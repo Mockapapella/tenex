@@ -1,0 +1,45 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff lint and format
+        entry: sh -c "uv run ruff check --fix --exit-non-zero-on-fix . && uv run ruff format ."
+        language: system
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy strict
+        entry: uv run mypy .
+        language: system
+        pass_filenames: false
+
+      - id: bandit
+        name: bandit security scan
+        entry: sh -c "uv run bandit -q -r src/tenex_cli tests --severity-level medium --confidence-level medium"
+        language: system
+        pass_filenames: false
+
+      - id: pip-audit
+        name: pip vulnerability scan
+        entry: uv run pip-audit
+        language: system
+        pass_filenames: false
+
+      - id: complexipy
+        name: complexity check
+        entry: uv run complexipy --max-complexity-allowed 20
+        language: system
+        types: [python]
+        pass_filenames: true
+        exclude: ^examples/
+
+      - id: pytest-coverage
+        name: coverage
+        entry: sh -c "export HYPOTHESIS_SEED=1 PYTHONHASHSEED=1; uv run coverage erase && uv run coverage run -m pytest -q && uv run coverage report --sort=cover"
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
