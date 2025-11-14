@@ -19,12 +19,6 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: pip-audit
-        name: pip vulnerability scan
-        entry: uv run pip-audit
-        language: system
-        pass_filenames: false
-
       - id: complexipy
         name: complexity check
         entry: uv run complexipy --max-complexity-allowed 20

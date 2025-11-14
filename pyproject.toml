@@ -39,6 +39,7 @@ packages = ["src/tenex_cli"]
 [dependency-groups]
 dev = [
     "bandit==1.8.6",
+    "complexipy>=4.2.0",
     "coverage[toml]==7.10.6",
     "mypy==1.17.1",
     "pre-commit==4.3.0",
