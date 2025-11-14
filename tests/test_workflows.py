@@ -195,15 +195,14 @@ def test_collect_from_panes_and_header(tmp_path: Path) -> None:
     assert runtime.tmux.killed == ["%1"]
 
 
-def test_launch_and_reset(tmp_path: Path) -> None:
+def test_launch_and_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """launch_codex_with_prompt should send commands and reset cleans up."""
     runtime = DummyRuntime(tmp_path)
     runtime.session.set_panes(["%0", "%1", "%2"])
     runtime.tmux.captured["%2"] = "text"
-
+    monkeypatch.setenv("TMUX", "1")
     launch_codex_with_prompt(cast("Runtime", runtime), "prompt text")
     assert "prompt text" in runtime.tmux.sent_commands[0]
-
     runtime.tmux.captured["%1"] = "data"
     reset(cast("Runtime", runtime))
     assert runtime.tmux.killed
@@ -213,7 +212,7 @@ def test_launch_and_reset(tmp_path: Path) -> None:
 def test_start_plan_records_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """start_plan should store prompts and pane metadata."""
     runtime = DummyRuntime(tmp_path)
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     monkeypatch.setattr("tenex_cli.workflows.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("tenex_cli.workflows.wait_for_ready", lambda *_args, **_kwargs: True)
     start_plan(cast("Runtime", runtime), "Implement feature")
@@ -228,7 +227,7 @@ def test_start_plan_escapes_prompt_text(tmp_path: Path, monkeypatch: pytest.Monk
     runtime = DummyRuntime(tmp_path)
     quoted_base = tmp_path / "user's state"
     runtime.session = DummySession(quoted_base)
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     monkeypatch.setattr("tenex_cli.workflows.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("tenex_cli.workflows.wait_for_ready", lambda *_args, **_kwargs: True)
 
@@ -243,7 +242,7 @@ def test_start_plan_escapes_prompt_text(tmp_path: Path, monkeypatch: pytest.Monk
 def test_start_review_triggers_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """start_review should send /review commands to panes."""
     runtime = DummyRuntime(tmp_path)
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     monkeypatch.setattr("tenex_cli.workflows.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("tenex_cli.workflows.wait_for_ready", lambda *_args, **_kwargs: True)
     start_review(cast("Runtime", runtime), "main")
@@ -255,7 +254,7 @@ def test_step_and_continuous_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     runtime = DummyRuntime(tmp_path)
     runtime.session.set_panes(["%0", "%1"])
     runtime.tmux.captured["%1"] = ""
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     step_prompt(cast("Runtime", runtime), "do it")
     assert any("paste:%1" in cmd for cmd in runtime.tmux.sent_commands)
 
@@ -274,7 +273,7 @@ def test_collect_reviews(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     runtime = DummyRuntime(tmp_path)
     runtime.session.set_panes(["%0", "%1"])
     runtime.tmux.captured["%1"] = "review body"
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     path = collect_reviews(cast("Runtime", runtime))
     assert path.exists()
     data = path.read_text()
@@ -286,7 +285,7 @@ def test_collect_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = DummyRuntime(tmp_path)
     runtime.session.set_panes(["%0", "%1"])
     runtime.tmux.captured["%1"] = "plan body"
-    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setenv("TMUX", "1")
     path = collect_plans(cast("Runtime", runtime))
     assert path.exists()
     data = path.read_text()
