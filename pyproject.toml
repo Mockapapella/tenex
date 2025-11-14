@@ -1,0 +1,106 @@
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.5"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tenex-cli"
+dynamic = ["version"]
+authors = [
+    { name = "Quinten", email = "quinten.lisowe@thelisowe.com" },
+]
+description = "Easily control swarms of agents"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1,<8.2",
+    "rich>=13.8.0",
+    "typer>=0.12.5",
+]
+keywords = ["tmux", "codex", "cli", "automation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX",
+]
+license = { text = "Apache-2.0" }
+
+[project.scripts]
+tenex = "tenex_cli.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Mockapapella/tenex"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenex_cli"]
+
+[dependency-groups]
+dev = [
+    "bandit==1.8.6",
+    "complexipy>=4.2.0",
+    "coverage[toml]==7.10.6",
+    "mypy==1.17.1",
+    "pre-commit==4.3.0",
+    "pytest==8.4.1",
+    "ruff==0.12.11",
+]
+
+[tool.coverage.run]
+source = ["tenex_cli"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [
+    "src/tenex_cli/_version.py",
+]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D211",
+    "D213",
+    "PLR0913",
+    "BLE001",
+    "G004",
+    "COM812",
+    "D203",
+    "S311",
+    "TRY003",
+    "EM101",
+    "TC002",
+    "TC001",
+    "UP017",
+    "PERF203",
+    "PT011",
+    "EM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"src/tenex_cli/_version.py" = ["UP007"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+warn_unused_ignores = true
+exclude = "^build/"
+ignore_missing_imports = false
+check_untyped_defs = true

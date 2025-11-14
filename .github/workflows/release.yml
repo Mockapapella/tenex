@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: '**/pyproject.toml'
+      - name: Build distribution
+        run: uvx --from build pyproject-build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
