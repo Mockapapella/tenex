@@ -1,5 +1,6 @@
 """Workflow helper tests built around lightweight runtime stubs."""
 
+import shlex
 from pathlib import Path
 from typing import cast
 
@@ -219,6 +220,24 @@ def test_start_plan_records_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert runtime.session.last_prompt is not None
     assert "Implement feature" in runtime.session.last_prompt
     assert len(runtime.session.load_panes()) == runtime.settings.pane_count + 1
+    assert any("codex" in command for command in runtime.tmux.sent_commands)
+
+
+def test_start_plan_escapes_prompt_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """start_plan should shell-escape the prompt text."""
+    runtime = DummyRuntime(tmp_path)
+    quoted_base = tmp_path / "user's state"
+    runtime.session = DummySession(quoted_base)
+    monkeypatch.setattr("tenex_cli.workflows.ensure_tmux", lambda _logger: None)
+    monkeypatch.setattr("tenex_cli.workflows.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("tenex_cli.workflows.wait_for_ready", lambda *_args, **_kwargs: True)
+
+    task = "Implement feature in user's area"
+    start_plan(cast("Runtime", runtime), task)
+
+    sent_command = next(command for command in runtime.tmux.sent_commands if "codex" in command)
+    expected_quoted_prompt = shlex.quote(runtime.session.last_prompt or "")
+    assert expected_quoted_prompt in sent_command
 
 
 def test_start_review_triggers_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

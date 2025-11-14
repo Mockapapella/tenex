@@ -53,8 +53,8 @@ def start_plan(runtime: Runtime, task: str) -> None:
 
     prompt_text = build_plan_prompt(task)
     runtime.session.store_prompt(prompt_text)
-    prompt_path = runtime.session.prompt_path()
-    command = f"{runtime.settings.codex_command} \"$(cat '{prompt_path}')\""
+    quoted_prompt = shlex.quote(prompt_text)
+    command = f"{runtime.settings.codex_command} {quoted_prompt}"
 
     pane_ids = create_codex_panes(runtime, original_pane, command)
     runtime.session.store_panes(pane_ids)

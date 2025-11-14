@@ -19,4 +19,4 @@ build/
 dist/
 *.egg-info/
 .eggs/
-src/tenex_cli/version.py
+src/tenex_cli/_version.py
