@@ -1,11 +1,17 @@
 //! Git branch management
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use git2::{BranchType, Repository};
 
 /// Manager for git branch operations
 pub struct Manager<'a> {
     repo: &'a Repository,
+}
+
+impl std::fmt::Debug for Manager<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manager").finish_non_exhaustive()
+    }
 }
 
 impl<'a> Manager<'a> {
@@ -21,13 +27,8 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the branch cannot be created
     pub fn create(&self, name: &str) -> Result<()> {
-        let head = self
-            .repo
-            .head()
-            .context("Failed to get HEAD reference")?;
-        let commit = head
-            .peel_to_commit()
-            .context("Failed to get HEAD commit")?;
+        let head = self.repo.head().context("Failed to get HEAD reference")?;
+        let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
 
         self.repo
             .branch(name, &commit, false)
@@ -89,9 +90,7 @@ impl<'a> Manager<'a> {
         let head = self.repo.head().context("Failed to get HEAD")?;
 
         if head.is_branch() {
-            let name = head
-                .shorthand()
-                .context("Branch name is not valid UTF-8")?;
+            let name = head.shorthand().context("Branch name is not valid UTF-8")?;
             Ok(name.to_string())
         } else {
             bail!("HEAD is not a branch (detached HEAD state)")

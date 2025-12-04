@@ -7,11 +7,13 @@ use ratatui::{
 };
 
 /// Widget for displaying the status bar
+#[derive(Debug)]
 pub struct Widget {
     content: StatusContent,
 }
 
 /// Content type for the status bar
+#[derive(Debug)]
 pub enum StatusContent {
     /// Normal status showing running count and keybindings
     Normal { running_count: usize },
@@ -58,9 +60,7 @@ impl Widget {
                 Span::styled(format!(" {msg} "), Style::default().fg(Color::Green))
             }
             StatusContent::Normal { running_count } => Span::styled(
-                format!(
-                    " {running_count} running | [n]ew [d]el [Tab]switch [?]help [q]uit "
-                ),
+                format!(" {running_count} running | [n]ew [d]el [Tab]switch [?]help [q]uit "),
                 Style::default().fg(Color::Gray),
             ),
         };

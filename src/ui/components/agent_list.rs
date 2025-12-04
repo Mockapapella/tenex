@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 /// Widget for displaying the agent list
+#[derive(Debug)]
 pub struct Widget<'a> {
     agents: &'a [Agent],
     selected: usize,
@@ -35,7 +36,7 @@ impl<'a> Widget<'a> {
     /// Convert to a List widget
     #[must_use]
     pub fn to_list(&self) -> List<'a> {
-        let items: Vec<ListItem> = self
+        let items: Vec<ListItem<'_>> = self
             .agents
             .iter()
             .enumerate()

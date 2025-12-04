@@ -1,0 +1,2 @@
+[alias]
+cov = "llvm-cov --fail-under-lines 100 --fail-under-functions 100"

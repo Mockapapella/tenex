@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 /// Widget for displaying terminal preview
+#[derive(Debug)]
 pub struct Widget {
     content: String,
     scroll: usize,
@@ -41,7 +42,7 @@ impl Widget {
     /// Convert to a Paragraph widget
     #[must_use]
     pub fn to_paragraph(&self) -> Paragraph<'_> {
-        let lines: Vec<Line> = self.content.lines().map(Line::from).collect();
+        let lines: Vec<Line<'_>> = self.content.lines().map(Line::from).collect();
 
         let scroll_pos = u16::try_from(self.scroll).unwrap_or(u16::MAX);
         Paragraph::new(Text::from(lines))

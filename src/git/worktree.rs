@@ -1,6 +1,6 @@
 //! Git worktree management
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use git2::Repository;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
+}
+
+impl std::fmt::Debug for Manager<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manager").finish_non_exhaustive()
+    }
 }
 
 impl<'a> Manager<'a> {
@@ -24,8 +30,9 @@ impl<'a> Manager<'a> {
     /// Returns an error if the worktree cannot be created
     pub fn create(&self, path: &Path, branch: &str) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create parent directory {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create parent directory {}", parent.display())
+            })?;
         }
 
         let branch_ref = self
@@ -53,8 +60,9 @@ impl<'a> Manager<'a> {
     /// Returns an error if the worktree or branch cannot be created
     pub fn create_with_new_branch(&self, path: &Path, branch: &str) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create parent directory {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create parent directory {}", parent.display())
+            })?;
         }
 
         let head = self.repo.head().context("Failed to get HEAD")?;
@@ -100,8 +108,9 @@ impl<'a> Manager<'a> {
             .with_context(|| format!("Failed to prune worktree '{name}'"))?;
 
         if wt_path.exists() {
-            fs::remove_dir_all(&wt_path)
-                .with_context(|| format!("Failed to remove worktree directory {}", wt_path.display()))?;
+            fs::remove_dir_all(&wt_path).with_context(|| {
+                format!("Failed to remove worktree directory {}", wt_path.display())
+            })?;
         }
 
         Ok(())
@@ -113,10 +122,7 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if worktrees cannot be listed
     pub fn list(&self) -> Result<Vec<Info>> {
-        let worktrees = self
-            .repo
-            .worktrees()
-            .context("Failed to list worktrees")?;
+        let worktrees = self.repo.worktrees().context("Failed to list worktrees")?;
 
         let mut infos = Vec::new();
         for name in worktrees.iter().flatten() {
@@ -168,7 +174,10 @@ impl<'a> Manager<'a> {
             .find_worktree(name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
-        let is_locked = matches!(worktree.is_locked(), Ok(git2::WorktreeLockStatus::Locked(_)));
+        let is_locked = matches!(
+            worktree.is_locked(),
+            Ok(git2::WorktreeLockStatus::Locked(_))
+        );
         if !is_locked {
             bail!("Worktree '{name}' is not locked");
         }

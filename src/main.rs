@@ -2,9 +2,9 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use muster::App;
 use muster::agent::Storage;
 use muster::config::Config;
-use muster::App;
 
 mod tui;
 
@@ -177,7 +177,10 @@ fn cmd_list(storage: &Storage, running_only: bool) {
         return;
     }
 
-    println!("{:<10} {:<20} {:<10} {:<10} BRANCH", "ID", "TITLE", "STATUS", "AGE");
+    println!(
+        "{:<10} {:<20} {:<10} {:<10} BRANCH",
+        "ID", "TITLE", "STATUS", "AGE"
+    );
     println!("{}", "-".repeat(70));
 
     for agent in agents {
@@ -265,7 +268,11 @@ fn cmd_resume(storage: &Storage, id: &str) -> Result<()> {
     let mut storage = storage.clone();
     let manager = SessionManager::new();
 
-    manager.create(&agent.tmux_session, &agent.worktree_path, Some(&agent.program))?;
+    manager.create(
+        &agent.tmux_session,
+        &agent.worktree_path,
+        Some(&agent.program),
+    )?;
 
     if let Some(agent) = storage.get_mut(agent.id) {
         agent.set_status(muster::Status::Running);
@@ -344,13 +351,13 @@ fn find_agent<'a>(storage: &'a Storage, id: &str) -> Result<&'a muster::Agent> {
         return Ok(agent);
     }
 
-    if let Ok(index) = id.parse::<usize>() {
-        if let Some(agent) = storage.get_by_index(index) {
-            return Ok(agent);
-        }
+    if let Ok(index) = id.parse::<usize>()
+        && let Some(agent) = storage.get_by_index(index)
+    {
+        return Ok(agent);
     }
 
-    anyhow::bail!("Agent not found: {}", id)
+    anyhow::bail!("Agent not found: {id}")
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

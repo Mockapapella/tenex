@@ -46,16 +46,6 @@ pub enum Action {
     Confirm,
 }
 
-/// A keybinding definition
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KeyBinding {
-    /// The key code
-    pub code: KeyCode,
-    /// Key modifiers (Ctrl, Alt, Shift)
-    pub modifiers: KeyModifiers,
-}
-
-
 /// Keybinding configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -224,25 +214,12 @@ mod tests {
     #[test]
     fn test_key_to_string() {
         assert_eq!(key_to_string(KeyCode::Char('a'), KeyModifiers::NONE), "a");
-        assert_eq!(key_to_string(KeyCode::Char('a'), KeyModifiers::CONTROL), "Ctrl+a");
+        assert_eq!(
+            key_to_string(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            "Ctrl+a"
+        );
         assert_eq!(key_to_string(KeyCode::Enter, KeyModifiers::NONE), "Enter");
         assert_eq!(key_to_string(KeyCode::F(1), KeyModifiers::NONE), "F1");
-    }
-
-    #[test]
-    fn test_keybinding_struct() {
-        let kb = KeyBinding {
-            code: KeyCode::Char('a'),
-            modifiers: KeyModifiers::NONE,
-        };
-        assert_eq!(kb.code, KeyCode::Char('a'));
-        assert_eq!(kb.modifiers, KeyModifiers::NONE);
-
-        let kb_ctrl = KeyBinding {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-        assert_eq!(kb_ctrl.modifiers, KeyModifiers::CONTROL);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Tmux output capture
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::process::Command;
 
 /// Capture output from tmux sessions
@@ -307,11 +307,7 @@ mod tests {
 
         let _ = manager.kill(session_name);
 
-        let result = manager.create(
-            session_name,
-            std::path::Path::new("/tmp"),
-            None,
-        );
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
 
         if result.is_err() {
             return;

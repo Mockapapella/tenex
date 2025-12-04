@@ -1,7 +1,8 @@
 [package]
 name = "muster"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.91"
 authors = ["Quinten Lisowe"]
 description = "Terminal multiplexer for AI coding agents"
 license = "MIT"
@@ -9,6 +10,7 @@ repository = "https://github.com/Mockapapella/muster"
 readme = "README.md"
 keywords = ["cli", "tui", "ai", "agents", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
+publish = false
 
 [dependencies]
 ratatui = "0.29"
@@ -29,18 +31,59 @@ dirs = "6.0"
 [dev-dependencies]
 tempfile = "3.19"
 pretty_assertions = "1.4"
+proptest = { version = "1", default-features = false, features = ["std"] }
+rstest = { version = "0.23", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
+warnings = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+non_ascii_idents = "forbid"
+unfulfilled_lint_expectations = "deny"
+
+[lints.rustdoc]
+all = { level = "deny", priority = -1 }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 multiple_crate_versions = "allow"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = 2
+overflow-checks = true
+debug-assertions = true
+incremental = false
+
+[profile.test]
+inherits = "dev"
 
 [profile.release]
-lto = true
-strip = true
+debug = 1
+overflow-checks = true
+debug-assertions = false
+lto = "fat"
 codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.mutants]
+inherits = "test"
+debug = "none"
+opt-level = 1
+
+[profile.coverage]
+inherits = "test"
+debug = 2
+opt-level = 0

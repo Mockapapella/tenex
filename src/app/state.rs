@@ -80,21 +80,26 @@ impl App {
     }
 
     /// Move selection to the next agent
-    pub fn select_next(&mut self) {
+    pub const fn select_next(&mut self) {
         if !self.storage.is_empty() {
             self.selected = (self.selected + 1) % self.storage.len();
             self.reset_scroll();
         }
     }
 
+    /// Move selection to the previous agent
     pub fn select_prev(&mut self) {
         if !self.storage.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.storage.len() - 1);
+            self.selected = self
+                .selected
+                .checked_sub(1)
+                .unwrap_or(self.storage.len() - 1);
             self.reset_scroll();
         }
     }
 
-    pub fn switch_tab(&mut self) {
+    /// Switch between preview and diff tabs
+    pub const fn switch_tab(&mut self) {
         self.active_tab = match self.active_tab {
             Tab::Preview => Tab::Diff,
             Tab::Diff => Tab::Preview,
@@ -102,12 +107,14 @@ impl App {
         self.reset_scroll();
     }
 
-    pub fn reset_scroll(&mut self) {
+    /// Reset scroll positions for both panes
+    pub const fn reset_scroll(&mut self) {
         self.preview_scroll = 0;
         self.diff_scroll = 0;
     }
 
-    pub fn scroll_up(&mut self, amount: usize) {
+    /// Scroll up in the active pane by the given amount
+    pub const fn scroll_up(&mut self, amount: usize) {
         match self.active_tab {
             Tab::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_sub(amount);
@@ -118,7 +125,8 @@ impl App {
         }
     }
 
-    pub fn scroll_down(&mut self, amount: usize) {
+    /// Scroll down in the active pane by the given amount
+    pub const fn scroll_down(&mut self, amount: usize) {
         match self.active_tab {
             Tab::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_add(amount);
@@ -129,14 +137,16 @@ impl App {
         }
     }
 
-    pub fn scroll_to_top(&mut self) {
+    /// Scroll to the top of the active pane
+    pub const fn scroll_to_top(&mut self) {
         match self.active_tab {
             Tab::Preview => self.preview_scroll = 0,
             Tab::Diff => self.diff_scroll = 0,
         }
     }
 
-    pub fn scroll_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
+    /// Scroll to the bottom of the active pane
+    pub const fn scroll_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
         let max_scroll = content_lines.saturating_sub(visible_lines);
         match self.active_tab {
             Tab::Preview => self.preview_scroll = max_scroll,
@@ -144,43 +154,48 @@ impl App {
         }
     }
 
+    /// Enter a new application mode
     pub fn enter_mode(&mut self, mode: Mode) {
-        let should_clear = matches!(
-            mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_)
-        );
+        let should_clear = matches!(mode, Mode::Creating | Mode::Prompting | Mode::Confirming(_));
         self.mode = mode;
         if should_clear {
             self.input_buffer.clear();
         }
     }
 
+    /// Exit the current mode and return to normal mode
     pub fn exit_mode(&mut self) {
         self.mode = Mode::Normal;
         self.input_buffer.clear();
     }
 
+    /// Set an error message to display
     pub fn set_error(&mut self, message: impl Into<String>) {
         self.last_error = Some(message.into());
     }
 
+    /// Clear the current error message
     pub fn clear_error(&mut self) {
         self.last_error = None;
     }
 
+    /// Set a status message to display
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status_message = Some(message.into());
     }
 
+    /// Clear the current status message
     pub fn clear_status(&mut self) {
         self.status_message = None;
     }
 
+    /// Check if there are any running agents
     #[must_use]
     pub fn has_running_agents(&self) -> bool {
         self.storage.iter().any(|a| a.status == Status::Running)
     }
 
+    /// Get the count of currently running agents
     #[must_use]
     pub fn running_agent_count(&self) -> usize {
         self.storage
@@ -189,6 +204,7 @@ impl App {
             .count()
     }
 
+    /// Handle a character input in text input modes
     pub fn handle_char(&mut self, c: char) {
         if matches!(
             self.mode,
@@ -198,6 +214,7 @@ impl App {
         }
     }
 
+    /// Handle backspace in text input modes
     pub fn handle_backspace(&mut self) {
         if matches!(
             self.mode,
@@ -207,7 +224,8 @@ impl App {
         }
     }
 
-    pub fn validate_selection(&mut self) {
+    /// Ensure the selection index is valid for the current storage
+    pub const fn validate_selection(&mut self) {
         if self.storage.is_empty() {
             self.selected = 0;
         } else if self.selected >= self.storage.len() {

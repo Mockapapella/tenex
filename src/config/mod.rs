@@ -123,11 +123,11 @@ impl Config {
     /// Returns an error if the file cannot be written
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory {}", parent.display())
+            })?;
         }
-        let contents = serde_json::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let contents = serde_json::to_string_pretty(self).context("Failed to serialize config")?;
         fs::write(path, contents)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
@@ -156,7 +156,13 @@ impl Config {
     pub fn generate_branch_name(&self, title: &str) -> String {
         let sanitized: String = title
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>()
             .to_lowercase();
         let truncated = if sanitized.len() > 50 {
@@ -224,10 +230,7 @@ mod tests {
             config.generate_branch_name("hello_world"),
             "muster/hello-world"
         );
-        assert_eq!(
-            config.generate_branch_name("  spaces  "),
-            "muster/spaces"
-        );
+        assert_eq!(config.generate_branch_name("  spaces  "), "muster/spaces");
     }
 
     #[test]

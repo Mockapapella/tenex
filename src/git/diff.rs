@@ -2,11 +2,18 @@
 
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Repository};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// Generator for git diffs
 pub struct Generator<'a> {
     repo: &'a Repository,
+}
+
+impl std::fmt::Debug for Generator<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Generator").finish_non_exhaustive()
+    }
 }
 
 impl<'a> Generator<'a> {
@@ -122,19 +129,20 @@ impl<'a> Generator<'a> {
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_default();
 
-            let file_idx = files.iter().position(|f: &FileChange| f.path == file_path);
-            let file = if let Some(idx) = file_idx {
-                &mut files[idx]
-            } else {
-                files.push(FileChange {
-                    path: file_path,
-                    status: delta_to_status(delta.status()),
-                    lines: Vec::new(),
-                    additions: 0,
-                    deletions: 0,
+            let file_idx = files
+                .iter()
+                .position(|f: &FileChange| f.path == file_path)
+                .unwrap_or_else(|| {
+                    files.push(FileChange {
+                        path: file_path,
+                        status: delta_to_status(delta.status()),
+                        lines: Vec::new(),
+                        additions: 0,
+                        deletions: 0,
+                    });
+                    files.len() - 1
                 });
-                files.last_mut().unwrap()
-            };
+            let file = &mut files[file_idx];
 
             let content = String::from_utf8_lossy(line.content()).to_string();
             let line_diff = match line.origin() {
@@ -210,22 +218,23 @@ impl FileChange {
     #[must_use]
     pub fn to_string_colored(&self) -> String {
         let mut output = String::new();
-        output.push_str(&format!(
+        let _ = write!(
+            output,
             "--- a/{}\n+++ b/{}\n",
             self.path.display(),
             self.path.display()
-        ));
+        );
 
         for line in &self.lines {
             match line {
                 LineChange::Added(content) => {
-                    output.push_str(&format!("+{content}"));
+                    let _ = write!(output, "+{content}");
                 }
                 LineChange::Removed(content) => {
-                    output.push_str(&format!("-{content}"));
+                    let _ = write!(output, "-{content}");
                 }
                 LineChange::Context(content) => {
-                    output.push_str(&format!(" {content}"));
+                    let _ = write!(output, " {content}");
                 }
             }
         }
@@ -333,9 +342,7 @@ mod tests {
         fs::write(&file_path, "# Test\n").unwrap();
 
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("README.md"))
-            .unwrap();
+        index.add_path(std::path::Path::new("README.md")).unwrap();
         index.write().unwrap();
 
         let tree_id = index.write_tree().unwrap();
@@ -382,9 +389,7 @@ mod tests {
         fs::write(&new_file, "New file content\n").unwrap();
 
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("new.txt"))
-            .unwrap();
+        index.add_path(std::path::Path::new("new.txt")).unwrap();
         index.write().unwrap();
 
         let staged = generator.staged().unwrap();
@@ -486,24 +491,15 @@ mod tests {
         fs::write(&file_path, "# Modified\n").unwrap();
 
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("README.md"))
-            .unwrap();
+        index.add_path(std::path::Path::new("README.md")).unwrap();
         index.write().unwrap();
 
         let tree_id = index.write_tree().unwrap();
         let tree = repo.find_tree(tree_id).unwrap();
         let head = repo.head().unwrap().peel_to_commit().unwrap();
 
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "Second commit",
-            &tree,
-            &[&head],
-        )
-        .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Second commit", &tree, &[&head])
+            .unwrap();
 
         let generator = Generator::new(&repo);
         let diff = generator.between_commits("HEAD~1", "HEAD").unwrap();

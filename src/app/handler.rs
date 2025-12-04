@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use super::state::{App, ConfirmAction, Mode};
 
 /// Handler for application actions
+#[derive(Debug)]
 pub struct Actions {
     /// Tmux session manager
     session_manager: SessionManager,
@@ -358,8 +359,8 @@ impl Default for Actions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::agent::Storage;
+    use crate::config::Config;
 
     fn create_test_app() -> App {
         App::new(Config::default(), Storage::default())
@@ -391,7 +392,9 @@ mod tests {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::NewAgentWithPrompt).unwrap();
+        handler
+            .handle_action(&mut app, Action::NewAgentWithPrompt)
+            .unwrap();
         assert_eq!(app.mode, Mode::Prompting);
     }
 

@@ -1,6 +1,6 @@
 //! Tmux session management
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
 
@@ -259,11 +259,7 @@ mod tests {
 
         let _ = manager.kill(session_name);
 
-        let result = manager.create(
-            session_name,
-            std::path::Path::new("/tmp"),
-            None,
-        );
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
 
         if result.is_ok() {
             std::thread::sleep(std::time::Duration::from_millis(100));

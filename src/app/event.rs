@@ -18,6 +18,7 @@ pub enum Event {
 }
 
 /// Handler that polls for terminal events
+#[derive(Debug)]
 pub struct Handler {
     /// Tick rate in milliseconds
     tick_rate: Duration,

@@ -1,23 +1,20 @@
 //! TUI rendering
 
-use muster::app::{App, Mode, Tab};
 use muster::agent::Status;
+use muster::app::{App, Mode, Tab};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 
 /// Render the full application UI
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame<'_>, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(frame.area());
 
     render_main(frame, app, chunks[0]);
@@ -25,8 +22,15 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     match &app.mode {
         Mode::Help => render_help_overlay(frame),
-        Mode::Creating => render_input_overlay(frame, "New Agent", "Enter agent name:", &app.input_buffer),
-        Mode::Prompting => render_input_overlay(frame, "New Agent with Prompt", "Enter prompt:", &app.input_buffer),
+        Mode::Creating => {
+            render_input_overlay(frame, "New Agent", "Enter agent name:", &app.input_buffer);
+        }
+        Mode::Prompting => render_input_overlay(
+            frame,
+            "New Agent with Prompt",
+            "Enter prompt:",
+            &app.input_buffer,
+        ),
         Mode::Confirming(action) => {
             let msg = match action {
                 muster::app::ConfirmAction::Kill => "Kill this agent?",
@@ -39,21 +43,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-fn render_main(frame: &mut Frame, app: &App, area: Rect) {
+fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(70),
-        ])
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(area);
 
     render_agent_list(frame, app, chunks[0]);
     render_content_pane(frame, app, chunks[1]);
 }
 
-fn render_agent_list(frame: &mut Frame, app: &App, area: Rect) {
-    let items: Vec<ListItem> = app
+fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let items: Vec<ListItem<'_>> = app
         .storage
         .iter()
         .enumerate()
@@ -103,13 +104,10 @@ fn render_agent_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
-fn render_content_pane(frame: &mut Frame, app: &App, area: Rect) {
+fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
     render_tab_bar(frame, app, chunks[0]);
@@ -120,13 +118,13 @@ fn render_content_pane(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let tabs = vec![
         (" Preview ", app.active_tab == Tab::Preview),
         (" Diff ", app.active_tab == Tab::Diff),
     ];
 
-    let spans: Vec<Span> = tabs
+    let spans: Vec<Span<'_>> = tabs
         .into_iter()
         .map(|(name, active)| {
             if active {
@@ -148,12 +146,14 @@ fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.preview_content;
-    let lines: Vec<Line> = content.lines().map(Line::from).collect();
+    let lines: Vec<Line<'_>> = content.lines().map(Line::from).collect();
 
     let visible_height = usize::from(area.height.saturating_sub(2));
-    let scroll = app.preview_scroll.min(lines.len().saturating_sub(visible_height));
+    let scroll = app
+        .preview_scroll
+        .min(lines.len().saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(Text::from(lines))
@@ -168,10 +168,10 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
+fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.diff_content;
 
-    let lines: Vec<Line> = content
+    let lines: Vec<Line<'_>> = content
         .lines()
         .map(|line| {
             let color = if line.starts_with('+') && !line.starts_with("+++") {
@@ -189,22 +189,20 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let visible_height = usize::from(area.height.saturating_sub(2));
-    let scroll = app.diff_scroll.min(lines.len().saturating_sub(visible_height));
+    let scroll = app
+        .diff_scroll
+        .min(lines.len().saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title(" Git Diff ")
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title(" Git Diff ").borders(Borders::ALL))
         .scroll((scroll_pos, 0))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }
 
-fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = match (&app.last_error, &app.status_message) {
         (Some(error), _) => Span::styled(
             format!(" Error: {error} "),
@@ -226,7 +224,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_help_overlay(frame: &mut Frame) {
+fn render_help_overlay(frame: &mut Frame<'_>) {
     let area = centered_rect(60, 70, frame.area());
 
     let help_text = vec![
@@ -271,7 +269,7 @@ fn render_help_overlay(frame: &mut Frame) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_input_overlay(frame: &mut Frame, title: &str, prompt: &str, input: &str) {
+fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input: &str) {
     let area = centered_rect(50, 20, frame.area());
 
     let text = vec![
@@ -301,16 +299,24 @@ fn render_input_overlay(frame: &mut Frame, title: &str, prompt: &str, input: &st
     frame.render_widget(paragraph, area);
 }
 
-fn render_confirm_overlay(frame: &mut Frame, message: &str) {
+fn render_confirm_overlay(frame: &mut Frame<'_>, message: &str) {
     let area = centered_rect(40, 15, frame.area());
 
     let text = vec![
         Line::from(message),
         Line::from(""),
         Line::from(vec![
-            Span::styled("[Y]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("es  "),
-            Span::styled("[N]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[N]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::raw("o"),
         ]),
     ];

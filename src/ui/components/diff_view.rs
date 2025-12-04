@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 /// Widget for displaying git diffs
+#[derive(Debug)]
 pub struct Widget {
     content: String,
     scroll: usize,
@@ -41,7 +42,7 @@ impl Widget {
     /// Convert to a Paragraph widget with syntax highlighting
     #[must_use]
     pub fn to_paragraph(&self) -> Paragraph<'_> {
-        let lines: Vec<Line> = self
+        let lines: Vec<Line<'_>> = self
             .content
             .lines()
             .map(|line| {

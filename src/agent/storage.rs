@@ -83,11 +83,11 @@ impl Storage {
     /// Returns an error if the file cannot be written
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create state directory {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create state directory {}", parent.display())
+            })?;
         }
-        let contents = serde_json::to_string_pretty(self)
-            .context("Failed to serialize state")?;
+        let contents = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
         fs::write(path, contents)
             .with_context(|| format!("Failed to write state to {}", path.display()))?;
         Ok(())
@@ -139,13 +139,13 @@ impl Storage {
 
     /// Get the number of agents
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.agents.len()
     }
 
     /// Check if there are no agents
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.agents.is_empty()
     }
 

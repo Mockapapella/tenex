@@ -6,8 +6,6 @@
 mod components;
 
 pub use components::{
-    agent_list::Widget as AgentListWidget,
-    diff_view::Widget as DiffViewWidget,
-    preview::Widget as PreviewWidget,
-    status_bar::Widget as StatusBarWidget,
+    agent_list::Widget as AgentListWidget, diff_view::Widget as DiffViewWidget,
+    preview::Widget as PreviewWidget, status_bar::Widget as StatusBarWidget,
 };
