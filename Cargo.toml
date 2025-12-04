@@ -1,0 +1,46 @@
+[package]
+name = "muster"
+version = "0.1.0"
+edition = "2021"
+authors = ["Quinten Lisowe"]
+description = "Terminal multiplexer for AI coding agents"
+license = "MIT"
+repository = "https://github.com/Mockapapella/muster"
+readme = "README.md"
+keywords = ["cli", "tui", "ai", "agents", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.29"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.48", features = ["full"] }
+git2 = "0.19"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.19", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0"
+
+[dev-dependencies]
+tempfile = "3.19"
+pretty_assertions = "1.4"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
