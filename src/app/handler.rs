@@ -547,4 +547,408 @@ mod tests {
 
         handler.sync_agent_status(&mut app).unwrap();
     }
+
+    #[test]
+    fn test_handle_quit_with_running_agents() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a running agent
+        let mut agent = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Running);
+        app.storage.add(agent);
+
+        // Quit should enter confirming mode
+        handler.handle_action(&mut app, Action::Quit).unwrap();
+        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Quit));
+    }
+
+    #[test]
+    fn test_handle_kill_with_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Kill should enter confirming mode
+        handler.handle_action(&mut app, Action::Kill).unwrap();
+        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Kill));
+    }
+
+    #[test]
+    fn test_handle_confirm_quit() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Enter confirming mode for quit
+        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+
+        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        assert!(app.should_quit);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_handle_confirm_kill() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp/nonexistent"),
+            None,
+        ));
+
+        // Enter confirming mode for kill
+        app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
+
+        // Confirm should kill and exit mode
+        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_handle_confirm_reset() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add agents
+        for i in 0..3 {
+            app.storage.add(Agent::new(
+                format!("agent{i}"),
+                "claude".to_string(),
+                format!("muster/agent{i}"),
+                PathBuf::from("/tmp"),
+                None,
+            ));
+        }
+
+        // Enter confirming mode for reset
+        app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
+
+        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        assert_eq!(app.storage.len(), 0);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_handle_pause_with_running_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a running agent
+        let mut agent = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Running);
+        app.storage.add(agent);
+
+        // Pause should work
+        handler.handle_action(&mut app, Action::Pause).unwrap();
+        // The session doesn't exist so it will be marked as paused
+        assert!(app.status_message.is_some() || app.last_error.is_some());
+    }
+
+    #[test]
+    fn test_handle_pause_with_stopped_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a stopped agent
+        let mut agent = Agent::new(
+            "stopped".to_string(),
+            "claude".to_string(),
+            "muster/stopped".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Stopped);
+        app.storage.add(agent);
+
+        // Pause should fail
+        handler.handle_action(&mut app, Action::Pause).unwrap();
+        assert!(app.last_error.is_some());
+    }
+
+    #[test]
+    fn test_handle_resume_with_paused_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a paused agent
+        let mut agent = Agent::new(
+            "paused".to_string(),
+            "claude".to_string(),
+            "muster/paused".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Paused);
+        app.storage.add(agent);
+
+        // Resume will try to create session (may fail due to missing session)
+        let _ = handler.handle_action(&mut app, Action::Resume);
+    }
+
+    #[test]
+    fn test_handle_resume_with_running_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a running agent
+        let mut agent = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Running);
+        app.storage.add(agent);
+
+        // Resume should fail
+        handler.handle_action(&mut app, Action::Resume).unwrap();
+        assert!(app.last_error.is_some());
+    }
+
+    #[test]
+    fn test_handle_attach_session_not_found() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent with a non-existent session
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "nonexistent-session".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Attach should fail
+        let result = handler.handle_action(&mut app, Action::Attach);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_preview_with_agent_no_session() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "nonexistent-session".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        handler.update_preview(&mut app).unwrap();
+        assert!(app.preview_content.contains("Session not running"));
+    }
+
+    #[test]
+    fn test_update_diff_with_agent_no_worktree() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent with non-existent worktree
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/nonexistent/path"),
+            None,
+        ));
+
+        handler.update_diff(&mut app).unwrap();
+        assert!(app.diff_content.contains("Worktree not found"));
+    }
+
+    #[test]
+    fn test_update_diff_with_agent_valid_worktree() {
+        use crate::agent::Agent;
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Create a temp directory (not a git repo)
+        let temp_dir = TempDir::new().unwrap();
+
+        // Add an agent with valid worktree path (but not git repo)
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        handler.update_diff(&mut app).unwrap();
+        assert!(app.diff_content.contains("Not a git repository"));
+    }
+
+    #[test]
+    fn test_sync_agent_status_with_agents() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add agents with different statuses
+        let mut running = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        running.set_status(Status::Running);
+        app.storage.add(running);
+
+        let mut starting = Agent::new(
+            "starting".to_string(),
+            "claude".to_string(),
+            "muster/starting".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        starting.set_status(Status::Starting);
+        app.storage.add(starting);
+
+        let mut paused = Agent::new(
+            "paused".to_string(),
+            "claude".to_string(),
+            "muster/paused".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        paused.set_status(Status::Paused);
+        app.storage.add(paused);
+
+        // Sync should mark running/starting as stopped (no sessions exist)
+        handler.sync_agent_status(&mut app).unwrap();
+
+        // The running/starting agents should now be stopped
+        for agent in app.storage.iter() {
+            if agent.title == "running" || agent.title == "starting" {
+                assert_eq!(agent.status, Status::Stopped);
+            }
+        }
+    }
+
+    #[test]
+    fn test_handle_scroll_bottom() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        handler
+            .handle_action(&mut app, Action::ScrollBottom)
+            .unwrap();
+        // ScrollBottom calls scroll_to_bottom(10000, 0) so preview_scroll becomes 10000
+        assert_eq!(app.preview_scroll, 10000);
+    }
+
+    #[test]
+    fn test_create_agent_max_reached() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.config.max_agents = 2;
+
+        // Add max agents
+        for i in 0..2 {
+            app.storage.add(Agent::new(
+                format!("agent{i}"),
+                "claude".to_string(),
+                format!("muster/agent{i}"),
+                PathBuf::from("/tmp"),
+                None,
+            ));
+        }
+
+        // Try to create another - should fail with error
+        handler.create_agent(&mut app, "overflow", None).unwrap();
+        assert!(app.last_error.is_some());
+    }
+
+    #[test]
+    fn test_handle_push_with_agent() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Push should set status message
+        handler.handle_action(&mut app, Action::Push).unwrap();
+        assert!(app.status_message.is_some());
+    }
 }

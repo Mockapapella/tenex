@@ -260,4 +260,44 @@ mod tests {
         assert!(config_path.to_string_lossy().contains("muster"));
         assert!(state_path.to_string_lossy().contains("muster"));
     }
+
+    #[test]
+    fn test_generate_branch_name_special_chars() {
+        let config = Config::default();
+
+        // Test various special characters
+        assert_eq!(config.generate_branch_name("fix@#$%bug"), "muster/fix----bug");
+        assert_eq!(config.generate_branch_name("hello/world"), "muster/hello-world");
+    }
+
+    #[test]
+    fn test_save_creates_parent_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        let nested_path = temp_dir.path().join("deep/nested/dir/config.json");
+
+        let config = Config::default();
+        config.save_to(&nested_path).unwrap();
+
+        assert!(nested_path.exists());
+    }
+
+    #[test]
+    fn test_default_worktree_dir_has_path() {
+        let dir = default_worktree_dir();
+        assert!(dir.to_string_lossy().contains("worktrees"));
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config = Config::default();
+        let cloned = config.clone();
+        assert_eq!(config, cloned);
+    }
+
+    #[test]
+    fn test_config_debug() {
+        let config = Config::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("Config"));
+    }
 }

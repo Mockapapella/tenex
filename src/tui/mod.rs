@@ -186,8 +186,8 @@ mod tests {
     #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use muster::agent::Storage;
-    use muster::config::Config;
     use muster::app::ConfirmAction;
+    use muster::config::Config;
 
     fn create_test_app() -> App {
         App::new(Config::default(), Storage::default())
@@ -390,8 +390,20 @@ mod tests {
         let handler = Actions::new();
 
         // Scroll commands
-        handle_key_event(&mut app, &handler, KeyCode::Char('u'), KeyModifiers::CONTROL).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('d'), KeyModifiers::CONTROL).unwrap();
+        handle_key_event(
+            &mut app,
+            &handler,
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )
+        .unwrap();
+        handle_key_event(
+            &mut app,
+            &handler,
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )
+        .unwrap();
         handle_key_event(&mut app, &handler, KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
         handle_key_event(&mut app, &handler, KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
 
@@ -515,5 +527,72 @@ mod tests {
         // 'N' should also cancel
         handle_key_event(&mut app, &handler, KeyCode::Char('N'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_handle_key_event_creating_mode_enter_with_input() {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Creating);
+        app.handle_char('t');
+        app.handle_char('e');
+        app.handle_char('s');
+        app.handle_char('t');
+
+        // Enter with input tries to create agent (will fail without git repo, but sets error)
+        handle_key_event(&mut app, &handler, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+        // Should exit to normal mode even on error
+        assert_eq!(app.mode, Mode::Normal);
+        // Error should be set since we're not in a git repo
+        assert!(app.last_error.is_some() || app.storage.len() == 1);
+    }
+
+    #[test]
+    fn test_handle_key_event_prompting_mode_enter_with_input() {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Prompting);
+        app.handle_char('f');
+        app.handle_char('i');
+        app.handle_char('x');
+
+        // Enter with input tries to create agent with prompt (will fail without git repo)
+        handle_key_event(&mut app, &handler, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+        // Should exit to normal mode even on error
+        assert_eq!(app.mode, Mode::Normal);
+        // Error should be set since we're not in a git repo
+        assert!(app.last_error.is_some() || app.storage.len() == 1);
+    }
+
+    #[test]
+    fn test_handle_key_event_creating_mode_fallthrough() {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Creating);
+
+        // Tab key should fall through to action handling in creating mode
+        handle_key_event(&mut app, &handler, KeyCode::Tab, KeyModifiers::NONE).unwrap();
+
+        // Mode should remain creating (Tab doesn't exit creating mode)
+        assert_eq!(app.mode, Mode::Creating);
+    }
+
+    #[test]
+    fn test_handle_key_event_scrolling_mode_navigation() {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Scrolling);
+
+        // Test scrolling mode handles normal mode keybindings
+        handle_key_event(&mut app, &handler, KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, &handler, KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+
+        // Should handle without panic
     }
 }

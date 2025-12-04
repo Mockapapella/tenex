@@ -15,7 +15,7 @@ publish = false
 
 [dependencies]
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
-clap = { version = "4.5", default-features = false, features = ["derive", "std"] }
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help"] }
 tokio = { version = "1.48", default-features = false, features = ["full"] }
 git2 = { version = "0.19", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
