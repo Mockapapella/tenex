@@ -42,9 +42,12 @@ impl<'a> Manager<'a> {
 
         let reference = branch_ref.into_reference();
 
+        // Worktree name cannot contain slashes (it becomes a directory name in .git/worktrees/)
+        let worktree_name = branch.replace('/', "-");
+
         self.repo
             .worktree(
-                branch,
+                &worktree_name,
                 path,
                 Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
             )
@@ -75,9 +78,12 @@ impl<'a> Manager<'a> {
 
         let reference = branch_ref.into_reference();
 
+        // Worktree name cannot contain slashes (it becomes a directory name in .git/worktrees/)
+        let worktree_name = branch.replace('/', "-");
+
         self.repo
             .worktree(
-                branch,
+                &worktree_name,
                 path,
                 Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
             )
@@ -92,9 +98,11 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree cannot be removed
     pub fn remove(&self, name: &str) -> Result<()> {
+        // Worktree name has slashes replaced with dashes
+        let worktree_name = name.replace('/', "-");
         let worktree = self
             .repo
-            .find_worktree(name)
+            .find_worktree(&worktree_name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
         let wt_path = worktree.path().to_path_buf();
@@ -142,7 +150,8 @@ impl<'a> Manager<'a> {
     /// Check if a worktree exists
     #[must_use]
     pub fn exists(&self, name: &str) -> bool {
-        self.repo.find_worktree(name).is_ok()
+        let worktree_name = name.replace('/', "-");
+        self.repo.find_worktree(&worktree_name).is_ok()
     }
 
     /// Lock a worktree to prevent it from being pruned
@@ -151,9 +160,10 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree cannot be locked
     pub fn lock(&self, name: &str, reason: Option<&str>) -> Result<()> {
+        let worktree_name = name.replace('/', "-");
         let worktree = self
             .repo
-            .find_worktree(name)
+            .find_worktree(&worktree_name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
         worktree
@@ -169,9 +179,10 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree cannot be unlocked
     pub fn unlock(&self, name: &str) -> Result<()> {
+        let worktree_name = name.replace('/', "-");
         let worktree = self
             .repo
-            .find_worktree(name)
+            .find_worktree(&worktree_name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
         let is_locked = matches!(
@@ -195,9 +206,10 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree is invalid
     pub fn validate(&self, name: &str) -> Result<()> {
+        let worktree_name = name.replace('/', "-");
         let worktree = self
             .repo
-            .find_worktree(name)
+            .find_worktree(&worktree_name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
         worktree
@@ -397,6 +409,50 @@ mod tests {
             .unwrap();
 
         manager.validate("feature-validate-test").unwrap();
+    }
+
+    #[test]
+    fn test_branch_name_with_slashes() {
+        // Integration test: branch names with slashes (like "muster/feature-name")
+        // should work correctly. The worktree name internally replaces slashes with dashes.
+        let (temp_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+
+        // Use a branch name with a slash (like muster generates)
+        let branch_name = "muster/my-feature";
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join("muster")
+            .join("my-feature");
+
+        // Create worktree with slashed branch name
+        manager
+            .create_with_new_branch(&wt_path, branch_name)
+            .unwrap();
+
+        // Verify worktree directory exists
+        assert!(wt_path.exists());
+
+        // Verify worktree can be found using original branch name
+        assert!(manager.exists(branch_name));
+
+        // Verify the worktree is a valid git worktree (has .git file)
+        assert!(wt_path.join(".git").exists());
+
+        // Verify the branch was created in the repository
+        assert!(
+            repo.find_branch(branch_name, git2::BranchType::Local)
+                .is_ok()
+        );
+
+        // Verify we can validate the worktree using the branch name
+        manager.validate(branch_name).unwrap();
+
+        // Verify we can remove the worktree using the branch name
+        manager.remove(branch_name).unwrap();
+        assert!(!manager.exists(branch_name));
+        assert!(!wt_path.exists());
     }
 
     #[test]

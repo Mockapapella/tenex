@@ -83,10 +83,13 @@ fn handle_key_event(
             KeyCode::Enter => {
                 let input = app.input_buffer.clone();
                 if !input.is_empty() {
-                    if app.mode == Mode::Creating {
-                        let _ = action_handler.create_agent(app, &input, None);
+                    let result = if app.mode == Mode::Creating {
+                        action_handler.create_agent(app, &input, None)
                     } else {
-                        let _ = action_handler.create_agent(app, "prompted-agent", Some(&input));
+                        action_handler.create_agent(app, "prompted-agent", Some(&input))
+                    };
+                    if let Err(e) = result {
+                        app.set_error(format!("Failed to create agent: {e:#}"));
                     }
                 }
                 app.exit_mode();
