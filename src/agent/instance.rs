@@ -117,6 +117,7 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use std::thread::sleep;
     use std::time::Duration;

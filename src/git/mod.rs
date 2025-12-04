@@ -42,6 +42,7 @@ pub fn repository_root(path: &Path) -> Result<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use tempfile::TempDir;
 

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use std::process::Command;
 
 /// Capture output from tmux sessions
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Capture;
 
 impl Capture {

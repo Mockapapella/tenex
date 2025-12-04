@@ -71,6 +71,7 @@ impl Widget {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic, reason = "test assertions")]
     use super::*;
 
     #[test]

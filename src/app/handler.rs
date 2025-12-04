@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use super::state::{App, ConfirmAction, Mode};
 
 /// Handler for application actions
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Actions {
     /// Tmux session manager
     session_manager: SessionManager,
@@ -17,6 +17,10 @@ pub struct Actions {
     output_capture: OutputCapture,
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "consistent &self receiver pattern for methods"
+)]
 impl Actions {
     /// Create a new action handler
     #[must_use]
@@ -355,6 +359,7 @@ impl Default for Actions {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use crate::agent::Storage;
     use crate::config::Config;

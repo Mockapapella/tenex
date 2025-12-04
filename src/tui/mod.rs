@@ -3,14 +3,17 @@
 mod render;
 
 use anyhow::Result;
-use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
 use muster::app::{Actions, App, Event, Handler, Mode};
 use muster::config::Action;
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    crossterm::{
+        event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers},
+        execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    },
+};
 use std::io;
 use std::process::Command;
 
@@ -38,6 +41,10 @@ pub fn run(mut app: App) -> Result<()> {
     result
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "consistent reference pattern for handlers"
+)]
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -108,6 +115,10 @@ fn run_loop(
     Ok(())
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "consistent reference pattern for handlers"
+)]
 fn handle_key_event(
     app: &mut App,
     action_handler: &Actions,

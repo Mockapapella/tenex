@@ -1,11 +1,11 @@
 //! Event handling for the TUI
 
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
+use ratatui::crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::time::Duration;
 
 /// Application events
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Event {
     /// Terminal tick (for animations/updates)
     Tick,
@@ -18,7 +18,7 @@ pub enum Event {
 }
 
 /// Handler that polls for terminal events
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Handler {
     /// Tick rate in milliseconds
     tick_rate: Duration,

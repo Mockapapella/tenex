@@ -261,7 +261,7 @@ impl Default for App {
 }
 
 /// Application mode/state
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Normal operation mode
     #[default]
@@ -279,7 +279,7 @@ pub enum Mode {
 }
 
 /// Actions that require confirmation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
     /// Kill an agent
     Kill,
@@ -320,6 +320,7 @@ impl std::fmt::Display for Tab {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use crate::agent::Agent;
     use std::path::PathBuf;

@@ -370,6 +370,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic, reason = "test assertions")]
     use super::*;
 
     #[test]

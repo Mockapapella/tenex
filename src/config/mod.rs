@@ -176,6 +176,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use tempfile::TempDir;
 

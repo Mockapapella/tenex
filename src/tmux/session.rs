@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Manager for tmux sessions
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Manager;
 
 impl Manager {

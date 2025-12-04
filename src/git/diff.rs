@@ -328,6 +328,7 @@ impl std::fmt::Display for Summary {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use git2::Signature;
     use std::fs;

@@ -1,6 +1,6 @@
 //! Keybinding configuration
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -147,6 +147,7 @@ pub fn key_to_string(code: KeyCode, modifiers: KeyModifiers) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
 
     #[test]
