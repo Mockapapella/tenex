@@ -227,10 +227,7 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
         if self.session_manager.exists(&agent.tmux_session) {
-            app.set_status(format!(
-                "Run: {}",
-                SessionManager::attach_command(&agent.tmux_session)
-            ));
+            app.request_attach(agent.tmux_session.clone());
             Ok(())
         } else {
             app.set_error("Tmux session not found");

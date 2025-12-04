@@ -45,6 +45,9 @@ pub struct App {
 
     /// Cached diff content
     pub diff_content: String,
+
+    /// Session to attach to (when set, TUI should suspend and attach)
+    pub attach_session: Option<String>,
 }
 
 impl App {
@@ -65,6 +68,7 @@ impl App {
             status_message: None,
             preview_content: String::new(),
             diff_content: String::new(),
+            attach_session: None,
         }
     }
 
@@ -187,6 +191,22 @@ impl App {
     /// Clear the current status message
     pub fn clear_status(&mut self) {
         self.status_message = None;
+    }
+
+    /// Request to attach to a tmux session
+    pub fn request_attach(&mut self, session: String) {
+        self.attach_session = Some(session);
+    }
+
+    /// Clear the attach request after attaching
+    pub fn clear_attach_request(&mut self) {
+        self.attach_session = None;
+    }
+
+    /// Check if there's a pending attach request
+    #[must_use]
+    pub const fn has_attach_request(&self) -> bool {
+        self.attach_session.is_some()
     }
 
     /// Check if there are any running agents

@@ -12,6 +12,7 @@ use muster::app::{Actions, App, Event, Handler, Mode};
 use muster::config::Action;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
+use std::process::Command;
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
@@ -62,6 +63,41 @@ fn run_loop(
             }
             Event::Mouse(_mouse) => {}
             Event::Resize(_, _) => {}
+        }
+
+        // Handle attach request - suspend TUI and attach to tmux session
+        if let Some(session) = app.attach_session.take() {
+            // Suspend the TUI
+            disable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
+            terminal.show_cursor()?;
+
+            // Attach to the tmux session
+            // Unset TMUX env var to allow nested tmux sessions
+            let status = Command::new("tmux")
+                .args(["attach-session", "-t", &session])
+                .env_remove("TMUX")
+                .status();
+
+            // Restore the TUI
+            enable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableMouseCapture
+            )?;
+
+            // Report any errors
+            if let Err(e) = status {
+                app.set_error(format!("Failed to attach: {e}"));
+            }
+
+            // Force a redraw
+            terminal.clear()?;
         }
 
         if app.should_quit {
