@@ -189,13 +189,23 @@ impl App {
         self.input_buffer.clear();
     }
 
-    /// Set an error message to display
+    /// Set an error message and show the error modal
     pub fn set_error(&mut self, message: impl Into<String>) {
-        self.last_error = Some(message.into());
+        let msg = message.into();
+        self.last_error = Some(msg.clone());
+        self.mode = Mode::ErrorModal(msg);
     }
 
     /// Clear the current error message
     pub fn clear_error(&mut self) {
+        self.last_error = None;
+    }
+
+    /// Dismiss the error modal (returns to normal mode)
+    pub fn dismiss_error(&mut self) {
+        if matches!(self.mode, Mode::ErrorModal(_)) {
+            self.mode = Mode::Normal;
+        }
         self.last_error = None;
     }
 
@@ -340,7 +350,7 @@ impl Default for App {
 }
 
 /// Application mode/state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Normal operation mode
     #[default]
@@ -361,6 +371,8 @@ pub enum Mode {
     ChildPrompt,
     /// Typing a message to broadcast to agent and leaf descendants
     Broadcasting,
+    /// Showing an error modal
+    ErrorModal(String),
 }
 
 /// Actions that require confirmation

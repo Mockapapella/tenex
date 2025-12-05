@@ -87,6 +87,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             };
             render_confirm_overlay(frame, lines);
         }
+        Mode::ErrorModal(message) => render_error_modal(frame, message),
         _ => {}
     }
 }
@@ -274,15 +275,18 @@ fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = match (&app.last_error, &app.status_message) {
-        (Some(error), _) => Span::styled(
+    // Don't show error in status bar when error modal is displayed
+    let showing_error_modal = matches!(app.mode, Mode::ErrorModal(_));
+
+    let content = match (&app.last_error, &app.status_message, showing_error_modal) {
+        (Some(error), _, false) => Span::styled(
             format!(" Error: {error} "),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        (None, Some(status)) => {
+        (_, Some(status), _) => {
             Span::styled(format!(" {status} "), Style::default().fg(Color::Green))
         }
-        (None, None) => {
+        _ => {
             let running = app.running_agent_count();
             let hints = app.config.keys.status_hints();
             Span::styled(
@@ -459,6 +463,62 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
                 .border_style(Style::default().fg(Color::Yellow)),
         )
         .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
+    // Wrap the error message to fit within the modal width (44 chars after padding)
+    let max_line_width = 44;
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Add error icon and header
+    lines.push(Line::from(Span::styled(
+        "✖ Error",
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Word-wrap the message
+    let words: Vec<&str> = message.split_whitespace().collect();
+    let mut current_line = String::new();
+
+    for word in words {
+        if current_line.is_empty() {
+            current_line = word.to_string();
+        } else if current_line.len() + 1 + word.len() <= max_line_width {
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            lines.push(Line::from(current_line.clone()));
+            current_line = word.to_string();
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(Line::from(current_line));
+    }
+
+    // Add dismiss hint
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press any key to dismiss",
+        Style::default().fg(Color::Gray),
+    )));
+
+    // Height: content lines + 2 for borders, min 7 lines
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).max(7);
+    let area = centered_rect_absolute(50, height, frame.area());
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Error ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .style(Style::default().bg(Color::Black))
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -840,6 +900,41 @@ mod tests {
         app.preview_content = "Line 1\nLine 2".to_string();
         // Set scroll position beyond content length
         app.preview_scroll = 1000;
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_error_modal() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.set_error("Something went wrong!");
+
+        // Verify app is in ErrorModal mode
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_error_modal_long_message() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.set_error("This is a very long error message that should wrap to multiple lines in the error modal to ensure the word wrapping functionality works correctly");
 
         terminal.draw(|frame| {
             render(frame, &app);

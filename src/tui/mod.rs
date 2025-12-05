@@ -129,6 +129,8 @@ fn handle_key_event(
                         };
                         if let Err(e) = result {
                             app.set_error(format!("Failed: {e:#}"));
+                            // Don't call exit_mode() - set_error already set ErrorModal mode
+                            return Ok(());
                         }
                     }
                     app.exit_mode();
@@ -153,6 +155,7 @@ fn handle_key_event(
             _ => {}
         },
         Mode::Help => app.exit_mode(),
+        Mode::ErrorModal(_) => app.dismiss_error(),
         Mode::Normal | Mode::Scrolling => {
             if let Some(action) = app.config.keys.get_action(code, modifiers) {
                 action_handler.handle_action(app, action)?;
@@ -542,9 +545,12 @@ mod tests {
         // Enter with input tries to create agent (will fail without git repo, but sets error)
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // Should exit to normal mode even on error
-        assert_eq!(app.mode, Mode::Normal);
-        // Error should be set since we're not in a git repo
+        // On error, should show error modal; on success, should be in normal mode
+        assert!(
+            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
+            "Expected ErrorModal or Normal mode"
+        );
+        // Error should be set since we're not in a git repo, or agent was created
         assert!(app.last_error.is_some() || app.storage.len() == 1);
         Ok(())
     }
@@ -563,9 +569,12 @@ mod tests {
         // Enter with input tries to create agent with prompt (will fail without git repo)
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // Should exit to normal mode even on error
-        assert_eq!(app.mode, Mode::Normal);
-        // Error should be set since we're not in a git repo
+        // On error, should show error modal; on success, should be in normal mode
+        assert!(
+            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
+            "Expected ErrorModal or Normal mode"
+        );
+        // Error should be set since we're not in a git repo, or agent was created
         assert!(app.last_error.is_some() || app.storage.len() == 1);
         Ok(())
     }
@@ -662,10 +671,10 @@ mod tests {
         app.handle_char('s');
         app.handle_char('t');
 
-        // Enter with no agent selected should set error
+        // Enter with no agent selected should show error modal
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
         assert!(app.last_error.is_some());
         Ok(())
     }
@@ -680,6 +689,38 @@ mod tests {
 
         // Enter with empty input should just exit mode
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_error_modal_dismiss() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        // Set an error (this enters ErrorModal mode)
+        app.set_error("Test error message");
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+
+        // Any key should dismiss the error modal
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.last_error.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_error_modal_dismiss_with_esc() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.set_error("Test error");
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
