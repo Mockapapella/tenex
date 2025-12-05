@@ -21,7 +21,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
-        Mode::Help => render_help_overlay(frame),
+        Mode::Help => render_help_overlay(frame, &app.config.keys),
         Mode::Creating => {
             render_input_overlay(frame, "New Agent", "Enter agent name:", &app.input_buffer);
         }
@@ -278,8 +278,9 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
         (None, None) => {
             let running = app.running_agent_count();
+            let hints = app.config.keys.status_hints();
             Span::styled(
-                format!(" {running} running | [a]dd [d]el [Tab]switch [?]help [q]uit "),
+                format!(" {running} running | {hints} "),
                 Style::default().fg(Color::Gray),
             )
         }
@@ -289,44 +290,45 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_help_overlay(frame: &mut Frame<'_>) {
-    let area = centered_rect(60, 80, frame.area());
+fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings) {
+    use muster::config::Action;
 
-    let help_text = vec![
+    // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
+    // 4 sections with headers(4) + empty lines between(3) + 17 actions + footer(2) = 26 + 2 borders
+    let area = centered_rect_absolute(50, 28, frame.area());
+
+    let mut help_text = vec![
         Line::from(Span::styled(
             "Keybindings",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled("Agents", Style::default().fg(Color::Cyan))),
-        Line::from("  a        New agent"),
-        Line::from("  A        New agent with prompt"),
-        Line::from("  Enter/o  Attach to agent"),
-        Line::from("  d        Kill agent (and descendants)"),
-        Line::from(""),
-        Line::from(Span::styled("Hierarchy", Style::default().fg(Color::Cyan))),
-        Line::from("  S        Spawn children (new root)"),
-        Line::from("  +        Add children to selected"),
-        Line::from("  s        Synthesize children"),
-        Line::from("  Space    Toggle collapse/expand"),
-        Line::from(""),
-        Line::from(Span::styled("Navigation", Style::default().fg(Color::Cyan))),
-        Line::from("  j/Down   Select next"),
-        Line::from("  k/Up     Select previous"),
-        Line::from("  Tab      Switch preview/diff"),
-        Line::from("  Ctrl+u   Scroll up"),
-        Line::from("  Ctrl+d   Scroll down"),
-        Line::from("  g        Scroll to top"),
-        Line::from("  G        Scroll to bottom"),
-        Line::from(""),
-        Line::from("  ?        Show this help"),
-        Line::from("  q        Quit"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press any key to close",
-            Style::default().fg(Color::Gray),
-        )),
     ];
+
+    let mut current_group = None;
+    for &action in Action::ALL_FOR_HELP {
+        let group = action.group();
+
+        // Add section header when group changes
+        if current_group != Some(group) {
+            if current_group.is_some() {
+                help_text.push(Line::from(""));
+            }
+            help_text.push(Line::from(Span::styled(
+                group.title(),
+                Style::default().fg(Color::Cyan),
+            )));
+            current_group = Some(group);
+        }
+
+        help_text.push(Line::from(keys.help_line(action)));
+    }
+
+    help_text.push(Line::from(""));
+    help_text.push(Line::from(Span::styled(
+        "Press any key to close",
+        Style::default().fg(Color::Gray),
+    )));
 
     let paragraph = Paragraph::new(help_text)
         .block(
@@ -342,7 +344,8 @@ fn render_help_overlay(frame: &mut Frame<'_>) {
 }
 
 fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input: &str) {
-    let area = centered_rect(50, 20, frame.area());
+    // 5 lines of content + 2 for borders = 7 lines
+    let area = centered_rect_absolute(50, 7, frame.area());
 
     let text = vec![
         Line::from(prompt),
@@ -372,7 +375,8 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
 }
 
 fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(40, 30, frame.area());
+    // 10 lines of content + 2 for borders = 12 lines
+    let area = centered_rect_absolute(40, 12, frame.area());
 
     let context = if app.spawning_under.is_some() {
         "Add children to selected agent"
@@ -458,27 +462,6 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
     frame.render_widget(paragraph, area);
 }
 
-/// Create a centered rect with percentage width and height
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
-
 /// Create a centered rect with percentage width and absolute height
 fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
     let vertical_padding = area.height.saturating_sub(height) / 2;
@@ -546,17 +529,6 @@ mod tests {
         storage.add(create_test_agent("agent-4", Status::Starting));
 
         App::new(config, storage)
-    }
-
-    #[test]
-    fn test_centered_rect() {
-        let area = Rect::new(0, 0, 100, 50);
-        let centered = centered_rect(50, 50, area);
-
-        assert!(centered.x > 0);
-        assert!(centered.y > 0);
-        assert!(centered.width < area.width);
-        assert!(centered.height < area.height);
     }
 
     #[test]

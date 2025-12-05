@@ -2,7 +2,7 @@
 
 mod keys;
 
-pub use keys::{Action, KeyBindings};
+pub use keys::{Action, ActionGroup, KeyBindings};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -101,8 +101,10 @@ impl Config {
     pub fn load_from(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config from {}", path.display()))?;
-        let config: Self = serde_json::from_str(&contents)
+        let mut config: Self = serde_json::from_str(&contents)
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+        // Ensure any new default keybindings are available
+        config.keys.merge_defaults();
         Ok(config)
     }
 

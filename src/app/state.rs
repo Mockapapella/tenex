@@ -240,7 +240,7 @@ impl App {
     pub fn handle_char(&mut self, c: char) {
         if matches!(
             self.mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_)
+            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
         ) {
             self.input_buffer.push(c);
         }
@@ -250,7 +250,7 @@ impl App {
     pub fn handle_backspace(&mut self) {
         if matches!(
             self.mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_)
+            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
         ) {
             self.input_buffer.pop();
         }

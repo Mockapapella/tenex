@@ -54,6 +54,115 @@ pub enum Action {
     ToggleCollapse,
 }
 
+/// Categories for grouping actions in help display
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionGroup {
+    /// Agent creation and management actions
+    Agents,
+    /// Hierarchical agent workflow actions
+    Hierarchy,
+    /// Navigation and scrolling actions
+    Navigation,
+    /// Miscellaneous actions
+    Other,
+    /// Actions not shown in help (internal or context-specific)
+    Hidden,
+}
+
+impl ActionGroup {
+    /// Get the display title for this group
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Agents => "Agents",
+            Self::Hierarchy => "Hierarchy",
+            Self::Navigation => "Navigation",
+            Self::Other => "Other",
+            Self::Hidden => "",
+        }
+    }
+}
+
+impl Action {
+    /// Get the display description for this action
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::NewAgent => "New agent",
+            Self::NewAgentWithPrompt => "New agent with prompt",
+            Self::Attach => "Attach to agent",
+            Self::Kill => "Kill agent (and descendants)",
+            Self::Push => "Push branch to remote",
+            Self::Pause => "Pause agent",
+            Self::Resume => "Resume agent",
+            Self::SwitchTab => "Switch preview/diff",
+            Self::NextAgent => "Select next",
+            Self::PrevAgent => "Select previous",
+            Self::Help => "Show this help",
+            Self::Quit => "Quit",
+            Self::ScrollUp => "Scroll up",
+            Self::ScrollDown => "Scroll down",
+            Self::ScrollTop => "Scroll to top",
+            Self::ScrollBottom => "Scroll to bottom",
+            Self::Cancel => "Cancel",
+            Self::Confirm => "Confirm",
+            Self::SpawnChildren => "Spawn children (new root)",
+            Self::AddChildren => "Add children to selected",
+            Self::Synthesize => "Synthesize children",
+            Self::ToggleCollapse => "Toggle collapse/expand",
+        }
+    }
+
+    /// Get the group this action belongs to
+    #[must_use]
+    pub const fn group(self) -> ActionGroup {
+        match self {
+            Self::NewAgent | Self::NewAgentWithPrompt | Self::Attach | Self::Kill => {
+                ActionGroup::Agents
+            }
+            Self::SpawnChildren | Self::AddChildren | Self::Synthesize | Self::ToggleCollapse => {
+                ActionGroup::Hierarchy
+            }
+            Self::NextAgent
+            | Self::PrevAgent
+            | Self::SwitchTab
+            | Self::ScrollUp
+            | Self::ScrollDown
+            | Self::ScrollTop
+            | Self::ScrollBottom => ActionGroup::Navigation,
+            Self::Help | Self::Quit => ActionGroup::Other,
+            Self::Push | Self::Pause | Self::Resume | Self::Cancel | Self::Confirm => {
+                ActionGroup::Hidden
+            }
+        }
+    }
+
+    /// All actions in display order for help
+    pub const ALL_FOR_HELP: &'static [Self] = &[
+        // Agents
+        Self::NewAgent,
+        Self::NewAgentWithPrompt,
+        Self::Attach,
+        Self::Kill,
+        // Hierarchy
+        Self::SpawnChildren,
+        Self::AddChildren,
+        Self::Synthesize,
+        Self::ToggleCollapse,
+        // Navigation
+        Self::NextAgent,
+        Self::PrevAgent,
+        Self::SwitchTab,
+        Self::ScrollUp,
+        Self::ScrollDown,
+        Self::ScrollTop,
+        Self::ScrollBottom,
+        // Other
+        Self::Help,
+        Self::Quit,
+    ];
+}
+
 /// Keybinding configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -95,6 +204,17 @@ impl Default for KeyBindings {
 }
 
 impl KeyBindings {
+    /// Merge in any missing default keybindings
+    ///
+    /// This ensures that new keybindings added in updates are available
+    /// even if the user has an older saved config.
+    pub fn merge_defaults(&mut self) {
+        let defaults = Self::default();
+        for (key, action) in defaults.bindings {
+            self.bindings.entry(key).or_insert(action);
+        }
+    }
+
     /// Get the action for a key event
     #[must_use]
     pub fn get_action(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
@@ -114,6 +234,67 @@ impl KeyBindings {
             .iter()
             .filter_map(|(k, &v)| if v == action { Some(k.clone()) } else { None })
             .collect()
+    }
+
+    /// Format key(s) for an action for display (e.g., "Enter/o" or "j/Down")
+    #[must_use]
+    pub fn format_keys(&self, action: Action) -> String {
+        let mut keys = self.keys_for_action(action);
+        // Sort to ensure consistent display order (prefer shorter/simpler keys first)
+        keys.sort_by(|a, b| {
+            // Prefer single chars over multi-char keys
+            let a_simple = a.len() == 1 || a == "Space";
+            let b_simple = b.len() == 1 || b == "Space";
+            match (a_simple, b_simple) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
+            }
+        });
+        // Replace space with readable name
+        keys.iter()
+            .map(|k| {
+                if k == " " {
+                    "Space".to_string()
+                } else {
+                    k.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// Generate a formatted help line for an action: "  keys    description"
+    #[must_use]
+    pub fn help_line(&self, action: Action) -> String {
+        let keys = self.format_keys(action);
+        format!("  {keys:<10} {}", action.description())
+    }
+
+    /// Generate status bar hint text
+    #[must_use]
+    pub fn status_hints(&self) -> String {
+        // Show key hints for common actions
+        let hints = [
+            (Action::NewAgent, "add"),
+            (Action::Kill, "del"),
+            (Action::SwitchTab, "switch"),
+            (Action::Help, "help"),
+            (Action::Quit, "quit"),
+        ];
+
+        hints
+            .iter()
+            .map(|(action, label)| {
+                let key = self
+                    .keys_for_action(*action)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default();
+                format!("[{key}]{label}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -193,6 +374,40 @@ mod tests {
     }
 
     #[test]
+    fn test_uppercase_keybindings() {
+        let keys = KeyBindings::default();
+
+        // Uppercase 'S' should trigger SpawnChildren
+        assert_eq!(
+            keys.get_action(KeyCode::Char('S'), KeyModifiers::SHIFT),
+            Some(Action::SpawnChildren)
+        );
+        // Also works without SHIFT modifier (some terminals don't send it)
+        assert_eq!(
+            keys.get_action(KeyCode::Char('S'), KeyModifiers::NONE),
+            Some(Action::SpawnChildren)
+        );
+
+        // Lowercase 's' should trigger Synthesize
+        assert_eq!(
+            keys.get_action(KeyCode::Char('s'), KeyModifiers::NONE),
+            Some(Action::Synthesize)
+        );
+
+        // Uppercase 'A' should trigger NewAgentWithPrompt
+        assert_eq!(
+            keys.get_action(KeyCode::Char('A'), KeyModifiers::SHIFT),
+            Some(Action::NewAgentWithPrompt)
+        );
+
+        // Uppercase 'G' should trigger ScrollBottom
+        assert_eq!(
+            keys.get_action(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            Some(Action::ScrollBottom)
+        );
+    }
+
+    #[test]
     fn test_unknown_key() {
         let keys = KeyBindings::default();
 
@@ -220,6 +435,52 @@ mod tests {
 
         assert!(attach_keys.contains(&"Enter".to_string()));
         assert!(attach_keys.contains(&"o".to_string()));
+    }
+
+    #[test]
+    fn test_format_keys_and_help_line() {
+        let keys = KeyBindings::default();
+
+        // Test that SpawnChildren shows "S"
+        let spawn_keys = keys.format_keys(Action::SpawnChildren);
+        assert_eq!(spawn_keys, "S");
+
+        // Test help line format
+        let spawn_help = keys.help_line(Action::SpawnChildren);
+        assert!(spawn_help.contains('S'));
+        assert!(spawn_help.contains("Spawn children"));
+    }
+
+    #[test]
+    fn test_merge_defaults() {
+        // Simulate an old config missing hierarchy keybindings
+        let mut keys = KeyBindings {
+            bindings: [
+                ("a".to_string(), Action::NewAgent),
+                ("q".to_string(), Action::Quit),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        // Should be missing SpawnChildren
+        assert_eq!(
+            keys.get_action(KeyCode::Char('S'), KeyModifiers::NONE),
+            None
+        );
+
+        // After merging defaults, it should work
+        keys.merge_defaults();
+        assert_eq!(
+            keys.get_action(KeyCode::Char('S'), KeyModifiers::NONE),
+            Some(Action::SpawnChildren)
+        );
+
+        // Existing bindings should be preserved (not overwritten)
+        assert_eq!(
+            keys.get_action(KeyCode::Char('a'), KeyModifiers::NONE),
+            Some(Action::NewAgent)
+        );
     }
 
     #[test]
