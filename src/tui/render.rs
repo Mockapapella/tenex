@@ -32,12 +32,47 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             &app.input_buffer,
         ),
         Mode::Confirming(action) => {
-            let msg = match action {
-                muster::app::ConfirmAction::Kill => "Kill this agent?",
-                muster::app::ConfirmAction::Reset => "Reset all agents?",
-                muster::app::ConfirmAction::Quit => "Quit with running agents?",
+            let lines: Vec<Line<'_>> = match action {
+                muster::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
+                    || vec![Line::from("No agent selected")],
+                    |agent| {
+                        vec![
+                            Line::from("Kill this agent?"),
+                            Line::from(""),
+                            Line::from(vec![
+                                Span::raw("  Name:    "),
+                                Span::styled(
+                                    &agent.title,
+                                    Style::default().add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::raw("  Branch:  "),
+                                Span::styled(&agent.branch, Style::default().fg(Color::Cyan)),
+                            ]),
+                            Line::from(vec![
+                                Span::raw("  Session: "),
+                                Span::styled(
+                                    &agent.tmux_session,
+                                    Style::default().fg(Color::Yellow),
+                                ),
+                            ]),
+                            Line::from(""),
+                            Line::from(Span::styled(
+                                "This will delete the worktree and branch.",
+                                Style::default().fg(Color::Red),
+                            )),
+                        ]
+                    },
+                ),
+                muster::app::ConfirmAction::Reset => {
+                    vec![Line::from("Reset all agents?")]
+                }
+                muster::app::ConfirmAction::Quit => {
+                    vec![Line::from("Quit with running agents?")]
+                }
             };
-            render_confirm_overlay(frame, msg);
+            render_confirm_overlay(frame, lines);
         }
         _ => {}
     }
@@ -299,27 +334,33 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
     frame.render_widget(paragraph, area);
 }
 
-fn render_confirm_overlay(frame: &mut Frame<'_>, message: &str) {
-    let area = centered_rect(40, 15, frame.area());
+fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
+    // Add the yes/no prompt at the end
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "[Y]",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("es  "),
+        Span::styled(
+            "[N]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("o"),
+    ]));
 
-    let text = vec![
-        Line::from(message),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "[Y]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("es  "),
-            Span::styled(
-                "[N]",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("o"),
-        ]),
-    ];
+    // Height: content lines + 2 for borders
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "dialog content is always small"
+    )]
+    let height = (lines.len() + 2) as u16;
+    let area = centered_rect_absolute(50, height, frame.area());
+
+    let text = lines;
 
     let paragraph = Paragraph::new(text)
         .block(
@@ -342,6 +383,28 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_y) / 2),
             Constraint::Percentage(percent_y),
             Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+/// Create a centered rect with percentage width and absolute height
+fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
+    let vertical_padding = area.height.saturating_sub(height) / 2;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(vertical_padding),
+            Constraint::Length(height),
+            Constraint::Length(vertical_padding),
         ])
         .split(area);
 

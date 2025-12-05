@@ -92,7 +92,7 @@ impl<'a> Manager<'a> {
         Ok(())
     }
 
-    /// Remove a worktree
+    /// Remove a worktree and its associated branch
     ///
     /// # Errors
     ///
@@ -120,6 +120,10 @@ impl<'a> Manager<'a> {
                 format!("Failed to remove worktree directory {}", wt_path.display())
             })?;
         }
+
+        // Also delete the branch
+        let branch_mgr = super::BranchManager::new(self.repo);
+        let _ = branch_mgr.delete(name); // Ignore errors (branch may already be deleted)
 
         Ok(())
     }
