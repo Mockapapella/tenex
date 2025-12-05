@@ -266,8 +266,14 @@ mod tests {
         let config = Config::default();
 
         // Test various special characters
-        assert_eq!(config.generate_branch_name("fix@#$%bug"), "muster/fix----bug");
-        assert_eq!(config.generate_branch_name("hello/world"), "muster/hello-world");
+        assert_eq!(
+            config.generate_branch_name("fix@#$%bug"),
+            "muster/fix----bug"
+        );
+        assert_eq!(
+            config.generate_branch_name("hello/world"),
+            "muster/hello-world"
+        );
     }
 
     #[test]

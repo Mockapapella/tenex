@@ -43,10 +43,7 @@ fn test_cli_config_show() {
 
 #[test]
 fn test_cli_config_path() {
-    let output = muster_bin()
-        .args(["config", "--path"])
-        .output()
-        .unwrap();
+    let output = muster_bin().args(["config", "--path"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("muster"));
@@ -55,10 +52,7 @@ fn test_cli_config_path() {
 #[test]
 fn test_cli_reset_force() {
     // Reset with force should succeed (even if no agents)
-    let output = muster_bin()
-        .args(["reset", "--force"])
-        .output()
-        .unwrap();
+    let output = muster_bin().args(["reset", "--force"]).output().unwrap();
     assert!(output.status.success());
 }
 
@@ -74,10 +68,7 @@ fn test_cli_attach_nonexistent() {
 
 #[test]
 fn test_cli_kill_nonexistent() {
-    let output = muster_bin()
-        .args(["kill", "nonexistent"])
-        .output()
-        .unwrap();
+    let output = muster_bin().args(["kill", "nonexistent"]).output().unwrap();
     // Should fail because agent doesn't exist
     assert!(!output.status.success());
 }
@@ -104,10 +95,7 @@ fn test_cli_resume_nonexistent() {
 
 #[test]
 fn test_cli_list_running_only() {
-    let output = muster_bin()
-        .args(["list", "--running"])
-        .output()
-        .unwrap();
+    let output = muster_bin().args(["list", "--running"]).output().unwrap();
     assert!(output.status.success());
 }
 
@@ -122,9 +110,6 @@ fn test_cli_with_program_flag() {
 
 #[test]
 fn test_cli_with_auto_yes_flag() {
-    let output = muster_bin()
-        .args(["-y", "list"])
-        .output()
-        .unwrap();
+    let output = muster_bin().args(["-y", "list"]).output().unwrap();
     assert!(output.status.success());
 }

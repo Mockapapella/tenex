@@ -602,7 +602,9 @@ fn test_actions_kill_agent_integration() {
     app.select_next();
 
     // Now kill it via confirm action
-    app.enter_mode(muster::app::Mode::Confirming(muster::app::ConfirmAction::Kill));
+    app.enter_mode(muster::app::Mode::Confirming(
+        muster::app::ConfirmAction::Kill,
+    ));
     let result = handler.handle_action(&mut app, muster::config::Action::Confirm);
 
     std::env::set_current_dir(&original_dir).unwrap();
@@ -678,7 +680,9 @@ fn test_actions_update_preview_integration() {
     let handler = muster::app::Actions::new();
 
     // Create an agent
-    handler.create_agent(&mut app, "preview-test", None).unwrap();
+    handler
+        .create_agent(&mut app, "preview-test", None)
+        .unwrap();
     app.select_next();
 
     // Wait for session
@@ -794,7 +798,9 @@ fn test_actions_reset_all_integration() {
     assert_eq!(app.storage.len(), 2);
 
     // Reset all via confirm action
-    app.enter_mode(muster::app::Mode::Confirming(muster::app::ConfirmAction::Reset));
+    app.enter_mode(muster::app::Mode::Confirming(
+        muster::app::ConfirmAction::Reset,
+    ));
     let result = handler.handle_action(&mut app, muster::config::Action::Confirm);
     assert!(result.is_ok());
     assert_eq!(app.storage.len(), 0);
@@ -867,7 +873,10 @@ fn test_tmux_capture_pane() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Verify session exists
-    assert!(manager.exists(&session_name), "Session should exist before capture");
+    assert!(
+        manager.exists(&session_name),
+        "Session should exist before capture"
+    );
 
     // Capture the pane
     let capture = muster::tmux::OutputCapture::new();
@@ -898,7 +907,10 @@ fn test_tmux_capture_pane_with_history() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Verify session exists
-    assert!(manager.exists(&session_name), "Session should exist before capture");
+    assert!(
+        manager.exists(&session_name),
+        "Session should exist before capture"
+    );
 
     // Capture with history
     let capture = muster::tmux::OutputCapture::new();
@@ -929,7 +941,10 @@ fn test_tmux_capture_full_history() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Verify session exists
-    assert!(manager.exists(&session_name), "Session should exist before capture");
+    assert!(
+        manager.exists(&session_name),
+        "Session should exist before capture"
+    );
 
     // Capture full history
     let capture = muster::tmux::OutputCapture::new();

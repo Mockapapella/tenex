@@ -643,8 +643,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.default_program = "original".to_string();
+        let config = Config {
+            default_program: "original".to_string(),
+            ..Default::default()
+        };
         config.save_to(&config_path).unwrap();
 
         // Load and modify - we test the parsing logic
@@ -659,8 +661,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.branch_prefix = "custom/".to_string();
+        let config = Config {
+            branch_prefix: "custom/".to_string(),
+            ..Default::default()
+        };
         config.save_to(&config_path).unwrap();
 
         let loaded = Config::load_from(&config_path).unwrap();
@@ -674,8 +678,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.auto_yes = true;
+        let config = Config {
+            auto_yes: true,
+            ..Default::default()
+        };
         config.save_to(&config_path).unwrap();
 
         let loaded = Config::load_from(&config_path).unwrap();
@@ -689,8 +695,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.poll_interval_ms = 500;
+        let config = Config {
+            poll_interval_ms: 500,
+            ..Default::default()
+        };
         config.save_to(&config_path).unwrap();
 
         let loaded = Config::load_from(&config_path).unwrap();
@@ -704,8 +712,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.max_agents = 20;
+        let config = Config {
+            max_agents: 20,
+            ..Default::default()
+        };
         config.save_to(&config_path).unwrap();
 
         let loaded = Config::load_from(&config_path).unwrap();
@@ -729,8 +739,10 @@ mod tests {
     // Integration tests for CLI commands
     #[test]
     fn test_cmd_new_max_agents_reached() {
-        let mut config = Config::default();
-        config.max_agents = 1;
+        let config = Config {
+            max_agents: 1,
+            ..Default::default()
+        };
 
         let mut storage = Storage::new();
         storage.add(create_test_agent("existing"));
@@ -751,7 +763,7 @@ mod tests {
     fn test_cmd_attach_session_not_found() {
         let mut storage = Storage::new();
         let agent = create_test_agent("test");
-        let short_id = agent.short_id().to_string();
+        let short_id = agent.short_id();
         storage.add(agent);
 
         // Agent exists but session doesn't
@@ -778,7 +790,7 @@ mod tests {
         let mut storage = Storage::new();
         let mut agent = create_test_agent("paused");
         agent.set_status(muster::Status::Paused);
-        let short_id = agent.short_id().to_string();
+        let short_id = agent.short_id();
         storage.add(agent);
 
         // Cannot pause an already paused agent
@@ -798,7 +810,7 @@ mod tests {
         let mut storage = Storage::new();
         let mut agent = create_test_agent("running");
         agent.set_status(muster::Status::Running);
-        let short_id = agent.short_id().to_string();
+        let short_id = agent.short_id();
         storage.add(agent);
 
         // Cannot resume a running agent

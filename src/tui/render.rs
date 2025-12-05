@@ -362,8 +362,8 @@ mod tests {
     use muster::agent::{Agent, Storage};
     use muster::app::ConfirmAction;
     use muster::config::Config;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
     fn create_test_config() -> Config {
