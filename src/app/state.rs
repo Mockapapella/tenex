@@ -664,4 +664,75 @@ mod tests {
         assert_eq!(app.preview_scroll, 0);
         assert_eq!(app.diff_scroll, 0);
     }
+
+    #[test]
+    fn test_increment_child_count() {
+        let mut app = App::default();
+        assert_eq!(app.child_count, 3);
+        app.increment_child_count();
+        assert_eq!(app.child_count, 4);
+    }
+
+    #[test]
+    fn test_decrement_child_count() {
+        let mut app = App::default();
+        app.decrement_child_count();
+        assert_eq!(app.child_count, 2);
+        app.child_count = 1;
+        app.decrement_child_count();
+        assert_eq!(app.child_count, 1); // Minimum is 1
+    }
+
+    #[test]
+    fn test_start_spawning_under() {
+        let mut app = App::default();
+        let id = uuid::Uuid::new_v4();
+        app.start_spawning_under(id);
+        assert_eq!(app.spawning_under, Some(id));
+        assert_eq!(app.child_count, 3);
+        assert_eq!(app.mode, Mode::ChildCount);
+    }
+
+    #[test]
+    fn test_start_spawning_root() {
+        let mut app = App::default();
+        app.start_spawning_root();
+        assert!(app.spawning_under.is_none());
+        assert_eq!(app.child_count, 3);
+        assert_eq!(app.mode, Mode::ChildCount);
+    }
+
+    #[test]
+    fn test_proceed_to_child_prompt() {
+        let mut app = App::default();
+        app.proceed_to_child_prompt();
+        assert_eq!(app.mode, Mode::ChildPrompt);
+    }
+
+    #[test]
+    fn test_toggle_selected_collapse() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::default();
+        let mut agent = create_test_agent("test");
+        agent.collapsed = false;
+        app.storage.add(agent);
+
+        app.toggle_selected_collapse();
+        assert!(app.selected_agent().ok_or("Expected agent")?.collapsed);
+
+        app.toggle_selected_collapse();
+        assert!(!app.selected_agent().ok_or("Expected agent")?.collapsed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_selected_has_children() {
+        let app = App::default();
+        assert!(!app.selected_has_children());
+    }
+
+    #[test]
+    fn test_selected_depth() {
+        let app = App::default();
+        assert_eq!(app.selected_depth(), 0);
+    }
 }

@@ -397,4 +397,20 @@ mod tests {
         let result = manager.send_keys("muster-nonexistent", "test");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_window_target() {
+        let target = Manager::window_target("my-session", 5);
+        assert_eq!(target, "my-session:5");
+    }
+
+    #[test]
+    fn test_session_attached_true() {
+        let session = Session {
+            name: "test".to_string(),
+            created: 1_234_567_890,
+            attached: true,
+        };
+        assert!(session.attached);
+    }
 }
