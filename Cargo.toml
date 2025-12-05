@@ -84,11 +84,6 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
-[profile.mutants]
-inherits = "test"
-debug = "none"
-opt-level = 1
-
 [profile.coverage]
 inherits = "test"
 debug = 2

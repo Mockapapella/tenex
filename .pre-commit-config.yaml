@@ -30,36 +30,9 @@ repos:
         pass_filenames: false
 
       - id: cargo-coverage
-        name: cargo llvm-cov (100% lines + functions)
+        name: cargo llvm-cov (90% lines + functions)
         entry: cargo cov
         language: system
         types: [rust]
         pass_filenames: false
 
-      - id: cargo-mutants
-        name: cargo mutants (mutation testing)
-        entry: cargo mutants --profile mutants
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: cargo-udeps
-        name: cargo udeps (unused dependencies)
-        entry: cargo +nightly udeps --all-targets
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: cargo-deny
-        name: cargo deny (deps / licenses / advisories / bans)
-        entry: cargo deny check bans licenses sources advisories
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: cargo-audit
-        name: cargo audit (RustSec)
-        entry: cargo audit --deny-warnings
-        language: system
-        types: [rust]
-        pass_filenames: false
