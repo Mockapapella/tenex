@@ -158,6 +158,12 @@ impl Actions {
         let repo = git::open_repository(&repo_path)?;
 
         let worktree_mgr = WorktreeManager::new(&repo);
+
+        // If worktree/branch already exists, remove it first to start fresh
+        if worktree_mgr.exists(&branch) {
+            worktree_mgr.remove(&branch)?;
+        }
+
         worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
         let agent = Agent::new(
