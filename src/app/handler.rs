@@ -252,8 +252,16 @@ impl Actions {
 
     /// Reset all agents and state
     fn reset_all(&self, app: &mut App) -> Result<()> {
+        let repo_path = std::env::current_dir()?;
+        let repo = git::open_repository(&repo_path).ok();
+
         for agent in app.storage.iter() {
             let _ = self.session_manager.kill(&agent.tmux_session);
+
+            if let Some(ref repo) = repo {
+                let worktree_mgr = WorktreeManager::new(repo);
+                let _ = worktree_mgr.remove(&agent.branch);
+            }
         }
 
         app.storage.clear();
