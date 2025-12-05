@@ -14,7 +14,7 @@ impl Capture {
         Self
     }
 
-    /// Capture the visible pane content
+    /// Capture the visible pane content with ANSI color codes
     ///
     /// # Errors
     ///
@@ -25,6 +25,7 @@ impl Capture {
             .arg("-t")
             .arg(session)
             .arg("-p")
+            .arg("-e") // Preserve escape sequences (ANSI colors)
             .output()
             .context("Failed to execute tmux")?;
 
@@ -36,7 +37,7 @@ impl Capture {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    /// Capture pane with scroll-back history
+    /// Capture pane with scroll-back history and ANSI color codes
     ///
     /// # Errors
     ///
@@ -49,6 +50,7 @@ impl Capture {
             .arg("-t")
             .arg(session)
             .arg("-p")
+            .arg("-e") // Preserve escape sequences (ANSI colors)
             .arg("-S")
             .arg(&start)
             .output()
@@ -62,7 +64,7 @@ impl Capture {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    /// Capture entire scroll-back buffer
+    /// Capture entire scroll-back buffer with ANSI color codes
     ///
     /// # Errors
     ///
@@ -73,6 +75,7 @@ impl Capture {
             .arg("-t")
             .arg(session)
             .arg("-p")
+            .arg("-e") // Preserve escape sequences (ANSI colors)
             .arg("-S")
             .arg("-")
             .output()

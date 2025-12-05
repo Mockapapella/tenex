@@ -5,10 +5,45 @@ use muster::app::{App, Mode, Tab};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+
+/// Modern color palette - cohesive, muted colors for a clean look
+mod colors {
+    use ratatui::style::Color;
+
+    // UI Chrome
+    pub const BORDER: Color = Color::Rgb(100, 110, 130);
+    pub const SURFACE: Color = Color::Rgb(30, 32, 40);
+    pub const SURFACE_HIGHLIGHT: Color = Color::Rgb(50, 55, 70);
+
+    // Text
+    pub const TEXT_PRIMARY: Color = Color::Rgb(220, 220, 230);
+    pub const TEXT_DIM: Color = Color::Rgb(130, 135, 150);
+    pub const TEXT_MUTED: Color = Color::Rgb(90, 95, 110);
+
+    // Status (semantic)
+    pub const STATUS_RUNNING: Color = Color::Rgb(120, 180, 120);
+    pub const STATUS_STOPPED: Color = Color::Rgb(200, 100, 100);
+    pub const STATUS_STARTING: Color = Color::Rgb(200, 180, 100);
+    pub const STATUS_PAUSED: Color = Color::Rgb(100, 140, 200);
+
+    // Diff
+    pub const DIFF_ADD: Color = Color::Rgb(120, 180, 120);
+    pub const DIFF_REMOVE: Color = Color::Rgb(200, 100, 100);
+    pub const DIFF_HUNK: Color = Color::Rgb(100, 140, 200);
+
+    // Modals
+    pub const MODAL_BG: Color = Color::Rgb(25, 27, 35);
+    pub const MODAL_BORDER_WARNING: Color = Color::Rgb(200, 160, 80);
+    pub const MODAL_BORDER_ERROR: Color = Color::Rgb(200, 100, 100);
+
+    // Accent (for confirmations)
+    pub const ACCENT_POSITIVE: Color = Color::Rgb(120, 180, 120);
+    pub const ACCENT_NEGATIVE: Color = Color::Rgb(200, 100, 100);
+}
 
 /// Render the full application UI
 pub fn render(frame: &mut Frame<'_>, app: &App) {
@@ -47,42 +82,61 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
                 muster::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
-                    || vec![Line::from("No agent selected")],
+                    || {
+                        vec![Line::from(Span::styled(
+                            "No agent selected",
+                            Style::default().fg(colors::TEXT_PRIMARY),
+                        ))]
+                    },
                     |agent| {
                         vec![
-                            Line::from("Kill this agent?"),
+                            Line::from(Span::styled(
+                                "Kill this agent?",
+                                Style::default().fg(colors::TEXT_PRIMARY),
+                            )),
                             Line::from(""),
                             Line::from(vec![
-                                Span::raw("  Name:    "),
+                                Span::styled("  Name:    ", Style::default().fg(colors::TEXT_DIM)),
                                 Span::styled(
                                     &agent.title,
-                                    Style::default().add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(colors::TEXT_PRIMARY)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                             ]),
                             Line::from(vec![
-                                Span::raw("  Branch:  "),
-                                Span::styled(&agent.branch, Style::default().fg(Color::Cyan)),
+                                Span::styled("  Branch:  ", Style::default().fg(colors::TEXT_DIM)),
+                                Span::styled(
+                                    &agent.branch,
+                                    Style::default().fg(colors::TEXT_PRIMARY),
+                                ),
                             ]),
                             Line::from(vec![
-                                Span::raw("  Session: "),
+                                Span::styled("  Session: ", Style::default().fg(colors::TEXT_DIM)),
                                 Span::styled(
                                     &agent.tmux_session,
-                                    Style::default().fg(Color::Yellow),
+                                    Style::default().fg(colors::TEXT_PRIMARY),
                                 ),
                             ]),
                             Line::from(""),
                             Line::from(Span::styled(
                                 "This will delete the worktree and branch.",
-                                Style::default().fg(Color::Red),
+                                Style::default().fg(colors::STATUS_STOPPED),
                             )),
                         ]
                     },
                 ),
                 muster::app::ConfirmAction::Reset => {
-                    vec![Line::from("Reset all agents?")]
+                    vec![Line::from(Span::styled(
+                        "Reset all agents?",
+                        Style::default().fg(colors::TEXT_PRIMARY),
+                    ))]
                 }
                 muster::app::ConfirmAction::Quit => {
-                    vec![Line::from("Quit with running agents?")]
+                    vec![Line::from(Span::styled(
+                        "Quit with running agents?",
+                        Style::default().fg(colors::TEXT_PRIMARY),
+                    ))]
                 }
             };
             render_confirm_overlay(frame, lines);
@@ -110,19 +164,19 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, (agent, depth))| {
             let status_color = match agent.status {
-                Status::Starting => Color::Yellow,
-                Status::Running => Color::Green,
-                Status::Paused => Color::Blue,
-                Status::Stopped => Color::Red,
+                Status::Starting => colors::STATUS_STARTING,
+                Status::Running => colors::STATUS_RUNNING,
+                Status::Paused => colors::STATUS_PAUSED,
+                Status::Stopped => colors::STATUS_STOPPED,
             };
 
             let style = if i == app.selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::White)
+                    .fg(colors::TEXT_PRIMARY)
+                    .bg(colors::SURFACE_HIGHLIGHT)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
+                Style::default().fg(colors::TEXT_PRIMARY)
             };
 
             // Build indentation based on depth
@@ -150,12 +204,12 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     format!("{} ", agent.status.symbol()),
                     Style::default().fg(status_color),
                 ),
-                Span::styled(collapse_indicator, Style::default().fg(Color::Cyan)),
+                Span::styled(collapse_indicator, Style::default().fg(colors::TEXT_DIM)),
                 Span::styled(&agent.title, style),
-                Span::styled(count_indicator, Style::default().fg(Color::Magenta)),
+                Span::styled(count_indicator, Style::default().fg(colors::TEXT_DIM)),
                 Span::styled(
                     format!(" ({})", agent.age_string()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(colors::TEXT_MUTED),
                 ),
             ]);
 
@@ -169,7 +223,7 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(colors::BORDER)),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -203,36 +257,43 @@ fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Span::styled(
                     name,
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
+                        .fg(colors::TEXT_PRIMARY)
+                        .bg(colors::SURFACE_HIGHLIGHT)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                Span::styled(name, Style::default().fg(Color::Gray))
+                Span::styled(name, Style::default().fg(colors::TEXT_MUTED))
             }
         })
         .collect();
 
     let line = Line::from(spans);
-    let paragraph = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
+    let paragraph = Paragraph::new(line).style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, area);
 }
 
 fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.preview_content;
-    let lines: Vec<Line<'_>> = content.lines().map(Line::from).collect();
 
+    // Parse ANSI escape sequences to preserve terminal colors
+    let text = ansi_to_tui::IntoText::into_text(content).unwrap_or_else(|_| {
+        // Fallback to plain text if parsing fails
+        Text::from(content.as_str())
+    });
+
+    let line_count = text.lines.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
     let scroll = app
         .preview_scroll
-        .min(lines.len().saturating_sub(visible_height));
+        .min(line_count.saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
-    let paragraph = Paragraph::new(Text::from(lines))
+    let paragraph = Paragraph::new(text)
         .block(
             Block::default()
                 .title(" Terminal Output ")
-                .borders(Borders::ALL),
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
         )
         .scroll((scroll_pos, 0))
         .wrap(Wrap { trim: false });
@@ -247,13 +308,13 @@ fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .lines()
         .map(|line| {
             let color = if line.starts_with('+') && !line.starts_with("+++") {
-                Color::Green
+                colors::DIFF_ADD
             } else if line.starts_with('-') && !line.starts_with("---") {
-                Color::Red
+                colors::DIFF_REMOVE
             } else if line.starts_with("@@") {
-                Color::Cyan
+                colors::DIFF_HUNK
             } else {
-                Color::White
+                colors::TEXT_PRIMARY
             };
 
             Line::styled(line, Style::default().fg(color))
@@ -267,7 +328,12 @@ fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(Text::from(lines))
-        .block(Block::default().title(" Git Diff ").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(" Git Diff ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
         .scroll((scroll_pos, 0))
         .wrap(Wrap { trim: false });
 
@@ -281,22 +347,25 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = match (&app.last_error, &app.status_message, showing_error_modal) {
         (Some(error), _, false) => Span::styled(
             format!(" Error: {error} "),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::STATUS_STOPPED)
+                .add_modifier(Modifier::BOLD),
         ),
-        (_, Some(status), _) => {
-            Span::styled(format!(" {status} "), Style::default().fg(Color::Green))
-        }
+        (_, Some(status), _) => Span::styled(
+            format!(" {status} "),
+            Style::default().fg(colors::STATUS_RUNNING),
+        ),
         _ => {
             let running = app.running_agent_count();
             let hints = app.config.keys.status_hints();
             Span::styled(
                 format!(" {running} running | {hints} "),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(colors::TEXT_DIM),
             )
         }
     };
 
-    let paragraph = Paragraph::new(Line::from(content)).style(Style::default().bg(Color::DarkGray));
+    let paragraph = Paragraph::new(Line::from(content)).style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, area);
 }
 
@@ -310,7 +379,9 @@ fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings
     let mut help_text = vec![
         Line::from(Span::styled(
             "Keybindings",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -326,7 +397,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings
             }
             help_text.push(Line::from(Span::styled(
                 group.title(),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(colors::TEXT_DIM),
             )));
             current_group = Some(group);
         }
@@ -337,7 +408,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings
     help_text.push(Line::from(""));
     help_text.push(Line::from(Span::styled(
         "Press any key to close",
-        Style::default().fg(Color::Gray),
+        Style::default().fg(colors::TEXT_MUTED),
     )));
 
     let paragraph = Paragraph::new(help_text)
@@ -345,9 +416,9 @@ fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings
             Block::default()
                 .title(" Help ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(colors::BORDER)),
         )
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(colors::MODAL_BG));
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -358,16 +429,21 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
     let area = centered_rect_absolute(50, 7, frame.area());
 
     let text = vec![
-        Line::from(prompt),
+        Line::from(Span::styled(
+            prompt,
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             format!("{input}_"),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Press Enter to confirm, Esc to cancel",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(colors::TEXT_MUTED),
         )),
     ];
 
@@ -376,9 +452,9 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
             Block::default()
                 .title(format!(" {title} "))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
+                .border_style(Style::default().fg(colors::BORDER)),
         )
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(colors::MODAL_BG));
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -395,26 +471,35 @@ fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
     };
 
     let text = vec![
-        Line::from(Span::styled(context, Style::default().fg(Color::Gray))),
+        Line::from(Span::styled(context, Style::default().fg(colors::TEXT_DIM))),
         Line::from(""),
-        Line::from("How many child agents?"),
+        Line::from(Span::styled(
+            "How many child agents?",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )),
         Line::from(""),
-        Line::from(Span::styled("        ▲", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            "        ▲",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
         Line::from(Span::styled(
             format!("        {}", app.child_count),
             Style::default()
-                .fg(Color::White)
+                .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled("        ▼", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            "        ▼",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "↑/k to increase, ↓/j to decrease",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(colors::TEXT_MUTED),
         )),
         Line::from(Span::styled(
             "Enter to continue, Esc to cancel",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(colors::TEXT_MUTED),
         )),
     ];
 
@@ -423,9 +508,9 @@ fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Spawn Children ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
+                .border_style(Style::default().fg(colors::BORDER)),
         )
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(colors::MODAL_BG));
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -438,15 +523,17 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
         Span::styled(
             "[Y]",
             Style::default()
-                .fg(Color::Green)
+                .fg(colors::ACCENT_POSITIVE)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("es  "),
+        Span::styled("es  ", Style::default().fg(colors::TEXT_PRIMARY)),
         Span::styled(
             "[N]",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::ACCENT_NEGATIVE)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("o"),
+        Span::styled("o", Style::default().fg(colors::TEXT_PRIMARY)),
     ]));
 
     // Height: content lines + 2 for borders
@@ -460,9 +547,9 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
             Block::default()
                 .title(" Confirm ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
+                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING)),
         )
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(colors::MODAL_BG));
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -476,7 +563,9 @@ fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
     // Add error icon and header
     lines.push(Line::from(Span::styled(
         "✖ Error",
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(colors::MODAL_BORDER_ERROR)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -491,19 +580,25 @@ fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
             current_line.push(' ');
             current_line.push_str(word);
         } else {
-            lines.push(Line::from(current_line.clone()));
+            lines.push(Line::from(Span::styled(
+                current_line.clone(),
+                Style::default().fg(colors::TEXT_PRIMARY),
+            )));
             current_line = word.to_string();
         }
     }
     if !current_line.is_empty() {
-        lines.push(Line::from(current_line));
+        lines.push(Line::from(Span::styled(
+            current_line,
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )));
     }
 
     // Add dismiss hint
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Press any key to dismiss",
-        Style::default().fg(Color::Gray),
+        Style::default().fg(colors::TEXT_MUTED),
     )));
 
     // Height: content lines + 2 for borders, min 7 lines
@@ -515,9 +610,9 @@ fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
             Block::default()
                 .title(" Error ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red)),
+                .border_style(Style::default().fg(colors::MODAL_BORDER_ERROR)),
         )
-        .style(Style::default().bg(Color::Black))
+        .style(Style::default().bg(colors::MODAL_BG))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);

@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 uuid = { version = "1.19", default-features = false, features = ["v4", "serde", "std"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 dirs = { version = "6.0", default-features = false }
+ansi-to-tui = { version = "7.0", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.19"
