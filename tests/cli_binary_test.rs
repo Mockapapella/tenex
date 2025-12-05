@@ -113,3 +113,62 @@ fn test_cli_with_auto_yes_flag() {
     let output = muster_bin().args(["-y", "list"]).output().unwrap();
     assert!(output.status.success());
 }
+
+#[test]
+fn test_cli_invalid_argument_shows_help() {
+    let output = muster_bin().arg("--invalid-flag").output().unwrap();
+
+    // Should fail with non-zero exit code
+    assert!(!output.status.success());
+
+    // Should show error message on stderr
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error:"));
+
+    // Should show help text on stdout
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage:"));
+}
+
+#[test]
+fn test_cli_unexpected_argument_shows_help() {
+    // Simulates typo like `--set` instead of `--set-agent`
+    let output = muster_bin().args(["--set", "codex"]).output().unwrap();
+
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error:"));
+
+    // Help on stdout should show the correct flag
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--set-agent"));
+}
+
+#[test]
+fn test_cli_set_agent() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Create a temp directory for config
+    let temp_dir = TempDir::new().unwrap();
+    let config_dir = temp_dir.path().join("muster");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    // Run with XDG_CONFIG_HOME set to temp directory
+    let output = muster_bin()
+        .args(["--set-agent", "test-agent"])
+        .env("XDG_CONFIG_HOME", temp_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Default agent set to: test-agent"));
+
+    // Verify config file was created with correct value
+    let config_path = config_dir.join("config.json");
+    let config_content = fs::read_to_string(&config_path).unwrap();
+    assert!(config_content.contains("test-agent"));
+}

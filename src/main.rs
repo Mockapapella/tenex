@@ -1,7 +1,7 @@
 //! Muster - Terminal multiplexer for AI coding agents
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use muster::App;
 use muster::agent::Storage;
 use muster::config::Config;
@@ -20,6 +20,10 @@ struct Cli {
     /// Auto-accept prompts (experimental)
     #[arg(short = 'y', long)]
     auto_yes: bool,
+
+    /// Set the default agent program and save to config
+    #[arg(long, value_name = "PROGRAM")]
+    set_agent: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -96,9 +100,31 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // Let --help and --version exit normally
+            if e.kind() == clap::error::ErrorKind::DisplayHelp
+                || e.kind() == clap::error::ErrorKind::DisplayVersion
+            {
+                e.exit();
+            }
+            // For actual errors, show error + help
+            eprintln!("error: {}\n", e.kind());
+            Cli::command().print_help()?;
+            std::process::exit(1);
+        }
+    };
 
     let mut config = Config::load().unwrap_or_default();
+
+    // Handle --set-agent: save to config and exit
+    if let Some(agent) = cli.set_agent {
+        config.default_program.clone_from(&agent);
+        config.save()?;
+        println!("Default agent set to: {agent}");
+        return Ok(());
+    }
 
     if cli.program != "claude" {
         config.default_program = cli.program;
@@ -404,6 +430,7 @@ mod tests {
         let cli = Cli::parse_from(["muster"]);
         assert_eq!(cli.program, "claude");
         assert!(!cli.auto_yes);
+        assert!(cli.set_agent.is_none());
         assert!(cli.command.is_none());
     }
 
@@ -412,6 +439,12 @@ mod tests {
         let cli = Cli::parse_from(["muster", "-p", "aider", "-y"]);
         assert_eq!(cli.program, "aider");
         assert!(cli.auto_yes);
+    }
+
+    #[test]
+    fn test_cli_set_agent() {
+        let cli = Cli::parse_from(["muster", "--set-agent", "codex"]);
+        assert_eq!(cli.set_agent, Some("codex".to_string()));
     }
 
     #[test]
