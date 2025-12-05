@@ -38,6 +38,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "Enter task for children:",
             &app.input_buffer,
         ),
+        Mode::Broadcasting => render_input_overlay(
+            frame,
+            "Broadcast Message",
+            "Enter message to broadcast to leaf agents:",
+            &app.input_buffer,
+        ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
                 muster::app::ConfirmAction::Kill => app.selected_agent().map_or_else(

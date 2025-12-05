@@ -171,7 +171,11 @@ impl App {
     pub fn enter_mode(&mut self, mode: Mode) {
         let should_clear = matches!(
             mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
+            Mode::Creating
+                | Mode::Prompting
+                | Mode::Confirming(_)
+                | Mode::ChildPrompt
+                | Mode::Broadcasting
         );
         self.mode = mode;
         if should_clear {
@@ -240,7 +244,11 @@ impl App {
     pub fn handle_char(&mut self, c: char) {
         if matches!(
             self.mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
+            Mode::Creating
+                | Mode::Prompting
+                | Mode::Confirming(_)
+                | Mode::ChildPrompt
+                | Mode::Broadcasting
         ) {
             self.input_buffer.push(c);
         }
@@ -250,7 +258,11 @@ impl App {
     pub fn handle_backspace(&mut self) {
         if matches!(
             self.mode,
-            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
+            Mode::Creating
+                | Mode::Prompting
+                | Mode::Confirming(_)
+                | Mode::ChildPrompt
+                | Mode::Broadcasting
         ) {
             self.input_buffer.pop();
         }
@@ -347,6 +359,8 @@ pub enum Mode {
     ChildCount,
     /// Typing the task/prompt for child agents
     ChildPrompt,
+    /// Typing a message to broadcast to agent and leaf descendants
+    Broadcasting,
 }
 
 /// Actions that require confirmation

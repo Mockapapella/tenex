@@ -110,6 +110,11 @@ impl Actions {
             Action::ToggleCollapse => {
                 self.toggle_collapse(app)?;
             }
+            Action::Broadcast => {
+                if app.selected_agent().is_some() {
+                    app.enter_mode(Mode::Broadcasting);
+                }
+            }
         }
         Ok(())
     }
@@ -327,10 +332,23 @@ impl Actions {
     /// Returns an error if preview update fails
     pub fn update_preview(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
+            // Determine the tmux target (session or specific window)
+            let tmux_target = if let Some(window_idx) = agent.window_index {
+                // Child agent: target specific window within root's session
+                let agent_id = agent.id;
+                let root = app.storage.root_ancestor(agent_id);
+                let root_session =
+                    root.map_or_else(|| agent.tmux_session.clone(), |r| r.tmux_session.clone());
+                SessionManager::window_target(&root_session, window_idx)
+            } else {
+                // Root agent: use session directly
+                agent.tmux_session.clone()
+            };
+
             if self.session_manager.exists(&agent.tmux_session) {
                 let content = self
                     .output_capture
-                    .capture_pane_with_history(&agent.tmux_session, 1000)
+                    .capture_pane_with_history(&tmux_target, 1000)
                     .unwrap_or_default();
                 app.preview_content = content;
             } else {
@@ -569,6 +587,65 @@ impl Actions {
                 app.storage.save()?;
             }
         }
+        Ok(())
+    }
+
+    /// Broadcast a message to the selected agent and all its leaf descendants
+    ///
+    /// Leaf agents are agents that have no children. Parent agents are skipped
+    /// but their children are still traversed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if broadcasting fails
+    pub fn broadcast_to_leaves(self, app: &mut App, message: &str) -> Result<()> {
+        let agent = app
+            .selected_agent()
+            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+
+        let agent_id = agent.id;
+        let mut sent_count = 0;
+
+        // Collect all agents to broadcast to (selected + descendants)
+        let mut targets: Vec<uuid::Uuid> = vec![agent_id];
+        targets.extend(app.storage.descendant_ids(agent_id));
+
+        // Filter to only leaf agents and send message
+        for target_id in targets {
+            if !app.storage.has_children(target_id)
+                && let Some(target_agent) = app.storage.get(target_id)
+            {
+                // Determine the tmux target (session or window)
+                let tmux_target = if let Some(window_idx) = target_agent.window_index {
+                    // Child agent: use window target within root's session
+                    let root = app.storage.root_ancestor(target_id);
+                    let root_session = root.map_or_else(
+                        || target_agent.tmux_session.clone(),
+                        |r| r.tmux_session.clone(),
+                    );
+                    SessionManager::window_target(&root_session, window_idx)
+                } else {
+                    // Root agent: use session directly
+                    target_agent.tmux_session.clone()
+                };
+
+                // Send the message
+                if self
+                    .session_manager
+                    .send_keys(&tmux_target, message)
+                    .is_ok()
+                {
+                    sent_count += 1;
+                }
+            }
+        }
+
+        if sent_count > 0 {
+            app.set_status(format!("Broadcast sent to {sent_count} agent(s)"));
+        } else {
+            app.set_error("No leaf agents found to broadcast to");
+        }
+
         Ok(())
     }
 
@@ -1349,5 +1426,47 @@ mod tests {
         // No agent - should not error
         handler.handle_action(&mut app, Action::ToggleCollapse)?;
         Ok(())
+    }
+
+    #[test]
+    fn test_handle_action_broadcast_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent - should not enter mode
+        handler.handle_action(&mut app, Action::Broadcast)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_action_broadcast_with_agent() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        handler.handle_action(&mut app, Action::Broadcast)?;
+        assert_eq!(app.mode, Mode::Broadcasting);
+        Ok(())
+    }
+
+    #[test]
+    fn test_broadcast_to_leaves_no_agent() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent selected - should return error
+        let result = handler.broadcast_to_leaves(&mut app, "test message");
+        assert!(result.is_err());
     }
 }

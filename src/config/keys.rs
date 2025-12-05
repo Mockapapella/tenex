@@ -52,6 +52,8 @@ pub enum Action {
     Synthesize,
     /// Toggle expand/collapse of selected agent
     ToggleCollapse,
+    /// Broadcast message to agent and all descendants
+    Broadcast,
 }
 
 /// Categories for grouping actions in help display
@@ -110,6 +112,7 @@ impl Action {
             Self::AddChildren => "Add children to selected",
             Self::Synthesize => "Synthesize children",
             Self::ToggleCollapse => "Toggle collapse/expand",
+            Self::Broadcast => "Broadcast to descendants",
         }
     }
 
@@ -120,9 +123,11 @@ impl Action {
             Self::NewAgent | Self::NewAgentWithPrompt | Self::Attach | Self::Kill => {
                 ActionGroup::Agents
             }
-            Self::SpawnChildren | Self::AddChildren | Self::Synthesize | Self::ToggleCollapse => {
-                ActionGroup::Hierarchy
-            }
+            Self::SpawnChildren
+            | Self::AddChildren
+            | Self::Synthesize
+            | Self::ToggleCollapse
+            | Self::Broadcast => ActionGroup::Hierarchy,
             Self::NextAgent
             | Self::PrevAgent
             | Self::SwitchTab
@@ -149,6 +154,7 @@ impl Action {
         Self::AddChildren,
         Self::Synthesize,
         Self::ToggleCollapse,
+        Self::Broadcast,
         // Navigation
         Self::NextAgent,
         Self::PrevAgent,
@@ -198,6 +204,7 @@ impl Default for KeyBindings {
         bindings.insert("+".to_string(), Action::AddChildren);
         bindings.insert("s".to_string(), Action::Synthesize);
         bindings.insert(" ".to_string(), Action::ToggleCollapse);
+        bindings.insert("B".to_string(), Action::Broadcast);
 
         Self { bindings }
     }

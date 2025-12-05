@@ -47,19 +47,14 @@ fn run_loop(
     event_handler: &Handler,
     action_handler: Actions,
 ) -> Result<()> {
-    let mut tick_count = 0;
-
     loop {
         terminal.draw(|frame| render::render(frame, app))?;
 
         match event_handler.next()? {
             Event::Tick => {
-                tick_count += 1;
-                if tick_count % 10 == 0 {
-                    let _ = action_handler.update_preview(app);
-                    let _ = action_handler.update_diff(app);
-                    let _ = action_handler.sync_agent_status(app);
-                }
+                let _ = action_handler.update_preview(app);
+                let _ = action_handler.update_diff(app);
+                let _ = action_handler.sync_agent_status(app);
             }
             Event::Key(key) => {
                 handle_key_event(app, action_handler, key.code, key.modifiers)?;
@@ -118,102 +113,52 @@ fn handle_key_event(
     modifiers: KeyModifiers,
 ) -> Result<()> {
     match &app.mode {
-        Mode::Creating | Mode::Prompting => match code {
-            KeyCode::Enter => {
-                let input = app.input_buffer.clone();
-                if !input.is_empty() {
-                    let result = if app.mode == Mode::Creating {
-                        action_handler.create_agent(app, &input, None)
-                    } else {
-                        action_handler.create_agent(app, "prompted-agent", Some(&input))
-                    };
-                    if let Err(e) = result {
-                        app.set_error(format!("Failed to create agent: {e:#}"));
+        Mode::Creating | Mode::Prompting | Mode::ChildPrompt | Mode::Broadcasting => {
+            match code {
+                KeyCode::Enter => {
+                    let input = app.input_buffer.clone();
+                    if !input.is_empty() {
+                        let result = match app.mode {
+                            Mode::Creating => action_handler.create_agent(app, &input, None),
+                            Mode::Prompting => {
+                                action_handler.create_agent(app, "prompted-agent", Some(&input))
+                            }
+                            Mode::ChildPrompt => action_handler.spawn_children(app, &input),
+                            Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
+                            _ => Ok(()),
+                        };
+                        if let Err(e) = result {
+                            app.set_error(format!("Failed: {e:#}"));
+                        }
                     }
+                    app.exit_mode();
                 }
-                app.exit_mode();
-                return Ok(());
+                KeyCode::Esc => app.exit_mode(),
+                KeyCode::Char(c) => app.handle_char(c),
+                KeyCode::Backspace => app.handle_backspace(),
+                _ => {}
             }
-            KeyCode::Esc => {
-                app.exit_mode();
-                return Ok(());
-            }
-            KeyCode::Char(c) => {
-                app.handle_char(c);
-                return Ok(());
-            }
-            KeyCode::Backspace => {
-                app.handle_backspace();
-                return Ok(());
-            }
-            _ => {}
-        },
-        Mode::ChildCount => match code {
-            KeyCode::Enter => {
-                app.proceed_to_child_prompt();
-                return Ok(());
-            }
-            KeyCode::Esc => {
-                app.exit_mode();
-                return Ok(());
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.increment_child_count();
-                return Ok(());
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.decrement_child_count();
-                return Ok(());
-            }
-            _ => return Ok(()),
-        },
-        Mode::ChildPrompt => match code {
-            KeyCode::Enter => {
-                let input = app.input_buffer.clone();
-                if !input.is_empty()
-                    && let Err(e) = action_handler.spawn_children(app, &input)
-                {
-                    app.set_error(format!("Failed to spawn children: {e:#}"));
-                }
-                app.exit_mode();
-                return Ok(());
-            }
-            KeyCode::Esc => {
-                app.exit_mode();
-                return Ok(());
-            }
-            KeyCode::Char(c) => {
-                app.handle_char(c);
-                return Ok(());
-            }
-            KeyCode::Backspace => {
-                app.handle_backspace();
-                return Ok(());
-            }
-            _ => return Ok(()),
-        },
-        Mode::Confirming(_) => match code {
-            KeyCode::Char('y' | 'Y') => {
-                action_handler.handle_action(app, Action::Confirm)?;
-                return Ok(());
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.exit_mode();
-                return Ok(());
-            }
-            _ => return Ok(()),
-        },
-        Mode::Help => {
-            app.exit_mode();
             return Ok(());
         }
-        Mode::Normal | Mode::Scrolling => {}
+        Mode::ChildCount => match code {
+            KeyCode::Enter => app.proceed_to_child_prompt(),
+            KeyCode::Esc => app.exit_mode(),
+            KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
+            KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
+            _ => {}
+        },
+        Mode::Confirming(_) => match code {
+            KeyCode::Char('y' | 'Y') => return action_handler.handle_action(app, Action::Confirm),
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => app.exit_mode(),
+            _ => {}
+        },
+        Mode::Help => app.exit_mode(),
+        Mode::Normal | Mode::Scrolling => {
+            if let Some(action) = app.config.keys.get_action(code, modifiers) {
+                action_handler.handle_action(app, action)?;
+            }
+        }
     }
-
-    if let Some(action) = app.config.keys.get_action(code, modifiers) {
-        action_handler.handle_action(app, action)?;
-    }
-
     Ok(())
 }
 
@@ -652,6 +597,91 @@ mod tests {
         handle_key_event(&mut app, handler, KeyCode::Char('G'), KeyModifiers::NONE)?;
 
         // Should handle without panic
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_broadcasting_mode_input() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Broadcasting);
+
+        // Type some characters
+        handle_key_event(&mut app, handler, KeyCode::Char('h'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('e'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('l'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('l'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('o'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.input_buffer, "hello");
+        assert_eq!(app.mode, Mode::Broadcasting);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_broadcasting_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Broadcasting);
+        app.handle_char('t');
+        app.handle_char('e');
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_broadcasting_mode_backspace() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Broadcasting);
+        app.handle_char('a');
+        app.handle_char('b');
+
+        handle_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
+
+        assert_eq!(app.input_buffer, "a");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_broadcasting_mode_enter_no_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Broadcasting);
+        app.handle_char('t');
+        app.handle_char('e');
+        app.handle_char('s');
+        app.handle_char('t');
+
+        // Enter with no agent selected should set error
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.last_error.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_broadcasting_mode_enter_empty()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::Broadcasting);
+
+        // Enter with empty input should just exit mode
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
         Ok(())
     }
 }
