@@ -4,6 +4,9 @@
 //! - tmux to be installed and running
 //! - git to be available
 //! - A writable temp directory
+//!
+//! IMPORTANT: Run with `--test-threads=1` to avoid race conditions from
+//! parallel tests calling `std::env::set_current_dir`.
 
 #![expect(clippy::unwrap_used, reason = "integration test assertions")]
 #![expect(clippy::similar_names, reason = "test clarity")]
@@ -111,11 +114,37 @@ impl TestFixture {
             }
         }
     }
+
+    /// Clean up branches and worktrees from the test's repo
+    fn cleanup_branches(&self) {
+        if let Ok(repo) = Repository::open(&self.repo_path) {
+            // Clean up worktrees
+            let worktree_mgr = muster::git::WorktreeManager::new(&repo);
+            if let Ok(worktrees) = worktree_mgr.list() {
+                for wt in worktrees {
+                    if wt.name.starts_with(&self.session_prefix) {
+                        let _ = worktree_mgr.remove(&wt.name);
+                    }
+                }
+            }
+
+            // Clean up branches
+            let branch_mgr = muster::git::BranchManager::new(&repo);
+            if let Ok(branches) = branch_mgr.list() {
+                for branch in branches {
+                    if branch.starts_with(&self.session_prefix) {
+                        let _ = branch_mgr.delete(&branch);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Drop for TestFixture {
     fn drop(&mut self) {
         self.cleanup_sessions();
+        self.cleanup_branches();
     }
 }
 
