@@ -28,7 +28,7 @@ pub fn run(mut app: App) -> Result<()> {
     let event_handler = Handler::new(app.config.poll_interval_ms);
     let action_handler = Actions::new();
 
-    let result = run_loop(&mut terminal, &mut app, &event_handler, &action_handler);
+    let result = run_loop(&mut terminal, &mut app, &event_handler, action_handler);
 
     disable_raw_mode()?;
     execute!(
@@ -41,15 +41,11 @@ pub fn run(mut app: App) -> Result<()> {
     result
 }
 
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "consistent reference pattern for handlers"
-)]
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     event_handler: &Handler,
-    action_handler: &Actions,
+    action_handler: Actions,
 ) -> Result<()> {
     let mut tick_count = 0;
 
@@ -115,13 +111,9 @@ fn run_loop(
     Ok(())
 }
 
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "consistent reference pattern for handlers"
-)]
 fn handle_key_event(
     app: &mut App,
-    action_handler: &Actions,
+    action_handler: Actions,
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<()> {
@@ -227,7 +219,6 @@ fn handle_key_event(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use muster::agent::Storage;
     use muster::app::ConfirmAction;
@@ -238,83 +229,92 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_quit() {
+    fn test_handle_key_event_normal_mode_quit() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // 'q' should trigger quit (since no running agents)
-        handle_key_event(&mut app, &handler, KeyCode::Char('q'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('q'), KeyModifiers::NONE)?;
         assert!(app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_help() {
+    fn test_handle_key_event_normal_mode_help() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // '?' should open help
-        handle_key_event(&mut app, &handler, KeyCode::Char('?'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('?'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Help);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_help_mode_any_key_exits() {
+    fn test_handle_key_event_help_mode_any_key_exits() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Help);
-        handle_key_event(&mut app, &handler, KeyCode::Char('x'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_new_agent() {
+    fn test_handle_key_event_normal_mode_new_agent() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // 'a' should enter creating mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Creating);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_new_agent_with_prompt() {
+    fn test_handle_key_event_normal_mode_new_agent_with_prompt()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // 'A' should enter prompting mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('A'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('A'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Prompting);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_char_input() {
+    fn test_handle_key_event_creating_mode_char_input() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
-        handle_key_event(&mut app, &handler, KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('c'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('b'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('c'), KeyModifiers::NONE)?;
 
         assert_eq!(app.input_buffer, "abc");
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_backspace() {
+    fn test_handle_key_event_creating_mode_backspace() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
         app.handle_char('a');
         app.handle_char('b');
-        handle_key_event(&mut app, &handler, KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
         assert_eq!(app.input_buffer, "a");
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_escape_cancels() {
+    fn test_handle_key_event_creating_mode_escape_cancels() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -324,28 +324,31 @@ mod tests {
         app.handle_char('s');
         app.handle_char('t');
 
-        handle_key_event(&mut app, &handler, KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.input_buffer.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_enter_empty_does_nothing() {
+    fn test_handle_key_event_creating_mode_enter_empty_does_nothing()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
         // Enter with empty input should just exit mode
-        handle_key_event(&mut app, &handler, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         // No agent created since input was empty
         assert_eq!(app.storage.len(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_mode_yes() {
+    fn test_handle_key_event_confirming_mode_yes() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -353,120 +356,118 @@ mod tests {
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
 
         // 'y' should confirm and quit
-        handle_key_event(&mut app, &handler, KeyCode::Char('y'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
         assert!(app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_mode_capital_y() {
+    fn test_handle_key_event_confirming_mode_capital_y() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-        handle_key_event(&mut app, &handler, KeyCode::Char('Y'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('Y'), KeyModifiers::NONE)?;
         assert!(app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_mode_no() {
+    fn test_handle_key_event_confirming_mode_no() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-        handle_key_event(&mut app, &handler, KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         assert!(!app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_mode_escape() {
+    fn test_handle_key_event_confirming_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-        handle_key_event(&mut app, &handler, KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         assert!(!app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_mode_other_key_ignored() {
+    fn test_handle_key_event_confirming_mode_other_key_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-        handle_key_event(&mut app, &handler, KeyCode::Char('x'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
 
         // Should still be in confirming mode
         assert!(matches!(app.mode, Mode::Confirming(_)));
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_navigation() {
+    fn test_handle_key_event_normal_mode_navigation() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // Navigation keys should work in normal mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Down, KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Up, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
 
         // Should still be in normal mode (no state change visible without agents)
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_tab_switch() {
+    fn test_handle_key_event_normal_mode_tab_switch() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         let initial_tab = app.active_tab;
-        handle_key_event(&mut app, &handler, KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
         assert_ne!(app.active_tab, initial_tab);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_normal_mode_scroll() {
+    fn test_handle_key_event_normal_mode_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // Scroll commands
-        handle_key_event(
-            &mut app,
-            &handler,
-            KeyCode::Char('u'),
-            KeyModifiers::CONTROL,
-        )
-        .unwrap();
-        handle_key_event(
-            &mut app,
-            &handler,
-            KeyCode::Char('d'),
-            KeyModifiers::CONTROL,
-        )
-        .unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('u'), KeyModifiers::CONTROL)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('d'), KeyModifiers::CONTROL)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('g'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('G'), KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_unknown_key_does_nothing() {
+    fn test_handle_key_event_unknown_key_does_nothing() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // Unknown key should be ignored
-        handle_key_event(&mut app, &handler, KeyCode::F(12), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::F(12), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Normal);
         assert!(!app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_prompting_mode_escape() {
+    fn test_handle_key_event_prompting_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -474,23 +475,25 @@ mod tests {
         app.handle_char('t');
         app.handle_char('e');
 
-        handle_key_event(&mut app, &handler, KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_cancel_action() {
+    fn test_handle_key_event_cancel_action() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         // Escape in normal mode triggers cancel action (does nothing but works)
-        handle_key_event(&mut app, &handler, KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_scrolling_mode() {
+    fn test_handle_key_event_scrolling_mode() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -498,44 +501,47 @@ mod tests {
         app.enter_mode(Mode::Scrolling);
 
         // Should handle scroll keys in scrolling mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_other_keys() {
+    fn test_handle_key_event_creating_mode_other_keys() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
 
         // Other keys like arrows should be ignored in creating mode
-        handle_key_event(&mut app, &handler, KeyCode::Left, KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Right, KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Up, KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Down, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Left, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Right, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
 
         // Should still be in creating mode
         assert_eq!(app.mode, Mode::Creating);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_prompting_mode_input() {
+    fn test_handle_key_event_prompting_mode_input() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Prompting);
 
         // Type some characters
-        handle_key_event(&mut app, &handler, KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('i'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('h'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('i'), KeyModifiers::NONE)?;
 
         assert_eq!(app.input_buffer, "hi");
         assert_eq!(app.mode, Mode::Prompting);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_kill() {
+    fn test_handle_key_event_confirming_kill() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -543,38 +549,42 @@ mod tests {
         app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
 
         // 'y' should trigger confirm but no agent to kill
-        handle_key_event(&mut app, &handler, KeyCode::Char('y'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
 
         // Should exit to normal mode
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_reset() {
+    fn test_handle_key_event_confirming_reset() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
 
         // 'n' should cancel
-        handle_key_event(&mut app, &handler, KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_confirming_capital_n() {
+    fn test_handle_key_event_confirming_capital_n() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
 
         // 'N' should also cancel
-        handle_key_event(&mut app, &handler, KeyCode::Char('N'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('N'), KeyModifiers::NONE)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_enter_with_input() {
+    fn test_handle_key_event_creating_mode_enter_with_input()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -585,16 +595,18 @@ mod tests {
         app.handle_char('t');
 
         // Enter with input tries to create agent (will fail without git repo, but sets error)
-        handle_key_event(&mut app, &handler, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Should exit to normal mode even on error
         assert_eq!(app.mode, Mode::Normal);
         // Error should be set since we're not in a git repo
         assert!(app.last_error.is_some() || app.storage.len() == 1);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_prompting_mode_enter_with_input() {
+    fn test_handle_key_event_prompting_mode_enter_with_input()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
@@ -604,39 +616,42 @@ mod tests {
         app.handle_char('x');
 
         // Enter with input tries to create agent with prompt (will fail without git repo)
-        handle_key_event(&mut app, &handler, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Should exit to normal mode even on error
         assert_eq!(app.mode, Mode::Normal);
         // Error should be set since we're not in a git repo
         assert!(app.last_error.is_some() || app.storage.len() == 1);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_creating_mode_fallthrough() {
+    fn test_handle_key_event_creating_mode_fallthrough() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
 
         // Tab key should fall through to action handling in creating mode
-        handle_key_event(&mut app, &handler, KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
 
         // Mode should remain creating (Tab doesn't exit creating mode)
         assert_eq!(app.mode, Mode::Creating);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_key_event_scrolling_mode_navigation() {
+    fn test_handle_key_event_scrolling_mode_navigation() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Scrolling);
 
         // Test scrolling mode handles normal mode keybindings
-        handle_key_event(&mut app, &handler, KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
-        handle_key_event(&mut app, &handler, KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+        handle_key_event(&mut app, handler, KeyCode::Char('g'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('G'), KeyModifiers::NONE)?;
 
         // Should handle without panic
+        Ok(())
     }
 }

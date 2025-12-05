@@ -2,8 +2,6 @@
 //!
 //! These tests run the actual muster binary to exercise the CLI code paths.
 
-#![expect(clippy::unwrap_used, reason = "integration test assertions")]
-
 use std::process::Command;
 
 fn muster_bin() -> Command {
@@ -11,38 +9,42 @@ fn muster_bin() -> Command {
 }
 
 #[test]
-fn test_cli_help() {
-    let output = muster_bin().arg("--help").output().unwrap();
+fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
+    let output = muster_bin().arg("--help").output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Terminal multiplexer"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_version() {
-    let output = muster_bin().arg("--version").output().unwrap();
+fn test_cli_version() -> Result<(), Box<dyn std::error::Error>> {
+    let output = muster_bin().arg("--version").output()?;
     assert!(output.status.success());
+    Ok(())
 }
 
 #[test]
-fn test_cli_config_show() {
-    let output = muster_bin().arg("config").output().unwrap();
+fn test_cli_config_show() -> Result<(), Box<dyn std::error::Error>> {
+    let output = muster_bin().arg("config").output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("default_program"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_config_path() {
-    let output = muster_bin().args(["config", "--path"]).output().unwrap();
+fn test_cli_config_path() -> Result<(), Box<dyn std::error::Error>> {
+    let output = muster_bin().args(["config", "--path"]).output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("muster"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_invalid_argument_shows_help() {
-    let output = muster_bin().arg("--invalid-flag").output().unwrap();
+fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
+    let output = muster_bin().arg("--invalid-flag").output()?;
 
     // Should fail with non-zero exit code
     assert!(!output.status.success());
@@ -54,12 +56,13 @@ fn test_cli_invalid_argument_shows_help() {
     // Should show help text on stdout
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage:"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_unexpected_argument_shows_help() {
+fn test_cli_unexpected_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
     // Simulates typo like `--set` instead of `--set-agent`
-    let output = muster_bin().args(["--set", "codex"]).output().unwrap();
+    let output = muster_bin().args(["--set", "codex"]).output()?;
 
     assert!(!output.status.success());
 
@@ -69,24 +72,24 @@ fn test_cli_unexpected_argument_shows_help() {
     // Help on stdout should show the correct flag
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--set-agent"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_set_agent() {
+fn test_cli_set_agent() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use tempfile::TempDir;
 
     // Create a temp directory for config
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("muster");
-    fs::create_dir_all(&config_dir).unwrap();
+    fs::create_dir_all(&config_dir)?;
 
     // Run with XDG_CONFIG_HOME set to temp directory
     let output = muster_bin()
         .args(["--set-agent", "test-agent"])
         .env("XDG_CONFIG_HOME", temp_dir.path())
-        .output()
-        .unwrap();
+        .output()?;
 
     assert!(output.status.success());
 
@@ -95,14 +98,15 @@ fn test_cli_set_agent() {
 
     // Verify config file was created with correct value
     let config_path = config_dir.join("config.json");
-    let config_content = fs::read_to_string(&config_path).unwrap();
+    let config_content = fs::read_to_string(&config_path)?;
     assert!(config_content.contains("test-agent"));
+    Ok(())
 }
 
 #[test]
-fn test_cli_reset_force() {
+fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
     // reset with --force should succeed (even if no agents)
-    let output = muster_bin().args(["reset", "--force"]).output().unwrap();
+    let output = muster_bin().args(["reset", "--force"]).output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // "No agents to reset", or lists agents/orphaned sessions
@@ -112,4 +116,5 @@ fn test_cli_reset_force() {
             || stdout.contains("Agents to kill")
             || stdout.contains("Orphaned")
     );
+    Ok(())
 }

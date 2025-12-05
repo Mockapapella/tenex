@@ -440,11 +440,7 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
     ]));
 
     // Height: content lines + 2 for borders
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "dialog content is always small"
-    )]
-    let height = (lines.len() + 2) as u16;
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
     let area = centered_rect_absolute(50, height, frame.area());
 
     let text = lines;
@@ -486,7 +482,6 @@ fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use muster::agent::{Agent, Storage};
     use muster::app::ConfirmAction;
@@ -532,42 +527,40 @@ mod tests {
     }
 
     #[test]
-    fn test_render_normal_mode() {
+    fn test_render_normal_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let app = create_test_app_with_agents();
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_help_mode() {
+    fn test_render_help_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Help);
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_creating_mode() {
+    fn test_render_creating_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Creating);
         app.handle_char('t');
@@ -575,125 +568,118 @@ mod tests {
         app.handle_char('s');
         app.handle_char('t');
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_prompting_mode() {
+    fn test_render_prompting_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Prompting);
         app.handle_char('f');
         app.handle_char('i');
         app.handle_char('x');
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_kill_mode() {
+    fn test_render_confirming_kill_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_reset_mode() {
+    fn test_render_confirming_reset_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_quit_mode() {
+    fn test_render_confirming_quit_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_with_error() {
+    fn test_render_with_error() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.set_error("Something went wrong!");
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_with_status_message() {
+    fn test_render_with_status_message() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.set_status("Operation completed");
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_diff_tab() {
+    fn test_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
         assert_eq!(app.active_tab, Tab::Diff);
@@ -709,37 +695,35 @@ mod tests {
  context"
             .to_string();
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_preview_with_content() {
+    fn test_render_preview_with_content() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_preview_with_scroll() {
+    fn test_render_preview_with_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.preview_content = (0..100)
             .map(|i| format!("Line {i}"))
@@ -747,20 +731,19 @@ mod tests {
             .join("\n");
         app.preview_scroll = 50;
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_diff_with_scroll() {
+    fn test_render_diff_with_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
         app.diff_content = (0..100)
@@ -769,101 +752,95 @@ mod tests {
             .join("\n");
         app.diff_scroll = 50;
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_empty_agents() {
+    fn test_render_empty_agents() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let app = App::new(create_test_config(), Storage::new());
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_with_selection() {
+    fn test_render_with_selection() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.select_next();
         app.select_next();
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_various_sizes() {
+    fn test_render_various_sizes() -> Result<(), Box<dyn std::error::Error>> {
         for (width, height) in [(40, 12), (80, 24), (120, 40), (200, 50)] {
             let backend = TestBackend::new(width, height);
-            let mut terminal = Terminal::new(backend).unwrap();
+            let mut terminal = Terminal::new(backend)?;
             let app = create_test_app_with_agents();
 
-            terminal
-                .draw(|frame| {
-                    render(frame, &app);
-                })
-                .unwrap();
+            terminal.draw(|frame| {
+                render(frame, &app);
+            })?;
 
             let buffer = terminal.backend().buffer();
             assert!(!buffer.content.is_empty());
         }
+        Ok(())
     }
 
     #[test]
-    fn test_render_scrolling_mode() {
+    fn test_render_scrolling_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(Mode::Scrolling);
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_render_scroll_exceeds_content() {
+    fn test_render_scroll_exceeds_content() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.preview_content = "Line 1\nLine 2".to_string();
         // Set scroll position beyond content length
         app.preview_scroll = 1000;
 
-        terminal
-            .draw(|frame| {
-                render(frame, &app);
-            })
-            .unwrap();
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
     }
 }

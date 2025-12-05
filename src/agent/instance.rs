@@ -57,6 +57,17 @@ const fn default_collapsed() -> bool {
     true
 }
 
+/// Configuration for creating a child agent
+#[derive(Debug, Clone)]
+pub struct ChildConfig {
+    /// Parent agent ID
+    pub parent_id: Uuid,
+    /// Tmux session name (from root ancestor)
+    pub tmux_session: String,
+    /// Window index in the session
+    pub window_index: u32,
+}
+
 impl Agent {
     /// Create a new agent with the given parameters
     #[must_use]
@@ -90,19 +101,13 @@ impl Agent {
 
     /// Create a new child agent under a parent
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Child agents need all parent context"
-    )]
     pub fn new_child(
         title: String,
         program: String,
         branch: String,
         worktree_path: PathBuf,
         initial_prompt: Option<String>,
-        parent_id: Uuid,
-        tmux_session: String,
-        window_index: u32,
+        config: ChildConfig,
     ) -> Self {
         let id = Uuid::new_v4();
         let now = Utc::now();
@@ -115,11 +120,11 @@ impl Agent {
             branch,
             worktree_path,
             initial_prompt,
-            tmux_session,
+            tmux_session: config.tmux_session,
             created_at: now,
             updated_at: now,
-            parent_id: Some(parent_id),
-            window_index: Some(window_index),
+            parent_id: Some(config.parent_id),
+            window_index: Some(config.window_index),
             collapsed: true,
         }
     }
@@ -185,7 +190,6 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use std::thread::sleep;
     use std::time::Duration;
@@ -285,16 +289,17 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip() {
+    fn test_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let agent = create_test_agent();
-        let json = serde_json::to_string(&agent).unwrap();
-        let parsed: Agent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&agent)?;
+        let parsed: Agent = serde_json::from_str(&json)?;
 
         assert_eq!(agent.id, parsed.id);
         assert_eq!(agent.title, parsed.title);
         assert_eq!(agent.program, parsed.program);
         assert_eq!(agent.status, parsed.status);
         assert_eq!(agent.branch, parsed.branch);
+        Ok(())
     }
 
     #[test]
@@ -325,9 +330,11 @@ mod tests {
             parent.branch.clone(),
             parent.worktree_path.clone(),
             Some("Research task".to_string()),
-            parent.id,
-            parent.tmux_session.clone(),
-            2,
+            ChildConfig {
+                parent_id: parent.id,
+                tmux_session: parent.tmux_session.clone(),
+                window_index: 2,
+            },
         );
 
         assert!(!child.is_root());
@@ -339,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip_with_hierarchy() {
+    fn test_serde_roundtrip_with_hierarchy() -> Result<(), Box<dyn std::error::Error>> {
         let parent = create_test_agent();
         let child = Agent::new_child(
             "Child".to_string(),
@@ -347,21 +354,24 @@ mod tests {
             parent.branch.clone(),
             parent.worktree_path.clone(),
             None,
-            parent.id,
-            parent.tmux_session,
-            2,
+            ChildConfig {
+                parent_id: parent.id,
+                tmux_session: parent.tmux_session,
+                window_index: 2,
+            },
         );
 
-        let json = serde_json::to_string(&child).unwrap();
-        let parsed: Agent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&child)?;
+        let parsed: Agent = serde_json::from_str(&json)?;
 
         assert_eq!(child.parent_id, parsed.parent_id);
         assert_eq!(child.window_index, parsed.window_index);
         assert_eq!(child.collapsed, parsed.collapsed);
+        Ok(())
     }
 
     #[test]
-    fn test_serde_backwards_compatibility() {
+    fn test_serde_backwards_compatibility() -> Result<(), Box<dyn std::error::Error>> {
         // Test that old JSON without hierarchy fields deserializes correctly
         let old_json = r#"{
             "id": "12345678-1234-1234-1234-123456789012",
@@ -376,9 +386,10 @@ mod tests {
             "updated_at": "2024-01-01T00:00:00Z"
         }"#;
 
-        let agent: Agent = serde_json::from_str(old_json).unwrap();
+        let agent: Agent = serde_json::from_str(old_json)?;
         assert!(agent.parent_id.is_none());
         assert!(agent.window_index.is_none());
         assert!(agent.collapsed); // default value
+        Ok(())
     }
 }

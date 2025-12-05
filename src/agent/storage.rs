@@ -342,9 +342,8 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
-    use crate::agent::Status;
+    use crate::agent::{ChildConfig, Status};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -378,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_agent() {
+    fn test_remove_agent() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         let agent = create_test_agent("test");
         let id = agent.id;
@@ -387,8 +386,9 @@ mod tests {
         let removed = storage.remove(id);
 
         assert!(removed.is_some());
-        assert_eq!(removed.unwrap().id, id);
+        assert_eq!(removed.ok_or("Agent not found")?.id, id);
         assert!(storage.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_mut() {
+    fn test_get_mut() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         let agent = create_test_agent("test");
         let id = agent.id;
@@ -422,22 +422,33 @@ mod tests {
             agent.set_status(Status::Running);
         }
 
-        assert_eq!(storage.get(id).unwrap().status, Status::Running);
+        assert_eq!(
+            storage.get(id).ok_or("Agent not found")?.status,
+            Status::Running
+        );
+        Ok(())
     }
 
     #[test]
-    fn test_get_by_index() {
+    fn test_get_by_index() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         storage.add(create_test_agent("first"));
         storage.add(create_test_agent("second"));
 
-        assert_eq!(storage.get_by_index(0).unwrap().title, "first");
-        assert_eq!(storage.get_by_index(1).unwrap().title, "second");
+        assert_eq!(
+            storage.get_by_index(0).ok_or("Agent not found")?.title,
+            "first"
+        );
+        assert_eq!(
+            storage.get_by_index(1).ok_or("Agent not found")?.title,
+            "second"
+        );
         assert!(storage.get_by_index(2).is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_get_by_index_mut() {
+    fn test_get_by_index_mut() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         storage.add(create_test_agent("test"));
 
@@ -445,7 +456,11 @@ mod tests {
             agent.title = "modified".to_string();
         }
 
-        assert_eq!(storage.get_by_index(0).unwrap().title, "modified");
+        assert_eq!(
+            storage.get_by_index(0).ok_or("Agent not found")?.title,
+            "modified"
+        );
+        Ok(())
     }
 
     #[test]
@@ -513,28 +528,30 @@ mod tests {
     }
 
     #[test]
-    fn test_save_and_load() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let state_path = temp_dir.path().join("state.json");
 
         let mut storage = Storage::new();
         storage.add(create_test_agent("test1"));
         storage.add(create_test_agent("test2"));
 
-        storage.save_to(&state_path).unwrap();
-        let loaded = Storage::load_from(&state_path).unwrap();
+        storage.save_to(&state_path)?;
+        let loaded = Storage::load_from(&state_path)?;
 
         assert_eq!(storage.len(), loaded.len());
         assert_eq!(storage.agents[0].title, loaded.agents[0].title);
         assert_eq!(storage.agents[1].title, loaded.agents[1].title);
+        Ok(())
     }
 
     #[test]
-    fn test_load_nonexistent_returns_empty() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_load_nonexistent_returns_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let state_path = temp_dir.path().join("nonexistent.json");
 
         assert!(Storage::load_from(&state_path).is_err());
+        Ok(())
     }
 
     #[test]
@@ -553,9 +570,11 @@ mod tests {
             parent.branch.clone(),
             parent.worktree_path.clone(),
             None,
-            parent.id,
-            parent.tmux_session.clone(),
-            window_index,
+            ChildConfig {
+                parent_id: parent.id,
+                tmux_session: parent.tmux_session.clone(),
+                window_index,
+            },
         )
     }
 
@@ -620,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn test_root_ancestor() {
+    fn test_root_ancestor() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         let root = create_test_agent("root");
         let root_id = root.id;
@@ -632,9 +651,11 @@ mod tests {
             root.branch.clone(),
             root.worktree_path.clone(),
             None,
-            child.id,
-            root.tmux_session.clone(),
-            3,
+            ChildConfig {
+                parent_id: child.id,
+                tmux_session: root.tmux_session.clone(),
+                window_index: 3,
+            },
         );
         let grandchild_id = grandchild.id;
 
@@ -643,11 +664,24 @@ mod tests {
         storage.add(grandchild);
 
         // Root's ancestor is itself
-        assert_eq!(storage.root_ancestor(root_id).unwrap().id, root_id);
+        assert_eq!(
+            storage.root_ancestor(root_id).ok_or("Agent not found")?.id,
+            root_id
+        );
         // Child's ancestor is root
-        assert_eq!(storage.root_ancestor(child_id).unwrap().id, root_id);
+        assert_eq!(
+            storage.root_ancestor(child_id).ok_or("Agent not found")?.id,
+            root_id
+        );
         // Grandchild's ancestor is also root
-        assert_eq!(storage.root_ancestor(grandchild_id).unwrap().id, root_id);
+        assert_eq!(
+            storage
+                .root_ancestor(grandchild_id)
+                .ok_or("Agent not found")?
+                .id,
+            root_id
+        );
+        Ok(())
     }
 
     #[test]
@@ -663,9 +697,11 @@ mod tests {
             root.branch.clone(),
             root.worktree_path.clone(),
             None,
-            child1.id,
-            root.tmux_session.clone(),
-            4,
+            ChildConfig {
+                parent_id: child1.id,
+                tmux_session: root.tmux_session.clone(),
+                window_index: 4,
+            },
         );
 
         storage.add(root);
@@ -690,9 +726,11 @@ mod tests {
             root.branch.clone(),
             root.worktree_path.clone(),
             None,
-            child.id,
-            root.tmux_session.clone(),
-            3,
+            ChildConfig {
+                parent_id: child.id,
+                tmux_session: root.tmux_session.clone(),
+                window_index: 3,
+            },
         );
         let grandchild_id = grandchild.id;
 
@@ -742,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_agent_at() {
+    fn test_visible_agent_at() -> Result<(), Box<dyn std::error::Error>> {
         let mut storage = Storage::new();
         let mut root = create_test_agent("root");
         root.collapsed = false;
@@ -751,9 +789,16 @@ mod tests {
         storage.add(root);
         storage.add(child);
 
-        assert_eq!(storage.visible_agent_at(0).unwrap().title, "root");
-        assert_eq!(storage.visible_agent_at(1).unwrap().title, "child");
+        assert_eq!(
+            storage.visible_agent_at(0).ok_or("Agent not found")?.title,
+            "root"
+        );
+        assert_eq!(
+            storage.visible_agent_at(1).ok_or("Agent not found")?.title,
+            "child"
+        );
         assert!(storage.visible_agent_at(2).is_none());
+        Ok(())
     }
 
     #[test]
@@ -782,9 +827,11 @@ mod tests {
             root.branch.clone(),
             root.worktree_path.clone(),
             None,
-            child1.id,
-            root.tmux_session.clone(),
-            4,
+            ChildConfig {
+                parent_id: child1.id,
+                tmux_session: root.tmux_session.clone(),
+                window_index: 4,
+            },
         );
 
         storage.add(root);

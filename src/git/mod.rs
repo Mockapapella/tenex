@@ -42,38 +42,40 @@ pub fn repository_root(path: &Path) -> Result<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use tempfile::TempDir;
 
-    fn init_test_repo() -> (TempDir, Repository) {
-        let temp_dir = TempDir::new().unwrap();
-        let repo = Repository::init(temp_dir.path()).unwrap();
-        (temp_dir, repo)
+    fn init_test_repo() -> Result<(TempDir, Repository), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let repo = Repository::init(temp_dir.path())?;
+        Ok((temp_dir, repo))
     }
 
     #[test]
-    fn test_is_git_repository() {
-        let (temp_dir, _repo) = init_test_repo();
+    fn test_is_git_repository() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, _repo) = init_test_repo()?;
         assert!(is_git_repository(temp_dir.path()));
 
-        let non_repo = TempDir::new().unwrap();
+        let non_repo = TempDir::new()?;
         assert!(!is_git_repository(non_repo.path()));
+        Ok(())
     }
 
     #[test]
-    fn test_open_repository() {
-        let (temp_dir, _repo) = init_test_repo();
+    fn test_open_repository() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, _repo) = init_test_repo()?;
         assert!(open_repository(temp_dir.path()).is_ok());
 
-        let non_repo = TempDir::new().unwrap();
+        let non_repo = TempDir::new()?;
         assert!(open_repository(non_repo.path()).is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_repository_root() {
-        let (temp_dir, _repo) = init_test_repo();
-        let root = repository_root(temp_dir.path()).unwrap();
+    fn test_repository_root() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, _repo) = init_test_repo()?;
+        let root = repository_root(temp_dir.path())?;
         assert_eq!(root, temp_dir.path());
+        Ok(())
     }
 }

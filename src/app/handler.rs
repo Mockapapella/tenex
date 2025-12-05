@@ -1,6 +1,6 @@
 //! Action handlers for the application
 
-use crate::agent::{Agent, Status};
+use crate::agent::{Agent, ChildConfig, Status};
 use crate::config::Action;
 use crate::git::{self, DiffGenerator, WorktreeManager};
 use crate::prompts;
@@ -18,10 +18,6 @@ pub struct Actions {
     output_capture: OutputCapture,
 }
 
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "consistent &self receiver pattern for methods"
-)]
 impl Actions {
     /// Create a new action handler
     #[must_use]
@@ -37,7 +33,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the action fails
-    pub fn handle_action(&self, app: &mut App, action: Action) -> Result<()> {
+    pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
         match action {
             Action::NewAgent => {
                 app.enter_mode(Mode::Creating);
@@ -119,7 +115,7 @@ impl Actions {
     }
 
     /// Handle confirmation of an action
-    fn handle_confirm(&self, app: &mut App) -> Result<()> {
+    fn handle_confirm(self, app: &mut App) -> Result<()> {
         if let Mode::Confirming(action) = &app.mode {
             match action {
                 ConfirmAction::Kill => {
@@ -142,7 +138,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if agent creation fails
-    pub fn create_agent(&self, app: &mut App, title: &str, prompt: Option<&str>) -> Result<()> {
+    pub fn create_agent(self, app: &mut App, title: &str, prompt: Option<&str>) -> Result<()> {
         if app.storage.len() >= app.config.max_agents {
             app.set_error(format!(
                 "Maximum agents ({}) reached",
@@ -184,7 +180,7 @@ impl Actions {
     }
 
     /// Kill the selected agent (and all its descendants)
-    fn kill_agent(&self, app: &mut App) -> Result<()> {
+    fn kill_agent(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
             let is_root = agent.is_root();
@@ -243,7 +239,7 @@ impl Actions {
     }
 
     /// Pause the selected agent
-    fn pause_agent(&self, app: &mut App) -> Result<()> {
+    fn pause_agent(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent_mut() {
             if agent.status.can_pause() {
                 let _ = self.session_manager.kill(&agent.tmux_session);
@@ -258,7 +254,7 @@ impl Actions {
     }
 
     /// Resume the selected agent
-    fn resume_agent(&self, app: &mut App) -> Result<()> {
+    fn resume_agent(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent_mut() {
             if agent.status.can_resume() {
                 self.session_manager.create(
@@ -277,7 +273,7 @@ impl Actions {
     }
 
     /// Attach to the selected agent's tmux session
-    fn attach_to_agent(&self, app: &mut App) -> Result<()> {
+    fn attach_to_agent(self, app: &mut App) -> Result<()> {
         let agent = app
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -292,7 +288,7 @@ impl Actions {
     }
 
     /// Push the selected agent's branch to remote
-    fn push_branch(&self, app: &mut App) -> Result<()> {
+    fn push_branch(self, app: &mut App) -> Result<()> {
         let agent = app
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -303,7 +299,7 @@ impl Actions {
     }
 
     /// Reset all agents and state
-    fn reset_all(&self, app: &mut App) -> Result<()> {
+    fn reset_all(self, app: &mut App) -> Result<()> {
         let repo_path = std::env::current_dir()?;
         let repo = git::open_repository(&repo_path).ok();
 
@@ -329,7 +325,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if preview update fails
-    pub fn update_preview(&self, app: &mut App) -> Result<()> {
+    pub fn update_preview(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             if self.session_manager.exists(&agent.tmux_session) {
                 let content = self
@@ -351,7 +347,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if diff update fails
-    pub fn update_diff(&self, app: &mut App) -> Result<()> {
+    pub fn update_diff(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             if agent.worktree_path.exists() {
                 if let Ok(repo) = git::open_repository(&agent.worktree_path) {
@@ -388,7 +384,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
-    pub fn spawn_children(&self, app: &mut App, task: &str) -> Result<()> {
+    pub fn spawn_children(self, app: &mut App, task: &str) -> Result<()> {
         let count = app.child_count;
         let parent_id = app.spawning_under;
 
@@ -456,9 +452,11 @@ impl Actions {
                 branch.clone(),
                 worktree_path.clone(),
                 Some(plan_prompt.clone()),
-                parent_agent_id,
-                root_session.clone(),
-                window_index,
+                ChildConfig {
+                    parent_id: parent_agent_id,
+                    tmux_session: root_session.clone(),
+                    window_index,
+                },
             );
 
             // Create window in the root's session with the planning prompt
@@ -496,7 +494,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if synthesis fails
-    pub fn synthesize(&self, app: &mut App) -> Result<()> {
+    pub fn synthesize(self, app: &mut App) -> Result<()> {
         let agent = app
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -561,7 +559,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if toggle fails
-    pub fn toggle_collapse(&self, app: &mut App) -> Result<()> {
+    pub fn toggle_collapse(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
             if app.storage.has_children(agent_id)
@@ -579,7 +577,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if status sync fails
-    pub fn sync_agent_status(&self, app: &mut App) -> Result<()> {
+    pub fn sync_agent_status(self, app: &mut App) -> Result<()> {
         let mut changed = false;
 
         for agent in app.storage.iter_mut() {
@@ -612,7 +610,6 @@ impl Default for Actions {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use crate::agent::Storage;
     use crate::config::Config;
@@ -634,54 +631,57 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_action_new_agent() {
+    fn test_handle_action_new_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::NewAgent).unwrap();
+        handler.handle_action(&mut app, Action::NewAgent)?;
         assert_eq!(app.mode, Mode::Creating);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_new_agent_with_prompt() {
+    fn test_handle_action_new_agent_with_prompt() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler
-            .handle_action(&mut app, Action::NewAgentWithPrompt)
-            .unwrap();
+        handler.handle_action(&mut app, Action::NewAgentWithPrompt)?;
         assert_eq!(app.mode, Mode::Prompting);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_help() {
+    fn test_handle_action_help() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::Help).unwrap();
+        handler.handle_action(&mut app, Action::Help)?;
         assert_eq!(app.mode, Mode::Help);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_quit_no_agents() {
+    fn test_handle_action_quit_no_agents() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::Quit).unwrap();
+        handler.handle_action(&mut app, Action::Quit)?;
         assert!(app.should_quit);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_switch_tab() {
+    fn test_handle_action_switch_tab() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::SwitchTab).unwrap();
+        handler.handle_action(&mut app, Action::SwitchTab)?;
         assert_eq!(app.active_tab, super::super::state::Tab::Diff);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_navigation() {
+    fn test_handle_action_navigation() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -699,62 +699,68 @@ mod tests {
         }
 
         assert_eq!(app.selected, 0);
-        handler.handle_action(&mut app, Action::NextAgent).unwrap();
+        handler.handle_action(&mut app, Action::NextAgent)?;
         assert_eq!(app.selected, 1);
-        handler.handle_action(&mut app, Action::PrevAgent).unwrap();
+        handler.handle_action(&mut app, Action::PrevAgent)?;
         assert_eq!(app.selected, 0);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_scroll() {
+    fn test_handle_action_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::ScrollDown).unwrap();
+        handler.handle_action(&mut app, Action::ScrollDown)?;
         assert_eq!(app.preview_scroll, 5);
 
-        handler.handle_action(&mut app, Action::ScrollUp).unwrap();
+        handler.handle_action(&mut app, Action::ScrollUp)?;
         assert_eq!(app.preview_scroll, 0);
 
-        handler.handle_action(&mut app, Action::ScrollTop).unwrap();
+        handler.handle_action(&mut app, Action::ScrollTop)?;
         assert_eq!(app.preview_scroll, 0);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_cancel() {
+    fn test_handle_action_cancel() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
         app.enter_mode(Mode::Creating);
-        handler.handle_action(&mut app, Action::Cancel).unwrap();
+        handler.handle_action(&mut app, Action::Cancel)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_update_preview_no_agent() {
+    fn test_update_preview_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_preview(&mut app).unwrap();
+        handler.update_preview(&mut app)?;
         assert!(app.preview_content.contains("No agent selected"));
+        Ok(())
     }
 
     #[test]
-    fn test_update_diff_no_agent() {
+    fn test_update_diff_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_diff(&mut app).unwrap();
+        handler.update_diff(&mut app)?;
         assert!(app.diff_content.contains("No agent selected"));
+        Ok(())
     }
 
     #[test]
-    fn test_handle_kill_no_agent() {
+    fn test_handle_kill_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::Kill).unwrap();
+        handler.handle_action(&mut app, Action::Kill)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
@@ -767,21 +773,23 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_pause_no_agent() {
+    fn test_handle_pause_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::Pause).unwrap();
+        handler.handle_action(&mut app, Action::Pause)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_resume_no_agent() {
+    fn test_handle_resume_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.handle_action(&mut app, Action::Resume).unwrap();
+        handler.handle_action(&mut app, Action::Resume)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
@@ -794,15 +802,16 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_agent_status() {
+    fn test_sync_agent_status() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.sync_agent_status(&mut app).unwrap();
+        handler.sync_agent_status(&mut app)?;
+        Ok(())
     }
 
     #[test]
-    fn test_handle_quit_with_running_agents() {
+    fn test_handle_quit_with_running_agents() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -821,12 +830,13 @@ mod tests {
         app.storage.add(agent);
 
         // Quit should enter confirming mode
-        handler.handle_action(&mut app, Action::Quit).unwrap();
+        handler.handle_action(&mut app, Action::Quit)?;
         assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Quit));
+        Ok(())
     }
 
     #[test]
-    fn test_handle_kill_with_agent() {
+    fn test_handle_kill_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -843,25 +853,27 @@ mod tests {
         ));
 
         // Kill should enter confirming mode
-        handler.handle_action(&mut app, Action::Kill).unwrap();
+        handler.handle_action(&mut app, Action::Kill)?;
         assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Kill));
+        Ok(())
     }
 
     #[test]
-    fn test_handle_confirm_quit() {
+    fn test_handle_confirm_quit() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
         // Enter confirming mode for quit
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
 
-        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        handler.handle_action(&mut app, Action::Confirm)?;
         assert!(app.should_quit);
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_confirm_kill() {
+    fn test_handle_confirm_kill() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -881,12 +893,13 @@ mod tests {
         app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
 
         // Confirm should kill and exit mode
-        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        handler.handle_action(&mut app, Action::Confirm)?;
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_confirm_reset() {
+    fn test_handle_confirm_reset() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -907,13 +920,14 @@ mod tests {
         // Enter confirming mode for reset
         app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
 
-        handler.handle_action(&mut app, Action::Confirm).unwrap();
+        handler.handle_action(&mut app, Action::Confirm)?;
         assert_eq!(app.storage.len(), 0);
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
-    fn test_handle_pause_with_running_agent() {
+    fn test_handle_pause_with_running_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -932,13 +946,14 @@ mod tests {
         app.storage.add(agent);
 
         // Pause should work
-        handler.handle_action(&mut app, Action::Pause).unwrap();
+        handler.handle_action(&mut app, Action::Pause)?;
         // The session doesn't exist so it will be marked as paused
         assert!(app.status_message.is_some() || app.last_error.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_pause_with_stopped_agent() {
+    fn test_handle_pause_with_stopped_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -957,8 +972,9 @@ mod tests {
         app.storage.add(agent);
 
         // Pause should fail
-        handler.handle_action(&mut app, Action::Pause).unwrap();
+        handler.handle_action(&mut app, Action::Pause)?;
         assert!(app.last_error.is_some());
+        Ok(())
     }
 
     #[test]
@@ -985,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_resume_with_running_agent() {
+    fn test_handle_resume_with_running_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1004,8 +1020,9 @@ mod tests {
         app.storage.add(agent);
 
         // Resume should fail
-        handler.handle_action(&mut app, Action::Resume).unwrap();
+        handler.handle_action(&mut app, Action::Resume)?;
         assert!(app.last_error.is_some());
+        Ok(())
     }
 
     #[test]
@@ -1031,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_preview_with_agent_no_session() {
+    fn test_update_preview_with_agent_no_session() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1047,12 +1064,13 @@ mod tests {
             None,
         ));
 
-        handler.update_preview(&mut app).unwrap();
+        handler.update_preview(&mut app)?;
         assert!(app.preview_content.contains("Session not running"));
+        Ok(())
     }
 
     #[test]
-    fn test_update_diff_with_agent_no_worktree() {
+    fn test_update_diff_with_agent_no_worktree() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1068,12 +1086,13 @@ mod tests {
             None,
         ));
 
-        handler.update_diff(&mut app).unwrap();
+        handler.update_diff(&mut app)?;
         assert!(app.diff_content.contains("Worktree not found"));
+        Ok(())
     }
 
     #[test]
-    fn test_update_diff_with_agent_valid_worktree() {
+    fn test_update_diff_with_agent_valid_worktree() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use tempfile::TempDir;
 
@@ -1081,7 +1100,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Create a temp directory (not a git repo)
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
 
         // Add an agent with valid worktree path (but not git repo)
         app.storage.add(Agent::new(
@@ -1092,12 +1111,13 @@ mod tests {
             None,
         ));
 
-        handler.update_diff(&mut app).unwrap();
+        handler.update_diff(&mut app)?;
         assert!(app.diff_content.contains("Not a git repository"));
+        Ok(())
     }
 
     #[test]
-    fn test_sync_agent_status_with_agents() {
+    fn test_sync_agent_status_with_agents() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1136,7 +1156,7 @@ mod tests {
         app.storage.add(paused);
 
         // Sync should mark running/starting as stopped (no sessions exist)
-        handler.sync_agent_status(&mut app).unwrap();
+        handler.sync_agent_status(&mut app)?;
 
         // The running/starting agents should now be stopped
         for agent in app.storage.iter() {
@@ -1144,22 +1164,22 @@ mod tests {
                 assert_eq!(agent.status, Status::Stopped);
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_handle_scroll_bottom() {
+    fn test_handle_scroll_bottom() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler
-            .handle_action(&mut app, Action::ScrollBottom)
-            .unwrap();
+        handler.handle_action(&mut app, Action::ScrollBottom)?;
         // ScrollBottom calls scroll_to_bottom(10000, 0) so preview_scroll becomes 10000
         assert_eq!(app.preview_scroll, 10000);
+        Ok(())
     }
 
     #[test]
-    fn test_create_agent_max_reached() {
+    fn test_create_agent_max_reached() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1179,12 +1199,13 @@ mod tests {
         }
 
         // Try to create another - should fail with error
-        handler.create_agent(&mut app, "overflow", None).unwrap();
+        handler.create_agent(&mut app, "overflow", None)?;
         assert!(app.last_error.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_push_with_agent() {
+    fn test_handle_push_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1201,21 +1222,23 @@ mod tests {
         ));
 
         // Push should set status message
-        handler.handle_action(&mut app, Action::Push).unwrap();
+        handler.handle_action(&mut app, Action::Push)?;
         assert!(app.status_message.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_toggle_collapse_no_agent() {
+    fn test_toggle_collapse_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
         // Should not error with no agent selected
-        handler.toggle_collapse(&mut app).unwrap();
+        handler.toggle_collapse(&mut app)?;
+        Ok(())
     }
 
     #[test]
-    fn test_toggle_collapse_no_children() {
+    fn test_toggle_collapse_no_children() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1231,7 +1254,8 @@ mod tests {
         ));
 
         // Should not error when agent has no children
-        handler.toggle_collapse(&mut app).unwrap();
+        handler.toggle_collapse(&mut app)?;
+        Ok(())
     }
 
     #[test]
@@ -1245,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn test_synthesize_no_children() {
+    fn test_synthesize_no_children() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1261,30 +1285,30 @@ mod tests {
         ));
 
         // Should set error when agent has no children
-        handler.synthesize(&mut app).unwrap();
+        handler.synthesize(&mut app)?;
         assert!(app.last_error.is_some());
         assert!(
             app.last_error
                 .as_ref()
-                .unwrap()
+                .ok_or("Expected last_error")?
                 .contains("no children to synthesize")
         );
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_spawn_children() {
+    fn test_handle_action_spawn_children() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler
-            .handle_action(&mut app, Action::SpawnChildren)
-            .unwrap();
+        handler.handle_action(&mut app, Action::SpawnChildren)?;
         assert_eq!(app.mode, Mode::ChildCount);
         assert!(app.spawning_under.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_action_add_children() {
+    fn test_handle_action_add_children() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
@@ -1301,11 +1325,10 @@ mod tests {
         let agent_id = agent.id;
         app.storage.add(agent);
 
-        handler
-            .handle_action(&mut app, Action::AddChildren)
-            .unwrap();
+        handler.handle_action(&mut app, Action::AddChildren)?;
         assert_eq!(app.mode, Mode::ChildCount);
         assert_eq!(app.spawning_under, Some(agent_id));
+        Ok(())
     }
 
     #[test]
@@ -1319,13 +1342,12 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_action_toggle_collapse() {
+    fn test_handle_action_toggle_collapse() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
         // No agent - should not error
-        handler
-            .handle_action(&mut app, Action::ToggleCollapse)
-            .unwrap();
+        handler.handle_action(&mut app, Action::ToggleCollapse)?;
+        Ok(())
     }
 }

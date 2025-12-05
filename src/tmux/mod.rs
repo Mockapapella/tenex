@@ -53,7 +53,6 @@ pub fn version() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
 
     #[test]
@@ -62,10 +61,11 @@ mod tests {
     }
 
     #[test]
-    fn test_version_when_available() {
+    fn test_version_when_available() -> Result<(), Box<dyn std::error::Error>> {
         if is_available() {
-            let version = version().unwrap();
+            let version = version()?;
             assert!(version.starts_with("tmux"));
         }
+        Ok(())
     }
 }

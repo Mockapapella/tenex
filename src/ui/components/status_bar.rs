@@ -71,34 +71,36 @@ impl Widget {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::panic, reason = "test assertions")]
     use super::*;
 
     #[test]
-    fn test_status_bar_normal() {
+    fn test_status_bar_normal() -> Result<(), Box<dyn std::error::Error>> {
         let widget = Widget::normal(3);
         match widget.content {
             StatusContent::Normal { running_count } => assert_eq!(running_count, 3),
-            _ => panic!("Expected Normal content"),
+            _ => return Err("Expected Normal content".into()),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_status_bar_error() {
+    fn test_status_bar_error() -> Result<(), Box<dyn std::error::Error>> {
         let widget = Widget::error("Something went wrong");
         match widget.content {
             StatusContent::Error(msg) => assert_eq!(msg, "Something went wrong"),
-            _ => panic!("Expected Error content"),
+            _ => return Err("Expected Error content".into()),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_status_bar_status() {
+    fn test_status_bar_status() -> Result<(), Box<dyn std::error::Error>> {
         let widget = Widget::status("Agent created");
         match widget.content {
             StatusContent::Status(msg) => assert_eq!(msg, "Agent created"),
-            _ => panic!("Expected Status content"),
+            _ => return Err("Expected Status content".into()),
         }
+        Ok(())
     }
 
     #[test]

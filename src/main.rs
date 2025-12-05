@@ -210,7 +210,6 @@ fn cmd_reset(force: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::panic, clippy::unwrap_used, reason = "test assertions")]
     use super::*;
 
     #[test]
@@ -227,38 +226,41 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_config_command() {
+    fn test_cli_config_command() -> Result<(), Box<dyn std::error::Error>> {
         let cli = Cli::parse_from(["muster", "config", "--path"]);
         match cli.command {
             Some(Commands::Config { set, path }) => {
                 assert!(path);
                 assert!(set.is_none());
             }
-            _ => panic!("Expected Config command"),
+            _ => return Err("Expected Config command".into()),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_cli_config_with_set() {
+    fn test_cli_config_with_set() -> Result<(), Box<dyn std::error::Error>> {
         let cli = Cli::parse_from(["muster", "config", "--set", "max_agents=10"]);
         match cli.command {
             Some(Commands::Config { set, path }) => {
                 assert!(!path);
                 assert_eq!(set, Some("max_agents=10".to_string()));
             }
-            _ => panic!("Expected Config command"),
+            _ => return Err("Expected Config command".into()),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_cli_reset_command() {
+    fn test_cli_reset_command() -> Result<(), Box<dyn std::error::Error>> {
         let cli = Cli::parse_from(["muster", "reset", "--force"]);
         match cli.command {
             Some(Commands::Reset { force }) => {
                 assert!(force);
             }
-            _ => panic!("Expected Reset command"),
+            _ => return Err("Expected Reset command".into()),
         }
+        Ok(())
     }
 
     #[test]
@@ -300,89 +302,94 @@ mod tests {
     // Config setting tests - these test the config key branches
     // Note: We use temp files to avoid modifying real config
     #[test]
-    fn test_cmd_config_set_default_program() {
+    fn test_cmd_config_set_default_program() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
             default_program: "original".to_string(),
             ..Default::default()
         };
-        config.save_to(&config_path).unwrap();
+        config.save_to(&config_path)?;
 
         // Load and modify - we test the parsing logic
-        let loaded = Config::load_from(&config_path).unwrap();
+        let loaded = Config::load_from(&config_path)?;
         assert_eq!(loaded.default_program, "original");
+        Ok(())
     }
 
     #[test]
-    fn test_cmd_config_set_branch_prefix() {
+    fn test_cmd_config_set_branch_prefix() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
             branch_prefix: "custom/".to_string(),
             ..Default::default()
         };
-        config.save_to(&config_path).unwrap();
+        config.save_to(&config_path)?;
 
-        let loaded = Config::load_from(&config_path).unwrap();
+        let loaded = Config::load_from(&config_path)?;
         assert_eq!(loaded.branch_prefix, "custom/");
+        Ok(())
     }
 
     #[test]
-    fn test_cmd_config_set_auto_yes() {
+    fn test_cmd_config_set_auto_yes() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
             auto_yes: true,
             ..Default::default()
         };
-        config.save_to(&config_path).unwrap();
+        config.save_to(&config_path)?;
 
-        let loaded = Config::load_from(&config_path).unwrap();
+        let loaded = Config::load_from(&config_path)?;
         assert!(loaded.auto_yes);
+        Ok(())
     }
 
     #[test]
-    fn test_cmd_config_set_poll_interval() {
+    fn test_cmd_config_set_poll_interval() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
             poll_interval_ms: 500,
             ..Default::default()
         };
-        config.save_to(&config_path).unwrap();
+        config.save_to(&config_path)?;
 
-        let loaded = Config::load_from(&config_path).unwrap();
+        let loaded = Config::load_from(&config_path)?;
         assert_eq!(loaded.poll_interval_ms, 500);
+        Ok(())
     }
 
     #[test]
-    fn test_cmd_config_set_max_agents() {
+    fn test_cmd_config_set_max_agents() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
             max_agents: 20,
             ..Default::default()
         };
-        config.save_to(&config_path).unwrap();
+        config.save_to(&config_path)?;
 
-        let loaded = Config::load_from(&config_path).unwrap();
+        let loaded = Config::load_from(&config_path)?;
         assert_eq!(loaded.max_agents, 20);
+        Ok(())
     }
 
     #[test]

@@ -80,7 +80,6 @@ impl fmt::Display for Status {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
 
     #[test]
@@ -146,22 +145,24 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip() {
+    fn test_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         for status in [
             Status::Starting,
             Status::Running,
             Status::Paused,
             Status::Stopped,
         ] {
-            let json = serde_json::to_string(&status).unwrap();
-            let parsed: Status = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&status)?;
+            let parsed: Status = serde_json::from_str(&json)?;
             assert_eq!(status, parsed);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_serde_format() {
-        let json = serde_json::to_string(&Status::Running).unwrap();
+    fn test_serde_format() -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string(&Status::Running)?;
         assert_eq!(json, "\"running\"");
+        Ok(())
     }
 }

@@ -237,109 +237,107 @@ pub struct Info {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use git2::Signature;
     use tempfile::TempDir;
 
-    fn init_test_repo_with_commit() -> (TempDir, Repository) {
-        let temp_dir = TempDir::new().unwrap();
-        let repo = Repository::init(temp_dir.path()).unwrap();
+    fn init_test_repo_with_commit() -> Result<(TempDir, Repository), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let repo = Repository::init(temp_dir.path())?;
 
-        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let sig = Signature::now("Test", "test@test.com")?;
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Test").unwrap();
+        fs::write(&file_path, "# Test")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(Path::new("README.md")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
 
-        let tree_id = index.write_tree().unwrap();
+        let tree_id = index.write_tree()?;
 
         {
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .unwrap();
+            let tree = repo.find_tree(tree_id)?;
+            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
         }
 
-        (temp_dir, repo)
+        Ok((temp_dir, repo))
     }
 
     #[test]
-    fn test_create_with_new_branch() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_with_new_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-test");
-        manager
-            .create_with_new_branch(&wt_path, "feature-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-test")?;
 
         assert!(wt_path.exists());
         assert!(manager.exists("feature-test"));
+        Ok(())
     }
 
     #[test]
-    fn test_create_existing_branch() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
 
-        let head = repo.head().unwrap();
-        let commit = head.peel_to_commit().unwrap();
-        repo.branch("existing-branch", &commit, false).unwrap();
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch("existing-branch", &commit, false)?;
 
         let manager = Manager::new(&repo);
         let wt_path = temp_dir.path().join("worktrees").join("existing");
-        manager.create(&wt_path, "existing-branch").unwrap();
+        manager.create(&wt_path, "existing-branch")?;
 
         assert!(wt_path.exists());
+        Ok(())
     }
 
     #[test]
-    fn test_create_nonexistent_branch() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_nonexistent_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("test");
         let result = manager.create(&wt_path, "nonexistent");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_remove_worktree() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_remove_worktree() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-remove");
-        manager
-            .create_with_new_branch(&wt_path, "feature-remove-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-remove-test")?;
         assert!(manager.exists("feature-remove-test"));
 
-        manager.remove("feature-remove-test").unwrap();
+        manager.remove("feature-remove-test")?;
         assert!(!manager.exists("feature-remove-test"));
         assert!(!wt_path.exists());
+        Ok(())
     }
 
     #[test]
-    fn test_remove_nonexistent() {
+    fn test_remove_nonexistent() -> Result<(), Box<dyn std::error::Error>> {
         // Removing a non-existent worktree/branch should succeed (idempotent cleanup)
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let result = manager.remove("nonexistent");
         assert!(result.is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_remove_with_missing_worktree_but_existing_branch() {
+    fn test_remove_with_missing_worktree_but_existing_branch()
+    -> Result<(), Box<dyn std::error::Error>> {
         // When worktree is manually removed but branch exists, cleanup should still delete branch
-        let (temp_dir, repo) = init_test_repo_with_commit();
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("orphan-branch");
-        manager
-            .create_with_new_branch(&wt_path, "orphan-branch-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "orphan-branch-test")?;
 
         // Verify branch exists
         assert!(
@@ -348,7 +346,7 @@ mod tests {
         );
 
         // Manually remove the worktree directory (simulating manual cleanup)
-        fs::remove_dir_all(&wt_path).unwrap();
+        fs::remove_dir_all(&wt_path)?;
 
         // Prune the worktree reference so git doesn't track it
         let worktree_name = "orphan-branch-test";
@@ -361,107 +359,101 @@ mod tests {
         }
 
         // Now remove should still clean up the branch
-        manager.remove("orphan-branch-test").unwrap();
+        manager.remove("orphan-branch-test")?;
 
         // Branch should be deleted
         assert!(
             repo.find_branch("orphan-branch-test", git2::BranchType::Local)
                 .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn test_list_worktrees() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_list_worktrees() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-list");
-        manager
-            .create_with_new_branch(&wt_path, "feature-list-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-list-test")?;
 
-        let worktrees = manager.list().unwrap();
+        let worktrees = manager.list()?;
         assert!(worktrees.iter().any(|wt| wt.name == "feature-list-test"));
+        Ok(())
     }
 
     #[test]
-    fn test_exists() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_exists() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         assert!(!manager.exists("nonexistent"));
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-exists");
-        manager
-            .create_with_new_branch(&wt_path, "feature-exists-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-exists-test")?;
 
         assert!(manager.exists("feature-exists-test"));
+        Ok(())
     }
 
     #[test]
-    fn test_lock_and_unlock() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_lock_and_unlock() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-lock");
-        manager
-            .create_with_new_branch(&wt_path, "feature-lock-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-lock-test")?;
 
-        manager
-            .lock("feature-lock-test", Some("Testing lock"))
-            .unwrap();
+        manager.lock("feature-lock-test", Some("Testing lock"))?;
 
-        let worktrees = manager.list().unwrap();
+        let worktrees = manager.list()?;
         let locked_wt = worktrees
             .iter()
             .find(|wt| wt.name == "feature-lock-test")
-            .unwrap();
+            .ok_or("Expected worktree")?;
         assert!(locked_wt.is_locked);
 
-        manager.unlock("feature-lock-test").unwrap();
+        manager.unlock("feature-lock-test")?;
 
-        let worktrees = manager.list().unwrap();
+        let worktrees = manager.list()?;
         let unlocked_wt = worktrees
             .iter()
             .find(|wt| wt.name == "feature-lock-test")
-            .unwrap();
+            .ok_or("Expected worktree")?;
         assert!(!unlocked_wt.is_locked);
+        Ok(())
     }
 
     #[test]
-    fn test_unlock_not_locked() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_unlock_not_locked() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-unlock");
-        manager
-            .create_with_new_branch(&wt_path, "feature-unlock-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-unlock-test")?;
 
         let result = manager.unlock("feature-unlock-test");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_validate() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_validate() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let wt_path = temp_dir.path().join("worktrees").join("feature-validate");
-        manager
-            .create_with_new_branch(&wt_path, "feature-validate-test")
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, "feature-validate-test")?;
 
-        manager.validate("feature-validate-test").unwrap();
+        manager.validate("feature-validate-test")?;
+        Ok(())
     }
 
     #[test]
-    fn test_branch_name_with_slashes() {
+    fn test_branch_name_with_slashes() -> Result<(), Box<dyn std::error::Error>> {
         // Integration test: branch names with slashes (like "muster/feature-name")
         // should work correctly. The worktree name internally replaces slashes with dashes.
-        let (temp_dir, repo) = init_test_repo_with_commit();
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         // Use a branch name with a slash (like muster generates)
@@ -473,9 +465,7 @@ mod tests {
             .join("my-feature");
 
         // Create worktree with slashed branch name
-        manager
-            .create_with_new_branch(&wt_path, branch_name)
-            .unwrap();
+        manager.create_with_new_branch(&wt_path, branch_name)?;
 
         // Verify worktree directory exists
         assert!(wt_path.exists());
@@ -493,12 +483,13 @@ mod tests {
         );
 
         // Verify we can validate the worktree using the branch name
-        manager.validate(branch_name).unwrap();
+        manager.validate(branch_name)?;
 
         // Verify we can remove the worktree using the branch name
-        manager.remove(branch_name).unwrap();
+        manager.remove(branch_name)?;
         assert!(!manager.exists(branch_name));
         assert!(!wt_path.exists());
+        Ok(())
     }
 
     #[test]

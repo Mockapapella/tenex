@@ -169,160 +169,168 @@ impl<'a> Manager<'a> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use git2::Signature;
     use std::fs;
     use tempfile::TempDir;
 
-    fn init_test_repo_with_commit() -> (TempDir, Repository) {
-        let temp_dir = TempDir::new().unwrap();
-        let repo = Repository::init(temp_dir.path()).unwrap();
+    fn init_test_repo_with_commit() -> Result<(TempDir, Repository), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let repo = Repository::init(temp_dir.path())?;
 
-        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let sig = Signature::now("Test", "test@test.com")?;
 
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Test").unwrap();
+        fs::write(&file_path, "# Test")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new("README.md")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
 
-        let tree_id = index.write_tree().unwrap();
+        let tree_id = index.write_tree()?;
 
         {
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .unwrap();
+            let tree = repo.find_tree(tree_id)?;
+            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
         }
 
-        (temp_dir, repo)
+        Ok((temp_dir, repo))
     }
 
     #[test]
-    fn test_create_branch() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        manager.create("feature/test").unwrap();
+        manager.create("feature/test")?;
         assert!(manager.exists("feature/test"));
+        Ok(())
     }
 
     #[test]
-    fn test_create_duplicate_branch() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_duplicate_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        manager.create("feature/test").unwrap();
+        manager.create("feature/test")?;
         let result = manager.create("feature/test");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_delete_branch() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_delete_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        manager.create("feature/test").unwrap();
+        manager.create("feature/test")?;
         assert!(manager.exists("feature/test"));
 
-        manager.delete("feature/test").unwrap();
+        manager.delete("feature/test")?;
         assert!(!manager.exists("feature/test"));
+        Ok(())
     }
 
     #[test]
-    fn test_delete_nonexistent_branch() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_delete_nonexistent_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let result = manager.delete("nonexistent");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_current_branch() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_current_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        let current = manager.current().unwrap();
+        let current = manager.current()?;
         assert!(!current.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_list_branches() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_list_branches() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        manager.create("feature/a").unwrap();
-        manager.create("feature/b").unwrap();
+        manager.create("feature/a")?;
+        manager.create("feature/b")?;
 
-        let branches = manager.list().unwrap();
+        let branches = manager.list()?;
         assert!(branches.len() >= 3);
         assert!(branches.iter().any(|b| b == "feature/a"));
         assert!(branches.iter().any(|b| b == "feature/b"));
+        Ok(())
     }
 
     #[test]
-    fn test_exists() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_exists() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         assert!(!manager.exists("nonexistent"));
-        manager.create("new-branch").unwrap();
+        manager.create("new-branch")?;
         assert!(manager.exists("new-branch"));
+        Ok(())
     }
 
     #[test]
-    fn test_checkout() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        manager.create("feature/test").unwrap();
-        manager.checkout("feature/test").unwrap();
+        manager.create("feature/test")?;
+        manager.checkout("feature/test")?;
 
-        assert_eq!(manager.current().unwrap(), "feature/test");
+        assert_eq!(manager.current()?, "feature/test");
+        Ok(())
     }
 
     #[test]
-    fn test_checkout_nonexistent() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_checkout_nonexistent() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let result = manager.checkout("nonexistent");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_commit_count() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_commit_count() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        let current = manager.current().unwrap();
-        let count = manager.commit_count(&current).unwrap();
+        let current = manager.current()?;
+        let count = manager.commit_count(&current)?;
         assert_eq!(count, 1);
+        Ok(())
     }
 
     #[test]
-    fn test_create_from_commit() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_from_commit() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        let head = repo.head().unwrap();
-        let commit = head.peel_to_commit().unwrap();
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
         let commit_id = commit.id().to_string();
 
-        manager
-            .create_from_commit("from-commit", &commit_id)
-            .unwrap();
+        manager.create_from_commit("from-commit", &commit_id)?;
         assert!(manager.exists("from-commit"));
+        Ok(())
     }
 
     #[test]
-    fn test_create_from_invalid_commit() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_create_from_invalid_commit() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
         let result = manager.create_from_commit("test", "invalid");
         assert!(result.is_err());
+        Ok(())
     }
 }

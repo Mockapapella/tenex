@@ -191,10 +191,6 @@ impl Manager {
     /// # Errors
     ///
     /// Returns an error if the window cannot be created
-    #[expect(
-        clippy::literal_string_with_formatting_args,
-        reason = "tmux format strings use #{...} syntax, not Rust format"
-    )]
     pub fn create_window(
         &self,
         session: &str,
@@ -212,7 +208,7 @@ impl Manager {
             .arg(working_dir)
             .arg("-P") // Print window info
             .arg("-F")
-            .arg("#{window_index}");
+            .arg(concat!("#", "{window_index}"));
 
         if let Some(shell_cmd) = command {
             cmd.args(["sh", "-c", shell_cmd]);

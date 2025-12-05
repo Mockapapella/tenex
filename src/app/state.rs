@@ -391,7 +391,6 @@ impl std::fmt::Display for Tab {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use crate::agent::Agent;
     use std::path::PathBuf;
@@ -538,17 +537,18 @@ mod tests {
     }
 
     #[test]
-    fn test_selected_agent() {
+    fn test_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::default();
         assert!(app.selected_agent().is_none());
 
         app.storage.add(create_test_agent("test"));
         assert!(app.selected_agent().is_some());
-        assert_eq!(app.selected_agent().unwrap().title, "test");
+        assert_eq!(app.selected_agent().ok_or("Expected agent")?.title, "test");
+        Ok(())
     }
 
     #[test]
-    fn test_selected_agent_mut() {
+    fn test_selected_agent_mut() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::default();
         app.storage.add(create_test_agent("test"));
 
@@ -556,7 +556,11 @@ mod tests {
             agent.title = "modified".to_string();
         }
 
-        assert_eq!(app.selected_agent().unwrap().title, "modified");
+        assert_eq!(
+            app.selected_agent().ok_or("Expected agent")?.title,
+            "modified"
+        );
+        Ok(())
     }
 
     #[test]
@@ -633,11 +637,12 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_serde() {
+    fn test_tab_serde() -> Result<(), Box<dyn std::error::Error>> {
         let tab = Tab::Preview;
-        let json = serde_json::to_string(&tab).unwrap();
-        let parsed: Tab = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tab)?;
+        let parsed: Tab = serde_json::from_str(&json)?;
         assert_eq!(tab, parsed);
+        Ok(())
     }
 
     #[test]

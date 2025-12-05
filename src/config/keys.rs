@@ -338,7 +338,6 @@ pub fn key_to_string(code: KeyCode, modifiers: KeyModifiers) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
 
     #[test]
@@ -495,10 +494,11 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip() {
+    fn test_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let keys = KeyBindings::default();
-        let json = serde_json::to_string(&keys).unwrap();
-        let parsed: KeyBindings = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&keys)?;
+        let parsed: KeyBindings = serde_json::from_str(&json)?;
         assert_eq!(keys, parsed);
+        Ok(())
     }
 }

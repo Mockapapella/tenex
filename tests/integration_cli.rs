@@ -8,17 +8,6 @@
 //! IMPORTANT: Run with `--test-threads=1` to avoid race conditions from
 //! parallel tests calling `std::env::set_current_dir`.
 
-#![expect(clippy::unwrap_used, reason = "integration test assertions")]
-#![expect(clippy::similar_names, reason = "test clarity")]
-#![expect(clippy::default_trait_access, reason = "test simplicity")]
-#![expect(clippy::unused_self, reason = "consistent API in test fixtures")]
-#![expect(clippy::missing_const_for_fn, reason = "test code simplicity")]
-#![expect(clippy::redundant_clone, reason = "test clarity over efficiency")]
-#![expect(clippy::needless_collect, reason = "test readability")]
-#![expect(clippy::implicit_clone, reason = "test clarity")]
-#![expect(clippy::uninlined_format_args, reason = "test readability")]
-#![expect(clippy::field_reassign_with_default, reason = "test setup clarity")]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,40 +32,39 @@ struct TestFixture {
 }
 
 impl TestFixture {
-    fn new(test_name: &str) -> Self {
-        let temp_dir = TempDir::new().unwrap();
+    fn new(test_name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let repo_path = temp_dir.path().to_path_buf();
 
         // Initialize git repo with initial commit
-        let repo = Repository::init(&repo_path).unwrap();
-        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let repo = Repository::init(&repo_path)?;
+        let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
         let readme_path = repo_path.join("README.md");
-        fs::write(&readme_path, "# Test Repository\n").unwrap();
+        fs::write(&readme_path, "# Test Repository\n")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(Path::new("README.md")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
 
-        let tree_id = index.write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-            .unwrap();
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
 
-        let worktree_dir = TempDir::new().unwrap();
-        let state_dir = TempDir::new().unwrap();
+        let worktree_dir = TempDir::new()?;
+        let state_dir = TempDir::new()?;
 
         // Generate unique session prefix for this test run
         let session_prefix = format!("muster-test-{}-{}", test_name, std::process::id());
 
-        Self {
+        Ok(Self {
             _temp_dir: temp_dir,
             repo_path,
             worktree_dir,
             state_dir,
             session_prefix,
-        }
+        })
     }
 
     fn config(&self) -> Config {
@@ -87,7 +75,7 @@ impl TestFixture {
             auto_yes: false,
             poll_interval_ms: 100,
             max_agents: 10,
-            keys: Default::default(),
+            keys: muster::config::KeyBindings::default(),
         }
     }
 
@@ -95,7 +83,7 @@ impl TestFixture {
         self.state_dir.path().join("agents.json")
     }
 
-    fn create_storage(&self) -> Storage {
+    const fn create_storage() -> Storage {
         Storage::new()
     }
 
@@ -183,9 +171,9 @@ fn skip_if_no_tmux() -> bool {
 // =============================================================================
 
 #[test]
-fn test_cmd_list_shows_agents() {
-    let fixture = TestFixture::new("list");
-    let mut storage = fixture.create_storage();
+fn test_cmd_list_shows_agents() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("list")?;
+    let mut storage = TestFixture::create_storage();
 
     // Add some test agents
     let agent1 = Agent::new(
@@ -210,14 +198,15 @@ fn test_cmd_list_shows_agents() {
     assert_eq!(storage.len(), 2);
 
     // The cmd_list function just prints, so we verify storage state
-    let agents: Vec<_> = storage.iter().collect();
-    assert_eq!(agents.len(), 2);
+    assert_eq!(storage.iter().count(), 2);
+
+    Ok(())
 }
 
 #[test]
-fn test_cmd_list_filter_running() {
-    let fixture = TestFixture::new("list_filter");
-    let mut storage = fixture.create_storage();
+fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("list_filter")?;
+    let mut storage = TestFixture::create_storage();
 
     let mut agent1 = Agent::new(
         "running-agent".to_string(),
@@ -247,6 +236,8 @@ fn test_cmd_list_filter_running() {
         .collect();
     assert_eq!(running.len(), 1);
     assert_eq!(running[0].title, "running-agent");
+
+    Ok(())
 }
 
 // =============================================================================
@@ -254,9 +245,9 @@ fn test_cmd_list_filter_running() {
 // =============================================================================
 
 #[test]
-fn test_find_agent_by_short_id_integration() {
-    let fixture = TestFixture::new("find_short");
-    let mut storage = fixture.create_storage();
+fn test_find_agent_by_short_id_integration() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("find_short")?;
+    let mut storage = TestFixture::create_storage();
 
     let agent = Agent::new(
         "findable-agent".to_string(),
@@ -265,20 +256,22 @@ fn test_find_agent_by_short_id_integration() {
         fixture.worktree_dir.path().join("findable"),
         None,
     );
-    let short_id = agent.short_id().to_string();
+    let short_id = agent.short_id();
     let full_id = agent.id;
     storage.add(agent);
 
     // Find by short ID
     let found = storage.find_by_short_id(&short_id);
     assert!(found.is_some());
-    assert_eq!(found.unwrap().id, full_id);
+    assert_eq!(found.ok_or("Agent not found")?.id, full_id);
+
+    Ok(())
 }
 
 #[test]
-fn test_find_agent_by_index_integration() {
-    let fixture = TestFixture::new("find_index");
-    let mut storage = fixture.create_storage();
+fn test_find_agent_by_index_integration() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("find_index")?;
+    let mut storage = TestFixture::create_storage();
 
     storage.add(Agent::new(
         "agent-0".to_string(),
@@ -301,7 +294,12 @@ fn test_find_agent_by_index_integration() {
 
     assert!(found0.is_some());
     assert!(found1.is_some());
-    assert_ne!(found0.unwrap().id, found1.unwrap().id);
+    assert_ne!(
+        found0.ok_or("Agent 0 not found")?.id,
+        found1.ok_or("Agent 1 not found")?.id
+    );
+
+    Ok(())
 }
 
 // =============================================================================
@@ -309,12 +307,12 @@ fn test_find_agent_by_index_integration() {
 // =============================================================================
 
 #[test]
-fn test_tmux_session_lifecycle() {
+fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("lifecycle");
+    let fixture = TestFixture::new("lifecycle")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("lifecycle");
 
@@ -339,33 +337,35 @@ fn test_tmux_session_lifecycle() {
     // Verify session is gone
     std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(!manager.exists(&session_name));
+
+    Ok(())
 }
 
 #[test]
-fn test_tmux_session_list() {
+fn test_tmux_session_list() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("list_sessions");
+    let fixture = TestFixture::new("list_sessions")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("listtest");
 
     // Create a session
     let _ = manager.kill(&session_name);
-    manager
-        .create(&session_name, fixture.worktree_dir.path(), None)
-        .unwrap();
+    manager.create(&session_name, fixture.worktree_dir.path(), None)?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // List sessions and verify our session is present
-    let sessions = manager.list().unwrap();
+    let sessions = manager.list()?;
     let found = sessions.iter().any(|s| s.name == session_name);
     assert!(found, "Created session should appear in list");
 
     // Cleanup
     let _ = manager.kill(&session_name);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -373,9 +373,9 @@ fn test_tmux_session_list() {
 // =============================================================================
 
 #[test]
-fn test_git_worktree_create_and_remove() {
-    let fixture = TestFixture::new("worktree");
-    let repo = muster::git::open_repository(&fixture.repo_path).unwrap();
+fn test_git_worktree_create_and_remove() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("worktree")?;
+    let repo = muster::git::open_repository(&fixture.repo_path)?;
     let manager = muster::git::WorktreeManager::new(&repo);
 
     let worktree_path = fixture.worktree_dir.path().join("test-worktree");
@@ -383,7 +383,7 @@ fn test_git_worktree_create_and_remove() {
 
     // Create worktree with new branch
     let result = manager.create_with_new_branch(&worktree_path, branch_name);
-    assert!(result.is_ok(), "Failed to create worktree: {:?}", result);
+    assert!(result.is_ok(), "Failed to create worktree: {result:?}");
 
     // Verify worktree exists
     assert!(worktree_path.exists());
@@ -391,7 +391,9 @@ fn test_git_worktree_create_and_remove() {
 
     // Remove worktree
     let result = manager.remove(branch_name);
-    assert!(result.is_ok(), "Failed to remove worktree: {:?}", result);
+    assert!(result.is_ok(), "Failed to remove worktree: {result:?}");
+
+    Ok(())
 }
 
 // =============================================================================
@@ -399,14 +401,14 @@ fn test_git_worktree_create_and_remove() {
 // =============================================================================
 
 #[test]
-fn test_agent_creation_workflow() {
+fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("create_workflow");
+    let fixture = TestFixture::new("create_workflow")?;
     let config = fixture.config();
-    let mut storage = fixture.create_storage();
+    let mut storage = TestFixture::create_storage();
     let manager = SessionManager::new();
 
     // Create agent manually (simulating cmd_new)
@@ -416,23 +418,19 @@ fn test_agent_creation_workflow() {
     let session_name = branch.replace('/', "-");
 
     // Create git worktree
-    let repo = muster::git::open_repository(&fixture.repo_path).unwrap();
+    let repo = muster::git::open_repository(&fixture.repo_path)?;
     let worktree_mgr = muster::git::WorktreeManager::new(&repo);
-    worktree_mgr
-        .create_with_new_branch(&worktree_path, &branch)
-        .unwrap();
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
     // Create tmux session with a command that stays alive
-    manager
-        .create(&session_name, &worktree_path, Some("sleep 10"))
-        .unwrap();
+    manager.create(&session_name, &worktree_path, Some("sleep 10"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Create agent record
     let agent = Agent::new(
         title.to_string(),
-        config.default_program.clone(),
+        config.default_program,
         branch.clone(),
         worktree_path.clone(),
         None,
@@ -454,6 +452,8 @@ fn test_agent_creation_workflow() {
     std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(!manager.exists(&session_name));
     assert_eq!(storage.len(), 0);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -461,12 +461,12 @@ fn test_agent_creation_workflow() {
 // =============================================================================
 
 #[test]
-fn test_storage_save_and_load() {
-    let fixture = TestFixture::new("storage_persist");
+fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("storage_persist")?;
     let storage_path = fixture.storage_path();
 
     // Create storage with agents
-    let mut storage = fixture.create_storage();
+    let mut storage = TestFixture::create_storage();
     storage.add(Agent::new(
         "persistent-agent".to_string(),
         "echo".to_string(),
@@ -476,17 +476,19 @@ fn test_storage_save_and_load() {
     ));
 
     // Save to file
-    storage.save_to(&storage_path).unwrap();
+    storage.save_to(&storage_path)?;
 
     // Verify file exists
     assert!(storage_path.exists());
 
     // Load from file
-    let loaded = Storage::load_from(&storage_path).unwrap();
+    let loaded = Storage::load_from(&storage_path)?;
     assert_eq!(loaded.len(), 1);
 
-    let agent = loaded.iter().next().unwrap();
+    let agent = loaded.iter().next().ok_or("No agent found in storage")?;
     assert_eq!(agent.title, "persistent-agent");
+
+    Ok(())
 }
 
 // =============================================================================
@@ -494,21 +496,25 @@ fn test_storage_save_and_load() {
 // =============================================================================
 
 #[test]
-fn test_config_save_and_load() {
-    let fixture = TestFixture::new("config_persist");
+fn test_config_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("config_persist")?;
     let config_path = fixture.state_dir.path().join("config.json");
 
-    let mut config = Config::default();
-    config.default_program = "custom-program".to_string();
-    config.max_agents = 20;
+    let config = Config {
+        default_program: "custom-program".to_string(),
+        max_agents: 20,
+        ..Config::default()
+    };
 
     // Save config
-    config.save_to(&config_path).unwrap();
+    config.save_to(&config_path)?;
 
     // Load config
-    let loaded = Config::load_from(&config_path).unwrap();
+    let loaded = Config::load_from(&config_path)?;
     assert_eq!(loaded.default_program, "custom-program");
     assert_eq!(loaded.max_agents, 20);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -516,9 +522,9 @@ fn test_config_save_and_load() {
 // =============================================================================
 
 #[test]
-fn test_agent_status_transitions() {
-    let fixture = TestFixture::new("status_trans");
-    let mut storage = fixture.create_storage();
+fn test_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("status_trans")?;
+    let mut storage = TestFixture::create_storage();
 
     let mut agent = Agent::new(
         "status-test".to_string(),
@@ -555,6 +561,8 @@ fn test_agent_status_transitions() {
 
     storage.add(agent);
     assert_eq!(storage.len(), 1);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -562,20 +570,20 @@ fn test_agent_status_transitions() {
 // =============================================================================
 
 #[test]
-fn test_actions_create_agent_integration() {
+fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_create");
+    let fixture = TestFixture::new("actions_create")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
     // Change to repo directory for the test
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent via the handler
@@ -590,32 +598,34 @@ fn test_actions_create_agent_integration() {
     // Restore original directory
     let _ = std::env::set_current_dir(&original_dir);
 
-    assert!(result.is_ok(), "Failed to create agent: {:?}", result);
+    assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.storage.len(), 1);
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_create_agent_with_prompt_integration() {
+fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_prompt");
+    let fixture = TestFixture::new("actions_prompt")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent with a prompt
     let result = handler.create_agent(&mut app, "prompted-agent", Some("test prompt"));
 
-    std::env::set_current_dir(&original_dir).unwrap();
+    std::env::set_current_dir(&original_dir)?;
 
-    assert!(result.is_ok(), "Failed to create agent: {:?}", result);
+    assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.storage.len(), 1);
 
     // Cleanup
@@ -623,26 +633,28 @@ fn test_actions_create_agent_with_prompt_integration() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_kill_agent_integration() {
+fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_kill");
+    let fixture = TestFixture::new("actions_kill")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent first
-    handler.create_agent(&mut app, "killable", None).unwrap();
+    handler.create_agent(&mut app, "killable", None)?;
     assert_eq!(app.storage.len(), 1);
 
     // Select the agent
@@ -654,30 +666,32 @@ fn test_actions_kill_agent_integration() {
     ));
     let result = handler.handle_action(&mut app, muster::config::Action::Confirm);
 
-    std::env::set_current_dir(&original_dir).unwrap();
+    std::env::set_current_dir(&original_dir)?;
 
     assert!(result.is_ok());
     assert_eq!(app.storage.len(), 0);
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_pause_resume_integration() {
+fn test_actions_pause_resume_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_pause_resume");
+    let fixture = TestFixture::new("actions_pause_resume")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
-    handler.create_agent(&mut app, "pausable", None).unwrap();
+    handler.create_agent(&mut app, "pausable", None)?;
     app.select_next();
 
     // Wait for agent to start
@@ -708,28 +722,28 @@ fn test_actions_pause_resume_integration() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_update_preview_integration() {
+fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_preview");
+    let fixture = TestFixture::new("actions_preview")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
-    handler
-        .create_agent(&mut app, "preview-test", None)
-        .unwrap();
+    handler.create_agent(&mut app, "preview-test", None)?;
     app.select_next();
 
     // Wait for session
@@ -748,26 +762,28 @@ fn test_actions_update_preview_integration() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_update_diff_integration() {
+fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_diff");
+    let fixture = TestFixture::new("actions_diff")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
-    handler.create_agent(&mut app, "diff-test", None).unwrap();
+    handler.create_agent(&mut app, "diff-test", None)?;
     app.select_next();
 
     // Update diff
@@ -783,26 +799,28 @@ fn test_actions_update_diff_integration() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_attach_integration() {
+fn test_actions_attach_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_attach");
+    let fixture = TestFixture::new("actions_attach")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
-    handler.create_agent(&mut app, "attachable", None).unwrap();
+    handler.create_agent(&mut app, "attachable", None)?;
     app.select_next();
 
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -821,27 +839,29 @@ fn test_actions_attach_integration() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_reset_all_integration() {
+fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_reset");
+    let fixture = TestFixture::new("actions_reset")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&fixture.repo_path).unwrap();
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create multiple agents
-    handler.create_agent(&mut app, "reset1", None).unwrap();
-    handler.create_agent(&mut app, "reset2", None).unwrap();
+    handler.create_agent(&mut app, "reset1", None)?;
+    handler.create_agent(&mut app, "reset2", None)?;
     assert_eq!(app.storage.len(), 2);
 
     // Reset all via confirm action
@@ -853,22 +873,24 @@ fn test_actions_reset_all_integration() {
     assert_eq!(app.storage.len(), 0);
 
     let _ = std::env::set_current_dir(&original_dir);
+
+    Ok(())
 }
 
 #[test]
-fn test_actions_push_branch_integration() {
+fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_push");
+    let fixture = TestFixture::new("actions_push")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
@@ -878,7 +900,7 @@ fn test_actions_push_branch_integration() {
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
         // Skip test if agent creation fails (e.g., git/tmux issues)
-        return;
+        return Ok(());
     }
 
     app.select_next();
@@ -895,6 +917,8 @@ fn test_actions_push_branch_integration() {
     let _ = std::env::set_current_dir(&original_dir);
 
     assert!(result.is_ok());
+
+    Ok(())
 }
 
 // =============================================================================
@@ -902,20 +926,18 @@ fn test_actions_push_branch_integration() {
 // =============================================================================
 
 #[test]
-fn test_tmux_capture_pane() {
+fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("capture_pane");
+    let fixture = TestFixture::new("capture_pane")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("capture");
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager
-        .create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))
-        .unwrap();
+    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -932,24 +954,24 @@ fn test_tmux_capture_pane() {
     // Cleanup
     let _ = manager.kill(&session_name);
 
-    assert!(result.is_ok(), "Capture failed: {:?}", result);
+    assert!(result.is_ok(), "Capture failed: {result:?}");
+
+    Ok(())
 }
 
 #[test]
-fn test_tmux_capture_pane_with_history() {
+fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("capture_history");
+    let fixture = TestFixture::new("capture_history")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("hist");
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager
-        .create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))
-        .unwrap();
+    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -966,24 +988,24 @@ fn test_tmux_capture_pane_with_history() {
     // Cleanup
     let _ = manager.kill(&session_name);
 
-    assert!(result.is_ok(), "Capture with history failed: {:?}", result);
+    assert!(result.is_ok(), "Capture with history failed: {result:?}");
+
+    Ok(())
 }
 
 #[test]
-fn test_tmux_capture_full_history() {
+fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("capture_full");
+    let fixture = TestFixture::new("capture_full")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("full");
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager
-        .create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))
-        .unwrap();
+    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -1000,7 +1022,9 @@ fn test_tmux_capture_full_history() {
     // Cleanup
     let _ = manager.kill(&session_name);
 
-    assert!(result.is_ok(), "Capture full history failed: {:?}", result);
+    assert!(result.is_ok(), "Capture full history failed: {result:?}");
+
+    Ok(())
 }
 
 #[test]
@@ -1015,20 +1039,18 @@ fn test_tmux_capture_nonexistent_session() {
 }
 
 #[test]
-fn test_tmux_send_keys() {
+fn test_tmux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("send_keys");
+    let fixture = TestFixture::new("send_keys")?;
     let manager = SessionManager::new();
     let session_name = fixture.session_name("keys");
 
     // Create a session
     let _ = manager.kill(&session_name);
-    manager
-        .create(&session_name, fixture.worktree_dir.path(), None)
-        .unwrap();
+    manager.create(&session_name, fixture.worktree_dir.path(), None)?;
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -1038,6 +1060,8 @@ fn test_tmux_send_keys() {
 
     // Cleanup
     let _ = manager.kill(&session_name);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -1045,75 +1069,77 @@ fn test_tmux_send_keys() {
 // =============================================================================
 
 #[test]
-fn test_cmd_kill_success() {
+fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("cmd_kill");
+    let fixture = TestFixture::new("cmd_kill")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent first
     let create_result = handler.create_agent(&mut app, "killable", None);
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
-        return;
+        return Ok(());
     }
 
     // Get agent info for kill command
-    let agent = app.storage.iter().next().unwrap();
+    let agent = app.storage.iter().next().ok_or("No agent found")?;
     let agent_id = agent.id;
     let session = agent.tmux_session.clone();
     let branch = agent.branch.clone();
 
     // Save storage so cmd_kill can load it
     let storage_path = fixture.storage_path();
-    app.storage.save_to(&storage_path).unwrap();
+    app.storage.save_to(&storage_path)?;
 
     // Simulate kill: kill session, remove worktree, remove from storage
     let manager = SessionManager::new();
     let _ = manager.kill(&session);
 
-    let repo = muster::git::open_repository(&fixture.repo_path).unwrap();
+    let repo = muster::git::open_repository(&fixture.repo_path)?;
     let worktree_mgr = muster::git::WorktreeManager::new(&repo);
     let _ = worktree_mgr.remove(&branch);
 
     app.storage.remove(agent_id);
-    app.storage.save_to(&storage_path).unwrap();
+    app.storage.save_to(&storage_path)?;
 
     let _ = std::env::set_current_dir(&original_dir);
 
     assert_eq!(app.storage.len(), 0);
+
+    Ok(())
 }
 
 #[test]
-fn test_cmd_pause_success() {
+fn test_cmd_pause_success() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("cmd_pause_success");
+    let fixture = TestFixture::new("cmd_pause_success")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
     let create_result = handler.create_agent(&mut app, "pausable", None);
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
-        return;
+        return Ok(());
     }
 
     // Mark as running
@@ -1138,29 +1164,31 @@ fn test_cmd_pause_success() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_cmd_resume_success() {
+fn test_cmd_resume_success() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("cmd_resume_success");
+    let fixture = TestFixture::new("cmd_resume_success")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
     let create_result = handler.create_agent(&mut app, "resumable", None);
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
-        return;
+        return Ok(());
     }
 
     // Mark as paused
@@ -1185,29 +1213,31 @@ fn test_cmd_resume_success() {
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
+
+    Ok(())
 }
 
 #[test]
-fn test_sync_agent_status_transitions() {
+fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("sync_status");
+    let fixture = TestFixture::new("sync_status")?;
     let config = fixture.config();
-    let storage = fixture.create_storage();
+    let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = muster::App::new(config.clone(), storage);
+    let mut app = muster::App::new(config, storage);
     let handler = muster::app::Actions::new();
 
     // Create an agent
     let create_result = handler.create_agent(&mut app, "sync-test", None);
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
-        return;
+        return Ok(());
     }
 
     // Agent starts as Starting
@@ -1233,6 +1263,8 @@ fn test_sync_agent_status_transitions() {
     let _ = handler.sync_agent_status(&mut app);
 
     let _ = std::env::set_current_dir(&original_dir);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -1240,14 +1272,14 @@ fn test_sync_agent_status_transitions() {
 // =============================================================================
 
 #[test]
-fn test_full_cli_workflow() {
+fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
-        return;
+        return Ok(());
     }
 
-    let fixture = TestFixture::new("full_workflow");
+    let fixture = TestFixture::new("full_workflow")?;
     let config = fixture.config();
-    let mut storage = fixture.create_storage();
+    let mut storage = TestFixture::create_storage();
     let manager = SessionManager::new();
 
     // 1. Create an agent (simulate `muster new`)
@@ -1256,21 +1288,17 @@ fn test_full_cli_workflow() {
     let worktree_path = config.worktree_dir.join(&branch);
     let session_name = branch.replace('/', "-");
 
-    let repo = muster::git::open_repository(&fixture.repo_path).unwrap();
+    let repo = muster::git::open_repository(&fixture.repo_path)?;
     let worktree_mgr = muster::git::WorktreeManager::new(&repo);
-    worktree_mgr
-        .create_with_new_branch(&worktree_path, &branch)
-        .unwrap();
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
-    manager
-        .create(&session_name, &worktree_path, Some("sleep 60"))
-        .unwrap();
+    manager.create(&session_name, &worktree_path, Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let mut agent = Agent::new(
         title.to_string(),
-        config.default_program.clone(),
+        config.default_program,
         branch.clone(),
         worktree_path.clone(),
         None,
@@ -1281,8 +1309,8 @@ fn test_full_cli_workflow() {
 
     // 2. List agents (simulate `muster list`)
     assert_eq!(storage.len(), 1);
-    let agents: Vec<_> = storage.iter().collect();
-    assert_eq!(agents[0].title, title);
+    let all_agents: Vec<_> = storage.iter().collect();
+    assert_eq!(all_agents[0].title, title);
 
     // 3. Pause agent (simulate `muster pause`)
     let _ = manager.kill(&session_name);
@@ -1294,9 +1322,7 @@ fn test_full_cli_workflow() {
     assert!(!manager.exists(&session_name));
 
     // 4. Resume agent (simulate `muster resume`)
-    manager
-        .create(&session_name, &worktree_path, Some("sleep 60"))
-        .unwrap();
+    manager.create(&session_name, &worktree_path, Some("sleep 60"))?;
     if let Some(agent) = storage.get_mut(agent_id) {
         agent.set_status(muster::Status::Running);
     }
@@ -1312,4 +1338,6 @@ fn test_full_cli_workflow() {
     std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(!manager.exists(&session_name));
     assert_eq!(storage.len(), 0);
+
+    Ok(())
 }

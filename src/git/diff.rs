@@ -328,99 +328,102 @@ impl std::fmt::Display for Summary {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use git2::Signature;
     use std::fs;
     use tempfile::TempDir;
 
-    fn init_test_repo_with_commit() -> (TempDir, Repository) {
-        let temp_dir = TempDir::new().unwrap();
-        let repo = Repository::init(temp_dir.path()).unwrap();
+    fn init_test_repo_with_commit() -> Result<(TempDir, Repository), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let repo = Repository::init(temp_dir.path())?;
 
-        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let sig = Signature::now("Test", "test@test.com")?;
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Test\n").unwrap();
+        fs::write(&file_path, "# Test\n")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new("README.md")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
 
-        let tree_id = index.write_tree().unwrap();
+        let tree_id = index.write_tree()?;
 
         {
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .unwrap();
+            let tree = repo.find_tree(tree_id)?;
+            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
         }
 
-        (temp_dir, repo)
+        Ok((temp_dir, repo))
     }
 
     #[test]
-    fn test_no_changes() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_no_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
-        let uncommitted = generator.uncommitted().unwrap();
+        let uncommitted = generator.uncommitted()?;
         assert!(uncommitted.is_empty());
-        assert!(!generator.has_changes().unwrap());
+        assert!(!generator.has_changes()?);
+        Ok(())
     }
 
     #[test]
-    fn test_unstaged_changes() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_unstaged_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Test\n\nNew content\n").unwrap();
+        fs::write(&file_path, "# Test\n\nNew content\n")?;
 
-        let unstaged = generator.unstaged().unwrap();
+        let unstaged = generator.unstaged()?;
         assert_eq!(unstaged.len(), 1);
         assert_eq!(unstaged[0].status, FileStatus::Modified);
-        assert!(generator.has_changes().unwrap());
+        assert!(generator.has_changes()?);
+        Ok(())
     }
 
     #[test]
-    fn test_staged_changes() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_staged_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
         let new_file = temp_dir.path().join("new.txt");
-        fs::write(&new_file, "New file content\n").unwrap();
+        fs::write(&new_file, "New file content\n")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new("new.txt")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("new.txt"))?;
+        index.write()?;
 
-        let staged = generator.staged().unwrap();
+        let staged = generator.staged()?;
         assert_eq!(staged.len(), 1);
         assert_eq!(staged[0].status, FileStatus::Added);
+        Ok(())
     }
 
     #[test]
-    fn test_uncommitted_changes() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_uncommitted_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Modified\n").unwrap();
+        fs::write(&file_path, "# Modified\n")?;
 
-        let uncommitted = generator.uncommitted().unwrap();
+        let uncommitted = generator.uncommitted()?;
         assert!(!uncommitted.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_summary() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_summary() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Modified\nNew line\n").unwrap();
+        fs::write(&file_path, "# Modified\nNew line\n")?;
 
-        let summary = generator.summary().unwrap();
+        let summary = generator.summary()?;
         assert_eq!(summary.files_changed, 1);
         assert!(summary.additions > 0 || summary.deletions > 0);
+        Ok(())
     }
 
     #[test]
@@ -484,36 +487,37 @@ mod tests {
     }
 
     #[test]
-    fn test_between_commits() {
-        let (temp_dir, repo) = init_test_repo_with_commit();
+    fn test_between_commits() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
 
-        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let sig = Signature::now("Test", "test@test.com")?;
         let file_path = temp_dir.path().join("README.md");
-        fs::write(&file_path, "# Modified\n").unwrap();
+        fs::write(&file_path, "# Modified\n")?;
 
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new("README.md")).unwrap();
-        index.write().unwrap();
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
 
-        let tree_id = index.write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let head = repo.head()?.peel_to_commit()?;
 
-        repo.commit(Some("HEAD"), &sig, &sig, "Second commit", &tree, &[&head])
-            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Second commit", &tree, &[&head])?;
 
         let generator = Generator::new(&repo);
-        let diff = generator.between_commits("HEAD~1", "HEAD").unwrap();
+        let diff = generator.between_commits("HEAD~1", "HEAD")?;
         assert_eq!(diff.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_between_commits_invalid() {
-        let (_temp_dir, repo) = init_test_repo_with_commit();
+    fn test_between_commits_invalid() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let generator = Generator::new(&repo);
 
         let result = generator.between_commits("invalid", "HEAD");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]

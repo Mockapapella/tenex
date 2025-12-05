@@ -178,7 +178,6 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test assertions")]
     use super::*;
     use tempfile::TempDir;
 
@@ -193,8 +192,8 @@ mod tests {
     }
 
     #[test]
-    fn test_save_and_load() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
         let config = Config {
@@ -207,18 +206,20 @@ mod tests {
             keys: KeyBindings::default(),
         };
 
-        config.save_to(&config_path).unwrap();
-        let loaded = Config::load_from(&config_path).unwrap();
+        config.save_to(&config_path)?;
+        let loaded = Config::load_from(&config_path)?;
 
         assert_eq!(config, loaded);
+        Ok(())
     }
 
     #[test]
-    fn test_load_nonexistent_returns_default() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_load_nonexistent_returns_default() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("nonexistent.json");
 
         assert!(Config::load_from(&config_path).is_err());
+        Ok(())
     }
 
     #[test]
@@ -245,13 +246,14 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_defaults() {
+    fn test_serde_defaults() -> Result<(), Box<dyn std::error::Error>> {
         let json = r#"{"default_program": "codex"}"#;
-        let config: Config = serde_json::from_str(json).unwrap();
+        let config: Config = serde_json::from_str(json)?;
 
         assert_eq!(config.default_program, "codex");
         assert_eq!(config.branch_prefix, "muster/");
         assert!(!config.auto_yes);
+        Ok(())
     }
 
     #[test]
@@ -279,14 +281,15 @@ mod tests {
     }
 
     #[test]
-    fn test_save_creates_parent_dirs() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_save_creates_parent_dirs() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let nested_path = temp_dir.path().join("deep/nested/dir/config.json");
 
         let config = Config::default();
-        config.save_to(&nested_path).unwrap();
+        config.save_to(&nested_path)?;
 
         assert!(nested_path.exists());
+        Ok(())
     }
 
     #[test]
