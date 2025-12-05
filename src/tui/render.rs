@@ -249,7 +249,7 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (None, None) => {
             let running = app.running_agent_count();
             Span::styled(
-                format!(" {running} running | [n]ew [d]el [Tab]switch [?]help [q]uit "),
+                format!(" {running} running | [a]dd [d]el [Tab]switch [?]help [q]uit "),
                 Style::default().fg(Color::Gray),
             )
         }
@@ -268,13 +268,10 @@ fn render_help_overlay(frame: &mut Frame<'_>) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  n        New agent"),
-        Line::from("  N        New agent with prompt"),
+        Line::from("  a        New agent"),
+        Line::from("  A        New agent with prompt"),
         Line::from("  Enter/o  Attach to agent"),
         Line::from("  d        Kill agent"),
-        Line::from("  p        Push branch"),
-        Line::from("  c        Pause agent"),
-        Line::from("  r        Resume agent"),
         Line::from("  Tab      Switch preview/diff"),
         Line::from("  j/Down   Select next"),
         Line::from("  k/Up     Select previous"),

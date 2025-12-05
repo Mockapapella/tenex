@@ -60,7 +60,7 @@ impl Widget {
                 Span::styled(format!(" {msg} "), Style::default().fg(Color::Green))
             }
             StatusContent::Normal { running_count } => Span::styled(
-                format!(" {running_count} running | [n]ew [d]el [Tab]switch [?]help [q]uit "),
+                format!(" {running_count} running | [a]dd [d]el [Tab]switch [?]help [q]uit "),
                 Style::default().fg(Color::Gray),
             ),
         };

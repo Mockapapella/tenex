@@ -228,8 +228,8 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        // 'n' should enter creating mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        // 'a' should enter creating mode
+        handle_key_event(&mut app, &handler, KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Creating);
     }
 
@@ -238,8 +238,8 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        // 'N' should enter prompting mode
-        handle_key_event(&mut app, &handler, KeyCode::Char('N'), KeyModifiers::NONE).unwrap();
+        // 'A' should enter prompting mode
+        handle_key_event(&mut app, &handler, KeyCode::Char('A'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Prompting);
     }
 

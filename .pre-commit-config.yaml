@@ -24,7 +24,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --all-targets --all-features --workspace
+        entry: cargo test --all-targets --all-features --workspace -- --test-threads=1
         language: system
         types: [rust]
         pass_filenames: false

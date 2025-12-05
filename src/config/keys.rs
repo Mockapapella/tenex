@@ -58,14 +58,11 @@ impl Default for KeyBindings {
     fn default() -> Self {
         let mut bindings = HashMap::new();
 
-        bindings.insert("n".to_string(), Action::NewAgent);
-        bindings.insert("N".to_string(), Action::NewAgentWithPrompt);
+        bindings.insert("a".to_string(), Action::NewAgent);
+        bindings.insert("A".to_string(), Action::NewAgentWithPrompt);
         bindings.insert("Enter".to_string(), Action::Attach);
         bindings.insert("o".to_string(), Action::Attach);
         bindings.insert("d".to_string(), Action::Kill);
-        bindings.insert("p".to_string(), Action::Push);
-        bindings.insert("c".to_string(), Action::Pause);
-        bindings.insert("r".to_string(), Action::Resume);
         bindings.insert("Tab".to_string(), Action::SwitchTab);
         bindings.insert("j".to_string(), Action::NextAgent);
         bindings.insert("Down".to_string(), Action::NextAgent);
@@ -155,7 +152,7 @@ mod tests {
         let keys = KeyBindings::default();
 
         assert_eq!(
-            keys.get_action(KeyCode::Char('n'), KeyModifiers::NONE),
+            keys.get_action(KeyCode::Char('a'), KeyModifiers::NONE),
             Some(Action::NewAgent)
         );
         assert_eq!(
