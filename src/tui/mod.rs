@@ -156,6 +156,50 @@ fn handle_key_event(
             }
             _ => {}
         },
+        Mode::ChildCount => match code {
+            KeyCode::Enter => {
+                app.proceed_to_child_prompt();
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                app.exit_mode();
+                return Ok(());
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.increment_child_count();
+                return Ok(());
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.decrement_child_count();
+                return Ok(());
+            }
+            _ => return Ok(()),
+        },
+        Mode::ChildPrompt => match code {
+            KeyCode::Enter => {
+                let input = app.input_buffer.clone();
+                if !input.is_empty()
+                    && let Err(e) = action_handler.spawn_children(app, &input)
+                {
+                    app.set_error(format!("Failed to spawn children: {e:#}"));
+                }
+                app.exit_mode();
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                app.exit_mode();
+                return Ok(());
+            }
+            KeyCode::Char(c) => {
+                app.handle_char(c);
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                app.handle_backspace();
+                return Ok(());
+            }
+            _ => return Ok(()),
+        },
         Mode::Confirming(_) => match code {
             KeyCode::Char('y' | 'Y') => {
                 action_handler.handle_action(app, Action::Confirm)?;

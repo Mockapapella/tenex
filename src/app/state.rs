@@ -13,7 +13,7 @@ pub struct App {
     /// Agent storage
     pub storage: Storage,
 
-    /// Currently selected agent index
+    /// Currently selected agent index (in visible agents list)
     pub selected: usize,
 
     /// Current application mode
@@ -48,6 +48,12 @@ pub struct App {
 
     /// Session to attach to (when set, TUI should suspend and attach)
     pub attach_session: Option<String>,
+
+    /// Number of child agents to spawn (for `ChildCount` mode)
+    pub child_count: usize,
+
+    /// Agent ID to spawn children under (None = create new root with children)
+    pub spawning_under: Option<uuid::Uuid>,
 }
 
 impl App {
@@ -69,35 +75,38 @@ impl App {
             preview_content: String::new(),
             diff_content: String::new(),
             attach_session: None,
+            child_count: 3,
+            spawning_under: None,
         }
     }
 
-    /// Get the currently selected agent
+    /// Get the currently selected agent (from visible agents list)
     #[must_use]
     pub fn selected_agent(&self) -> Option<&Agent> {
-        self.storage.get_by_index(self.selected)
+        self.storage.visible_agent_at(self.selected)
     }
 
     /// Get a mutable reference to the currently selected agent
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
-        self.storage.get_by_index_mut(self.selected)
+        // Get the ID first, then get mutable reference
+        let agent_id = self.storage.visible_agent_at(self.selected)?.id;
+        self.storage.get_mut(agent_id)
     }
 
-    /// Move selection to the next agent
-    pub const fn select_next(&mut self) {
-        if !self.storage.is_empty() {
-            self.selected = (self.selected + 1) % self.storage.len();
+    /// Move selection to the next agent (in visible list)
+    pub fn select_next(&mut self) {
+        let visible_count = self.storage.visible_count();
+        if visible_count > 0 {
+            self.selected = (self.selected + 1) % visible_count;
             self.reset_scroll();
         }
     }
 
-    /// Move selection to the previous agent
+    /// Move selection to the previous agent (in visible list)
     pub fn select_prev(&mut self) {
-        if !self.storage.is_empty() {
-            self.selected = self
-                .selected
-                .checked_sub(1)
-                .unwrap_or(self.storage.len() - 1);
+        let visible_count = self.storage.visible_count();
+        if visible_count > 0 {
+            self.selected = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
             self.reset_scroll();
         }
     }
@@ -160,7 +169,10 @@ impl App {
 
     /// Enter a new application mode
     pub fn enter_mode(&mut self, mode: Mode) {
-        let should_clear = matches!(mode, Mode::Creating | Mode::Prompting | Mode::Confirming(_));
+        let should_clear = matches!(
+            mode,
+            Mode::Creating | Mode::Prompting | Mode::Confirming(_) | Mode::ChildPrompt
+        );
         self.mode = mode;
         if should_clear {
             self.input_buffer.clear();
@@ -244,13 +256,68 @@ impl App {
         }
     }
 
-    /// Ensure the selection index is valid for the current storage
-    pub const fn validate_selection(&mut self) {
-        if self.storage.is_empty() {
+    /// Ensure the selection index is valid for the current visible agents
+    pub fn validate_selection(&mut self) {
+        let visible_count = self.storage.visible_count();
+        if visible_count == 0 {
             self.selected = 0;
-        } else if self.selected >= self.storage.len() {
-            self.selected = self.storage.len() - 1;
+        } else if self.selected >= visible_count {
+            self.selected = visible_count - 1;
         }
+    }
+
+    // === Child Spawning Methods ===
+
+    /// Increment child count (for `ChildCount` mode)
+    pub const fn increment_child_count(&mut self) {
+        self.child_count = self.child_count.saturating_add(1);
+    }
+
+    /// Decrement child count (minimum 1)
+    pub const fn decrement_child_count(&mut self) {
+        if self.child_count > 1 {
+            self.child_count -= 1;
+        }
+    }
+
+    /// Start spawning children under a specific agent
+    pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
+        self.spawning_under = Some(parent_id);
+        self.child_count = 3; // Reset to default
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Start spawning a new root agent with children
+    pub fn start_spawning_root(&mut self) {
+        self.spawning_under = None;
+        self.child_count = 3; // Reset to default
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Proceed from `ChildCount` to `ChildPrompt` mode
+    pub fn proceed_to_child_prompt(&mut self) {
+        self.enter_mode(Mode::ChildPrompt);
+    }
+
+    /// Toggle collapse state of the selected agent
+    pub fn toggle_selected_collapse(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.collapsed = !agent.collapsed;
+        }
+    }
+
+    /// Check if selected agent has children (for UI)
+    #[must_use]
+    pub fn selected_has_children(&self) -> bool {
+        self.selected_agent()
+            .is_some_and(|a| self.storage.has_children(a.id))
+    }
+
+    /// Get depth of the selected agent (for UI)
+    #[must_use]
+    pub fn selected_depth(&self) -> usize {
+        self.selected_agent()
+            .map_or(0, |a| self.storage.depth(a.id))
     }
 }
 
@@ -276,6 +343,10 @@ pub enum Mode {
     Help,
     /// Scrolling through preview/diff
     Scrolling,
+    /// Selecting number of child agents to spawn
+    ChildCount,
+    /// Typing the task/prompt for child agents
+    ChildPrompt,
 }
 
 /// Actions that require confirmation

@@ -3,6 +3,7 @@
 use crate::agent::{Agent, Status};
 use crate::config::Action;
 use crate::git::{self, DiffGenerator, WorktreeManager};
+use crate::prompts;
 use crate::tmux::{OutputCapture, SessionManager};
 use anyhow::{Context, Result};
 
@@ -98,6 +99,21 @@ impl Actions {
             Action::Confirm => {
                 self.handle_confirm(app)?;
             }
+            Action::SpawnChildren => {
+                app.start_spawning_root();
+            }
+            Action::AddChildren => {
+                if let Some(agent) = app.selected_agent() {
+                    let agent_id = agent.id;
+                    app.start_spawning_under(agent_id);
+                }
+            }
+            Action::Synthesize => {
+                self.synthesize(app)?;
+            }
+            Action::ToggleCollapse => {
+                self.toggle_collapse(app)?;
+            }
         }
         Ok(())
     }
@@ -167,22 +183,57 @@ impl Actions {
         Ok(())
     }
 
-    /// Kill the selected agent
+    /// Kill the selected agent (and all its descendants)
     fn kill_agent(&self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
+            let is_root = agent.is_root();
             let session = agent.tmux_session.clone();
             let worktree_name = agent.branch.clone();
+            let window_index = agent.window_index;
 
-            let _ = self.session_manager.kill(&session);
+            if is_root {
+                // Root agent: kill entire session and worktree
+                // First kill all descendant windows (in case any are in other sessions)
+                let descendants = app.storage.descendants(agent_id);
+                for desc in &descendants {
+                    if let Some(idx) = desc.window_index {
+                        let _ = self.session_manager.kill_window(&session, idx);
+                    }
+                }
 
-            let repo_path = std::env::current_dir()?;
-            if let Ok(repo) = git::open_repository(&repo_path) {
-                let worktree_mgr = WorktreeManager::new(&repo);
-                let _ = worktree_mgr.remove(&worktree_name);
+                // Kill the session
+                let _ = self.session_manager.kill(&session);
+
+                // Remove worktree
+                let repo_path = std::env::current_dir()?;
+                if let Ok(repo) = git::open_repository(&repo_path) {
+                    let worktree_mgr = WorktreeManager::new(&repo);
+                    let _ = worktree_mgr.remove(&worktree_name);
+                }
+            } else {
+                // Child agent: kill just this window and its descendants
+                // Get the root's session for killing windows
+                let root = app.storage.root_ancestor(agent_id);
+                let root_session = root.map(|r| r.tmux_session.clone()).unwrap_or(session);
+
+                // Kill descendant windows first
+                let descendants = app.storage.descendants(agent_id);
+                for desc in &descendants {
+                    if let Some(idx) = desc.window_index {
+                        let _ = self.session_manager.kill_window(&root_session, idx);
+                    }
+                }
+
+                // Kill this agent's window
+                if let Some(idx) = window_index {
+                    let _ = self.session_manager.kill_window(&root_session, idx);
+                }
             }
 
-            app.storage.remove(agent_id);
+            // Remove agent and all descendants from storage
+            app.storage.remove_with_descendants(agent_id);
+
             app.validate_selection();
             app.storage.save()?;
 
@@ -326,6 +377,199 @@ impl Actions {
             }
         } else {
             app.diff_content = String::from("(No agent selected)");
+        }
+        Ok(())
+    }
+
+    // === Hierarchy Methods ===
+
+    /// Spawn child agents under a parent (or create new root with children)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if spawning fails
+    pub fn spawn_children(&self, app: &mut App, task: &str) -> Result<()> {
+        let count = app.child_count;
+        let parent_id = app.spawning_under;
+
+        // Determine the root agent and session/worktree to use
+        let (root_session, worktree_path, branch, parent_agent_id) = if let Some(pid) = parent_id {
+            // Adding children to existing agent
+            let root = app
+                .storage
+                .root_ancestor(pid)
+                .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
+            (
+                root.tmux_session.clone(),
+                root.worktree_path.clone(),
+                root.branch.clone(),
+                pid,
+            )
+        } else {
+            // Create new root agent first
+            let root_title = if task.len() > 30 {
+                format!("{}...", &task[..27])
+            } else {
+                task.to_string()
+            };
+            let branch = app.config.generate_branch_name(&root_title);
+            let worktree_path = app.config.worktree_dir.join(&branch);
+            let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+            let repo = git::open_repository(&repo_path)?;
+
+            let worktree_mgr = WorktreeManager::new(&repo);
+            worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
+
+            let root_agent = Agent::new(
+                root_title,
+                app.config.default_program.clone(),
+                branch.clone(),
+                worktree_path.clone(),
+                None, // Root doesn't get the planning preamble
+            );
+
+            let root_session = root_agent.tmux_session.clone();
+            let root_id = root_agent.id;
+
+            // Create the root's tmux session
+            self.session_manager.create(
+                &root_session,
+                &worktree_path,
+                Some(&app.config.default_program),
+            )?;
+
+            app.storage.add(root_agent);
+            (root_session, worktree_path, branch, root_id)
+        };
+
+        // Create child agents
+        let plan_prompt = prompts::build_plan_prompt(task);
+        for i in 0..count {
+            let child_title = format!("Child {}", i + 1);
+
+            // Get next window index
+            let window_index = app.storage.next_window_index(parent_agent_id);
+
+            let child = Agent::new_child(
+                child_title.clone(),
+                app.config.default_program.clone(),
+                branch.clone(),
+                worktree_path.clone(),
+                Some(plan_prompt.clone()),
+                parent_agent_id,
+                root_session.clone(),
+                window_index,
+            );
+
+            // Create window in the root's session with the planning prompt
+            let command = format!(
+                "{} \"{}\"",
+                app.config.default_program,
+                plan_prompt.replace('"', "\\\"")
+            );
+            let actual_index = self.session_manager.create_window(
+                &root_session,
+                &child_title,
+                &worktree_path,
+                Some(&command),
+            )?;
+
+            // Update window index if it differs
+            let mut child = child;
+            child.window_index = Some(actual_index);
+
+            app.storage.add(child);
+        }
+
+        // Expand the parent to show children
+        if let Some(parent) = app.storage.get_mut(parent_agent_id) {
+            parent.collapsed = false;
+        }
+
+        app.storage.save()?;
+        app.set_status(format!("Spawned {count} child agents"));
+        Ok(())
+    }
+
+    /// Synthesize children into the parent agent
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if synthesis fails
+    pub fn synthesize(&self, app: &mut App) -> Result<()> {
+        let agent = app
+            .selected_agent()
+            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+
+        if !app.storage.has_children(agent.id) {
+            app.set_error("Selected agent has no children to synthesize");
+            return Ok(());
+        }
+
+        let parent_id = agent.id;
+        let parent_session = agent.tmux_session.clone();
+
+        // Collect findings from all children
+        let children = app.storage.children(parent_id);
+        let mut findings: Vec<(String, String)> = Vec::new();
+
+        for child in &children {
+            // Capture terminal output from child's window
+            let target = child.window_index.map_or_else(
+                || child.tmux_session.clone(),
+                |window_idx| SessionManager::window_target(&parent_session, window_idx),
+            );
+
+            let output = self
+                .output_capture
+                .capture_pane_with_history(&target, 5000)
+                .unwrap_or_else(|_| "(Could not capture output)".to_string());
+
+            findings.push((child.title.clone(), output));
+        }
+
+        // Build synthesis prompt
+        let synthesis_prompt = prompts::build_synthesis_prompt(&findings);
+
+        // Send synthesis prompt to parent
+        self.session_manager
+            .send_keys(&parent_session, &synthesis_prompt)?;
+
+        // Kill all children (and their descendants)
+        let child_ids: Vec<_> = children.iter().map(|c| c.id).collect();
+        for child_id in child_ids {
+            // Kill the window
+            if let Some(child) = app.storage.get(child_id)
+                && let Some(window_idx) = child.window_index
+            {
+                let _ = self
+                    .session_manager
+                    .kill_window(&parent_session, window_idx);
+            }
+            // Remove from storage (with descendants)
+            app.storage.remove_with_descendants(child_id);
+        }
+
+        app.validate_selection();
+        app.storage.save()?;
+        app.set_status("Synthesized findings into parent agent");
+        Ok(())
+    }
+
+    /// Toggle collapse state of the selected agent
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if toggle fails
+    pub fn toggle_collapse(&self, app: &mut App) -> Result<()> {
+        if let Some(agent) = app.selected_agent() {
+            let agent_id = agent.id;
+            if app.storage.has_children(agent_id)
+                && let Some(agent) = app.storage.get_mut(agent_id)
+            {
+                agent.collapsed = !agent.collapsed;
+                app.storage.save()?;
+            }
         }
         Ok(())
     }
@@ -959,5 +1203,129 @@ mod tests {
         // Push should set status message
         handler.handle_action(&mut app, Action::Push).unwrap();
         assert!(app.status_message.is_some());
+    }
+
+    #[test]
+    fn test_toggle_collapse_no_agent() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Should not error with no agent selected
+        handler.toggle_collapse(&mut app).unwrap();
+    }
+
+    #[test]
+    fn test_toggle_collapse_no_children() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Should not error when agent has no children
+        handler.toggle_collapse(&mut app).unwrap();
+    }
+
+    #[test]
+    fn test_synthesize_no_agent() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Should error with no agent selected
+        let result = handler.synthesize(&mut app);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_synthesize_no_children() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Should set error when agent has no children
+        handler.synthesize(&mut app).unwrap();
+        assert!(app.last_error.is_some());
+        assert!(
+            app.last_error
+                .as_ref()
+                .unwrap()
+                .contains("no children to synthesize")
+        );
+    }
+
+    #[test]
+    fn test_handle_action_spawn_children() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        handler
+            .handle_action(&mut app, Action::SpawnChildren)
+            .unwrap();
+        assert_eq!(app.mode, Mode::ChildCount);
+        assert!(app.spawning_under.is_none());
+    }
+
+    #[test]
+    fn test_handle_action_add_children() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let agent = Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let agent_id = agent.id;
+        app.storage.add(agent);
+
+        handler
+            .handle_action(&mut app, Action::AddChildren)
+            .unwrap();
+        assert_eq!(app.mode, Mode::ChildCount);
+        assert_eq!(app.spawning_under, Some(agent_id));
+    }
+
+    #[test]
+    fn test_handle_action_synthesize() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent - should error
+        let result = handler.handle_action(&mut app, Action::Synthesize);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_handle_action_toggle_collapse() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent - should not error
+        handler
+            .handle_action(&mut app, Action::ToggleCollapse)
+            .unwrap();
     }
 }

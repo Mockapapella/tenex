@@ -44,6 +44,14 @@ pub enum Action {
     Cancel,
     /// Confirm current operation
     Confirm,
+    /// Spawn new root with children
+    SpawnChildren,
+    /// Add children to selected agent
+    AddChildren,
+    /// Synthesize children into parent
+    Synthesize,
+    /// Toggle expand/collapse of selected agent
+    ToggleCollapse,
 }
 
 /// Keybinding configuration
@@ -76,6 +84,11 @@ impl Default for KeyBindings {
         bindings.insert("G".to_string(), Action::ScrollBottom);
         bindings.insert("Esc".to_string(), Action::Cancel);
         bindings.insert("y".to_string(), Action::Confirm);
+        // Hierarchy keybindings
+        bindings.insert("S".to_string(), Action::SpawnChildren);
+        bindings.insert("+".to_string(), Action::AddChildren);
+        bindings.insert("s".to_string(), Action::Synthesize);
+        bindings.insert(" ".to_string(), Action::ToggleCollapse);
 
         Self { bindings }
     }

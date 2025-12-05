@@ -38,6 +38,23 @@ pub struct Agent {
 
     /// When the agent was last updated
     pub updated_at: DateTime<Utc>,
+
+    /// Parent agent ID (None for root agents)
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
+
+    /// Tmux window index within the root ancestor's session (None for root agents)
+    #[serde(default)]
+    pub window_index: Option<u32>,
+
+    /// Whether children are collapsed in the UI (default: true)
+    #[serde(default = "default_collapsed")]
+    pub collapsed: bool,
+}
+
+/// Default value for collapsed field
+const fn default_collapsed() -> bool {
+    true
 }
 
 impl Agent {
@@ -65,7 +82,58 @@ impl Agent {
             tmux_session,
             created_at: now,
             updated_at: now,
+            parent_id: None,
+            window_index: None,
+            collapsed: true,
         }
+    }
+
+    /// Create a new child agent under a parent
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Child agents need all parent context"
+    )]
+    pub fn new_child(
+        title: String,
+        program: String,
+        branch: String,
+        worktree_path: PathBuf,
+        initial_prompt: Option<String>,
+        parent_id: Uuid,
+        tmux_session: String,
+        window_index: u32,
+    ) -> Self {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        Self {
+            id,
+            title,
+            program,
+            status: Status::Starting,
+            branch,
+            worktree_path,
+            initial_prompt,
+            tmux_session,
+            created_at: now,
+            updated_at: now,
+            parent_id: Some(parent_id),
+            window_index: Some(window_index),
+            collapsed: true,
+        }
+    }
+
+    /// Check if this agent is a root agent (no parent)
+    #[must_use]
+    pub const fn is_root(&self) -> bool {
+        self.parent_id.is_none()
+    }
+
+    /// Check if this agent is a child agent (has a parent)
+    #[must_use]
+    pub const fn is_child(&self) -> bool {
+        self.parent_id.is_some()
     }
 
     /// Get a short display ID (first 8 chars of UUID)
@@ -236,5 +304,81 @@ mod tests {
 
         assert_ne!(agent1.id, agent2.id);
         assert_ne!(agent1.tmux_session, agent2.tmux_session);
+    }
+
+    #[test]
+    fn test_new_agent_is_root() {
+        let agent = create_test_agent();
+        assert!(agent.is_root());
+        assert!(!agent.is_child());
+        assert!(agent.parent_id.is_none());
+        assert!(agent.window_index.is_none());
+        assert!(agent.collapsed);
+    }
+
+    #[test]
+    fn test_new_child_agent() {
+        let parent = create_test_agent();
+        let child = Agent::new_child(
+            "Child Agent".to_string(),
+            "claude".to_string(),
+            parent.branch.clone(),
+            parent.worktree_path.clone(),
+            Some("Research task".to_string()),
+            parent.id,
+            parent.tmux_session.clone(),
+            2,
+        );
+
+        assert!(!child.is_root());
+        assert!(child.is_child());
+        assert_eq!(child.parent_id, Some(parent.id));
+        assert_eq!(child.window_index, Some(2));
+        assert_eq!(child.tmux_session, parent.tmux_session);
+        assert!(child.collapsed);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_with_hierarchy() {
+        let parent = create_test_agent();
+        let child = Agent::new_child(
+            "Child".to_string(),
+            "claude".to_string(),
+            parent.branch.clone(),
+            parent.worktree_path.clone(),
+            None,
+            parent.id,
+            parent.tmux_session,
+            2,
+        );
+
+        let json = serde_json::to_string(&child).unwrap();
+        let parsed: Agent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(child.parent_id, parsed.parent_id);
+        assert_eq!(child.window_index, parsed.window_index);
+        assert_eq!(child.collapsed, parsed.collapsed);
+    }
+
+    #[test]
+    fn test_serde_backwards_compatibility() {
+        // Test that old JSON without hierarchy fields deserializes correctly
+        let old_json = r#"{
+            "id": "12345678-1234-1234-1234-123456789012",
+            "title": "Old Agent",
+            "program": "claude",
+            "status": "running",
+            "branch": "muster/old",
+            "worktree_path": "/tmp/old",
+            "initial_prompt": null,
+            "tmux_session": "muster-12345678",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let agent: Agent = serde_json::from_str(old_json).unwrap();
+        assert!(agent.parent_id.is_none());
+        assert!(agent.window_index.is_none());
+        assert!(agent.collapsed); // default value
     }
 }

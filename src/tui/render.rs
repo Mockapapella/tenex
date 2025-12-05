@@ -31,6 +31,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "Enter prompt:",
             &app.input_buffer,
         ),
+        Mode::ChildCount => render_count_picker_overlay(frame, app),
+        Mode::ChildPrompt => render_input_overlay(
+            frame,
+            "Spawn Children",
+            "Enter task for children:",
+            &app.input_buffer,
+        ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
                 muster::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
@@ -89,11 +96,12 @@ fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let items: Vec<ListItem<'_>> = app
-        .storage
+    let visible = app.storage.visible_agents();
+
+    let items: Vec<ListItem<'_>> = visible
         .iter()
         .enumerate()
-        .map(|(i, agent)| {
+        .map(|(i, (agent, depth))| {
             let status_color = match agent.status {
                 Status::Starting => Color::Yellow,
                 Status::Running => Color::Green,
@@ -110,12 +118,34 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Style::default()
             };
 
+            // Build indentation based on depth
+            let indent = "    ".repeat(*depth);
+
+            // Collapse/expand indicator
+            let has_children = app.storage.has_children(agent.id);
+            let collapse_indicator = if has_children {
+                if agent.collapsed { "▶ " } else { "▼ " }
+            } else {
+                ""
+            };
+
+            // Child count indicator
+            let child_count = app.storage.child_count(agent.id);
+            let count_indicator = if child_count > 0 {
+                format!(" ({child_count})")
+            } else {
+                String::new()
+            };
+
             let content = Line::from(vec![
+                Span::raw(indent),
                 Span::styled(
                     format!("{} ", agent.status.symbol()),
                     Style::default().fg(status_color),
                 ),
+                Span::styled(collapse_indicator, Style::default().fg(Color::Cyan)),
                 Span::styled(&agent.title, style),
+                Span::styled(count_indicator, Style::default().fg(Color::Magenta)),
                 Span::styled(
                     format!(" ({})", agent.age_string()),
                     Style::default().fg(Color::DarkGray),
@@ -260,7 +290,7 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_help_overlay(frame: &mut Frame<'_>) {
-    let area = centered_rect(60, 70, frame.area());
+    let area = centered_rect(60, 80, frame.area());
 
     let help_text = vec![
         Line::from(Span::styled(
@@ -268,17 +298,27 @@ fn render_help_overlay(frame: &mut Frame<'_>) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from(Span::styled("Agents", Style::default().fg(Color::Cyan))),
         Line::from("  a        New agent"),
         Line::from("  A        New agent with prompt"),
         Line::from("  Enter/o  Attach to agent"),
-        Line::from("  d        Kill agent"),
-        Line::from("  Tab      Switch preview/diff"),
+        Line::from("  d        Kill agent (and descendants)"),
+        Line::from(""),
+        Line::from(Span::styled("Hierarchy", Style::default().fg(Color::Cyan))),
+        Line::from("  S        Spawn children (new root)"),
+        Line::from("  +        Add children to selected"),
+        Line::from("  s        Synthesize children"),
+        Line::from("  Space    Toggle collapse/expand"),
+        Line::from(""),
+        Line::from(Span::styled("Navigation", Style::default().fg(Color::Cyan))),
         Line::from("  j/Down   Select next"),
         Line::from("  k/Up     Select previous"),
+        Line::from("  Tab      Switch preview/diff"),
         Line::from("  Ctrl+u   Scroll up"),
         Line::from("  Ctrl+d   Scroll down"),
         Line::from("  g        Scroll to top"),
         Line::from("  G        Scroll to bottom"),
+        Line::from(""),
         Line::from("  ?        Show this help"),
         Line::from("  q        Quit"),
         Line::from(""),
@@ -322,6 +362,52 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
         .block(
             Block::default()
                 .title(format!(" {title} "))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect(40, 30, frame.area());
+
+    let context = if app.spawning_under.is_some() {
+        "Add children to selected agent"
+    } else {
+        "Create new agent with children"
+    };
+
+    let text = vec![
+        Line::from(Span::styled(context, Style::default().fg(Color::Gray))),
+        Line::from(""),
+        Line::from("How many child agents?"),
+        Line::from(""),
+        Line::from(Span::styled("        ▲", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            format!("        {}", app.child_count),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled("        ▼", Style::default().fg(Color::Cyan))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "↑/k to increase, ↓/j to decrease",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "Enter to continue, Esc to cancel",
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title(" Spawn Children ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
         )

@@ -185,6 +185,83 @@ impl Manager {
 
         Err(err).context("Failed to attach to tmux session")
     }
+
+    /// Create a new window in an existing session
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window cannot be created
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "tmux format strings use #{...} syntax, not Rust format"
+    )]
+    pub fn create_window(
+        &self,
+        session: &str,
+        window_name: &str,
+        working_dir: &Path,
+        command: Option<&str>,
+    ) -> Result<u32> {
+        let mut cmd = Command::new("tmux");
+        cmd.arg("new-window")
+            .arg("-t")
+            .arg(session)
+            .arg("-n")
+            .arg(window_name)
+            .arg("-c")
+            .arg(working_dir)
+            .arg("-P") // Print window info
+            .arg("-F")
+            .arg("#{window_index}");
+
+        if let Some(shell_cmd) = command {
+            cmd.args(["sh", "-c", shell_cmd]);
+        }
+
+        let output = cmd.output().context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to create window in session '{session}': {stderr}");
+        }
+
+        // Parse window index from output
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let window_index = stdout
+            .trim()
+            .parse::<u32>()
+            .context("Failed to parse window index")?;
+
+        Ok(window_index)
+    }
+
+    /// Kill a specific window in a session
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window cannot be killed
+    pub fn kill_window(&self, session: &str, window_index: u32) -> Result<()> {
+        let target = format!("{session}:{window_index}");
+        let output = Command::new("tmux")
+            .arg("kill-window")
+            .arg("-t")
+            .arg(&target)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to kill window '{target}': {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Get the window target string for a session and window index
+    #[must_use]
+    pub fn window_target(session: &str, window_index: u32) -> String {
+        format!("{session}:{window_index}")
+    }
 }
 
 /// Information about a tmux session

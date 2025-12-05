@@ -169,6 +169,175 @@ impl Storage {
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Agent> {
         self.agents.iter_mut()
     }
+
+    // === Hierarchy Methods ===
+
+    /// Get all root agents (agents without a parent)
+    #[must_use]
+    pub fn root_agents(&self) -> Vec<&Agent> {
+        self.agents.iter().filter(|a| a.is_root()).collect()
+    }
+
+    /// Get all children of a specific agent
+    #[must_use]
+    pub fn children(&self, parent_id: Uuid) -> Vec<&Agent> {
+        self.agents
+            .iter()
+            .filter(|a| a.parent_id == Some(parent_id))
+            .collect()
+    }
+
+    /// Check if an agent has any children
+    #[must_use]
+    pub fn has_children(&self, agent_id: Uuid) -> bool {
+        self.agents.iter().any(|a| a.parent_id == Some(agent_id))
+    }
+
+    /// Get the count of children for an agent
+    #[must_use]
+    pub fn child_count(&self, agent_id: Uuid) -> usize {
+        self.agents
+            .iter()
+            .filter(|a| a.parent_id == Some(agent_id))
+            .count()
+    }
+
+    /// Get the root ancestor of an agent (follows parent chain to the top)
+    #[must_use]
+    pub fn root_ancestor(&self, agent_id: Uuid) -> Option<&Agent> {
+        let agent = self.get(agent_id)?;
+        if agent.is_root() {
+            return Some(agent);
+        }
+
+        // Follow parent chain
+        let mut current = agent;
+        while let Some(parent_id) = current.parent_id {
+            if let Some(parent) = self.get(parent_id) {
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        Some(current)
+    }
+
+    /// Get all descendants of an agent (children, grandchildren, etc.)
+    #[must_use]
+    pub fn descendants(&self, agent_id: Uuid) -> Vec<&Agent> {
+        let mut result = Vec::new();
+        self.collect_descendants(agent_id, &mut result);
+        result
+    }
+
+    /// Helper to recursively collect descendants
+    fn collect_descendants<'a>(&'a self, agent_id: Uuid, result: &mut Vec<&'a Agent>) {
+        for child in self.children(agent_id) {
+            result.push(child);
+            self.collect_descendants(child.id, result);
+        }
+    }
+
+    /// Get all descendant IDs (useful for removal operations)
+    #[must_use]
+    pub fn descendant_ids(&self, agent_id: Uuid) -> Vec<Uuid> {
+        self.descendants(agent_id).iter().map(|a| a.id).collect()
+    }
+
+    /// Get the depth of an agent in the tree (root = 0)
+    #[must_use]
+    pub fn depth(&self, agent_id: Uuid) -> usize {
+        let Some(agent) = self.get(agent_id) else {
+            return 0;
+        };
+
+        let mut depth = 0;
+        let mut current = agent;
+        while let Some(parent_id) = current.parent_id {
+            depth += 1;
+            if let Some(parent) = self.get(parent_id) {
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        depth
+    }
+
+    /// Get visible agents (respecting collapsed state) in display order
+    /// Returns a list of (agent, depth) tuples for rendering
+    #[must_use]
+    pub fn visible_agents(&self) -> Vec<(&Agent, usize)> {
+        let mut result = Vec::new();
+        for root in self.root_agents() {
+            self.add_visible_recursive(root, 0, &mut result);
+        }
+        result
+    }
+
+    /// Helper to recursively add visible agents
+    fn add_visible_recursive<'a>(
+        &'a self,
+        agent: &'a Agent,
+        depth: usize,
+        result: &mut Vec<(&'a Agent, usize)>,
+    ) {
+        result.push((agent, depth));
+        if !agent.collapsed {
+            for child in self.children(agent.id) {
+                self.add_visible_recursive(child, depth + 1, result);
+            }
+        }
+    }
+
+    /// Get the visible agent at a specific index
+    #[must_use]
+    pub fn visible_agent_at(&self, index: usize) -> Option<&Agent> {
+        self.visible_agents().get(index).map(|(agent, _)| *agent)
+    }
+
+    /// Get the number of visible agents
+    #[must_use]
+    pub fn visible_count(&self) -> usize {
+        self.visible_agents().len()
+    }
+
+    /// Find the visible index for a given agent ID
+    #[must_use]
+    pub fn visible_index_of(&self, agent_id: Uuid) -> Option<usize> {
+        self.visible_agents()
+            .iter()
+            .position(|(agent, _)| agent.id == agent_id)
+    }
+
+    /// Remove an agent and all its descendants
+    pub fn remove_with_descendants(&mut self, agent_id: Uuid) -> Vec<Agent> {
+        // First collect all IDs to remove
+        let mut ids_to_remove = self.descendant_ids(agent_id);
+        ids_to_remove.push(agent_id);
+
+        // Remove them all
+        let mut removed = Vec::new();
+        for id in ids_to_remove {
+            if let Some(agent) = self.remove(id) {
+                removed.push(agent);
+            }
+        }
+        removed
+    }
+
+    /// Get the next available window index for a root agent's session
+    #[must_use]
+    pub fn next_window_index(&self, root_id: Uuid) -> u32 {
+        // Window 1 is the root, children start at 2
+        let descendants = self.descendants(root_id);
+        let max_index = descendants
+            .iter()
+            .filter_map(|a| a.window_index)
+            .max()
+            .unwrap_or(1);
+        max_index + 1
+    }
 }
 
 #[cfg(test)]
@@ -373,5 +542,277 @@ mod tests {
         let storage = Storage::default();
         assert!(storage.is_empty());
         assert_eq!(storage.version, 1);
+    }
+
+    // === Hierarchy Tests ===
+
+    fn create_child_agent(parent: &Agent, title: &str, window_index: u32) -> Agent {
+        Agent::new_child(
+            title.to_string(),
+            "claude".to_string(),
+            parent.branch.clone(),
+            parent.worktree_path.clone(),
+            None,
+            parent.id,
+            parent.tmux_session.clone(),
+            window_index,
+        )
+    }
+
+    #[test]
+    fn test_root_agents() {
+        let mut storage = Storage::new();
+        let root1 = create_test_agent("root1");
+        let root2 = create_test_agent("root2");
+        let child = create_child_agent(&root1, "child", 2);
+
+        storage.add(root1);
+        storage.add(root2);
+        storage.add(child);
+
+        let root_list = storage.root_agents();
+        assert_eq!(root_list.len(), 2);
+        assert!(root_list.iter().all(|a| a.is_root()));
+    }
+
+    #[test]
+    fn test_children() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child1 = create_child_agent(&root, "child1", 2);
+        let child2 = create_child_agent(&root, "child2", 3);
+
+        storage.add(root);
+        storage.add(child1);
+        storage.add(child2);
+
+        let children = storage.children(root_id);
+        assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn test_has_children() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+
+        storage.add(root);
+        assert!(!storage.has_children(root_id));
+
+        storage.add(child);
+        assert!(storage.has_children(root_id));
+    }
+
+    #[test]
+    fn test_child_count() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+
+        storage.add(root.clone());
+        assert_eq!(storage.child_count(root_id), 0);
+
+        storage.add(create_child_agent(&root, "child1", 2));
+        storage.add(create_child_agent(&root, "child2", 3));
+        assert_eq!(storage.child_count(root_id), 2);
+    }
+
+    #[test]
+    fn test_root_ancestor() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+        let child_id = child.id;
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            root.branch.clone(),
+            root.worktree_path.clone(),
+            None,
+            child.id,
+            root.tmux_session.clone(),
+            3,
+        );
+        let grandchild_id = grandchild.id;
+
+        storage.add(root);
+        storage.add(child);
+        storage.add(grandchild);
+
+        // Root's ancestor is itself
+        assert_eq!(storage.root_ancestor(root_id).unwrap().id, root_id);
+        // Child's ancestor is root
+        assert_eq!(storage.root_ancestor(child_id).unwrap().id, root_id);
+        // Grandchild's ancestor is also root
+        assert_eq!(storage.root_ancestor(grandchild_id).unwrap().id, root_id);
+    }
+
+    #[test]
+    fn test_descendants() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child1 = create_child_agent(&root, "child1", 2);
+        let child2 = create_child_agent(&root, "child2", 3);
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            root.branch.clone(),
+            root.worktree_path.clone(),
+            None,
+            child1.id,
+            root.tmux_session.clone(),
+            4,
+        );
+
+        storage.add(root);
+        storage.add(child1);
+        storage.add(child2);
+        storage.add(grandchild);
+
+        let descendants = storage.descendants(root_id);
+        assert_eq!(descendants.len(), 3);
+    }
+
+    #[test]
+    fn test_depth() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+        let child_id = child.id;
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            root.branch.clone(),
+            root.worktree_path.clone(),
+            None,
+            child.id,
+            root.tmux_session.clone(),
+            3,
+        );
+        let grandchild_id = grandchild.id;
+
+        storage.add(root);
+        storage.add(child);
+        storage.add(grandchild);
+
+        assert_eq!(storage.depth(root_id), 0);
+        assert_eq!(storage.depth(child_id), 1);
+        assert_eq!(storage.depth(grandchild_id), 2);
+    }
+
+    #[test]
+    fn test_visible_agents_all_collapsed() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+
+        storage.add(root);
+        storage.add(child);
+
+        // By default, collapsed is true, so only root is visible
+        let visible = storage.visible_agents();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].0.id, root_id);
+    }
+
+    #[test]
+    fn test_visible_agents_expanded() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false; // Expand root
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+        let child_id = child.id;
+
+        storage.add(root);
+        storage.add(child);
+
+        let visible = storage.visible_agents();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].0.id, root_id);
+        assert_eq!(visible[0].1, 0); // depth 0
+        assert_eq!(visible[1].0.id, child_id);
+        assert_eq!(visible[1].1, 1); // depth 1
+    }
+
+    #[test]
+    fn test_visible_agent_at() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false;
+        let child = create_child_agent(&root, "child", 2);
+
+        storage.add(root);
+        storage.add(child);
+
+        assert_eq!(storage.visible_agent_at(0).unwrap().title, "root");
+        assert_eq!(storage.visible_agent_at(1).unwrap().title, "child");
+        assert!(storage.visible_agent_at(2).is_none());
+    }
+
+    #[test]
+    fn test_visible_count() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false;
+        let child = create_child_agent(&root, "child", 2);
+
+        storage.add(root);
+        storage.add(child);
+
+        assert_eq!(storage.visible_count(), 2);
+    }
+
+    #[test]
+    fn test_remove_with_descendants() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        let child1 = create_child_agent(&root, "child1", 2);
+        let child2 = create_child_agent(&root, "child2", 3);
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            root.branch.clone(),
+            root.worktree_path.clone(),
+            None,
+            child1.id,
+            root.tmux_session.clone(),
+            4,
+        );
+
+        storage.add(root);
+        storage.add(child1);
+        storage.add(child2);
+        storage.add(grandchild);
+
+        assert_eq!(storage.len(), 4);
+
+        let removed = storage.remove_with_descendants(root_id);
+        assert_eq!(removed.len(), 4);
+        assert!(storage.is_empty());
+    }
+
+    #[test]
+    fn test_next_window_index() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+
+        storage.add(root.clone());
+        // No children yet, next index should be 2 (window 1 is root)
+        assert_eq!(storage.next_window_index(root_id), 2);
+
+        storage.add(create_child_agent(&root, "child1", 2));
+        assert_eq!(storage.next_window_index(root_id), 3);
+
+        storage.add(create_child_agent(&root, "child2", 3));
+        assert_eq!(storage.next_window_index(root_id), 4);
     }
 }
