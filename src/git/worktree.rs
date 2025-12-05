@@ -94,36 +94,36 @@ impl<'a> Manager<'a> {
 
     /// Remove a worktree and its associated branch
     ///
+    /// Always attempts to delete the branch, even if the worktree is missing.
+    /// This ensures cleanup works even if the worktree was manually removed.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the worktree cannot be removed
+    /// This function is idempotent and does not return errors for missing
+    /// worktrees or branches.
     pub fn remove(&self, name: &str) -> Result<()> {
         // Worktree name has slashes replaced with dashes
         let worktree_name = name.replace('/', "-");
-        let worktree = self
-            .repo
-            .find_worktree(&worktree_name)
-            .with_context(|| format!("Worktree not found: {name}"))?;
 
-        let wt_path = worktree.path().to_path_buf();
+        // Try to remove the worktree (may already be gone)
+        if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
+            let wt_path = worktree.path().to_path_buf();
 
-        worktree
-            .prune(Some(
+            let _ = worktree.prune(Some(
                 git2::WorktreePruneOptions::new()
                     .valid(true)
                     .working_tree(true),
-            ))
-            .with_context(|| format!("Failed to prune worktree '{name}'"))?;
+            ));
 
-        if wt_path.exists() {
-            fs::remove_dir_all(&wt_path).with_context(|| {
-                format!("Failed to remove worktree directory {}", wt_path.display())
-            })?;
+            if wt_path.exists() {
+                let _ = fs::remove_dir_all(&wt_path);
+            }
         }
 
-        // Also delete the branch
+        // Always try to delete the branch (critical for cleanup)
+        // Ignore errors - branch may already be deleted
         let branch_mgr = super::BranchManager::new(self.repo);
-        let _ = branch_mgr.delete(name); // Ignore errors (branch may already be deleted)
+        let _ = branch_mgr.delete(name);
 
         Ok(())
     }
@@ -322,11 +322,52 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent() {
+        // Removing a non-existent worktree/branch should succeed (idempotent cleanup)
         let (_temp_dir, repo) = init_test_repo_with_commit();
         let manager = Manager::new(&repo);
 
         let result = manager.remove("nonexistent");
-        assert!(result.is_err());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remove_with_missing_worktree_but_existing_branch() {
+        // When worktree is manually removed but branch exists, cleanup should still delete branch
+        let (temp_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+
+        let wt_path = temp_dir.path().join("worktrees").join("orphan-branch");
+        manager
+            .create_with_new_branch(&wt_path, "orphan-branch-test")
+            .unwrap();
+
+        // Verify branch exists
+        assert!(
+            repo.find_branch("orphan-branch-test", git2::BranchType::Local)
+                .is_ok()
+        );
+
+        // Manually remove the worktree directory (simulating manual cleanup)
+        fs::remove_dir_all(&wt_path).unwrap();
+
+        // Prune the worktree reference so git doesn't track it
+        let worktree_name = "orphan-branch-test";
+        if let Ok(wt) = repo.find_worktree(worktree_name) {
+            let _ = wt.prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(true)
+                    .working_tree(true),
+            ));
+        }
+
+        // Now remove should still clean up the branch
+        manager.remove("orphan-branch-test").unwrap();
+
+        // Branch should be deleted
+        assert!(
+            repo.find_branch("orphan-branch-test", git2::BranchType::Local)
+                .is_err()
+        );
     }
 
     #[test]

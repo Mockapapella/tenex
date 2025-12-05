@@ -153,7 +153,8 @@ impl Actions {
 
         let mut command = app.config.default_program.clone();
         if let Some(p) = prompt {
-            command = format!("{} -p \"{}\"", command, p.replace('"', "\\\""));
+            // Pass prompt as positional argument (works for codex, claude, etc.)
+            command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
         }
 
         self.session_manager

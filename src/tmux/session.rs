@@ -34,7 +34,8 @@ impl Manager {
             .arg(working_dir);
 
         if let Some(shell_cmd) = command {
-            cmd.arg(shell_cmd);
+            // Wrap in shell to properly handle commands with arguments
+            cmd.args(["sh", "-c", shell_cmd]);
         }
 
         let output = cmd.output().context("Failed to execute tmux")?;
