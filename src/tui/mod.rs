@@ -9,7 +9,9 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
-        event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers},
+        event::{
+            self as crossterm_event, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers,
+        },
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
@@ -17,6 +19,7 @@ use ratatui::{
 };
 use std::io;
 use std::process::Command;
+use std::time::Duration;
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
@@ -48,40 +51,64 @@ fn run_loop(
     event_handler: &Handler,
     action_handler: Actions,
 ) -> Result<()> {
+    // Initialize preview dimensions before first draw
+    if app.preview_dimensions.is_none()
+        && let Ok(size) = terminal.size()
+    {
+        let area = Rect::new(0, 0, size.width, size.height);
+        let (width, height) = render::calculate_preview_dimensions(area);
+        app.set_preview_dimensions(width, height);
+        action_handler.resize_agent_windows(app);
+    }
+
     loop {
+        // Drain all queued events first (without drawing)
+        // This prevents lag when returning focus after being away,
+        // since mouse events queue up while the app is unfocused
+        let mut needs_tick = false;
+        let mut last_resize: Option<(u16, u16)> = None;
+
+        loop {
+            match event_handler.next()? {
+                Event::Tick => {
+                    needs_tick = true;
+                    break; // Timeout - exit inner loop
+                }
+                Event::Key(key) => {
+                    handle_key_event(app, action_handler, key.code, key.modifiers)?;
+                }
+                Event::Mouse(_) => {
+                    // Ignore mouse events (we don't use them)
+                }
+                Event::Resize(w, h) => {
+                    last_resize = Some((w, h)); // Only keep final resize
+                }
+            }
+
+            // Check if more events are immediately available
+            if !crossterm_event::poll(Duration::ZERO)? {
+                break; // Queue empty, exit inner loop
+            }
+        }
+
+        // Apply final resize if any occurred
+        if let Some((width, height)) = last_resize {
+            let (preview_width, preview_height) =
+                render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
+            if app.preview_dimensions != Some((preview_width, preview_height)) {
+                app.set_preview_dimensions(preview_width, preview_height);
+                action_handler.resize_agent_windows(app);
+            }
+        }
+
+        // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
 
-        match event_handler.next()? {
-            Event::Tick => {
-                // Initialize preview dimensions on first tick if not set
-                if app.preview_dimensions.is_none()
-                    && let Ok(size) = terminal.size()
-                {
-                    let area = Rect::new(0, 0, size.width, size.height);
-                    let (width, height) = render::calculate_preview_dimensions(area);
-                    app.set_preview_dimensions(width, height);
-                    action_handler.resize_agent_windows(app);
-                }
-
-                let _ = action_handler.update_preview(app);
-                let _ = action_handler.update_diff(app);
-                let _ = action_handler.sync_agent_status(app);
-            }
-            Event::Key(key) => {
-                handle_key_event(app, action_handler, key.code, key.modifiers)?;
-            }
-            Event::Mouse(_mouse) => {}
-            Event::Resize(width, height) => {
-                // Calculate new preview dimensions and resize agent windows
-                let (preview_width, preview_height) =
-                    render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
-
-                // Only resize if dimensions actually changed
-                if app.preview_dimensions != Some((preview_width, preview_height)) {
-                    app.set_preview_dimensions(preview_width, preview_height);
-                    action_handler.resize_agent_windows(app);
-                }
-            }
+        // Run tick operations only on actual timeout
+        if needs_tick {
+            let _ = action_handler.update_preview(app);
+            let _ = action_handler.update_diff(app);
+            let _ = action_handler.sync_agent_status(app);
         }
 
         // Handle attach request - suspend TUI and attach to tmux session
