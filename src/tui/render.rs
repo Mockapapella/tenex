@@ -56,7 +56,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
-        Mode::Help => render_help_overlay(frame, &app.config.keys),
+        Mode::Help => render_help_overlay(frame),
         Mode::Creating => {
             render_input_overlay(frame, "New Agent", "Enter agent name:", &app.input_buffer);
         }
@@ -357,7 +357,7 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ),
         _ => {
             let running = app.running_agent_count();
-            let hints = app.config.keys.status_hints();
+            let hints = muster::config::status_hints();
             Span::styled(
                 format!(" {running} running | {hints} "),
                 Style::default().fg(colors::TEXT_DIM),
@@ -369,7 +369,65 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings) {
+/// Parse a description with `[x]` mnemonic patterns and return styled spans.
+/// The bracketed content is highlighted (bold), brackets are dimmed.
+fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut remaining = description;
+
+    while let Some(start) = remaining.find('[') {
+        // Add text before the bracket
+        if start > 0 {
+            spans.push(Span::styled(
+                remaining[..start].to_string(),
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ));
+        }
+
+        // Find the closing bracket
+        if let Some(end) = remaining[start..].find(']') {
+            let end = start + end;
+            let bracket_content = &remaining[start + 1..end];
+
+            // Add styled bracket and content
+            spans.push(Span::styled(
+                "[".to_string(),
+                Style::default().fg(colors::TEXT_DIM),
+            ));
+            spans.push(Span::styled(
+                bracket_content.to_string(),
+                Style::default()
+                    .fg(colors::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                "]".to_string(),
+                Style::default().fg(colors::TEXT_DIM),
+            ));
+
+            remaining = &remaining[end + 1..];
+        } else {
+            // No closing bracket, add rest as-is
+            spans.push(Span::styled(
+                remaining.to_string(),
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ));
+            remaining = "";
+        }
+    }
+
+    // Add any remaining text after the last bracket
+    if !remaining.is_empty() {
+        spans.push(Span::styled(
+            remaining.to_string(),
+            Style::default().fg(colors::TEXT_PRIMARY),
+        ));
+    }
+
+    spans
+}
+
+fn render_help_overlay(frame: &mut Frame<'_>) {
     use muster::config::Action;
 
     // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
@@ -402,7 +460,17 @@ fn render_help_overlay(frame: &mut Frame<'_>, keys: &muster::config::KeyBindings
             current_group = Some(group);
         }
 
-        help_text.push(Line::from(keys.help_line(action)));
+        // Build help line with styled mnemonics
+        let key_str = action.keys();
+        let description = action.description();
+
+        let mut spans = vec![Span::styled(
+            format!("  {key_str:<10} "),
+            Style::default().fg(colors::TEXT_DIM),
+        )];
+        spans.extend(styled_mnemonic_description(description));
+
+        help_text.push(Line::from(spans));
     }
 
     help_text.push(Line::from(""));
@@ -659,7 +727,6 @@ mod tests {
             auto_yes: false,
             poll_interval_ms: 100,
             max_agents: 10,
-            keys: muster::config::KeyBindings::default(),
         }
     }
 

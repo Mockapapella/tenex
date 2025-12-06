@@ -2,7 +2,7 @@
 
 mod keys;
 
-pub use keys::{Action, ActionGroup, KeyBindings};
+pub use keys::{Action, ActionGroup, get_action, status_hints};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,10 +35,6 @@ pub struct Config {
     /// Directory for worktrees
     #[serde(default = "default_worktree_dir")]
     pub worktree_dir: PathBuf,
-
-    /// Keybindings configuration
-    #[serde(default)]
-    pub keys: KeyBindings,
 }
 
 fn default_program() -> String {
@@ -73,7 +69,6 @@ impl Default for Config {
             poll_interval_ms: default_poll_interval(),
             max_agents: default_max_agents(),
             worktree_dir: default_worktree_dir(),
-            keys: KeyBindings::default(),
         }
     }
 }
@@ -101,10 +96,8 @@ impl Config {
     pub fn load_from(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config from {}", path.display()))?;
-        let mut config: Self = serde_json::from_str(&contents)
+        let config: Self = serde_json::from_str(&contents)
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
-        // Ensure any new default keybindings are available
-        config.keys.merge_defaults();
         Ok(config)
     }
 
@@ -203,7 +196,6 @@ mod tests {
             poll_interval_ms: 200,
             max_agents: 5,
             worktree_dir: temp_dir.path().join("worktrees"),
-            keys: KeyBindings::default(),
         };
 
         config.save_to(&config_path)?;

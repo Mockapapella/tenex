@@ -75,7 +75,6 @@ impl TestFixture {
             auto_yes: false,
             poll_interval_ms: 100,
             max_agents: 10,
-            keys: muster::config::KeyBindings::default(),
         }
     }
 

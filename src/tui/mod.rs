@@ -157,7 +157,7 @@ fn handle_key_event(
         Mode::Help => app.exit_mode(),
         Mode::ErrorModal(_) => app.dismiss_error(),
         Mode::Normal | Mode::Scrolling => {
-            if let Some(action) = app.config.keys.get_action(code, modifiers) {
+            if let Some(action) = muster::config::get_action(code, modifiers) {
                 action_handler.handle_action(app, action)?;
             }
         }
