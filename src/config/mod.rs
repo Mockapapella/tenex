@@ -1,4 +1,4 @@
-//! Configuration management for Muster
+//! Configuration management for Tenex
 
 mod keys;
 
@@ -16,7 +16,7 @@ pub struct Config {
     #[serde(default = "default_program")]
     pub default_program: String,
 
-    /// Prefix for branch names created by muster
+    /// Prefix for branch names created by tenex
     #[serde(default = "default_branch_prefix")]
     pub branch_prefix: String,
 
@@ -42,7 +42,7 @@ fn default_program() -> String {
 }
 
 fn default_branch_prefix() -> String {
-    "muster/".to_string()
+    "tenex/".to_string()
 }
 
 const fn default_poll_interval() -> u64 {
@@ -56,7 +56,7 @@ const fn default_max_agents() -> usize {
 fn default_worktree_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".muster")
+        .join(".tenex")
         .join("worktrees")
 }
 
@@ -133,7 +133,7 @@ impl Config {
     pub fn default_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("muster")
+            .join("tenex")
             .join("config.json")
     }
 
@@ -142,7 +142,7 @@ impl Config {
     pub fn state_path() -> PathBuf {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("muster")
+            .join("tenex")
             .join("state.json")
     }
 
@@ -178,7 +178,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.default_program, "claude");
-        assert_eq!(config.branch_prefix, "muster/");
+        assert_eq!(config.branch_prefix, "tenex/");
         assert!(!config.auto_yes);
         assert_eq!(config.poll_interval_ms, 100);
         assert_eq!(config.max_agents, 10);
@@ -220,13 +220,13 @@ mod tests {
 
         assert_eq!(
             config.generate_branch_name("Fix Auth Bug"),
-            "muster/fix-auth-bug"
+            "tenex/fix-auth-bug"
         );
         assert_eq!(
             config.generate_branch_name("hello_world"),
-            "muster/hello-world"
+            "tenex/hello-world"
         );
-        assert_eq!(config.generate_branch_name("  spaces  "), "muster/spaces");
+        assert_eq!(config.generate_branch_name("  spaces  "), "tenex/spaces");
     }
 
     #[test]
@@ -243,7 +243,7 @@ mod tests {
         let config: Config = serde_json::from_str(json)?;
 
         assert_eq!(config.default_program, "codex");
-        assert_eq!(config.branch_prefix, "muster/");
+        assert_eq!(config.branch_prefix, "tenex/");
         assert!(!config.auto_yes);
         Ok(())
     }
@@ -253,8 +253,8 @@ mod tests {
         let config_path = Config::default_path();
         let state_path = Config::state_path();
 
-        assert!(config_path.to_string_lossy().contains("muster"));
-        assert!(state_path.to_string_lossy().contains("muster"));
+        assert!(config_path.to_string_lossy().contains("tenex"));
+        assert!(state_path.to_string_lossy().contains("tenex"));
     }
 
     #[test]
@@ -264,11 +264,11 @@ mod tests {
         // Test various special characters
         assert_eq!(
             config.generate_branch_name("fix@#$%bug"),
-            "muster/fix----bug"
+            "tenex/fix----bug"
         );
         assert_eq!(
             config.generate_branch_name("hello/world"),
-            "muster/hello-world"
+            "tenex/hello-world"
         );
     }
 

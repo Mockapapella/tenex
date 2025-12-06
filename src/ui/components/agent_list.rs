@@ -101,7 +101,7 @@ mod tests {
         let mut agent = Agent::new(
             title.to_string(),
             "claude".to_string(),
-            format!("muster/{title}"),
+            format!("tenex/{title}"),
             PathBuf::from("/tmp"),
             None,
         );

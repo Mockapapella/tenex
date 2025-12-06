@@ -451,17 +451,17 @@ mod tests {
 
     #[test]
     fn test_branch_name_with_slashes() -> Result<(), Box<dyn std::error::Error>> {
-        // Integration test: branch names with slashes (like "muster/feature-name")
+        // Integration test: branch names with slashes (like "tenex/feature-name")
         // should work correctly. The worktree name internally replaces slashes with dashes.
         let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        // Use a branch name with a slash (like muster generates)
-        let branch_name = "muster/my-feature";
+        // Use a branch name with a slash (like tenex generates)
+        let branch_name = "tenex/my-feature";
         let wt_path = temp_dir
             .path()
             .join("worktrees")
-            .join("muster")
+            .join("tenex")
             .join("my-feature");
 
         // Create worktree with slashed branch name

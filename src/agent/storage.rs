@@ -351,7 +351,7 @@ mod tests {
         Agent::new(
             title.to_string(),
             "claude".to_string(),
-            format!("muster/{title}"),
+            format!("tenex/{title}"),
             PathBuf::from("/tmp/worktree"),
             None,
         )

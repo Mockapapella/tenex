@@ -1,6 +1,6 @@
-//! Muster - Terminal multiplexer for AI coding agents
+//! Tenex - Terminal multiplexer for AI coding agents
 //!
-//! Muster allows you to run multiple AI agents in parallel, each in isolated
+//! Tenex allows you to run multiple AI agents in parallel, each in isolated
 //! git worktrees, with a TUI for managing and monitoring them.
 
 pub mod agent;

@@ -4,20 +4,20 @@
 
 use std::path::PathBuf;
 
-use muster::agent::{Agent, Storage};
-use muster::app::{App, ConfirmAction, Mode, Tab};
-use muster::config::Config;
-use muster::ui::{AgentListWidget, DiffViewWidget, PreviewWidget, StatusBarWidget};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
+use tenex::agent::{Agent, Storage};
+use tenex::app::{App, ConfirmAction, Mode, Tab};
+use tenex::config::Config;
+use tenex::ui::{AgentListWidget, DiffViewWidget, PreviewWidget, StatusBarWidget};
 
 fn create_test_config() -> Config {
     Config {
         default_program: "echo".to_string(),
-        branch_prefix: "muster/".to_string(),
+        branch_prefix: "tenex/".to_string(),
         worktree_dir: PathBuf::from("/tmp/test-worktrees"),
         auto_yes: false,
         poll_interval_ms: 100,
@@ -25,11 +25,11 @@ fn create_test_config() -> Config {
     }
 }
 
-fn create_test_agent(title: &str, status: muster::Status) -> Agent {
+fn create_test_agent(title: &str, status: tenex::Status) -> Agent {
     let mut agent = Agent::new(
         title.to_string(),
         "echo".to_string(),
-        format!("muster/{title}"),
+        format!("tenex/{title}"),
         PathBuf::from(format!("/tmp/{title}")),
         None,
     );
@@ -39,9 +39,9 @@ fn create_test_agent(title: &str, status: muster::Status) -> Agent {
 
 fn create_test_agents() -> Vec<Agent> {
     vec![
-        create_test_agent("agent-1", muster::Status::Running),
-        create_test_agent("agent-2", muster::Status::Paused),
-        create_test_agent("agent-3", muster::Status::Stopped),
+        create_test_agent("agent-1", tenex::Status::Running),
+        create_test_agent("agent-2", tenex::Status::Paused),
+        create_test_agent("agent-3", tenex::Status::Stopped),
     ]
 }
 
@@ -49,9 +49,9 @@ fn create_test_app_with_agents() -> App {
     let config = create_test_config();
     let mut storage = Storage::new();
 
-    storage.add(create_test_agent("agent-1", muster::Status::Running));
-    storage.add(create_test_agent("agent-2", muster::Status::Paused));
-    storage.add(create_test_agent("agent-3", muster::Status::Stopped));
+    storage.add(create_test_agent("agent-1", tenex::Status::Running));
+    storage.add(create_test_agent("agent-2", tenex::Status::Paused));
+    storage.add(create_test_agent("agent-3", tenex::Status::Stopped));
 
     App::new(config, storage)
 }

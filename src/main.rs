@@ -1,16 +1,16 @@
-//! Muster - Terminal multiplexer for AI coding agents
+//! Tenex - Terminal multiplexer for AI coding agents
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
-use muster::App;
-use muster::agent::Storage;
-use muster::config::Config;
+use tenex::App;
+use tenex::agent::Storage;
+use tenex::config::Config;
 
 mod tui;
 
 /// Terminal multiplexer for AI coding agents
 #[derive(Parser)]
-#[command(name = "muster")]
+#[command(name = "tenex")]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Set the default agent program and save to config
@@ -120,10 +120,10 @@ fn cmd_config(config: &Config, set: Option<&str>, show_path: bool) -> Result<()>
 }
 
 fn cmd_reset(force: bool) -> Result<()> {
-    use muster::git::WorktreeManager;
-    use muster::tmux::SessionManager;
     use std::collections::HashSet;
     use std::io::{self, Write};
+    use tenex::git::WorktreeManager;
+    use tenex::tmux::SessionManager;
 
     let storage = Storage::load().unwrap_or_default();
     let tmux = SessionManager::new();
@@ -134,7 +134,7 @@ fn cmd_reset(force: bool) -> Result<()> {
         .list()
         .unwrap_or_default()
         .into_iter()
-        .filter(|s| s.name.starts_with("muster-") && !storage_sessions.contains(&s.name))
+        .filter(|s| s.name.starts_with("tenex-") && !storage_sessions.contains(&s.name))
         .collect();
 
     if storage.is_empty() && orphaned_sessions.is_empty() {
@@ -179,9 +179,9 @@ fn cmd_reset(force: bool) -> Result<()> {
 
     // Kill tmux sessions and remove worktrees/branches
     let repo_path = std::env::current_dir()?;
-    let repo = muster::git::open_repository(&repo_path).ok();
+    let repo = tenex::git::open_repository(&repo_path).ok();
     let worktree_mgr = repo.as_ref().map(WorktreeManager::new);
-    let branch_mgr = repo.as_ref().map(muster::git::BranchManager::new);
+    let branch_mgr = repo.as_ref().map(tenex::git::BranchManager::new);
 
     for agent in storage.iter() {
         let _ = tmux.kill(&agent.tmux_session);
@@ -214,20 +214,20 @@ mod tests {
 
     #[test]
     fn test_cli_parsing() {
-        let cli = Cli::parse_from(["muster"]);
+        let cli = Cli::parse_from(["tenex"]);
         assert!(cli.set_agent.is_none());
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn test_cli_set_agent() {
-        let cli = Cli::parse_from(["muster", "--set-agent", "codex"]);
+        let cli = Cli::parse_from(["tenex", "--set-agent", "codex"]);
         assert_eq!(cli.set_agent, Some("codex".to_string()));
     }
 
     #[test]
     fn test_cli_config_command() -> Result<(), Box<dyn std::error::Error>> {
-        let cli = Cli::parse_from(["muster", "config", "--path"]);
+        let cli = Cli::parse_from(["tenex", "config", "--path"]);
         match cli.command {
             Some(Commands::Config { set, path }) => {
                 assert!(path);
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_cli_config_with_set() -> Result<(), Box<dyn std::error::Error>> {
-        let cli = Cli::parse_from(["muster", "config", "--set", "max_agents=10"]);
+        let cli = Cli::parse_from(["tenex", "config", "--set", "max_agents=10"]);
         match cli.command {
             Some(Commands::Config { set, path }) => {
                 assert!(!path);
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_cli_reset_command() -> Result<(), Box<dyn std::error::Error>> {
-        let cli = Cli::parse_from(["muster", "reset", "--force"]);
+        let cli = Cli::parse_from(["tenex", "reset", "--force"]);
         match cli.command {
             Some(Commands::Reset { force }) => {
                 assert!(force);

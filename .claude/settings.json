@@ -3,7 +3,7 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q -- '--no-verify'; then echo '--no-verify is not allowed. Address the pre-commit errors in the codebase without modifying any configuration files (or adding allow/except handlers to try to cheat/mask the sloppy code). You need to actually fix the problems.'; exit 2; fi"
+        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(--no-verify|SKIP=)'; then echo 'Bypassing pre-commit hooks is not allowed. Address the pre-commit errors in the codebase without modifying any configuration files (or adding allow/except handlers to try to cheat/mask the sloppy code). You need to actually fix the problems.'; exit 2; fi"
       }
     ]
   }

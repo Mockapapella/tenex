@@ -1,7 +1,5 @@
 //! TUI rendering
 
-use muster::agent::Status;
-use muster::app::{App, Mode, Tab};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,6 +7,8 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use tenex::agent::Status;
+use tenex::app::{App, Mode, Tab};
 
 /// Modern color palette - cohesive, muted colors for a clean look
 mod colors {
@@ -81,7 +81,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
-                muster::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
+                tenex::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
                     || {
                         vec![Line::from(Span::styled(
                             "No agent selected",
@@ -126,13 +126,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ]
                     },
                 ),
-                muster::app::ConfirmAction::Reset => {
+                tenex::app::ConfirmAction::Reset => {
                     vec![Line::from(Span::styled(
                         "Reset all agents?",
                         Style::default().fg(colors::TEXT_PRIMARY),
                     ))]
                 }
-                muster::app::ConfirmAction::Quit => {
+                tenex::app::ConfirmAction::Quit => {
                     vec![Line::from(Span::styled(
                         "Quit with running agents?",
                         Style::default().fg(colors::TEXT_PRIMARY),
@@ -357,7 +357,7 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ),
         _ => {
             let running = app.running_agent_count();
-            let hints = muster::config::status_hints();
+            let hints = tenex::config::status_hints();
             Span::styled(
                 format!(" {running} running | {hints} "),
                 Style::default().fg(colors::TEXT_DIM),
@@ -428,7 +428,7 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
 }
 
 fn render_help_overlay(frame: &mut Frame<'_>) {
-    use muster::config::Action;
+    use tenex::config::Action;
 
     // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
     // 4 sections with headers(4) + empty lines between(3) + 17 actions + footer(2) = 26 + 2 borders
@@ -733,17 +733,17 @@ fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muster::agent::{Agent, Storage};
-    use muster::app::ConfirmAction;
-    use muster::config::Config;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
+    use tenex::agent::{Agent, Storage};
+    use tenex::app::ConfirmAction;
+    use tenex::config::Config;
 
     fn create_test_config() -> Config {
         Config {
             default_program: "echo".to_string(),
-            branch_prefix: "muster/".to_string(),
+            branch_prefix: "tenex/".to_string(),
             worktree_dir: PathBuf::from("/tmp/test-worktrees"),
             auto_yes: false,
             poll_interval_ms: 100,
@@ -755,7 +755,7 @@ mod tests {
         let mut agent = Agent::new(
             title.to_string(),
             "echo".to_string(),
-            format!("muster/{title}"),
+            format!("tenex/{title}"),
             PathBuf::from(format!("/tmp/{title}")),
             None,
         );

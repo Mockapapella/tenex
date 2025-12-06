@@ -80,7 +80,7 @@ impl Agent {
     ) -> Self {
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let tmux_session = format!("muster-{}", &id.to_string()[..8]);
+        let tmux_session = format!("tenex-{}", &id.to_string()[..8]);
 
         Self {
             id,
@@ -198,7 +198,7 @@ mod tests {
         Agent::new(
             "Test Agent".to_string(),
             "claude".to_string(),
-            "muster/test-agent".to_string(),
+            "tenex/test-agent".to_string(),
             PathBuf::from("/tmp/worktree"),
             None,
         )
@@ -211,8 +211,8 @@ mod tests {
         assert_eq!(agent.title, "Test Agent");
         assert_eq!(agent.program, "claude");
         assert_eq!(agent.status, Status::Starting);
-        assert_eq!(agent.branch, "muster/test-agent");
-        assert!(agent.tmux_session.starts_with("muster-"));
+        assert_eq!(agent.branch, "tenex/test-agent");
+        assert!(agent.tmux_session.starts_with("tenex-"));
         assert!(agent.initial_prompt.is_none());
     }
 
@@ -221,7 +221,7 @@ mod tests {
         let agent = Agent::new(
             "Fix Bug".to_string(),
             "aider".to_string(),
-            "muster/fix-bug".to_string(),
+            "tenex/fix-bug".to_string(),
             PathBuf::from("/tmp/worktree"),
             Some("Fix the authentication bug".to_string()),
         );
@@ -378,10 +378,10 @@ mod tests {
             "title": "Old Agent",
             "program": "claude",
             "status": "running",
-            "branch": "muster/old",
+            "branch": "tenex/old",
             "worktree_path": "/tmp/old",
             "initial_prompt": null,
-            "tmux_session": "muster-12345678",
+            "tmux_session": "tenex-12345678",
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-01T00:00:00Z"
         }"#;

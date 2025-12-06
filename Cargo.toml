@@ -1,5 +1,5 @@
 [package]
-name = "muster"
+name = "tenex"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
@@ -7,7 +7,7 @@ resolver = "3"
 authors = ["Quinten Lisowe"]
 description = "Terminal multiplexer for AI coding agents"
 license = "MIT"
-repository = "https://github.com/Mockapapella/muster"
+repository = "https://github.com/Mockapapella/tenex"
 readme = "README.md"
 keywords = ["cli", "tui", "ai", "agents", "terminal"]
 categories = ["command-line-utilities", "development-tools"]

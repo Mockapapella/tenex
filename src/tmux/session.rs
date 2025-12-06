@@ -317,7 +317,7 @@ mod tests {
             return;
         }
         let manager = Manager::new();
-        assert!(!manager.exists("muster-test-nonexistent-session-xyz"));
+        assert!(!manager.exists("tenex-test-nonexistent-session-xyz"));
     }
 
     #[test]
@@ -355,7 +355,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let session_name = "muster-test-create-kill";
+        let session_name = "tenex-test-create-kill";
 
         let _ = manager.kill(session_name);
 
@@ -377,7 +377,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let session_name = "muster-test-duplicate";
+        let session_name = "tenex-test-duplicate";
 
         let _ = manager.kill(session_name);
 
@@ -398,7 +398,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let result = manager.kill("muster-test-nonexistent-xyz");
+        let result = manager.kill("tenex-test-nonexistent-xyz");
         assert!(result.is_err());
     }
 
@@ -409,7 +409,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let result = manager.rename("muster-nonexistent", "muster-new");
+        let result = manager.rename("tenex-nonexistent", "tenex-new");
         assert!(result.is_err());
     }
 
@@ -420,7 +420,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let result = manager.send_keys("muster-nonexistent", "test");
+        let result = manager.send_keys("tenex-nonexistent", "test");
         assert!(result.is_err());
     }
 
@@ -437,7 +437,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let result = manager.resize_window("muster-nonexistent-xyz", 80, 24);
+        let result = manager.resize_window("tenex-nonexistent-xyz", 80, 24);
         assert!(result.is_err());
     }
 
@@ -449,7 +449,7 @@ mod tests {
 
         let manager = Manager::new();
         let result = manager.create_window(
-            "muster-nonexistent-xyz",
+            "tenex-nonexistent-xyz",
             "test",
             std::path::Path::new("/tmp"),
             None,
@@ -464,7 +464,7 @@ mod tests {
         }
 
         let manager = Manager::new();
-        let result = manager.kill_window("muster-nonexistent-xyz", 0);
+        let result = manager.kill_window("tenex-nonexistent-xyz", 0);
         assert!(result.is_err());
     }
 

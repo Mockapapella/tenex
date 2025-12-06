@@ -221,7 +221,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.capture_pane("muster-nonexistent-session");
+        let result = capture.capture_pane("tenex-nonexistent-session");
         assert!(result.is_err());
     }
 
@@ -232,7 +232,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.capture_pane_with_history("muster-nonexistent-session", 100);
+        let result = capture.capture_pane_with_history("tenex-nonexistent-session", 100);
         assert!(result.is_err());
     }
 
@@ -243,7 +243,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.capture_full_history("muster-nonexistent-session");
+        let result = capture.capture_full_history("tenex-nonexistent-session");
         assert!(result.is_err());
     }
 
@@ -254,7 +254,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.pane_size("muster-nonexistent-session");
+        let result = capture.pane_size("tenex-nonexistent-session");
         assert!(result.is_err());
     }
 
@@ -265,7 +265,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.cursor_position("muster-nonexistent-session");
+        let result = capture.cursor_position("tenex-nonexistent-session");
         assert!(result.is_err());
     }
 
@@ -276,7 +276,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.pane_current_command("muster-nonexistent-session");
+        let result = capture.pane_current_command("tenex-nonexistent-session");
         assert!(result.is_err() || result.as_ref().map(String::is_empty).unwrap_or(false));
     }
 
@@ -287,7 +287,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        let result = capture.tail("muster-nonexistent-session", 10);
+        let result = capture.tail("tenex-nonexistent-session", 10);
         assert!(result.is_err());
     }
 
@@ -306,7 +306,7 @@ mod tests {
         }
 
         let manager = SessionManager::new();
-        let session_name = "muster-test-capture";
+        let session_name = "tenex-test-capture";
 
         let _ = manager.kill(session_name);
 

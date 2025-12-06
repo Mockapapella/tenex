@@ -1,10 +1,8 @@
-//! Terminal User Interface for Muster
+//! Terminal User Interface for Tenex
 
 mod render;
 
 use anyhow::Result;
-use muster::app::{Actions, App, Event, Handler, Mode};
-use muster::config::Action;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -20,6 +18,8 @@ use ratatui::{
 use std::io;
 use std::process::Command;
 use std::time::Duration;
+use tenex::app::{Actions, App, Event, Handler, Mode};
+use tenex::config::Action;
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
@@ -205,7 +205,7 @@ fn handle_key_event(
         Mode::Help => app.exit_mode(),
         Mode::ErrorModal(_) => app.dismiss_error(),
         Mode::Normal | Mode::Scrolling => {
-            if let Some(action) = muster::config::get_action(code, modifiers) {
+            if let Some(action) = tenex::config::get_action(code, modifiers) {
                 action_handler.handle_action(app, action)?;
             }
         }
@@ -216,9 +216,9 @@ fn handle_key_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muster::agent::Storage;
-    use muster::app::ConfirmAction;
-    use muster::config::Config;
+    use tenex::agent::Storage;
+    use tenex::app::ConfirmAction;
+    use tenex::config::Config;
 
     fn create_test_app() -> App {
         App::new(Config::default(), Storage::default())
