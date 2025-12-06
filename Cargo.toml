@@ -1,6 +1,6 @@
 [package]
 name = "tenex"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.91"
 resolver = "3"
@@ -8,10 +8,10 @@ authors = ["Quinten Lisowe"]
 description = "Terminal multiplexer for AI coding agents"
 license = "Apache-2.0"
 repository = "https://github.com/Mockapapella/tenex"
+homepage = "https://github.com/Mockapapella/tenex"
 readme = "README.md"
 keywords = ["cli", "tui", "ai", "agents", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
-publish = false
 
 [dependencies]
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
