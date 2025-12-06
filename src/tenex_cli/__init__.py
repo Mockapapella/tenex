@@ -1,1 +1,0 @@
-"""tenex CLI package."""
