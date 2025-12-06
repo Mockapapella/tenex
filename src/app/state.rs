@@ -520,9 +520,45 @@ mod tests {
 
     #[test]
     fn test_scroll_to_top() {
+        // Destructure default to ensure all fields are explicitly handled
+        let App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
+            preview_scroll: _,
+            diff_scroll,
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
+        } = App::default();
+
         let mut app = App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
             preview_scroll: 100,
-            ..Default::default()
+            diff_scroll,
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
         };
         app.scroll_to_top();
         assert_eq!(app.preview_scroll, 0);
@@ -688,10 +724,45 @@ mod tests {
 
     #[test]
     fn test_reset_scroll() {
+        // Destructure default to ensure all fields are explicitly handled
+        let App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
+            preview_scroll: _,
+            diff_scroll: _,
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
+        } = App::default();
+
         let mut app = App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
             preview_scroll: 50,
             diff_scroll: 30,
-            ..Default::default()
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
         };
 
         app.reset_scroll();

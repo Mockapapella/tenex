@@ -308,9 +308,23 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
+        // Destructure default to ensure all fields are explicitly handled
+        let Config {
+            default_program: _,
+            branch_prefix,
+            auto_yes,
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
+        } = Config::default();
+
         let config = Config {
             default_program: "original".to_string(),
-            ..Default::default()
+            branch_prefix,
+            auto_yes,
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
         };
         config.save_to(&config_path)?;
 
@@ -327,9 +341,23 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
+        // Destructure default to ensure all fields are explicitly handled
+        let Config {
+            default_program,
+            branch_prefix: _,
+            auto_yes,
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
+        } = Config::default();
+
         let config = Config {
+            default_program,
             branch_prefix: "custom/".to_string(),
-            ..Default::default()
+            auto_yes,
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
         };
         config.save_to(&config_path)?;
 
@@ -345,9 +373,23 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
+        // Destructure default to ensure all fields are explicitly handled
+        let Config {
+            default_program,
+            branch_prefix,
+            auto_yes: _,
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
+        } = Config::default();
+
         let config = Config {
+            default_program,
+            branch_prefix,
             auto_yes: true,
-            ..Default::default()
+            poll_interval_ms,
+            max_agents,
+            worktree_dir,
         };
         config.save_to(&config_path)?;
 
@@ -363,9 +405,23 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
+        // Destructure default to ensure all fields are explicitly handled
+        let Config {
+            default_program,
+            branch_prefix,
+            auto_yes,
+            poll_interval_ms: _,
+            max_agents,
+            worktree_dir,
+        } = Config::default();
+
         let config = Config {
+            default_program,
+            branch_prefix,
+            auto_yes,
             poll_interval_ms: 500,
-            ..Default::default()
+            max_agents,
+            worktree_dir,
         };
         config.save_to(&config_path)?;
 
@@ -381,9 +437,23 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config_path = temp_dir.path().join("config.json");
 
+        // Destructure default to ensure all fields are explicitly handled
+        let Config {
+            default_program,
+            branch_prefix,
+            auto_yes,
+            poll_interval_ms,
+            max_agents: _,
+            worktree_dir,
+        } = Config::default();
+
         let config = Config {
+            default_program,
+            branch_prefix,
+            auto_yes,
+            poll_interval_ms,
             max_agents: 20,
-            ..Default::default()
+            worktree_dir,
         };
         config.save_to(&config_path)?;
 
