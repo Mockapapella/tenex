@@ -687,6 +687,27 @@ fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
+/// Calculate the inner dimensions of the preview pane (content area without borders)
+///
+/// This is used to resize tmux windows to match the preview pane size.
+#[must_use]
+pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
+    // Main layout: Vertical split with status bar at bottom (1 line)
+    let main_area_height = frame_area.height.saturating_sub(1);
+
+    // Horizontal split: 30% agents, 70% content
+    let content_width = u16::try_from((u32::from(frame_area.width) * 70) / 100).unwrap_or(0);
+
+    // Content pane: 1-line tab bar, rest is preview
+    let preview_height = main_area_height.saturating_sub(1);
+
+    // Inner area: subtract borders (2 chars total width, 2 lines total height)
+    let inner_width = content_width.saturating_sub(2);
+    let inner_height = preview_height.saturating_sub(2);
+
+    (inner_width, inner_height)
+}
+
 /// Create a centered rect with percentage width and absolute height
 fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
     let vertical_padding = area.height.saturating_sub(height) / 2;
@@ -1105,5 +1126,47 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn test_calculate_preview_dimensions() {
+        use ratatui::layout::Rect;
+
+        // Test standard terminal size (80x24)
+        let area = Rect::new(0, 0, 80, 24);
+        let (width, height) = calculate_preview_dimensions(area);
+
+        // Content width = 80 * 70% = 56, minus 2 for borders = 54
+        assert_eq!(width, 54);
+        // Height = 24 - 1 (status bar) - 1 (tab bar) - 2 (borders) = 20
+        assert_eq!(height, 20);
+    }
+
+    #[test]
+    fn test_calculate_preview_dimensions_large_terminal() {
+        use ratatui::layout::Rect;
+
+        // Test larger terminal (120x40)
+        let area = Rect::new(0, 0, 120, 40);
+        let (width, height) = calculate_preview_dimensions(area);
+
+        // Content width = 120 * 70% = 84, minus 2 for borders = 82
+        assert_eq!(width, 82);
+        // Height = 40 - 1 - 1 - 2 = 36
+        assert_eq!(height, 36);
+    }
+
+    #[test]
+    fn test_calculate_preview_dimensions_small_terminal() {
+        use ratatui::layout::Rect;
+
+        // Test small terminal (40x10)
+        let area = Rect::new(0, 0, 40, 10);
+        let (width, height) = calculate_preview_dimensions(area);
+
+        // Content width = 40 * 70% = 28, minus 2 for borders = 26
+        assert_eq!(width, 26);
+        // Height = 10 - 1 - 1 - 2 = 6
+        assert_eq!(height, 6);
     }
 }

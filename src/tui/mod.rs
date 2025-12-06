@@ -13,6 +13,7 @@ use ratatui::{
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
+    layout::Rect,
 };
 use std::io;
 use std::process::Command;
@@ -52,6 +53,16 @@ fn run_loop(
 
         match event_handler.next()? {
             Event::Tick => {
+                // Initialize preview dimensions on first tick if not set
+                if app.preview_dimensions.is_none()
+                    && let Ok(size) = terminal.size()
+                {
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    let (width, height) = render::calculate_preview_dimensions(area);
+                    app.set_preview_dimensions(width, height);
+                    action_handler.resize_agent_windows(app);
+                }
+
                 let _ = action_handler.update_preview(app);
                 let _ = action_handler.update_diff(app);
                 let _ = action_handler.sync_agent_status(app);
@@ -60,7 +71,17 @@ fn run_loop(
                 handle_key_event(app, action_handler, key.code, key.modifiers)?;
             }
             Event::Mouse(_mouse) => {}
-            Event::Resize(_, _) => {}
+            Event::Resize(width, height) => {
+                // Calculate new preview dimensions and resize agent windows
+                let (preview_width, preview_height) =
+                    render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
+
+                // Only resize if dimensions actually changed
+                if app.preview_dimensions != Some((preview_width, preview_height)) {
+                    app.set_preview_dimensions(preview_width, preview_height);
+                    action_handler.resize_agent_windows(app);
+                }
+            }
         }
 
         // Handle attach request - suspend TUI and attach to tmux session
@@ -723,6 +744,140 @@ mod tests {
         handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_count_mode_enter() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildCount);
+
+        // Enter should proceed to child prompt
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::ChildPrompt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_count_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildCount);
+
+        // Escape should exit mode
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_count_mode_up_down() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildCount);
+        let initial_count = app.child_count;
+
+        // Up should increment
+        handle_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count + 1);
+
+        // Down should decrement
+        handle_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count);
+
+        // 'k' should also increment
+        handle_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count + 1);
+
+        // 'j' should also decrement
+        handle_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_prompt_mode_input() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildPrompt);
+
+        // Type some characters
+        handle_key_event(&mut app, handler, KeyCode::Char('t'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('e'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('s'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('t'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.input_buffer, "test");
+        assert_eq!(app.mode, Mode::ChildPrompt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_prompt_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildPrompt);
+        app.handle_char('t');
+
+        // Escape should exit mode
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input_buffer.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_prompt_mode_enter_no_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildPrompt);
+        app.handle_char('t');
+        app.handle_char('a');
+        app.handle_char('s');
+        app.handle_char('k');
+
+        // Enter with input tries to spawn children (will fail without agent selected)
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        // On error, should show error modal; on success with no agent, exits normally
+        assert!(
+            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
+            "Expected ErrorModal or Normal mode, got {:?}",
+            app.mode
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_child_count_mode_other_keys() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ChildCount);
+        let initial_count = app.child_count;
+
+        // Other keys should be ignored
+        handle_key_event(&mut app, handler, KeyCode::Left, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Right, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
+
+        // Should still be in ChildCount mode with same count
+        assert_eq!(app.mode, Mode::ChildCount);
+        assert_eq!(app.child_count, initial_count);
         Ok(())
     }
 }

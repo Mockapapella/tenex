@@ -54,6 +54,9 @@ pub struct App {
 
     /// Agent ID to spawn children under (None = create new root with children)
     pub spawning_under: Option<uuid::Uuid>,
+
+    /// Cached preview pane dimensions (width, height) for tmux window sizing
+    pub preview_dimensions: Option<(u16, u16)>,
 }
 
 impl App {
@@ -77,6 +80,7 @@ impl App {
             attach_session: None,
             child_count: 3,
             spawning_under: None,
+            preview_dimensions: None,
         }
     }
 
@@ -333,6 +337,11 @@ impl App {
     pub fn selected_has_children(&self) -> bool {
         self.selected_agent()
             .is_some_and(|a| self.storage.has_children(a.id))
+    }
+
+    /// Set the preview pane dimensions for tmux window sizing
+    pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
+        self.preview_dimensions = Some((width, height));
     }
 
     /// Get depth of the selected agent (for UI)
@@ -760,5 +769,21 @@ mod tests {
     fn test_selected_depth() {
         let app = App::default();
         assert_eq!(app.selected_depth(), 0);
+    }
+
+    #[test]
+    fn test_set_preview_dimensions() {
+        let mut app = App::default();
+
+        // Initially None
+        assert!(app.preview_dimensions.is_none());
+
+        // Set dimensions
+        app.set_preview_dimensions(100, 50);
+        assert_eq!(app.preview_dimensions, Some((100, 50)));
+
+        // Update dimensions
+        app.set_preview_dimensions(80, 40);
+        assert_eq!(app.preview_dimensions, Some((80, 40)));
     }
 }

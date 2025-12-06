@@ -258,6 +258,31 @@ impl Manager {
     pub fn window_target(session: &str, window_index: u32) -> String {
         format!("{session}:{window_index}")
     }
+
+    /// Resize a tmux window to specific dimensions
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window cannot be resized
+    pub fn resize_window(&self, target: &str, width: u16, height: u16) -> Result<()> {
+        let output = Command::new("tmux")
+            .arg("resize-window")
+            .arg("-t")
+            .arg(target)
+            .arg("-x")
+            .arg(width.to_string())
+            .arg("-y")
+            .arg(height.to_string())
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to resize window '{target}': {stderr}");
+        }
+
+        Ok(())
+    }
 }
 
 /// Information about a tmux session
@@ -402,6 +427,17 @@ mod tests {
     fn test_window_target() {
         let target = Manager::window_target("my-session", 5);
         assert_eq!(target, "my-session:5");
+    }
+
+    #[test]
+    fn test_resize_window_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.resize_window("muster-nonexistent-xyz", 80, 24);
+        assert!(result.is_err());
     }
 
     #[test]
