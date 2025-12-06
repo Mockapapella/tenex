@@ -200,6 +200,7 @@ impl Manager {
     ) -> Result<u32> {
         let mut cmd = Command::new("tmux");
         cmd.arg("new-window")
+            .arg("-d") // Don't switch to the new window
             .arg("-t")
             .arg(session)
             .arg("-n")
@@ -437,6 +438,33 @@ mod tests {
 
         let manager = Manager::new();
         let result = manager.resize_window("muster-nonexistent-xyz", 80, 24);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_window_nonexistent_session() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.create_window(
+            "muster-nonexistent-xyz",
+            "test",
+            std::path::Path::new("/tmp"),
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kill_window_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.kill_window("muster-nonexistent-xyz", 0);
         assert!(result.is_err());
     }
 
