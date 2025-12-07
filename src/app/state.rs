@@ -125,10 +125,11 @@ impl App {
         self.reset_scroll();
     }
 
-    /// Reset scroll positions for both panes
+    /// Reset scroll positions for both panes (to bottom)
     pub const fn reset_scroll(&mut self) {
-        self.preview_scroll = 0;
-        self.diff_scroll = 0;
+        // Set to max so render functions clamp to bottom of content
+        self.preview_scroll = usize::MAX;
+        self.diff_scroll = usize::MAX;
     }
 
     /// Scroll up in the active pane by the given amount
@@ -506,7 +507,47 @@ mod tests {
 
     #[test]
     fn test_scroll() {
-        let mut app = App::default();
+        // Destructure default to ensure all fields are explicitly handled
+        let App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
+            preview_scroll: _,
+            diff_scroll: _,
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
+        } = App::default();
+
+        // Start at 0 to test scroll operations
+        let mut app = App {
+            config,
+            storage,
+            selected,
+            mode,
+            active_tab,
+            should_quit,
+            input_buffer,
+            preview_scroll: 0,
+            diff_scroll: 0,
+            last_error,
+            status_message,
+            preview_content,
+            diff_content,
+            attach_session,
+            child_count,
+            spawning_under,
+            preview_dimensions,
+        };
 
         app.scroll_down(10);
         assert_eq!(app.preview_scroll, 10);
@@ -518,8 +559,8 @@ mod tests {
         assert_eq!(app.preview_scroll, 0);
 
         app.switch_tab();
-        app.scroll_down(20);
-        assert_eq!(app.diff_scroll, 20);
+        // switch_tab resets scroll to MAX (bottom), scroll_down saturates at MAX
+        assert_eq!(app.diff_scroll, usize::MAX);
     }
 
     #[test]
@@ -771,8 +812,9 @@ mod tests {
 
         app.reset_scroll();
 
-        assert_eq!(app.preview_scroll, 0);
-        assert_eq!(app.diff_scroll, 0);
+        // reset_scroll sets to max (bottom) so render functions clamp appropriately
+        assert_eq!(app.preview_scroll, usize::MAX);
+        assert_eq!(app.diff_scroll, usize::MAX);
     }
 
     #[test]

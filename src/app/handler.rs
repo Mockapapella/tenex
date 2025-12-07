@@ -436,6 +436,11 @@ impl Actions {
         } else {
             app.preview_content = String::from("(No agent selected)");
         }
+
+        // Auto-scroll to bottom so the latest output is visible
+        // Use a large value that will be clamped by the render function
+        app.preview_scroll = usize::MAX;
+
         Ok(())
     }
 

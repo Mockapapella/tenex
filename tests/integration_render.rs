@@ -452,7 +452,14 @@ fn test_full_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
         let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
         frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
 
-        let diff = DiffViewWidget::new(&app.diff_content).scroll(app.diff_scroll);
+        // Clamp scroll like the real render function does (switch_tab sets to usize::MAX)
+        let line_count = app.diff_content.lines().count();
+        let visible_height = usize::from(area.height.saturating_sub(3));
+        let scroll = app
+            .diff_scroll
+            .min(line_count.saturating_sub(visible_height));
+
+        let diff = DiffViewWidget::new(&app.diff_content).scroll(scroll);
         frame.render_widget(
             diff.to_paragraph(),
             Rect::new(30, 0, area.width - 30, area.height - 1),

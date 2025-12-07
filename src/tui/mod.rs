@@ -101,13 +101,15 @@ fn run_loop(
             }
         }
 
+        // Always update preview/diff before drawing for snappy response
+        let _ = action_handler.update_preview(app);
+        let _ = action_handler.update_diff(app);
+
         // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
 
-        // Run tick operations only on actual timeout
+        // Sync agent status only on tick (less frequent operation)
         if needs_tick {
-            let _ = action_handler.update_preview(app);
-            let _ = action_handler.update_diff(app);
             let _ = action_handler.sync_agent_status(app);
         }
 
