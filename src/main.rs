@@ -43,6 +43,9 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Clear the log file on startup
+    let _ = std::fs::write("/tmp/tenex.log", "");
+
     // Log to /tmp/tenex.log - tail with: tail -f /tmp/tenex.log
     // Set DEBUG=0-3 to control verbosity (0=off, 1=warn, 2=info, 3=debug)
     let debug_level = std::env::var("DEBUG")
