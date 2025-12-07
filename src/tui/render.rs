@@ -44,6 +44,10 @@ mod colors {
 }
 
 /// Render the full application UI
+#[expect(
+    clippy::too_many_lines,
+    reason = "render function handles all UI modes in one place"
+)]
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -136,6 +140,42 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         Style::default().fg(colors::TEXT_PRIMARY),
                     ))]
                 }
+                tenex::app::ConfirmAction::Synthesize => app.selected_agent().map_or_else(
+                    || {
+                        vec![Line::from(Span::styled(
+                            "No agent selected",
+                            Style::default().fg(colors::TEXT_PRIMARY),
+                        ))]
+                    },
+                    |agent| {
+                        let descendants_count = app.storage.descendants(agent.id).len();
+                        let agent_word = if descendants_count == 1 {
+                            "agent"
+                        } else {
+                            "agents"
+                        };
+                        vec![
+                            Line::from(Span::styled(
+                                format!("Synthesize {descendants_count} {agent_word}?"),
+                                Style::default().fg(colors::TEXT_PRIMARY),
+                            )),
+                            Line::from(""),
+                            Line::from(Span::styled(
+                                "This will capture each agent's output, write it to a file,",
+                                Style::default().fg(colors::TEXT_DIM),
+                            )),
+                            Line::from(Span::styled(
+                                "and send it to the parent for synthesis.",
+                                Style::default().fg(colors::TEXT_DIM),
+                            )),
+                            Line::from(""),
+                            Line::from(Span::styled(
+                                "All descendant agents will be terminated.",
+                                Style::default().fg(colors::DIFF_REMOVE),
+                            )),
+                        ]
+                    },
+                ),
             };
             render_confirm_overlay(frame, lines);
         }

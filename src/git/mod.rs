@@ -10,6 +10,8 @@ pub use worktree::{Info as WorktreeInfo, Manager as WorktreeManager};
 
 use anyhow::{Context, Result};
 use git2::Repository;
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 /// Open a git repository at the given path
@@ -38,6 +40,56 @@ pub fn repository_root(path: &Path) -> Result<std::path::PathBuf> {
     repo.workdir()
         .map(std::path::Path::to_path_buf)
         .context("Repository has no working directory")
+}
+
+/// Ensure `.tenex/` is in `.git/info/exclude`
+///
+/// This prevents synthesis files from being tracked by git.
+/// Creates the exclude file if it doesn't exist.
+///
+/// # Errors
+///
+/// Returns an error if the exclude file cannot be read or written
+pub fn ensure_tenex_excluded(repo_path: &Path) -> Result<()> {
+    const EXCLUDE_ENTRY: &str = ".tenex/";
+
+    let repo = open_repository(repo_path)?;
+    let git_dir = repo.path();
+    let info_dir = git_dir.join("info");
+    let exclude_path = info_dir.join("exclude");
+
+    // Create info directory if it doesn't exist
+    if !info_dir.exists() {
+        fs::create_dir_all(&info_dir)
+            .with_context(|| format!("Failed to create {}", info_dir.display()))?;
+    }
+
+    // Check if .tenex/ is already in exclude
+    if exclude_path.exists() {
+        let file = fs::File::open(&exclude_path)
+            .with_context(|| format!("Failed to open {}", exclude_path.display()))?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line.context("Failed to read exclude file")?;
+            if line.trim() == EXCLUDE_ENTRY {
+                // Already excluded
+                return Ok(());
+            }
+        }
+    }
+
+    // Append .tenex/ to exclude file
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude_path)
+        .with_context(|| format!("Failed to open {} for writing", exclude_path.display()))?;
+
+    writeln!(file, "{EXCLUDE_ENTRY}")
+        .with_context(|| format!("Failed to write to {}", exclude_path.display()))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -76,6 +128,49 @@ mod tests {
         let (temp_dir, _repo) = init_test_repo()?;
         let root = repository_root(temp_dir.path())?;
         assert_eq!(root, temp_dir.path());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure_tenex_excluded() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, _repo) = init_test_repo()?;
+
+        // First call should add .tenex/ to exclude
+        ensure_tenex_excluded(temp_dir.path())?;
+
+        let exclude_path = temp_dir.path().join(".git/info/exclude");
+        assert!(exclude_path.exists());
+
+        let contents = std::fs::read_to_string(&exclude_path)?;
+        assert!(contents.contains(".tenex/"));
+
+        // Second call should be idempotent
+        ensure_tenex_excluded(temp_dir.path())?;
+
+        let contents = std::fs::read_to_string(&exclude_path)?;
+        let count = contents.matches(".tenex/").count();
+        assert_eq!(count, 1, "Should only have one .tenex/ entry");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure_tenex_excluded_creates_info_dir() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, _repo) = init_test_repo()?;
+
+        // Remove the info directory if it exists
+        let info_dir = temp_dir.path().join(".git/info");
+        if info_dir.exists() {
+            std::fs::remove_dir_all(&info_dir)?;
+        }
+
+        // Should create the directory and file
+        ensure_tenex_excluded(temp_dir.path())?;
+
+        assert!(info_dir.exists());
+        let exclude_path = info_dir.join("exclude");
+        assert!(exclude_path.exists());
+
         Ok(())
     }
 }

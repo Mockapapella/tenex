@@ -59,6 +59,9 @@ impl<'a> Manager<'a> {
 
     /// Create a worktree with a new branch from HEAD
     ///
+    /// If the branch already exists (e.g., from a previous run), it will be deleted
+    /// and recreated from HEAD.
+    ///
     /// # Errors
     ///
     /// Returns an error if the worktree or branch cannot be created
@@ -73,6 +76,30 @@ impl<'a> Manager<'a> {
 
         let head = self.repo.head().context("Failed to get HEAD")?;
         let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
+
+        // Clean up any existing worktree/branch with this name (from a previous run)
+        // Must remove worktree first, as the branch can't be deleted while it's
+        // the HEAD of a linked worktree
+        let worktree_name = branch.replace('/', "-");
+        if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
+            debug!(branch, "Removing existing worktree before recreation");
+            let wt_path = worktree.path().to_path_buf();
+            let _ = worktree.prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(true)
+                    .working_tree(true),
+            ));
+            if wt_path.exists() {
+                let _ = fs::remove_dir_all(&wt_path);
+            }
+        }
+
+        // Now delete the branch if it exists
+        let branch_mgr = super::BranchManager::new(self.repo);
+        if branch_mgr.exists(branch) {
+            debug!(branch, "Deleting existing branch before recreation");
+            let _ = branch_mgr.delete(branch);
+        }
 
         let branch_ref = self
             .repo
@@ -511,5 +538,68 @@ mod tests {
         assert_eq!(info.name, "test");
         assert_eq!(info.path, PathBuf::from("/tmp/test"));
         assert!(!info.is_locked);
+    }
+
+    #[test]
+    fn test_create_with_new_branch_cleanup_existing() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that create_with_new_branch cleans up existing worktree/branch
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let wt_path = temp_dir.path().join("worktrees").join("feature-recreate");
+
+        // Create initial worktree
+        manager.create_with_new_branch(&wt_path, "feature-recreate-test")?;
+        assert!(wt_path.exists());
+        assert!(manager.exists("feature-recreate-test"));
+
+        // Create a file in the worktree to verify it's a new worktree after recreation
+        let marker_file = wt_path.join("marker.txt");
+        fs::write(&marker_file, "original")?;
+        assert!(marker_file.exists());
+
+        // Remove the worktree first (simulate user cleanup without branch deletion)
+        manager.remove("feature-recreate-test")?;
+
+        // Re-create with the same name - should clean up existing branch and succeed
+        manager.create_with_new_branch(&wt_path, "feature-recreate-test")?;
+
+        assert!(wt_path.exists());
+        assert!(manager.exists("feature-recreate-test"));
+        // The marker file should not exist (fresh worktree)
+        assert!(!marker_file.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_recreate_with_existing_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Test that create_with_new_branch cleans up when worktree still exists
+        // (exercises the cleanup path at lines 85-94)
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let wt_path = temp_dir.path().join("worktrees").join("feature-reuse");
+
+        // Create initial worktree
+        manager.create_with_new_branch(&wt_path, "feature-reuse-test")?;
+        assert!(wt_path.exists());
+        assert!(manager.exists("feature-reuse-test"));
+
+        // Create a marker file
+        let marker_file = wt_path.join("marker.txt");
+        fs::write(&marker_file, "original")?;
+
+        // DO NOT remove the worktree - call create_with_new_branch again
+        // This should prune the existing worktree and recreate it
+        manager.create_with_new_branch(&wt_path, "feature-reuse-test")?;
+
+        assert!(wt_path.exists());
+        assert!(manager.exists("feature-reuse-test"));
+        // The marker file should not exist (fresh worktree)
+        assert!(!marker_file.exists());
+
+        Ok(())
     }
 }

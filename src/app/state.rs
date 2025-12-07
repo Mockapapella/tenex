@@ -410,6 +410,8 @@ pub enum ConfirmAction {
     Reset,
     /// Quit the application
     Quit,
+    /// Synthesize children into parent
+    Synthesize,
 }
 
 /// Input mode for text entry
@@ -626,6 +628,31 @@ mod tests {
         let mut app = App::default();
         app.scroll_to_bottom(100, 20);
         assert_eq!(app.preview_scroll, 80);
+    }
+
+    #[test]
+    fn test_scroll_diff_tab() {
+        let mut app = App {
+            active_tab: Tab::Diff,
+            diff_scroll: 0,
+            ..App::default()
+        };
+
+        // Test scroll operations on Diff tab
+        app.scroll_down(10);
+        assert_eq!(app.diff_scroll, 10);
+
+        app.scroll_up(5);
+        assert_eq!(app.diff_scroll, 5);
+
+        app.scroll_up(10);
+        assert_eq!(app.diff_scroll, 0); // saturating_sub
+
+        app.scroll_to_top();
+        assert_eq!(app.diff_scroll, 0);
+
+        app.scroll_to_bottom(100, 20);
+        assert_eq!(app.diff_scroll, 80);
     }
 
     #[test]
@@ -914,5 +941,57 @@ mod tests {
         // Update dimensions
         app.set_preview_dimensions(80, 40);
         assert_eq!(app.preview_dimensions, Some((80, 40)));
+    }
+
+    #[test]
+    fn test_dismiss_error() {
+        let mut app = App {
+            mode: Mode::ErrorModal("Test error".to_string()),
+            last_error: Some("Test error".to_string()),
+            ..App::default()
+        };
+
+        // Dismiss it
+        app.dismiss_error();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.last_error.is_none());
+
+        // Calling dismiss_error in normal mode should be a no-op for mode
+        app.dismiss_error();
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_attach_request() {
+        let mut app = App::default();
+
+        // Initially no attach request
+        assert!(!app.has_attach_request());
+        assert!(app.attach_request.is_none());
+
+        // Request attach without window index
+        app.request_attach("test-session".to_string(), None);
+        assert!(app.has_attach_request());
+        assert_eq!(
+            app.attach_request.as_ref().map(|r| r.session.as_str()),
+            Some("test-session")
+        );
+        assert_eq!(
+            app.attach_request.as_ref().and_then(|r| r.window_index),
+            None
+        );
+
+        // Clear attach request
+        app.clear_attach_request();
+        assert!(!app.has_attach_request());
+        assert!(app.attach_request.is_none());
+
+        // Request attach with window index
+        app.request_attach("another-session".to_string(), Some(5));
+        assert!(app.has_attach_request());
+        assert_eq!(
+            app.attach_request.as_ref().and_then(|r| r.window_index),
+            Some(5)
+        );
     }
 }

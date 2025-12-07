@@ -97,6 +97,11 @@ fn main() -> Result<()> {
         Some(Commands::Config { set, path }) => cmd_config(&config, set.as_deref(), path),
         Some(Commands::Reset { force }) => cmd_reset(force),
         None => {
+            // Ensure .tenex/ is excluded from git tracking
+            if let Ok(cwd) = std::env::current_dir() {
+                let _ = tenex::git::ensure_tenex_excluded(&cwd);
+            }
+
             let app = App::new(config, storage);
             tui::run(app)
         }

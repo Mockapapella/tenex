@@ -6,6 +6,8 @@ use crate::git::{self, DiffGenerator, WorktreeManager};
 use crate::prompts;
 use crate::tmux::{OutputCapture, SessionManager};
 use anyhow::{Context, Result};
+use std::fs;
+use std::io::Write;
 use tracing::{debug, info, warn};
 
 use super::state::{App, ConfirmAction, Mode};
@@ -100,7 +102,13 @@ impl Actions {
                 }
             }
             Action::Synthesize => {
-                self.synthesize(app)?;
+                if let Some(agent) = app.selected_agent() {
+                    if app.storage.has_children(agent.id) {
+                        app.enter_mode(Mode::Confirming(ConfirmAction::Synthesize));
+                    } else {
+                        app.set_error("Selected agent has no children to synthesize");
+                    }
+                }
             }
             Action::ToggleCollapse => {
                 self.toggle_collapse(app)?;
@@ -126,6 +134,9 @@ impl Actions {
                 }
                 ConfirmAction::Quit => {
                     app.should_quit = true;
+                }
+                ConfirmAction::Synthesize => {
+                    self.synthesize(app)?;
                 }
             }
         }
@@ -580,6 +591,8 @@ impl Actions {
 
     /// Synthesize children into the parent agent
     ///
+    /// Writes synthesis content to `.tenex/<id>.md` and tells the parent to read it.
+    ///
     /// # Errors
     ///
     /// Returns an error if synthesis fails
@@ -597,17 +610,24 @@ impl Actions {
         let parent_id = agent.id;
         let parent_session = agent.tmux_session.clone();
         let parent_title = agent.title.clone();
+        let worktree_path = agent.worktree_path.clone();
+        // Determine the correct tmux target for the parent
+        // If the parent has a window_index, it's a child agent running in a window
+        let parent_tmux_target = agent.window_index.map_or_else(
+            || parent_session.clone(),
+            |window_idx| SessionManager::window_target(&parent_session, window_idx),
+        );
 
-        info!(%parent_id, %parent_title, "Synthesizing children into parent");
+        info!(%parent_id, %parent_title, "Synthesizing descendants into parent");
 
-        // Collect findings from all children
-        let children = app.storage.children(parent_id);
+        // Collect findings from all descendants (children, grandchildren, etc.)
+        let descendants = app.storage.descendants(parent_id);
         let mut findings: Vec<(String, String)> = Vec::new();
 
-        for child in &children {
-            // Capture terminal output from child's window
-            let target = child.window_index.map_or_else(
-                || child.tmux_session.clone(),
+        for descendant in &descendants {
+            // Capture terminal output from descendant's window
+            let target = descendant.window_index.map_or_else(
+                || descendant.tmux_session.clone(),
                 |window_idx| SessionManager::window_target(&parent_session, window_idx),
             );
 
@@ -616,35 +636,56 @@ impl Actions {
                 .capture_pane_with_history(&target, 5000)
                 .unwrap_or_else(|_| "(Could not capture output)".to_string());
 
-            findings.push((child.title.clone(), output));
+            findings.push((descendant.title.clone(), output));
         }
 
-        // Build synthesis prompt
-        let synthesis_prompt = prompts::build_synthesis_prompt(&findings);
+        // Build synthesis content
+        let synthesis_content = prompts::build_synthesis_prompt(&findings);
 
-        // Send synthesis prompt to parent
-        self.session_manager
-            .send_keys(&parent_session, &synthesis_prompt)?;
+        // Write to .tenex/<unique-id>.md in the worktree
+        let tenex_dir = worktree_path.join(".tenex");
+        fs::create_dir_all(&tenex_dir)
+            .with_context(|| format!("Failed to create {}", tenex_dir.display()))?;
 
-        // Kill all children (and their descendants)
-        let child_ids: Vec<_> = children.iter().map(|c| c.id).collect();
-        let children_count = child_ids.len();
-        for child_id in child_ids {
-            // Kill the window
-            if let Some(child) = app.storage.get(child_id)
-                && let Some(window_idx) = child.window_index
-            {
-                let _ = self
-                    .session_manager
-                    .kill_window(&parent_session, window_idx);
+        let synthesis_id = uuid::Uuid::new_v4();
+        let synthesis_file = tenex_dir.join(format!("{synthesis_id}.md"));
+
+        let mut file = fs::File::create(&synthesis_file)
+            .with_context(|| format!("Failed to create {}", synthesis_file.display()))?;
+        file.write_all(synthesis_content.as_bytes())
+            .with_context(|| format!("Failed to write to {}", synthesis_file.display()))?;
+
+        debug!(?synthesis_file, "Wrote synthesis file");
+
+        // Kill all descendant windows and remove from storage
+        // Collect IDs and window indices first to avoid borrow issues
+        let descendant_info: Vec<_> = descendants.iter().map(|d| (d.id, d.window_index)).collect();
+        let descendants_count = descendant_info.len();
+
+        for (descendant_id, window_idx) in descendant_info {
+            // Kill the window if it has one
+            if let Some(idx) = window_idx {
+                let _ = self.session_manager.kill_window(&parent_session, idx);
             }
-            // Remove from storage (with descendants)
-            app.storage.remove_with_descendants(child_id);
+            // Remove from storage (remove_with_descendants handles nested removal)
+            app.storage.remove(descendant_id);
         }
+
+        // Now tell the parent to read the file
+        let agent_word = if descendants_count == 1 {
+            "agent"
+        } else {
+            "agents"
+        };
+        let read_command = format!(
+            "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
+        );
+        self.session_manager
+            .send_keys_and_submit(&parent_tmux_target, &read_command)?;
 
         app.validate_selection();
         app.storage.save()?;
-        info!(%parent_title, children_count, "Synthesis complete");
+        info!(%parent_title, descendants_count, "Synthesis complete");
         app.set_status("Synthesized findings into parent agent");
         Ok(())
     }
@@ -706,10 +747,10 @@ impl Actions {
                     target_agent.tmux_session.clone()
                 };
 
-                // Send the message
+                // Send the message and submit it
                 if self
                     .session_manager
-                    .send_keys(&tmux_target, message)
+                    .send_keys_and_submit(&tmux_target, message)
                     .is_ok()
                 {
                     sent_count += 1;
@@ -1457,13 +1498,73 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_action_synthesize() {
+    fn test_handle_action_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        // No agent - should error
-        let result = handler.handle_action(&mut app, Action::Synthesize);
-        assert!(result.is_err());
+        // No agent - should not enter confirming mode
+        handler.handle_action(&mut app, Action::Synthesize)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_action_synthesize_with_children() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add parent agent
+        let parent = Agent::new(
+            "parent".to_string(),
+            "claude".to_string(),
+            "tenex/parent".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let parent_id = parent.id;
+        app.storage.add(parent);
+
+        // Add child agent
+        let mut child = Agent::new(
+            "child".to_string(),
+            "claude".to_string(),
+            "tenex/child".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        child.parent_id = Some(parent_id);
+        app.storage.add(child);
+
+        // With children - should enter confirming mode
+        handler.handle_action(&mut app, Action::Synthesize)?;
+        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Synthesize));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_action_synthesize_no_children() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add agent with no children
+        app.storage.add(Agent::new(
+            "parent".to_string(),
+            "claude".to_string(),
+            "tenex/parent".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // No children - should show error modal, not enter confirming mode
+        handler.handle_action(&mut app, Action::Synthesize)?;
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        Ok(())
     }
 
     #[test]

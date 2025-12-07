@@ -128,7 +128,7 @@ impl Manager {
         Ok(sessions)
     }
 
-    /// Send keys to a session
+    /// Send keys to a session (without pressing Enter)
     ///
     /// # Errors
     ///
@@ -139,13 +139,38 @@ impl Manager {
             .arg("-t")
             .arg(name)
             .arg(keys)
-            .arg("Enter")
             .output()
             .context("Failed to execute tmux")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("Failed to send keys to session '{name}': {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Send keys to a session and press Enter to submit
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if keys cannot be sent
+    pub fn send_keys_and_submit(&self, name: &str, keys: &str) -> Result<()> {
+        // Send the text
+        self.send_keys(name, keys)?;
+
+        // Send Enter to submit
+        let output = Command::new("tmux")
+            .arg("send-keys")
+            .arg("-t")
+            .arg(name)
+            .arg("Enter")
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to send Enter to session '{name}': {stderr}");
         }
 
         Ok(())
