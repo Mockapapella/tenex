@@ -5,6 +5,15 @@ use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+/// Request to attach to a tmux session/window
+#[derive(Debug, Clone)]
+pub struct AttachRequest {
+    /// Tmux session name
+    pub session: String,
+    /// Optional window index (for child agents)
+    pub window_index: Option<u32>,
+}
+
 /// Main application state
 #[derive(Debug)]
 pub struct App {
@@ -48,7 +57,7 @@ pub struct App {
     pub diff_content: String,
 
     /// Session to attach to (when set, TUI should suspend and attach)
-    pub attach_session: Option<String>,
+    pub attach_request: Option<AttachRequest>,
 
     /// Number of child agents to spawn (for `ChildCount` mode)
     pub child_count: usize,
@@ -78,7 +87,7 @@ impl App {
             status_message: None,
             preview_content: String::new(),
             diff_content: String::new(),
-            attach_session: None,
+            attach_request: None,
             child_count: 3,
             spawning_under: None,
             preview_dimensions: None,
@@ -228,20 +237,23 @@ impl App {
         self.status_message = None;
     }
 
-    /// Request to attach to a tmux session
-    pub fn request_attach(&mut self, session: String) {
-        self.attach_session = Some(session);
+    /// Request to attach to a tmux session/window
+    pub fn request_attach(&mut self, session: String, window_index: Option<u32>) {
+        self.attach_request = Some(AttachRequest {
+            session,
+            window_index,
+        });
     }
 
     /// Clear the attach request after attaching
     pub fn clear_attach_request(&mut self) {
-        self.attach_session = None;
+        self.attach_request = None;
     }
 
     /// Check if there's a pending attach request
     #[must_use]
     pub const fn has_attach_request(&self) -> bool {
-        self.attach_session.is_some()
+        self.attach_request.is_some()
     }
 
     /// Check if there are any running agents
@@ -522,7 +534,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,
@@ -543,7 +555,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,
@@ -580,7 +592,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,
@@ -600,7 +612,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,
@@ -784,7 +796,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,
@@ -804,7 +816,7 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_session,
+            attach_request,
             child_count,
             spawning_under,
             preview_dimensions,

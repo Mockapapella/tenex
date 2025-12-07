@@ -114,7 +114,7 @@ fn run_loop(
         }
 
         // Handle attach request - suspend TUI and attach to tmux session
-        if let Some(session) = app.attach_session.take() {
+        if let Some(request) = app.attach_request.take() {
             // Suspend the TUI
             disable_raw_mode()?;
             execute!(
@@ -124,10 +124,16 @@ fn run_loop(
             )?;
             terminal.show_cursor()?;
 
-            // Attach to the tmux session
+            // Build the target: session:window_index or just session
+            let target = match request.window_index {
+                Some(idx) => format!("{}:{}", request.session, idx),
+                None => request.session,
+            };
+
+            // Attach to the tmux session/window
             // Unset TMUX env var to allow nested tmux sessions
             let status = Command::new("tmux")
-                .args(["attach-session", "-t", &session])
+                .args(["attach-session", "-t", &target])
                 .env_remove("TMUX")
                 .status();
 
