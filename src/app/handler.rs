@@ -226,12 +226,16 @@ impl Actions {
 
             if is_root {
                 // Root agent: kill entire session and worktree
-                // First kill all descendant windows (in case any are in other sessions)
+                // First kill all descendant windows in descending order
+                // (in case any are in other sessions, and to handle renumbering)
                 let descendants = app.storage.descendants(agent_id);
-                for desc in &descendants {
-                    if let Some(idx) = desc.window_index {
-                        let _ = self.session_manager.kill_window(&session, idx);
-                    }
+                let mut indices: Vec<u32> = descendants
+                    .iter()
+                    .filter_map(|desc| desc.window_index)
+                    .collect();
+                indices.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in indices {
+                    let _ = self.session_manager.kill_window(&session, idx);
                 }
 
                 // Kill the session
@@ -247,26 +251,39 @@ impl Actions {
                 // Child agent: kill just this window and its descendants
                 // Get the root's session for killing windows
                 let root = app.storage.root_ancestor(agent_id);
-                let root_session = root.map(|r| r.tmux_session.clone()).unwrap_or(session);
-                let parent_id = agent.parent_id;
+                let root_session = root.map_or_else(|| session.clone(), |r| r.tmux_session.clone());
+                let root_id = root.map(|r| r.id);
 
-                // Kill descendant windows first
+                // Collect all window indices being deleted
+                let mut deleted_indices: Vec<u32> = Vec::new();
                 let descendants = app.storage.descendants(agent_id);
                 for desc in &descendants {
                     if let Some(idx) = desc.window_index {
-                        let _ = self.session_manager.kill_window(&root_session, idx);
+                        deleted_indices.push(idx);
                     }
                 }
 
-                // Kill this agent's window
+                // Add this agent's window
                 if let Some(idx) = window_index {
-                    let _ = self.session_manager.kill_window(&root_session, idx);
+                    deleted_indices.push(idx);
                 }
 
-                // Sync window indices for siblings after deletion
-                // This handles the case where tmux renumbers windows
-                if let Some(pid) = parent_id {
-                    self.sync_sibling_window_indices(app, pid, &root_session, agent_id);
+                // Sort in descending order and kill windows from highest to lowest
+                // This prevents tmux renumbering from affecting indices we haven't killed yet
+                deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in &deleted_indices {
+                    let _ = self.session_manager.kill_window(&root_session, *idx);
+                }
+
+                // Update window indices for remaining agents under the same root
+                // When tmux has renumber-windows on, indices shift down
+                if let Some(rid) = root_id {
+                    Self::adjust_window_indices_after_deletion(
+                        app,
+                        rid,
+                        agent_id,
+                        &deleted_indices,
+                    );
                 }
             }
 
@@ -358,9 +375,30 @@ impl Actions {
 
     /// Attach to the selected agent's tmux session
     fn attach_to_agent(self, app: &mut App) -> Result<()> {
+        // Log all visible agents for debugging
+        for (i, (agent, depth)) in app.storage.visible_agents().iter().enumerate() {
+            debug!(
+                index = i,
+                agent_id = %agent.short_id(),
+                agent_title = %agent.title,
+                window_index = ?agent.window_index,
+                depth = depth,
+                "Visible agent"
+            );
+        }
+
         let agent = app
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+
+        debug!(
+            selected_index = app.selected,
+            agent_id = %agent.short_id(),
+            agent_title = %agent.title,
+            window_index = ?agent.window_index,
+            session = %agent.tmux_session,
+            "Attaching to agent"
+        );
 
         if self.session_manager.exists(&agent.tmux_session) {
             app.request_attach(agent.tmux_session.clone(), agent.window_index);
@@ -557,13 +595,12 @@ impl Actions {
         // Create child agents
         let plan_prompt = prompts::build_plan_prompt(task);
         for i in 0..count {
-            let child_title = format!("Child {}", i + 1);
-
             // Get next window index
             let window_index = app.storage.next_window_index(parent_agent_id);
 
+            // Create child first to get its ID, then build the title with short ID
             let child = Agent::new_child(
-                child_title.clone(),
+                String::new(), // Placeholder, will be updated below
                 app.config.default_program.clone(),
                 branch.clone(),
                 worktree_path.clone(),
@@ -574,6 +611,11 @@ impl Actions {
                     window_index,
                 },
             );
+
+            // Include short ID in title to distinguish agents with same base name
+            let child_title = format!("Child {} ({})", i + 1, child.short_id());
+            let mut child = child;
+            child.title.clone_from(&child_title);
 
             // Create window in the root's session with the planning prompt
             let command = format!(
@@ -597,7 +639,6 @@ impl Actions {
             }
 
             // Update window index if it differs
-            let mut child = child;
             child.window_index = Some(actual_index);
 
             app.storage.add(child);
@@ -831,41 +872,55 @@ impl Actions {
         Ok(())
     }
 
-    /// Sync window indices for sibling agents after one is deleted
+    /// Adjust window indices for all agents under a root after windows are deleted
     ///
     /// This handles the case where tmux has `renumber-windows on` and
-    /// window indices shift after a window is deleted.
-    fn sync_sibling_window_indices(
-        self,
+    /// window indices shift after windows are deleted. We compute the new
+    /// indices mathematically rather than relying on window names.
+    fn adjust_window_indices_after_deletion(
         app: &mut App,
-        parent_id: uuid::Uuid,
-        session: &str,
+        root_id: uuid::Uuid,
         deleted_agent_id: uuid::Uuid,
+        deleted_indices: &[u32],
     ) {
-        // Get the current window list from tmux
-        let Ok(windows) = self.session_manager.list_windows(session) else {
+        if deleted_indices.is_empty() {
             return;
-        };
+        }
 
-        // Build a map of window name -> index
-        let window_map: std::collections::HashMap<String, u32> =
-            windows.into_iter().map(|w| (w.name, w.index)).collect();
+        // Sort deleted indices for efficient counting
+        let mut sorted_deleted: Vec<u32> = deleted_indices.to_vec();
+        sorted_deleted.sort_unstable();
 
-        // Update each sibling's window index based on its title matching the window name
-        let siblings: Vec<_> = app
+        // Get all descendants of the root (excluding the deleted agent and its descendants)
+        let descendants_to_update: Vec<uuid::Uuid> = app
             .storage
-            .children(parent_id)
+            .descendants(root_id)
             .iter()
             .filter(|a| a.id != deleted_agent_id)
-            .map(|a| (a.id, a.title.clone()))
+            .filter(|a| !app.storage.descendant_ids(deleted_agent_id).contains(&a.id))
+            .map(|a| a.id)
             .collect();
 
-        for (agent_id, title) in siblings {
-            if let Some(&new_index) = window_map.get(&title)
-                && let Some(agent) = app.storage.get_mut(agent_id)
-                && agent.window_index != Some(new_index)
+        // Update each remaining agent's window index
+        for agent_id in descendants_to_update {
+            if let Some(agent) = app.storage.get_mut(agent_id)
+                && let Some(current_idx) = agent.window_index
             {
-                agent.window_index = Some(new_index);
+                // Count how many deleted indices are less than current index
+                let decrement =
+                    u32::try_from(sorted_deleted.iter().filter(|&&d| d < current_idx).count())
+                        .unwrap_or(0);
+                if decrement > 0 {
+                    let new_idx = current_idx - decrement;
+                    debug!(
+                        agent_id = %agent.short_id(),
+                        agent_title = %agent.title,
+                        %current_idx,
+                        %new_idx,
+                        "Adjusting window index after deletion"
+                    );
+                    agent.window_index = Some(new_idx);
+                }
             }
         }
     }
