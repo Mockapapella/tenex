@@ -40,8 +40,8 @@ fn create_test_agent(title: &str, status: tenex::Status) -> Agent {
 fn create_test_agents() -> Vec<Agent> {
     vec![
         create_test_agent("agent-1", tenex::Status::Running),
-        create_test_agent("agent-2", tenex::Status::Paused),
-        create_test_agent("agent-3", tenex::Status::Stopped),
+        create_test_agent("agent-2", tenex::Status::Starting),
+        create_test_agent("agent-3", tenex::Status::Running),
     ]
 }
 
@@ -50,8 +50,8 @@ fn create_test_app_with_agents() -> App {
     let mut storage = Storage::new();
 
     storage.add(create_test_agent("agent-1", tenex::Status::Running));
-    storage.add(create_test_agent("agent-2", tenex::Status::Paused));
-    storage.add(create_test_agent("agent-3", tenex::Status::Stopped));
+    storage.add(create_test_agent("agent-2", tenex::Status::Starting));
+    storage.add(create_test_agent("agent-3", tenex::Status::Running));
 
     App::new(config, storage)
 }

@@ -15,10 +15,6 @@ pub enum Action {
     Kill,
     /// Push branch to remote
     Push,
-    /// Pause agent (checkout)
-    Pause,
-    /// Resume paused agent
-    Resume,
     /// Switch between preview/diff tabs
     SwitchTab,
     /// Select next agent
@@ -246,8 +242,6 @@ impl Action {
             Self::Attach => "[Enter] into agent",
             Self::Kill => "[d]elete agent (and descendants)",
             Self::Push => "Push branch to remote",
-            Self::Pause => "Pause agent",
-            Self::Resume => "Resume agent",
             Self::SwitchTab => "[Tab] switch preview/diff",
             Self::NextAgent => "[j] / [↓] next agent",
             Self::PrevAgent => "[k] / [↑] prev agent",
@@ -291,7 +285,7 @@ impl Action {
             Self::Synthesize => "s",
             Self::ToggleCollapse => "Space",
             Self::Broadcast => "B",
-            Self::Push | Self::Pause | Self::Resume => "",
+            Self::Push => "",
         }
     }
 
@@ -316,9 +310,7 @@ impl Action {
             | Self::ScrollTop
             | Self::ScrollBottom => ActionGroup::Navigation,
             Self::Help | Self::Quit => ActionGroup::Other,
-            Self::Push | Self::Pause | Self::Resume | Self::Cancel | Self::Confirm => {
-                ActionGroup::Hidden
-            }
+            Self::Push | Self::Cancel | Self::Confirm => ActionGroup::Hidden,
         }
     }
 

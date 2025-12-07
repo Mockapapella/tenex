@@ -4,3 +4,7 @@ cov = "llvm-cov --workspace --all-features --profile coverage --fail-under-lines
 
 # "Do everything the LLM must pass" entrypoint (used in CI).
 ci = ["check", "--all-targets", "--all-features", "--workspace"]
+
+[env]
+# Run tests single-threaded to avoid race conditions with tmux sessions
+RUST_TEST_THREADS = "1"

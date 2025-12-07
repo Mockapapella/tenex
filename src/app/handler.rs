@@ -53,12 +53,6 @@ impl Actions {
             Action::Push => {
                 self.push_branch(app)?;
             }
-            Action::Pause => {
-                self.pause_agent(app)?;
-            }
-            Action::Resume => {
-                self.resume_agent(app)?;
-            }
             Action::SwitchTab => {
                 app.switch_tab();
             }
@@ -298,77 +292,6 @@ impl Actions {
             let _ = self.update_diff(app);
 
             app.set_status("Agent killed");
-        }
-        Ok(())
-    }
-
-    /// Pause the selected agent
-    fn pause_agent(self, app: &mut App) -> Result<()> {
-        // Extract info before mutable borrow
-        let agent_info = app.selected_agent().map(|a| {
-            (
-                a.title.clone(),
-                a.tmux_session.clone(),
-                a.status.can_pause(),
-                a.status,
-            )
-        });
-
-        if let Some((title, session, can_pause, status)) = agent_info {
-            if can_pause {
-                debug!(%title, %session, "Pausing agent");
-                let _ = self.session_manager.kill(&session);
-                if let Some(agent) = app.selected_agent_mut() {
-                    agent.set_status(Status::Paused);
-                }
-                app.storage.save()?;
-                info!(%title, "Agent paused");
-                app.set_status("Agent paused");
-            } else {
-                warn!(%title, ?status, "Agent cannot be paused");
-                app.set_error("Agent cannot be paused");
-            }
-        }
-        Ok(())
-    }
-
-    /// Resume the selected agent
-    fn resume_agent(self, app: &mut App) -> Result<()> {
-        // Extract needed info before mutable borrow
-        let agent_info = app.selected_agent().and_then(|agent| {
-            if agent.status.can_resume() {
-                Some((
-                    agent.title.clone(),
-                    agent.tmux_session.clone(),
-                    agent.worktree_path.clone(),
-                    agent.program.clone(),
-                ))
-            } else {
-                None
-            }
-        });
-
-        let preview_dims = app.preview_dimensions;
-
-        if let Some((title, session, worktree_path, program)) = agent_info {
-            debug!(%title, %session, %program, "Resuming agent");
-            self.session_manager
-                .create(&session, &worktree_path, Some(&program))?;
-
-            // Resize the new session to match preview dimensions
-            if let Some((width, height)) = preview_dims {
-                let _ = self.session_manager.resize_window(&session, width, height);
-            }
-
-            if let Some(agent) = app.selected_agent_mut() {
-                agent.set_status(Status::Running);
-            }
-            app.storage.save()?;
-            info!(%title, "Agent resumed");
-            app.set_status("Agent resumed");
-        } else if let Some(agent) = app.selected_agent() {
-            warn!(title = %agent.title, status = ?agent.status, "Agent cannot be resumed");
-            app.set_error("Agent cannot be resumed");
         }
         Ok(())
     }
@@ -849,24 +772,35 @@ impl Actions {
     pub fn sync_agent_status(self, app: &mut App) -> Result<()> {
         let mut changed = false;
 
+        // Collect IDs of dead agents to remove
+        let dead_agents: Vec<uuid::Uuid> = app
+            .storage
+            .iter()
+            .filter(|agent| !self.session_manager.exists(&agent.tmux_session))
+            .map(|agent| {
+                debug!(title = %agent.title, "Removing dead agent (session not found)");
+                agent.id
+            })
+            .collect();
+
+        // Remove dead agents
+        for id in dead_agents {
+            app.storage.remove(id);
+            changed = true;
+        }
+
+        // Update starting agents to running if their session exists
         for agent in app.storage.iter_mut() {
-            if agent.status == Status::Starting || agent.status == Status::Running {
-                if self.session_manager.exists(&agent.tmux_session) {
-                    if agent.status == Status::Starting {
-                        debug!(title = %agent.title, "Agent status: Starting -> Running");
-                        agent.set_status(Status::Running);
-                        changed = true;
-                    }
-                } else {
-                    debug!(title = %agent.title, old_status = ?agent.status, "Agent status: -> Stopped (session not found)");
-                    agent.set_status(Status::Stopped);
-                    changed = true;
-                }
+            if agent.status == Status::Starting {
+                debug!(title = %agent.title, "Agent status: Starting -> Running");
+                agent.set_status(Status::Running);
+                changed = true;
             }
         }
 
         if changed {
             app.storage.save()?;
+            app.validate_selection();
         }
 
         Ok(())
@@ -1097,26 +1031,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_pause_no_agent() -> Result<(), Box<dyn std::error::Error>> {
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        handler.handle_action(&mut app, Action::Pause)?;
-        assert_eq!(app.mode, Mode::Normal);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_resume_no_agent() -> Result<(), Box<dyn std::error::Error>> {
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        handler.handle_action(&mut app, Action::Resume)?;
-        assert_eq!(app.mode, Mode::Normal);
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_push_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
@@ -1251,105 +1165,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_pause_with_running_agent() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add a running agent
-        let mut agent = Agent::new(
-            "running".to_string(),
-            "claude".to_string(),
-            "muster/running".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Running);
-        app.storage.add(agent);
-
-        // Pause should work
-        handler.handle_action(&mut app, Action::Pause)?;
-        // The session doesn't exist so it will be marked as paused
-        assert!(app.status_message.is_some() || app.last_error.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_pause_with_stopped_agent() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add a stopped agent
-        let mut agent = Agent::new(
-            "stopped".to_string(),
-            "claude".to_string(),
-            "muster/stopped".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Stopped);
-        app.storage.add(agent);
-
-        // Pause should fail
-        handler.handle_action(&mut app, Action::Pause)?;
-        assert!(app.last_error.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_resume_with_paused_agent() {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add a paused agent
-        let mut agent = Agent::new(
-            "paused".to_string(),
-            "claude".to_string(),
-            "muster/paused".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Paused);
-        app.storage.add(agent);
-
-        // Resume will try to create session (may fail due to missing session)
-        let _ = handler.handle_action(&mut app, Action::Resume);
-    }
-
-    #[test]
-    fn test_handle_resume_with_running_agent() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add a running agent
-        let mut agent = Agent::new(
-            "running".to_string(),
-            "claude".to_string(),
-            "muster/running".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Running);
-        app.storage.add(agent);
-
-        // Resume should fail
-        handler.handle_action(&mut app, Action::Resume)?;
-        assert!(app.last_error.is_some());
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_attach_session_not_found() {
         use crate::agent::Agent;
         use std::path::PathBuf;
@@ -1469,25 +1284,11 @@ mod tests {
         starting.set_status(Status::Starting);
         app.storage.add(starting);
 
-        let mut paused = Agent::new(
-            "paused".to_string(),
-            "claude".to_string(),
-            "muster/paused".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        paused.set_status(Status::Paused);
-        app.storage.add(paused);
-
-        // Sync should mark running/starting as stopped (no sessions exist)
+        // Sync should remove dead agents (no sessions exist)
         handler.sync_agent_status(&mut app)?;
 
-        // The running/starting agents should now be stopped
-        for agent in app.storage.iter() {
-            if agent.title == "running" || agent.title == "starting" {
-                assert_eq!(agent.status, Status::Stopped);
-            }
-        }
+        // All agents should be removed since their sessions don't exist
+        assert_eq!(app.storage.len(), 0);
         Ok(())
     }
 
@@ -1791,93 +1592,6 @@ mod tests {
 
         // Should handle both root and child agents without panicking
         handler.resize_agent_windows(&app);
-    }
-
-    #[test]
-    fn test_pause_agent_cannot_pause() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add an agent that's already paused
-        let mut agent = Agent::new(
-            "paused".to_string(),
-            "claude".to_string(),
-            "muster/paused".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Paused);
-        app.storage.add(agent);
-
-        // Try to pause - should set error
-        handler.pause_agent(&mut app)?;
-        assert!(app.last_error.is_some());
-        assert!(
-            app.last_error
-                .as_ref()
-                .ok_or("Expected error")?
-                .contains("cannot be paused")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_pause_agent_stopped_cannot_pause() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add an agent that's stopped
-        let mut agent = Agent::new(
-            "stopped".to_string(),
-            "claude".to_string(),
-            "muster/stopped".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Stopped);
-        app.storage.add(agent);
-
-        // Try to pause - should set error
-        handler.pause_agent(&mut app)?;
-        assert!(app.last_error.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn test_resume_agent_cannot_resume() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add an agent that's already running
-        let mut agent = Agent::new(
-            "running".to_string(),
-            "claude".to_string(),
-            "muster/running".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        );
-        agent.set_status(Status::Running);
-        app.storage.add(agent);
-
-        // Try to resume - should set error
-        handler.resume_agent(&mut app)?;
-        assert!(app.last_error.is_some());
-        assert!(
-            app.last_error
-                .as_ref()
-                .ok_or("Expected error")?
-                .contains("cannot be resumed")
-        );
-        Ok(())
     }
 
     #[test]

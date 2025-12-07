@@ -153,12 +153,6 @@ impl Agent {
         self.updated_at = Utc::now();
     }
 
-    /// Check if this agent is still active (not stopped)
-    #[must_use]
-    pub fn is_alive(&self) -> bool {
-        self.status != Status::Stopped
-    }
-
     /// Get the age of the agent as a human-readable string
     #[must_use]
     pub fn age_string(&self) -> String {
@@ -252,22 +246,6 @@ mod tests {
 
         assert_eq!(agent.status, Status::Running);
         assert!(agent.updated_at > original_updated);
-    }
-
-    #[test]
-    fn test_is_alive() {
-        let mut agent = create_test_agent();
-
-        assert!(agent.is_alive());
-
-        agent.set_status(Status::Running);
-        assert!(agent.is_alive());
-
-        agent.set_status(Status::Paused);
-        assert!(agent.is_alive());
-
-        agent.set_status(Status::Stopped);
-        assert!(!agent.is_alive());
     }
 
     #[test]

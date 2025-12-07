@@ -149,12 +149,6 @@ impl Storage {
         self.agents.is_empty()
     }
 
-    /// Get all alive agents (not stopped)
-    #[must_use]
-    pub fn alive_agents(&self) -> Vec<&Agent> {
-        self.agents.iter().filter(|a| a.is_alive()).collect()
-    }
-
     /// Clear all agents
     pub fn clear(&mut self) {
         self.agents.clear();
@@ -473,24 +467,6 @@ mod tests {
 
         assert!(storage.find_by_short_id(&short_id).is_some());
         assert!(storage.find_by_short_id("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_alive_agents() {
-        let mut storage = Storage::new();
-
-        let mut agent1 = create_test_agent("alive");
-        agent1.set_status(Status::Running);
-
-        let mut agent2 = create_test_agent("dead");
-        agent2.set_status(Status::Stopped);
-
-        storage.add(agent1);
-        storage.add(agent2);
-
-        let alive = storage.alive_agents();
-        assert_eq!(alive.len(), 1);
-        assert_eq!(alive[0].title, "alive");
     }
 
     #[test]

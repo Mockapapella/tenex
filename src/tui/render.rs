@@ -26,9 +26,7 @@ mod colors {
 
     // Status (semantic)
     pub const STATUS_RUNNING: Color = Color::Rgb(120, 180, 120);
-    pub const STATUS_STOPPED: Color = Color::Rgb(200, 100, 100);
     pub const STATUS_STARTING: Color = Color::Rgb(200, 180, 100);
-    pub const STATUS_PAUSED: Color = Color::Rgb(100, 140, 200);
 
     // Diff
     pub const DIFF_ADD: Color = Color::Rgb(120, 180, 120);
@@ -121,7 +119,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             Line::from(""),
                             Line::from(Span::styled(
                                 "This will delete the worktree and branch.",
-                                Style::default().fg(colors::STATUS_STOPPED),
+                                Style::default().fg(colors::DIFF_REMOVE),
                             )),
                         ]
                     },
@@ -166,8 +164,6 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             let status_color = match agent.status {
                 Status::Starting => colors::STATUS_STARTING,
                 Status::Running => colors::STATUS_RUNNING,
-                Status::Paused => colors::STATUS_PAUSED,
-                Status::Stopped => colors::STATUS_STOPPED,
             };
 
             let style = if i == app.selected {
@@ -348,7 +344,7 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (Some(error), _, false) => Span::styled(
             format!(" Error: {error} "),
             Style::default()
-                .fg(colors::STATUS_STOPPED)
+                .fg(colors::DIFF_REMOVE)
                 .add_modifier(Modifier::BOLD),
         ),
         (_, Some(status), _) => Span::styled(
@@ -768,9 +764,8 @@ mod tests {
         let mut storage = Storage::new();
 
         storage.add(create_test_agent("agent-1", Status::Running));
-        storage.add(create_test_agent("agent-2", Status::Paused));
-        storage.add(create_test_agent("agent-3", Status::Stopped));
-        storage.add(create_test_agent("agent-4", Status::Starting));
+        storage.add(create_test_agent("agent-2", Status::Starting));
+        storage.add(create_test_agent("agent-3", Status::Running));
 
         App::new(config, storage)
     }

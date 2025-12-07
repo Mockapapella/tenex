@@ -87,8 +87,6 @@ pub const fn status_to_color(status: Status) -> Color {
     match status {
         Status::Starting => Color::Yellow,
         Status::Running => Color::Green,
-        Status::Paused => Color::Blue,
-        Status::Stopped => Color::Red,
     }
 }
 
@@ -113,7 +111,7 @@ mod tests {
     fn test_agent_list_widget_new() {
         let agents = vec![
             create_test_agent("agent1", Status::Running),
-            create_test_agent("agent2", Status::Paused),
+            create_test_agent("agent2", Status::Starting),
         ];
 
         let widget = Widget::new(&agents, 0);
@@ -131,8 +129,6 @@ mod tests {
     fn test_status_to_color() {
         assert_eq!(status_to_color(Status::Starting), Color::Yellow);
         assert_eq!(status_to_color(Status::Running), Color::Green);
-        assert_eq!(status_to_color(Status::Paused), Color::Blue);
-        assert_eq!(status_to_color(Status::Stopped), Color::Red);
     }
 
     #[test]

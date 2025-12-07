@@ -217,13 +217,13 @@ fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
     agent1.set_status(tenex::Status::Running);
 
     let mut agent2 = Agent::new(
-        "paused-agent".to_string(),
+        "starting-agent".to_string(),
         "echo".to_string(),
-        fixture.session_name("paused"),
-        fixture.worktree_dir.path().join("paused"),
+        fixture.session_name("starting"),
+        fixture.worktree_dir.path().join("starting"),
         None,
     );
-    agent2.set_status(tenex::Status::Paused);
+    agent2.set_status(tenex::Status::Starting);
 
     storage.add(agent1);
     storage.add(agent2);
@@ -539,24 +539,6 @@ fn test_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
     // Transition to Running
     agent.set_status(tenex::Status::Running);
     assert_eq!(agent.status, tenex::Status::Running);
-    assert!(agent.status.can_pause());
-    assert!(!agent.status.can_resume());
-
-    // Transition to Paused
-    agent.set_status(tenex::Status::Paused);
-    assert_eq!(agent.status, tenex::Status::Paused);
-    assert!(!agent.status.can_pause());
-    assert!(agent.status.can_resume());
-
-    // Back to Running
-    agent.set_status(tenex::Status::Running);
-    assert_eq!(agent.status, tenex::Status::Running);
-
-    // Transition to Stopped
-    agent.set_status(tenex::Status::Stopped);
-    assert_eq!(agent.status, tenex::Status::Stopped);
-    assert!(!agent.status.can_pause());
-    assert!(!agent.status.can_resume());
 
     storage.add(agent);
     assert_eq!(storage.len(), 1);
@@ -669,58 +651,6 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
 
     assert!(result.is_ok());
     assert_eq!(app.storage.len(), 0);
-
-    Ok(())
-}
-
-#[test]
-fn test_actions_pause_resume_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
-        return Ok(());
-    }
-
-    let fixture = TestFixture::new("actions_pause_resume")?;
-    let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
-    let mut app = tenex::App::new(config, storage);
-    let handler = tenex::app::Actions::new();
-
-    // Create an agent
-    handler.create_agent(&mut app, "pausable", None)?;
-    app.select_next();
-
-    // Wait for agent to start
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
-    // Manually set to Running (since "echo" command exits quickly)
-    if let Some(agent) = app.selected_agent_mut() {
-        agent.set_status(tenex::Status::Running);
-    }
-
-    // Pause the agent
-    let result = handler.handle_action(&mut app, tenex::config::Action::Pause);
-    assert!(result.is_ok());
-
-    // Check status is paused
-    if let Some(agent) = app.selected_agent() {
-        assert_eq!(agent.status, tenex::Status::Paused);
-    }
-
-    // Resume the agent
-    let result = handler.handle_action(&mut app, tenex::config::Action::Resume);
-    assert!(result.is_ok());
-
-    let _ = std::env::set_current_dir(&original_dir);
-
-    // Cleanup
-    let manager = SessionManager::new();
-    for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
-    }
 
     Ok(())
 }
@@ -1119,104 +1049,6 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_cmd_pause_success() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
-        return Ok(());
-    }
-
-    let fixture = TestFixture::new("cmd_pause_success")?;
-    let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
-
-    let mut app = tenex::App::new(config, storage);
-    let handler = tenex::app::Actions::new();
-
-    // Create an agent
-    let create_result = handler.create_agent(&mut app, "pausable", None);
-    if create_result.is_err() {
-        let _ = std::env::set_current_dir(&original_dir);
-        return Ok(());
-    }
-
-    // Mark as running
-    if let Some(agent) = app.storage.iter_mut().next() {
-        agent.set_status(tenex::Status::Running);
-    }
-    app.select_next();
-
-    // Pause via handler
-    let result = handler.handle_action(&mut app, tenex::config::Action::Pause);
-    assert!(result.is_ok());
-
-    // Verify paused
-    if let Some(agent) = app.selected_agent() {
-        assert_eq!(agent.status, tenex::Status::Paused);
-    }
-
-    let _ = std::env::set_current_dir(&original_dir);
-
-    // Cleanup
-    let manager = SessionManager::new();
-    for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn test_cmd_resume_success() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
-        return Ok(());
-    }
-
-    let fixture = TestFixture::new("cmd_resume_success")?;
-    let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
-
-    let mut app = tenex::App::new(config, storage);
-    let handler = tenex::app::Actions::new();
-
-    // Create an agent
-    let create_result = handler.create_agent(&mut app, "resumable", None);
-    if create_result.is_err() {
-        let _ = std::env::set_current_dir(&original_dir);
-        return Ok(());
-    }
-
-    // Mark as paused
-    if let Some(agent) = app.storage.iter_mut().next() {
-        agent.set_status(tenex::Status::Paused);
-    }
-    app.select_next();
-
-    // Resume via handler
-    let result = handler.handle_action(&mut app, tenex::config::Action::Resume);
-    assert!(result.is_ok());
-
-    // Verify running
-    if let Some(agent) = app.selected_agent() {
-        assert_eq!(agent.status, tenex::Status::Running);
-    }
-
-    let _ = std::env::set_current_dir(&original_dir);
-
-    // Cleanup
-    let manager = SessionManager::new();
-    for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
-    }
-
-    Ok(())
-}
-
-#[test]
 fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
         return Ok(());
@@ -1258,7 +1090,7 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    // Sync should transition to Stopped
+    // Sync should remove dead agents
     let _ = handler.sync_agent_status(&mut app);
 
     let _ = std::env::set_current_dir(&original_dir);
@@ -1299,7 +1131,7 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
         title.to_string(),
         config.default_program,
         branch.clone(),
-        worktree_path.clone(),
+        worktree_path,
         None,
     );
     agent.set_status(tenex::Status::Running);
@@ -1311,25 +1143,7 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let all_agents: Vec<_> = storage.iter().collect();
     assert_eq!(all_agents[0].title, title);
 
-    // 3. Pause agent (simulate `muster pause`)
-    let _ = manager.kill(&session_name);
-    if let Some(agent) = storage.get_mut(agent_id) {
-        agent.set_status(tenex::Status::Paused);
-    }
-
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    assert!(!manager.exists(&session_name));
-
-    // 4. Resume agent (simulate `muster resume`)
-    manager.create(&session_name, &worktree_path, Some("sleep 60"))?;
-    if let Some(agent) = storage.get_mut(agent_id) {
-        agent.set_status(tenex::Status::Running);
-    }
-
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    assert!(manager.exists(&session_name));
-
-    // 5. Kill agent (simulate `muster kill`)
+    // 3. Kill agent (simulate `muster kill`)
     let _ = manager.kill(&session_name);
     let _ = worktree_mgr.remove(&branch);
     storage.remove(agent_id);
