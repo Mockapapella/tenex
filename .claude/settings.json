@@ -3,7 +3,12 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(--no-verify|SKIP=)'; then echo 'Bypassing pre-commit hooks is not allowed. Address the pre-commit errors in the codebase without modifying any configuration files (or adding allow/except handlers to try to cheat/mask the sloppy code). You need to actually fix the problems.'; exit 2; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -re '.tool_input.command | select(test(\"(^|\\\\s)(--no-verify|SKIP=|--amend)(\\\\s|$)\"))' >/dev/null 2>&1 && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Do not bypass pre-commit hooks. Fix the actual errors.\"}}' || true"
+          }
+        ]
       }
     ]
   }

@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
+use tracing::{debug, error, info};
 
 /// Manager for tmux sessions
 #[derive(Debug, Clone, Copy, Default)]
@@ -21,7 +22,10 @@ impl Manager {
     ///
     /// Returns an error if the session cannot be created
     pub fn create(&self, name: &str, working_dir: &Path, command: Option<&str>) -> Result<()> {
+        debug!(name, ?working_dir, command, "Creating tmux session");
+
         if self.exists(name) {
+            error!(name, "Session already exists");
             bail!("Session '{name}' already exists");
         }
 
@@ -42,9 +46,11 @@ impl Manager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(name, %stderr, "Failed to create session");
             bail!("Failed to create session '{name}': {stderr}");
         }
 
+        info!(name, "Tmux session created");
         Ok(())
     }
 
@@ -54,6 +60,8 @@ impl Manager {
     ///
     /// Returns an error if the session cannot be killed
     pub fn kill(&self, name: &str) -> Result<()> {
+        debug!(name, "Killing tmux session");
+
         let output = Command::new("tmux")
             .arg("kill-session")
             .arg("-t")
@@ -63,9 +71,11 @@ impl Manager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(name, %stderr, "Failed to kill session");
             bail!("Failed to kill session '{name}': {stderr}");
         }
 
+        info!(name, "Tmux session killed");
         Ok(())
     }
 
@@ -198,6 +208,8 @@ impl Manager {
         working_dir: &Path,
         command: Option<&str>,
     ) -> Result<u32> {
+        debug!(session, window_name, ?working_dir, "Creating tmux window");
+
         let mut cmd = Command::new("tmux");
         cmd.arg("new-window")
             .arg("-d") // Don't switch to the new window
@@ -219,6 +231,7 @@ impl Manager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(session, window_name, %stderr, "Failed to create window");
             bail!("Failed to create window in session '{session}': {stderr}");
         }
 
@@ -229,6 +242,7 @@ impl Manager {
             .parse::<u32>()
             .context("Failed to parse window index")?;
 
+        info!(session, window_name, window_index, "Tmux window created");
         Ok(window_index)
     }
 
@@ -239,6 +253,8 @@ impl Manager {
     /// Returns an error if the window cannot be killed
     pub fn kill_window(&self, session: &str, window_index: u32) -> Result<()> {
         let target = format!("{session}:{window_index}");
+        debug!(%target, "Killing tmux window");
+
         let output = Command::new("tmux")
             .arg("kill-window")
             .arg("-t")
@@ -248,9 +264,11 @@ impl Manager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(%target, %stderr, "Failed to kill window");
             bail!("Failed to kill window '{target}': {stderr}");
         }
 
+        debug!(%target, "Tmux window killed");
         Ok(())
     }
 
@@ -258,6 +276,44 @@ impl Manager {
     #[must_use]
     pub fn window_target(session: &str, window_index: u32) -> String {
         format!("{session}:{window_index}")
+    }
+
+    /// List all windows in a session with their indices and names
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the windows cannot be listed
+    pub fn list_windows(&self, session: &str) -> Result<Vec<Window>> {
+        let output = Command::new("tmux")
+            .arg("list-windows")
+            .arg("-t")
+            .arg(session)
+            .arg("-F")
+            .arg("#{window_index}:#{window_name}")
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let windows = stdout
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.splitn(2, ':').collect();
+                if parts.len() >= 2 {
+                    Some(Window {
+                        index: parts[0].parse().ok()?,
+                        name: parts[1].to_string(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(windows)
     }
 
     /// Resize a tmux window to specific dimensions
@@ -295,6 +351,15 @@ pub struct Session {
     pub created: i64,
     /// Whether a client is attached to this session
     pub attached: bool,
+}
+
+/// Information about a tmux window
+#[derive(Debug, Clone)]
+pub struct Window {
+    /// Window index
+    pub index: u32,
+    /// Window name
+    pub name: String,
 }
 
 #[cfg(test)]

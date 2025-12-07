@@ -43,12 +43,27 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::WARN.into()),
-        )
-        .init();
+    // Log to /tmp/tenex.log - tail with: tail -f /tmp/tenex.log
+    // Set DEBUG=0-3 to control verbosity (0=off, 1=warn, 2=info, 3=debug)
+    let debug_level = std::env::var("DEBUG")
+        .ok()
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(0);
+
+    if debug_level > 0 {
+        let level = match debug_level {
+            1 => tracing::Level::WARN,
+            2 => tracing::Level::INFO,
+            _ => tracing::Level::DEBUG,
+        };
+
+        let file_appender = tracing_appender::rolling::never("/tmp", "tenex.log");
+        tracing_subscriber::fmt()
+            .with_writer(file_appender)
+            .with_max_level(level)
+            .with_ansi(false)
+            .init();
+    }
 
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,

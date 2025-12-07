@@ -3,6 +3,7 @@
 use crate::agent::{Agent, Status, Storage};
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 /// Main application state
 #[derive(Debug)]
@@ -173,6 +174,7 @@ impl App {
 
     /// Enter a new application mode
     pub fn enter_mode(&mut self, mode: Mode) {
+        debug!(new_mode = ?mode, old_mode = ?self.mode, "Entering mode");
         let should_clear = matches!(
             mode,
             Mode::Creating
@@ -189,6 +191,7 @@ impl App {
 
     /// Exit the current mode and return to normal mode
     pub fn exit_mode(&mut self) {
+        debug!(old_mode = ?self.mode, "Exiting mode");
         self.mode = Mode::Normal;
         self.input_buffer.clear();
     }
@@ -196,6 +199,7 @@ impl App {
     /// Set an error message and show the error modal
     pub fn set_error(&mut self, message: impl Into<String>) {
         let msg = message.into();
+        warn!(error = %msg, "Application error");
         self.last_error = Some(msg.clone());
         self.mode = Mode::ErrorModal(msg);
     }

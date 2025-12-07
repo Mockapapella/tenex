@@ -6,6 +6,7 @@ use crate::git::{self, DiffGenerator, WorktreeManager};
 use crate::prompts;
 use crate::tmux::{OutputCapture, SessionManager};
 use anyhow::{Context, Result};
+use tracing::{debug, info, warn};
 
 use super::state::{App, ConfirmAction, Mode};
 
@@ -144,7 +145,14 @@ impl Actions {
     ///
     /// Returns an error if agent creation fails
     pub fn create_agent(self, app: &mut App, title: &str, prompt: Option<&str>) -> Result<()> {
+        debug!(title, prompt, "Creating new agent");
+
         if app.storage.len() >= app.config.max_agents {
+            warn!(
+                max = app.config.max_agents,
+                current = app.storage.len(),
+                "Maximum agents reached"
+            );
             app.set_error(format!(
                 "Maximum agents ({}) reached",
                 app.config.max_agents
@@ -169,7 +177,7 @@ impl Actions {
         let agent = Agent::new(
             title.to_string(),
             app.config.default_program.clone(),
-            branch,
+            branch.clone(),
             worktree_path.clone(),
             prompt.map(String::from),
         );
@@ -193,6 +201,7 @@ impl Actions {
         app.storage.add(agent);
         app.storage.save()?;
 
+        info!(title, %branch, "Agent created successfully");
         app.set_status(format!("Created agent: {title}"));
         Ok(())
     }
@@ -205,6 +214,15 @@ impl Actions {
             let session = agent.tmux_session.clone();
             let worktree_name = agent.branch.clone();
             let window_index = agent.window_index;
+            let title = agent.title.clone();
+
+            info!(
+                %title,
+                %agent_id,
+                is_root,
+                %session,
+                "Killing agent"
+            );
 
             if is_root {
                 // Root agent: kill entire session and worktree
@@ -230,6 +248,7 @@ impl Actions {
                 // Get the root's session for killing windows
                 let root = app.storage.root_ancestor(agent_id);
                 let root_session = root.map(|r| r.tmux_session.clone()).unwrap_or(session);
+                let parent_id = agent.parent_id;
 
                 // Kill descendant windows first
                 let descendants = app.storage.descendants(agent_id);
@@ -243,6 +262,12 @@ impl Actions {
                 if let Some(idx) = window_index {
                     let _ = self.session_manager.kill_window(&root_session, idx);
                 }
+
+                // Sync window indices for siblings after deletion
+                // This handles the case where tmux renumbers windows
+                if let Some(pid) = parent_id {
+                    self.sync_sibling_window_indices(app, pid, &root_session, agent_id);
+                }
             }
 
             // Remove agent and all descendants from storage
@@ -251,6 +276,10 @@ impl Actions {
             app.validate_selection();
             app.storage.save()?;
 
+            // Immediately update preview/diff to show the newly selected agent
+            let _ = self.update_preview(app);
+            let _ = self.update_diff(app);
+
             app.set_status("Agent killed");
         }
         Ok(())
@@ -258,13 +287,28 @@ impl Actions {
 
     /// Pause the selected agent
     fn pause_agent(self, app: &mut App) -> Result<()> {
-        if let Some(agent) = app.selected_agent_mut() {
-            if agent.status.can_pause() {
-                let _ = self.session_manager.kill(&agent.tmux_session);
-                agent.set_status(Status::Paused);
+        // Extract info before mutable borrow
+        let agent_info = app.selected_agent().map(|a| {
+            (
+                a.title.clone(),
+                a.tmux_session.clone(),
+                a.status.can_pause(),
+                a.status,
+            )
+        });
+
+        if let Some((title, session, can_pause, status)) = agent_info {
+            if can_pause {
+                debug!(%title, %session, "Pausing agent");
+                let _ = self.session_manager.kill(&session);
+                if let Some(agent) = app.selected_agent_mut() {
+                    agent.set_status(Status::Paused);
+                }
                 app.storage.save()?;
+                info!(%title, "Agent paused");
                 app.set_status("Agent paused");
             } else {
+                warn!(%title, ?status, "Agent cannot be paused");
                 app.set_error("Agent cannot be paused");
             }
         }
@@ -277,6 +321,7 @@ impl Actions {
         let agent_info = app.selected_agent().and_then(|agent| {
             if agent.status.can_resume() {
                 Some((
+                    agent.title.clone(),
                     agent.tmux_session.clone(),
                     agent.worktree_path.clone(),
                     agent.program.clone(),
@@ -288,7 +333,8 @@ impl Actions {
 
         let preview_dims = app.preview_dimensions;
 
-        if let Some((session, worktree_path, program)) = agent_info {
+        if let Some((title, session, worktree_path, program)) = agent_info {
+            debug!(%title, %session, %program, "Resuming agent");
             self.session_manager
                 .create(&session, &worktree_path, Some(&program))?;
 
@@ -301,8 +347,10 @@ impl Actions {
                 agent.set_status(Status::Running);
             }
             app.storage.save()?;
+            info!(%title, "Agent resumed");
             app.set_status("Agent resumed");
-        } else if app.selected_agent().is_some() {
+        } else if let Some(agent) = app.selected_agent() {
+            warn!(title = %agent.title, status = ?agent.status, "Agent cannot be resumed");
             app.set_error("Agent cannot be resumed");
         }
         Ok(())
@@ -437,6 +485,13 @@ impl Actions {
         let count = app.child_count;
         let parent_id = app.spawning_under;
 
+        info!(
+            count,
+            ?parent_id,
+            task_len = task.len(),
+            "Spawning child agents"
+        );
+
         // Determine the root agent and session/worktree to use
         let (root_session, worktree_path, branch, parent_agent_id) = if let Some(pid) = parent_id {
             // Adding children to existing agent
@@ -549,6 +604,7 @@ impl Actions {
         }
 
         app.storage.save()?;
+        info!(count, parent_id = %parent_agent_id, "Child agents spawned successfully");
         app.set_status(format!("Spawned {count} child agents"));
         Ok(())
     }
@@ -564,12 +620,16 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
         if !app.storage.has_children(agent.id) {
+            warn!(agent_id = %agent.id, title = %agent.title, "No children to synthesize");
             app.set_error("Selected agent has no children to synthesize");
             return Ok(());
         }
 
         let parent_id = agent.id;
         let parent_session = agent.tmux_session.clone();
+        let parent_title = agent.title.clone();
+
+        info!(%parent_id, %parent_title, "Synthesizing children into parent");
 
         // Collect findings from all children
         let children = app.storage.children(parent_id);
@@ -599,6 +659,7 @@ impl Actions {
 
         // Kill all children (and their descendants)
         let child_ids: Vec<_> = children.iter().map(|c| c.id).collect();
+        let children_count = child_ids.len();
         for child_id in child_ids {
             // Kill the window
             if let Some(child) = app.storage.get(child_id)
@@ -614,6 +675,7 @@ impl Actions {
 
         app.validate_selection();
         app.storage.save()?;
+        info!(%parent_title, children_count, "Synthesis complete");
         app.set_status("Synthesized findings into parent agent");
         Ok(())
     }
@@ -687,8 +749,14 @@ impl Actions {
         }
 
         if sent_count > 0 {
+            info!(
+                sent_count,
+                message_len = message.len(),
+                "Broadcast sent to leaf agents"
+            );
             app.set_status(format!("Broadcast sent to {sent_count} agent(s)"));
         } else {
+            warn!(%agent_id, "No leaf agents found to broadcast to");
             app.set_error("No leaf agents found to broadcast to");
         }
 
@@ -739,10 +807,12 @@ impl Actions {
             if agent.status == Status::Starting || agent.status == Status::Running {
                 if self.session_manager.exists(&agent.tmux_session) {
                     if agent.status == Status::Starting {
+                        debug!(title = %agent.title, "Agent status: Starting -> Running");
                         agent.set_status(Status::Running);
                         changed = true;
                     }
                 } else {
+                    debug!(title = %agent.title, old_status = ?agent.status, "Agent status: -> Stopped (session not found)");
                     agent.set_status(Status::Stopped);
                     changed = true;
                 }
@@ -754,6 +824,45 @@ impl Actions {
         }
 
         Ok(())
+    }
+
+    /// Sync window indices for sibling agents after one is deleted
+    ///
+    /// This handles the case where tmux has `renumber-windows on` and
+    /// window indices shift after a window is deleted.
+    fn sync_sibling_window_indices(
+        self,
+        app: &mut App,
+        parent_id: uuid::Uuid,
+        session: &str,
+        deleted_agent_id: uuid::Uuid,
+    ) {
+        // Get the current window list from tmux
+        let Ok(windows) = self.session_manager.list_windows(session) else {
+            return;
+        };
+
+        // Build a map of window name -> index
+        let window_map: std::collections::HashMap<String, u32> =
+            windows.into_iter().map(|w| (w.name, w.index)).collect();
+
+        // Update each sibling's window index based on its title matching the window name
+        let siblings: Vec<_> = app
+            .storage
+            .children(parent_id)
+            .iter()
+            .filter(|a| a.id != deleted_agent_id)
+            .map(|a| (a.id, a.title.clone()))
+            .collect();
+
+        for (agent_id, title) in siblings {
+            if let Some(&new_index) = window_map.get(&title)
+                && let Some(agent) = app.storage.get_mut(agent_id)
+                && agent.window_index != Some(new_index)
+            {
+                agent.window_index = Some(new_index);
+            }
+        }
     }
 }
 
@@ -1622,5 +1731,294 @@ mod tests {
 
         // Should handle both root and child agents without panicking
         handler.resize_agent_windows(&app);
+    }
+
+    #[test]
+    fn test_pause_agent_cannot_pause() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent that's already paused
+        let mut agent = Agent::new(
+            "paused".to_string(),
+            "claude".to_string(),
+            "muster/paused".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Paused);
+        app.storage.add(agent);
+
+        // Try to pause - should set error
+        handler.pause_agent(&mut app)?;
+        assert!(app.last_error.is_some());
+        assert!(
+            app.last_error
+                .as_ref()
+                .ok_or("Expected error")?
+                .contains("cannot be paused")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_pause_agent_stopped_cannot_pause() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent that's stopped
+        let mut agent = Agent::new(
+            "stopped".to_string(),
+            "claude".to_string(),
+            "muster/stopped".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Stopped);
+        app.storage.add(agent);
+
+        // Try to pause - should set error
+        handler.pause_agent(&mut app)?;
+        assert!(app.last_error.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_resume_agent_cannot_resume() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent that's already running
+        let mut agent = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Running);
+        app.storage.add(agent);
+
+        // Try to resume - should set error
+        handler.resume_agent(&mut app)?;
+        assert!(app.last_error.is_some());
+        assert!(
+            app.last_error
+                .as_ref()
+                .ok_or("Expected error")?
+                .contains("cannot be resumed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_kill_agent_root() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a root agent
+        app.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Kill should work (session doesn't exist, but should not error)
+        handler.kill_agent(&mut app)?;
+        assert_eq!(app.storage.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_kill_agent_child() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a root agent (expanded to show children)
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add a child agent
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 2,
+            },
+        );
+        app.storage.add(child);
+
+        // Select the child (it's the second visible agent)
+        app.select_next();
+
+        // Kill child should remove just the child
+        handler.kill_agent(&mut app)?;
+        assert_eq!(app.storage.len(), 1);
+        assert!(app.storage.get(root_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_kill_agent_with_descendants() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a root agent
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add children
+        for i in 0..3 {
+            app.storage.add(Agent::new_child(
+                format!("child{i}"),
+                "claude".to_string(),
+                "muster/root".to_string(),
+                PathBuf::from("/tmp"),
+                None,
+                ChildConfig {
+                    parent_id: root_id,
+                    tmux_session: root_session.clone(),
+                    window_index: i + 2,
+                },
+            ));
+        }
+
+        // Kill root should remove all
+        handler.kill_agent(&mut app)?;
+        assert_eq!(app.storage.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_attach_to_agent_no_session() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent with non-existent session
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "nonexistent-session".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Attach should fail
+        let result = handler.attach_to_agent(&mut app);
+        assert!(result.is_err());
+        assert!(app.last_error.is_some());
+    }
+
+    #[test]
+    fn test_broadcast_to_leaves_with_agent_no_children() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent with no children
+        app.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Broadcast should set error when no children
+        handler.broadcast_to_leaves(&mut app, "test message")?;
+        assert!(app.last_error.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_broadcast_to_leaves_with_children() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a root agent (expanded to show children)
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add children (leaves)
+        for i in 0..2 {
+            app.storage.add(Agent::new_child(
+                format!("child{i}"),
+                "claude".to_string(),
+                "muster/root".to_string(),
+                PathBuf::from("/tmp"),
+                None,
+                ChildConfig {
+                    parent_id: root_id,
+                    tmux_session: root_session.clone(),
+                    window_index: i + 2,
+                },
+            ));
+        }
+
+        // Broadcast when sessions don't exist - send_keys fails, so no messages sent
+        // This exercises the "No leaf agents found" path since send_keys fails
+        handler.broadcast_to_leaves(&mut app, "test message")?;
+        // Since sessions don't exist, send_keys fails and error is set
+        assert!(app.last_error.is_some());
+        Ok(())
     }
 }

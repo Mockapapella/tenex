@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::Repository;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{debug, info};
 
 /// Manager for git worktree operations
 pub struct Manager<'a> {
@@ -62,6 +63,8 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree or branch cannot be created
     pub fn create_with_new_branch(&self, path: &Path, branch: &str) -> Result<()> {
+        debug!(branch, ?path, "Creating worktree with new branch");
+
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create parent directory {}", parent.display())
@@ -89,6 +92,7 @@ impl<'a> Manager<'a> {
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
 
+        info!(branch, ?path, "Worktree created");
         Ok(())
     }
 
@@ -102,6 +106,8 @@ impl<'a> Manager<'a> {
     /// This function is idempotent and does not return errors for missing
     /// worktrees or branches.
     pub fn remove(&self, name: &str) -> Result<()> {
+        debug!(name, "Removing worktree and branch");
+
         // Worktree name has slashes replaced with dashes
         let worktree_name = name.replace('/', "-");
 
@@ -118,6 +124,7 @@ impl<'a> Manager<'a> {
             if wt_path.exists() {
                 let _ = fs::remove_dir_all(&wt_path);
             }
+            debug!(name, "Worktree pruned");
         }
 
         // Always try to delete the branch (critical for cleanup)
@@ -125,6 +132,7 @@ impl<'a> Manager<'a> {
         let branch_mgr = super::BranchManager::new(self.repo);
         let _ = branch_mgr.delete(name);
 
+        info!(name, "Worktree removed");
         Ok(())
     }
 
