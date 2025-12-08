@@ -197,7 +197,12 @@ fn handle_key_event(
             match code {
                 KeyCode::Enter => {
                     let input = app.input_buffer.clone();
-                    if !input.is_empty() || matches!(app.mode, Mode::ReconnectPrompt) {
+                    if !input.is_empty()
+                        || matches!(
+                            app.mode,
+                            Mode::ReconnectPrompt | Mode::Prompting | Mode::ChildPrompt
+                        )
+                    {
                         // Remember the original mode before the action
                         let original_mode = app.mode.clone();
                         let result = match app.mode {
@@ -205,9 +210,21 @@ fn handle_key_event(
                             Mode::Prompting => {
                                 let short_id = &Uuid::new_v4().to_string()[..8];
                                 let title = format!("Agent ({short_id})");
-                                action_handler.create_agent(app, &title, Some(&input))
+                                let prompt = if input.is_empty() {
+                                    None
+                                } else {
+                                    Some(input.as_str())
+                                };
+                                action_handler.create_agent(app, &title, prompt)
                             }
-                            Mode::ChildPrompt => action_handler.spawn_children(app, &input),
+                            Mode::ChildPrompt => {
+                                let prompt = if input.is_empty() {
+                                    None
+                                } else {
+                                    Some(input.as_str())
+                                };
+                                action_handler.spawn_children(app, prompt)
+                            }
                             Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
                             Mode::ReconnectPrompt => {
                                 // Update the prompt in the conflict info and reconnect

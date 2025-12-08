@@ -217,7 +217,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 
     // Try to spawn children - should detect conflict
     let handler = Actions::new();
-    handler.spawn_children(&mut app, "swarm-task")?;
+    handler.spawn_children(&mut app, Some("swarm-task"))?;
 
     // Should be in Confirming(WorktreeConflict) mode
     assert!(
@@ -283,7 +283,7 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
 
     // Trigger conflict detection - use the same task so branch names match
     let handler = Actions::new();
-    handler.spawn_children(&mut app, task)?;
+    handler.spawn_children(&mut app, Some(task))?;
 
     // Verify we're in conflict mode with swarm info
     assert!(
@@ -388,7 +388,7 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
 
     // Trigger conflict detection
     let handler = Actions::new();
-    handler.spawn_children(&mut app, "swarm-recreate")?;
+    handler.spawn_children(&mut app, Some("swarm-recreate"))?;
 
     // Verify we're in conflict mode
     assert!(matches!(
@@ -456,7 +456,7 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
     app.child_count = 2;
 
     let handler2 = Actions::new();
-    handler2.spawn_children(&mut app, "child task")?;
+    handler2.spawn_children(&mut app, Some("child task"))?;
 
     // Should NOT be in conflict mode - should have spawned directly
     assert!(

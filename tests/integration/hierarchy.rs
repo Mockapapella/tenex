@@ -25,7 +25,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     // Create a root agent with 3 children (swarm)
     app.child_count = 3;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "test-swarm");
+    let result = handler.spawn_children(&mut app, Some("test-swarm"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(()); // Skip if creation fails
@@ -66,7 +66,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, "grandchild-task");
+    let result = handler.spawn_children(&mut app, Some("grandchild-task"));
     if result.is_err() {
         // Cleanup and skip
         let manager = SessionManager::new();
@@ -173,7 +173,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     // Create a swarm with children
     app.child_count = 2;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "id-test");
+    let result = handler.spawn_children(&mut app, Some("id-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(());
@@ -233,7 +233,7 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     // Create a swarm with 3 children
     app.child_count = 3;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "descending-test");
+    let result = handler.spawn_children(&mut app, Some("descending-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(());
@@ -303,7 +303,7 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     // Create a swarm with root + 3 children
     app.child_count = 3;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "original-swarm");
+    let result = handler.spawn_children(&mut app, Some("original-swarm"));
     if let Err(e) = result {
         std::env::set_current_dir(&original_dir)?;
         return Err(format!("Swarm creation failed: {e:#}").into());

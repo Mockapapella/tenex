@@ -267,7 +267,7 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     // Create a root agent with children (swarm) to get a proper tmux session
     app.child_count = 1;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "test-swarm");
+    let result = handler.spawn_children(&mut app, Some("test-swarm"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(()); // Skip if creation fails

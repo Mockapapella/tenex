@@ -597,9 +597,8 @@ impl Actions {
             app.spawning_under = None;
             app.child_count = child_count;
 
-            // Call spawn_children with the task/prompt
-            let task = conflict.prompt.as_deref().unwrap_or(&conflict.title);
-            self.spawn_children(app, task)
+            // Call spawn_children with the task/prompt (if any)
+            self.spawn_children(app, conflict.prompt.as_deref())
         } else {
             // Single agent creation
             self.create_agent_internal(
@@ -1355,14 +1354,14 @@ impl Actions {
         clippy::too_many_lines,
         reason = "Complex swarm spawning logic with multiple branches"
     )]
-    pub fn spawn_children(self, app: &mut App, task: &str) -> Result<()> {
+    pub fn spawn_children(self, app: &mut App, task: Option<&str>) -> Result<()> {
         let count = app.child_count;
         let parent_id = app.spawning_under;
 
         info!(
             count,
             ?parent_id,
-            task_len = task.len(),
+            task_len = task.map_or(0, str::len),
             "Spawning child agents"
         );
 
@@ -1381,10 +1380,13 @@ impl Actions {
             )
         } else {
             // Create new root agent first
-            let root_title = if task.len() > 30 {
-                format!("{}...", &task[..27])
-            } else {
-                task.to_string()
+            let root_title = match task {
+                Some(t) if t.len() > 30 => format!("{}...", &t[..27]),
+                Some(t) => t.to_string(),
+                None => {
+                    let short_id = &uuid::Uuid::new_v4().to_string()[..8];
+                    format!("Swarm ({short_id})")
+                }
             };
             let branch = app.config.generate_branch_name(&root_title);
             let worktree_path = app.config.worktree_dir.join(&branch);
@@ -1415,7 +1417,7 @@ impl Actions {
 
                 app.worktree_conflict = Some(WorktreeConflictInfo {
                     title: root_title,
-                    prompt: Some(task.to_string()),
+                    prompt: task.map(String::from),
                     branch,
                     worktree_path,
                     existing_branch,
@@ -1462,11 +1464,13 @@ impl Actions {
         // Create child agents
         // Reserve all window indices upfront to avoid O(n*count) lookups
         let start_window_index = app.storage.reserve_window_indices(parent_agent_id);
-        let child_prompt = if app.use_plan_prompt {
-            prompts::build_plan_prompt(task)
-        } else {
-            task.to_string()
-        };
+        let child_prompt: Option<String> = task.map(|t| {
+            if app.use_plan_prompt {
+                prompts::build_plan_prompt(t)
+            } else {
+                t.to_string()
+            }
+        });
         for i in 0..count {
             // Use pre-reserved window index (cast i to u32 for addition)
             let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
@@ -1477,7 +1481,7 @@ impl Actions {
                 app.config.default_program.clone(),
                 branch.clone(),
                 worktree_path.clone(),
-                Some(child_prompt.clone()),
+                child_prompt.clone(),
                 ChildConfig {
                     parent_id: parent_agent_id,
                     tmux_session: root_session.clone(),
@@ -1487,7 +1491,7 @@ impl Actions {
 
             // Include short ID in title to distinguish agents with same base name
             // Use descriptive names based on agent type
-            let child_title = if app.use_plan_prompt {
+            let child_title = if app.use_plan_prompt && task.is_some() {
                 format!("Planner {} ({})", i + 1, child.short_id())
             } else {
                 format!("Agent {} ({})", i + 1, child.short_id())
@@ -1495,10 +1499,14 @@ impl Actions {
             let mut child = child;
             child.title.clone_from(&child_title);
 
-            // Create window in the root's session with the prompt
-            // Escape both double quotes and backticks (backticks are command substitution in bash)
-            let escaped_prompt = child_prompt.replace('"', "\\\"").replace('`', "\\`");
-            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
+            // Create window in the root's session with the prompt (if any)
+            let command = match &child_prompt {
+                Some(prompt) => {
+                    let escaped_prompt = prompt.replace('"', "\\\"").replace('`', "\\`");
+                    format!("{} \"{escaped_prompt}\"", app.config.default_program)
+                }
+                None => app.config.default_program.clone(),
+            };
             let actual_index = self.session_manager.create_window(
                 &root_session,
                 &child_title,

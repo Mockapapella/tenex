@@ -65,7 +65,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     // Create a swarm with children
     app.child_count = 2;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "synth-confirm-test");
+    let result = handler.spawn_children(&mut app, Some("synth-confirm-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(());
@@ -112,7 +112,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     // Create a swarm with 3 children
     app.child_count = 3;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "synth-desc-test");
+    let result = handler.spawn_children(&mut app, Some("synth-desc-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(());
@@ -148,7 +148,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, "grandchild-task");
+    let result = handler.spawn_children(&mut app, Some("grandchild-task"));
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
@@ -216,7 +216,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     // Create a swarm with 2 children
     app.child_count = 2;
     app.spawning_under = None;
-    let result = handler.spawn_children(&mut app, "synth-gc-test");
+    let result = handler.spawn_children(&mut app, Some("synth-gc-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
         return Ok(());
@@ -247,7 +247,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, "gc-task");
+    let result = handler.spawn_children(&mut app, Some("gc-task"));
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
