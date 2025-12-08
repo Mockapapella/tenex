@@ -383,12 +383,76 @@ fn handle_key_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tenex::agent::Storage;
     use tenex::app::ConfirmAction;
     use tenex::config::Config;
 
+    /// Helper struct that cleans up test worktrees and branches on drop
+    struct TestCleanup {
+        branch_prefix: String,
+    }
+
+    impl TestCleanup {
+        fn new(branch_prefix: &str) -> Self {
+            Self {
+                branch_prefix: branch_prefix.to_string(),
+            }
+        }
+    }
+
+    impl Drop for TestCleanup {
+        fn drop(&mut self) {
+            // Clean up any worktrees/branches created by this test
+            if let Ok(repo) = git2::Repository::open(".") {
+                // Remove worktrees with our prefix
+                if let Ok(worktrees) = repo.worktrees() {
+                    for wt_name in worktrees.iter().flatten() {
+                        if wt_name.starts_with(&self.branch_prefix.replace('/', "-")) {
+                            let _ = repo.find_worktree(wt_name).map(|wt| {
+                                if let Some(path) = wt.path().to_str() {
+                                    let _ = std::fs::remove_dir_all(path);
+                                }
+                                wt.prune(Some(git2::WorktreePruneOptions::new().working_tree(true)))
+                            });
+                        }
+                    }
+                }
+
+                // Remove branches with our prefix
+                if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
+                    for branch_result in branches {
+                        if let Ok((mut branch, _)) = branch_result
+                            && let Some(name) = branch.name().ok().flatten()
+                            && name.starts_with(&self.branch_prefix)
+                        {
+                            let _ = branch.delete();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn create_test_config() -> Config {
+        // Use a unique temp directory for each test process to avoid conflicts
+        // and prevent tests from creating worktrees in the real ~/.tenex directory
+        let pid = std::process::id();
+        Config {
+            worktree_dir: PathBuf::from(format!("/tmp/tenex-test-{pid}")),
+            branch_prefix: format!("tenex-test-{pid}/"),
+            ..Config::default()
+        }
+    }
+
     fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+        App::new(create_test_config(), Storage::default())
+    }
+
+    fn create_test_app_with_cleanup() -> (App, TestCleanup) {
+        let config = create_test_config();
+        let cleanup = TestCleanup::new(&config.branch_prefix);
+        (App::new(config, Storage::default()), cleanup)
     }
 
     #[test]
@@ -748,7 +812,7 @@ mod tests {
     #[test]
     fn test_handle_key_event_creating_mode_enter_with_input()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = create_test_app();
+        let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Creating);
@@ -778,13 +842,14 @@ mod tests {
         assert!(
             app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
         );
+        // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_prompting_mode_enter_with_input()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = create_test_app();
+        let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
         app.enter_mode(Mode::Prompting);
@@ -813,6 +878,7 @@ mod tests {
         assert!(
             app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
         );
+        // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
     }
 
@@ -1055,7 +1121,7 @@ mod tests {
     #[test]
     fn test_handle_key_event_child_prompt_mode_enter_no_agent()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = create_test_app();
+        let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
         app.enter_mode(Mode::ChildPrompt);
@@ -1076,6 +1142,7 @@ mod tests {
             "Expected ErrorModal, Normal, or WorktreeConflict mode, got {:?}",
             app.mode
         );
+        // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
     }
 

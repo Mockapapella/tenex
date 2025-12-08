@@ -1395,10 +1395,12 @@ mod tests {
     use tenex::config::Config;
 
     fn create_test_config() -> Config {
+        // Use a unique temp directory to avoid conflicts with real worktrees
+        let pid = std::process::id();
         Config {
             default_program: "echo".to_string(),
-            branch_prefix: "tenex/".to_string(),
-            worktree_dir: PathBuf::from("/tmp/test-worktrees"),
+            branch_prefix: format!("tenex-render-test-{pid}/"),
+            worktree_dir: PathBuf::from(format!("/tmp/tenex-render-test-{pid}")),
             auto_yes: false,
             poll_interval_ms: 100,
             max_agents: 10,
@@ -1406,11 +1408,12 @@ mod tests {
     }
 
     fn create_test_agent(title: &str, status: Status) -> Agent {
+        let pid = std::process::id();
         let mut agent = Agent::new(
             title.to_string(),
             "echo".to_string(),
-            format!("tenex/{title}"),
-            PathBuf::from(format!("/tmp/{title}")),
+            format!("tenex-render-test-{pid}/{title}"),
+            PathBuf::from(format!("/tmp/tenex-render-test-{pid}/{title}")),
             None,
         );
         agent.set_status(status);
