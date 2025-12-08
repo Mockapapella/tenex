@@ -264,7 +264,7 @@ impl Action {
             Self::NewAgent => "[a]dd agent",
             Self::NewAgentWithPrompt => "[A]dd agent with prompt",
             Self::Attach => "[Enter] into agent",
-            Self::Kill => "[d]elete agent (and descendants)",
+            Self::Kill => "[d]elete agent and sub-agents",
             Self::Push => "Push branch to remote",
             Self::SwitchTab => "[Tab] switch preview/diff",
             Self::NextAgent => "[j] / [↓] next agent",
@@ -279,10 +279,10 @@ impl Action {
             Self::Confirm => "Confirm",
             Self::SpawnChildren => "[S]pawn swarm",
             Self::PlanSwarm => "[P]lanning swarm",
-            Self::AddChildren => "[+] add children",
-            Self::Synthesize => "[s]ynthesize children",
+            Self::AddChildren => "[+] add agents",
+            Self::Synthesize => "[s]ynthesize sub-agent outputs",
             Self::ToggleCollapse => "[Space] collapse/expand",
-            Self::Broadcast => "[B]roadcast to descendants",
+            Self::Broadcast => "[B]roadcast to leaf sub-agents",
             Self::ReviewSwarm => "[R]eview swarm",
         }
     }
