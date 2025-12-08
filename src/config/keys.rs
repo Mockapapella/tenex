@@ -283,7 +283,7 @@ impl Action {
             Self::Synthesize => "[s]ynthesize children",
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to descendants",
-            Self::ReviewSwarm => "[R]eview against branch",
+            Self::ReviewSwarm => "[R]eview swarm",
         }
     }
 
@@ -352,8 +352,8 @@ impl Action {
         Self::Kill,
         Self::SpawnChildren,
         Self::PlanSwarm,
-        Self::AddChildren,
         Self::ReviewSwarm,
+        Self::AddChildren,
         Self::Synthesize,
         Self::Broadcast,
         // Navigation
