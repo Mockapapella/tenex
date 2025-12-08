@@ -198,6 +198,207 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("synth_ignore_term")?;
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage);
+    let handler = tenex::app::Actions::new();
+
+    // Create a swarm with 2 children (non-terminal agents)
+    app.child_count = 2;
+    app.spawning_under = None;
+    let result = handler.spawn_children(&mut app, Some("synth-term-test"));
+    if result.is_err() {
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    // Should have 3 agents (root + 2 children)
+    assert_eq!(app.storage.len(), 3);
+
+    // Select root and spawn a terminal
+    app.selected = 0;
+    let handler = tenex::app::Actions::new();
+    let result = handler.spawn_terminal(&mut app, None);
+    if result.is_err() {
+        let manager = SessionManager::new();
+        for agent in app.storage.iter() {
+            let _ = manager.kill(&agent.tmux_session);
+        }
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    // Should now have 4 agents (root + 2 children + 1 terminal)
+    assert_eq!(app.storage.len(), 4);
+
+    // Verify we have exactly 1 terminal child
+    let root_id = app
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?
+        .id;
+    let terminal_count = app
+        .storage
+        .children(root_id)
+        .into_iter()
+        .filter(|a| a.is_terminal)
+        .count();
+    assert_eq!(terminal_count, 1, "Should have exactly 1 terminal");
+
+    // Select root and synthesize
+    app.selected = 0;
+
+    // Enter confirmation mode and confirm
+    app.enter_mode(tenex::app::Mode::Confirming(
+        tenex::app::ConfirmAction::Synthesize,
+    ));
+    let handler = tenex::app::Actions::new();
+    let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
+    assert!(result.is_ok());
+
+    // Should have 2 agents remaining (root + terminal)
+    // The 2 non-terminal children should be removed, terminal preserved
+    assert_eq!(app.storage.len(), 2);
+
+    // Verify the terminal is still there
+    let remaining_children = app.storage.children(root_id);
+    assert_eq!(remaining_children.len(), 1);
+    assert!(
+        remaining_children[0].is_terminal,
+        "Terminal should be preserved"
+    );
+
+    // Verify synthesis file was created
+    let root = app
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("Root gone")?;
+    let tenex_dir = root.worktree_path.join(".tenex");
+    assert!(tenex_dir.exists(), ".tenex directory should exist");
+
+    // Cleanup
+    let manager = SessionManager::new();
+    for agent in app.storage.iter() {
+        let _ = manager.kill(&agent.tmux_session);
+    }
+
+    std::env::set_current_dir(&original_dir)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("synth_only_term")?;
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage);
+    let handler = tenex::app::Actions::new();
+
+    // Create a single agent (root)
+    let result = handler.create_agent(&mut app, "term-only-root", None);
+    if result.is_err() {
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    app.select_next();
+
+    // Spawn two terminals as children
+    let handler = tenex::app::Actions::new();
+    let result = handler.spawn_terminal(&mut app, None);
+    if result.is_err() {
+        let manager = SessionManager::new();
+        for agent in app.storage.iter() {
+            let _ = manager.kill(&agent.tmux_session);
+        }
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    let handler = tenex::app::Actions::new();
+    let result = handler.spawn_terminal(&mut app, None);
+    if result.is_err() {
+        let manager = SessionManager::new();
+        for agent in app.storage.iter() {
+            let _ = manager.kill(&agent.tmux_session);
+        }
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    // Should have 3 agents (root + 2 terminals)
+    assert_eq!(app.storage.len(), 3);
+
+    // Verify all children are terminals
+    let root_id = app
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?
+        .id;
+    let children = app.storage.children(root_id);
+    assert_eq!(children.len(), 2);
+    assert!(
+        children.iter().all(|c| c.is_terminal),
+        "All children should be terminals"
+    );
+
+    // Select root
+    app.selected = 0;
+
+    // has_children check passes, so we should enter confirmation mode
+    let handler = tenex::app::Actions::new();
+    let result = handler.handle_action(&mut app, tenex::config::Action::Synthesize);
+    assert!(result.is_ok());
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::Synthesize)
+    );
+
+    // Now confirm - this should fail because all children are terminals
+    let handler = tenex::app::Actions::new();
+    let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
+    assert!(result.is_ok());
+
+    // Should show error modal
+    assert!(matches!(app.mode, tenex::app::Mode::ErrorModal(_)));
+
+    // All agents should still exist (nothing was removed)
+    assert_eq!(app.storage.len(), 3);
+
+    // Cleanup
+    let manager = SessionManager::new();
+    for agent in app.storage.iter() {
+        let _ = manager.kill(&agent.tmux_session);
+    }
+
+    std::env::set_current_dir(&original_dir)?;
+
+    Ok(())
+}
+
+#[test]
 fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
         return Ok(());

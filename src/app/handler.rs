@@ -1669,7 +1669,20 @@ impl Actions {
         info!(%parent_id, %parent_title, "Synthesizing descendants into parent");
 
         // Collect findings from all descendants (children, grandchildren, etc.)
-        let descendants = app.storage.descendants(parent_id);
+        // Filter out terminal agents - they are interactive shells, not research agents
+        let descendants: Vec<_> = app
+            .storage
+            .descendants(parent_id)
+            .into_iter()
+            .filter(|d| !d.is_terminal)
+            .collect();
+
+        if descendants.is_empty() {
+            warn!(agent_id = %parent_id, title = %parent_title, "No non-terminal children to synthesize");
+            app.set_error("Selected agent has no non-terminal children to synthesize");
+            return Ok(());
+        }
+
         let mut findings: Vec<(String, String)> = Vec::new();
 
         for descendant in &descendants {
