@@ -105,7 +105,14 @@ fn main() -> Result<()> {
                 let _ = tenex::git::ensure_tenex_excluded(&cwd);
             }
 
-            let app = App::new(config, storage);
+            let mut app = App::new(config, storage);
+
+            // Auto-connect to any existing worktrees
+            let action_handler = tenex::app::Actions::new();
+            if let Err(e) = action_handler.auto_connect_worktrees(&mut app) {
+                eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
+            }
+
             tui::run(app)
         }
     }
