@@ -210,7 +210,7 @@ impl Actions {
                 },
             );
 
-            let child_title = format!("Review {} ({})", i + 1, child.short_id());
+            let child_title = format!("Reviewer {} ({})", i + 1, child.short_id());
             let mut child = child;
             child.title.clone_from(&child_title);
 
@@ -528,7 +528,12 @@ impl Actions {
                 },
             );
 
-            let child_title = format!("Child {} ({})", i + 1, child.short_id());
+            // Use descriptive names based on agent type
+            let child_title = if app.use_plan_prompt {
+                format!("Planner {} ({})", i + 1, child.short_id())
+            } else {
+                format!("Agent {} ({})", i + 1, child.short_id())
+            };
             let mut child = child;
             child.title.clone_from(&child_title);
 
@@ -983,7 +988,12 @@ impl Actions {
             );
 
             // Include short ID in title to distinguish agents with same base name
-            let child_title = format!("Child {} ({})", i + 1, child.short_id());
+            // Use descriptive names based on agent type
+            let child_title = if app.use_plan_prompt {
+                format!("Planner {} ({})", i + 1, child.short_id())
+            } else {
+                format!("Agent {} ({})", i + 1, child.short_id())
+            };
             let mut child = child;
             child.title.clone_from(&child_title);
 
