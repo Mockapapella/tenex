@@ -67,6 +67,9 @@ pub struct App {
 
     /// Cached preview pane dimensions (width, height) for tmux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
+
+    /// Information about a worktree conflict (when creating an agent with existing worktree)
+    pub worktree_conflict: Option<WorktreeConflictInfo>,
 }
 
 impl App {
@@ -91,6 +94,7 @@ impl App {
             child_count: 3,
             spawning_under: None,
             preview_dimensions: None,
+            worktree_conflict: None,
         }
     }
 
@@ -399,6 +403,8 @@ pub enum Mode {
     Broadcasting,
     /// Showing an error modal
     ErrorModal(String),
+    /// Editing prompt after choosing to reconnect to existing worktree
+    ReconnectPrompt,
 }
 
 /// Actions that require confirmation
@@ -412,6 +418,31 @@ pub enum ConfirmAction {
     Quit,
     /// Synthesize children into parent
     Synthesize,
+    /// Worktree already exists - ask to reconnect or recreate
+    WorktreeConflict,
+}
+
+/// Information about an existing worktree that conflicts with a new agent
+#[derive(Debug, Clone)]
+pub struct WorktreeConflictInfo {
+    /// The title the user entered for the new agent
+    pub title: String,
+    /// Optional prompt for the new agent
+    pub prompt: Option<String>,
+    /// The generated branch name
+    pub branch: String,
+    /// The path to the existing worktree
+    pub worktree_path: std::path::PathBuf,
+    /// The branch the existing worktree is based on (if available)
+    pub existing_branch: Option<String>,
+    /// The commit hash of the existing worktree's HEAD (short form)
+    pub existing_commit: Option<String>,
+    /// The current HEAD branch that would be used for a new worktree
+    pub current_branch: String,
+    /// The current HEAD commit hash (short form)
+    pub current_commit: String,
+    /// If this is a swarm creation, the number of children to spawn
+    pub swarm_child_count: Option<usize>,
 }
 
 /// Input mode for text entry
@@ -540,6 +571,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         } = App::default();
 
         // Start at 0 to test scroll operations
@@ -561,6 +593,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         };
 
         app.scroll_down(10);
@@ -598,6 +631,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         } = App::default();
 
         let mut app = App {
@@ -618,6 +652,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         };
         app.scroll_to_top();
         assert_eq!(app.preview_scroll, 0);
@@ -827,6 +862,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         } = App::default();
 
         let mut app = App {
@@ -847,6 +883,7 @@ mod tests {
             child_count,
             spawning_under,
             preview_dimensions,
+            worktree_conflict,
         };
 
         app.reset_scroll();

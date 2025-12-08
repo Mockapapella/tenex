@@ -10,7 +10,7 @@ use std::fs;
 use std::io::Write;
 use tracing::{debug, info, warn};
 
-use super::state::{App, ConfirmAction, Mode};
+use super::state::{App, ConfirmAction, Mode, WorktreeConflictInfo};
 
 /// Handler for application actions
 #[derive(Debug, Clone, Copy)]
@@ -138,6 +138,10 @@ impl Actions {
                 ConfirmAction::Synthesize => {
                     self.synthesize(app)?;
                 }
+                ConfirmAction::WorktreeConflict => {
+                    // This is handled separately in the TUI with R/D keys
+                    // If we get here, just exit mode (like pressing Esc)
+                }
             }
         }
         app.exit_mode();
@@ -145,6 +149,9 @@ impl Actions {
     }
 
     /// Create a new agent
+    ///
+    /// If a worktree with the same name already exists, this will prompt the user
+    /// to either reconnect to the existing worktree or recreate it from scratch.
     ///
     /// # Errors
     ///
@@ -172,18 +179,59 @@ impl Actions {
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
-        // If worktree/branch already exists, remove it first to start fresh
+        // Check if worktree/branch already exists - prompt user for action
         if worktree_mgr.exists(&branch) {
-            worktree_mgr.remove(&branch)?;
+            debug!(branch, "Worktree already exists, prompting user");
+
+            // Get current HEAD info for new worktree context
+            let (current_branch, current_commit) = worktree_mgr
+                .head_info()
+                .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+
+            // Try to get existing worktree info
+            let (existing_branch, existing_commit) = worktree_mgr
+                .worktree_head_info(&branch)
+                .map(|(b, c)| (Some(b), Some(c)))
+                .unwrap_or((None, None));
+
+            app.worktree_conflict = Some(WorktreeConflictInfo {
+                title: title.to_string(),
+                prompt: prompt.map(String::from),
+                branch: branch.clone(),
+                worktree_path: worktree_path.clone(),
+                existing_branch,
+                existing_commit,
+                current_branch,
+                current_commit,
+                swarm_child_count: None, // Not a swarm creation
+            });
+            app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+            return Ok(());
         }
 
-        worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
+        self.create_agent_internal(app, title, prompt, &branch, &worktree_path)
+    }
+
+    /// Internal function to actually create the agent after conflict resolution
+    fn create_agent_internal(
+        self,
+        app: &mut App,
+        title: &str,
+        prompt: Option<&str>,
+        branch: &str,
+        worktree_path: &std::path::Path,
+    ) -> Result<()> {
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo = git::open_repository(&repo_path)?;
+        let worktree_mgr = WorktreeManager::new(&repo);
+
+        worktree_mgr.create_with_new_branch(worktree_path, branch)?;
 
         let agent = Agent::new(
             title.to_string(),
             app.config.default_program.clone(),
-            branch.clone(),
-            worktree_path.clone(),
+            branch.to_string(),
+            worktree_path.to_path_buf(),
             prompt.map(String::from),
         );
 
@@ -194,7 +242,7 @@ impl Actions {
         }
 
         self.session_manager
-            .create(&agent.tmux_session, &worktree_path, Some(&command))?;
+            .create(&agent.tmux_session, worktree_path, Some(&command))?;
 
         // Resize the new session to match preview dimensions
         if let Some((width, height)) = app.preview_dimensions {
@@ -209,6 +257,212 @@ impl Actions {
         info!(title, %branch, "Agent created successfully");
         app.set_status(format!("Created agent: {title}"));
         Ok(())
+    }
+
+    /// Reconnect to an existing worktree (user chose to keep it)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tmux session cannot be created or storage fails
+    pub fn reconnect_to_worktree(self, app: &mut App) -> Result<()> {
+        let conflict = app
+            .worktree_conflict
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("No worktree conflict info available"))?;
+
+        debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Reconnecting to existing worktree");
+
+        // Check if this is a swarm creation (has child count)
+        if let Some(child_count) = conflict.swarm_child_count {
+            // Create root agent for swarm
+            let root_agent = Agent::new(
+                conflict.title.clone(),
+                app.config.default_program.clone(),
+                conflict.branch.clone(),
+                conflict.worktree_path.clone(),
+                None, // Root doesn't get the prompt
+            );
+
+            let root_session = root_agent.tmux_session.clone();
+            let root_id = root_agent.id;
+
+            // Create the root's tmux session
+            self.session_manager.create(
+                &root_session,
+                &conflict.worktree_path,
+                Some(&app.config.default_program),
+            )?;
+
+            // Resize the session to match preview dimensions
+            if let Some((width, height)) = app.preview_dimensions {
+                let _ = self
+                    .session_manager
+                    .resize_window(&root_session, width, height);
+            }
+
+            app.storage.add(root_agent);
+
+            // Now spawn the children
+            let task = conflict.prompt.as_deref().unwrap_or("");
+            self.spawn_children_for_root(
+                app,
+                &root_session,
+                &conflict.worktree_path,
+                &conflict.branch,
+                root_id,
+                child_count,
+                task,
+            )?;
+
+            info!(title = %conflict.title, branch = %conflict.branch, child_count, "Reconnected swarm to existing worktree");
+            app.set_status(format!("Reconnected swarm: {}", conflict.title));
+        } else {
+            // Single agent reconnect
+            let agent = Agent::new(
+                conflict.title.clone(),
+                app.config.default_program.clone(),
+                conflict.branch.clone(),
+                conflict.worktree_path.clone(),
+                conflict.prompt.clone(),
+            );
+
+            let mut command = app.config.default_program.clone();
+            if let Some(ref p) = conflict.prompt {
+                command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
+            }
+
+            self.session_manager.create(
+                &agent.tmux_session,
+                &conflict.worktree_path,
+                Some(&command),
+            )?;
+
+            // Resize the new session to match preview dimensions
+            if let Some((width, height)) = app.preview_dimensions {
+                let _ = self
+                    .session_manager
+                    .resize_window(&agent.tmux_session, width, height);
+            }
+
+            app.storage.add(agent);
+
+            info!(title = %conflict.title, branch = %conflict.branch, "Reconnected to existing worktree");
+            app.set_status(format!("Reconnected to: {}", conflict.title));
+        }
+
+        app.storage.save()?;
+        Ok(())
+    }
+
+    /// Spawn child agents for an existing root agent
+    ///
+    /// This is a helper used by both `spawn_children` and `reconnect_to_worktree`
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Helper needs all context from caller"
+    )]
+    fn spawn_children_for_root(
+        self,
+        app: &mut App,
+        root_session: &str,
+        worktree_path: &std::path::Path,
+        branch: &str,
+        parent_id: uuid::Uuid,
+        count: usize,
+        task: &str,
+    ) -> Result<()> {
+        let start_window_index = app.storage.reserve_window_indices(parent_id);
+        let plan_prompt = prompts::build_plan_prompt(task);
+
+        for i in 0..count {
+            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
+
+            let child = Agent::new_child(
+                String::new(),
+                app.config.default_program.clone(),
+                branch.to_string(),
+                worktree_path.to_path_buf(),
+                Some(plan_prompt.clone()),
+                ChildConfig {
+                    parent_id,
+                    tmux_session: root_session.to_string(),
+                    window_index,
+                },
+            );
+
+            let child_title = format!("Child {} ({})", i + 1, child.short_id());
+            let mut child = child;
+            child.title.clone_from(&child_title);
+
+            let command = format!(
+                "{} \"{}\"",
+                app.config.default_program,
+                plan_prompt.replace('"', "\\\"")
+            );
+            let actual_index = self.session_manager.create_window(
+                root_session,
+                &child_title,
+                worktree_path,
+                Some(&command),
+            )?;
+
+            if let Some((width, height)) = app.preview_dimensions {
+                let window_target = SessionManager::window_target(root_session, actual_index);
+                let _ = self
+                    .session_manager
+                    .resize_window(&window_target, width, height);
+            }
+
+            child.window_index = Some(actual_index);
+            app.storage.add(child);
+        }
+
+        // Expand the parent to show children
+        if let Some(parent) = app.storage.get_mut(parent_id) {
+            parent.collapsed = false;
+        }
+
+        Ok(())
+    }
+
+    /// Recreate the worktree (user chose to delete and start fresh)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worktree cannot be removed/recreated or agent creation fails
+    pub fn recreate_worktree(self, app: &mut App) -> Result<()> {
+        let conflict = app
+            .worktree_conflict
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("No worktree conflict info available"))?;
+
+        debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Recreating worktree from scratch");
+
+        // Remove existing worktree first
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo = git::open_repository(&repo_path)?;
+        let worktree_mgr = WorktreeManager::new(&repo);
+        worktree_mgr.remove(&conflict.branch)?;
+
+        // Check if this is a swarm creation
+        if let Some(child_count) = conflict.swarm_child_count {
+            // Set up app state for spawn_children
+            app.spawning_under = None;
+            app.child_count = child_count;
+
+            // Call spawn_children with the task/prompt
+            let task = conflict.prompt.as_deref().unwrap_or(&conflict.title);
+            self.spawn_children(app, task)
+        } else {
+            // Single agent creation
+            self.create_agent_internal(
+                app,
+                &conflict.title,
+                conflict.prompt.as_deref(),
+                &conflict.branch,
+                &conflict.worktree_path,
+            )
+        }
     }
 
     /// Kill the selected agent (and all its descendants)
@@ -458,6 +712,10 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Complex swarm spawning logic with multiple branches"
+    )]
     pub fn spawn_children(self, app: &mut App, task: &str) -> Result<()> {
         let count = app.child_count;
         let parent_id = app.spawning_under;
@@ -495,6 +753,42 @@ impl Actions {
             let repo = git::open_repository(&repo_path)?;
 
             let worktree_mgr = WorktreeManager::new(&repo);
+
+            // Check if worktree/branch already exists - prompt user for action
+            let branch_exists = worktree_mgr.exists(&branch);
+            debug!(
+                branch,
+                branch_exists, "Checking if worktree exists for swarm"
+            );
+            if branch_exists {
+                debug!(branch, "Worktree already exists for swarm, prompting user");
+
+                // Get current HEAD info for new worktree context
+                let (current_branch, current_commit) = worktree_mgr
+                    .head_info()
+                    .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+
+                // Try to get existing worktree info
+                let (existing_branch, existing_commit) = worktree_mgr
+                    .worktree_head_info(&branch)
+                    .map(|(b, c)| (Some(b), Some(c)))
+                    .unwrap_or((None, None));
+
+                app.worktree_conflict = Some(WorktreeConflictInfo {
+                    title: root_title,
+                    prompt: Some(task.to_string()),
+                    branch,
+                    worktree_path,
+                    existing_branch,
+                    existing_commit,
+                    current_branch,
+                    current_commit,
+                    swarm_child_count: Some(count),
+                });
+                app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+                return Ok(());
+            }
+
             worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
             let root_agent = Agent::new(
@@ -1907,5 +2201,110 @@ mod tests {
         // Since sessions don't exist, send_keys fails and error is set
         assert!(app.last_error.is_some());
         Ok(())
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_no_conflict_info() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No conflict info set - should error
+        let result = handler.reconnect_to_worktree(&mut app);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_recreate_worktree_no_conflict_info() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No conflict info set - should error
+        let result = handler.recreate_worktree(&mut app);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_spawn_children_for_root_no_session() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add a root agent (the session won't exist)
+        let root = Agent::new(
+            "root".to_string(),
+            "echo".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        app.storage.add(root);
+
+        // Calling spawn_children_for_root should fail because the session doesn't exist
+        let result = handler.spawn_children_for_root(
+            &mut app,
+            "nonexistent-session",
+            &PathBuf::from("/tmp"),
+            "test-branch",
+            root_id,
+            2,
+            "test task",
+        );
+
+        // This should error because the session doesn't exist
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
+    fn test_worktree_conflict_info_struct() {
+        use crate::app::WorktreeConflictInfo;
+
+        let mut app = create_test_app();
+
+        // Set up conflict info manually
+        app.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "test".to_string(),
+            prompt: Some("test prompt".to_string()),
+            branch: "tenex/test".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp/test"),
+            existing_branch: Some("tenex/test".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+
+        // Verify the conflict info is set
+        assert!(app.worktree_conflict.is_some());
+        let info = app.worktree_conflict.as_ref().unwrap();
+        assert_eq!(info.title, "test");
+        assert_eq!(info.swarm_child_count, None);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
+    fn test_worktree_conflict_info_swarm() {
+        use crate::app::WorktreeConflictInfo;
+
+        let mut app = create_test_app();
+
+        // Set up conflict info for a swarm
+        app.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "swarm".to_string(),
+            prompt: Some("swarm task".to_string()),
+            branch: "tenex/swarm".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp/swarm"),
+            existing_branch: Some("tenex/swarm".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: Some(3),
+        });
+
+        let info = app.worktree_conflict.as_ref().unwrap();
+        assert_eq!(info.swarm_child_count, Some(3));
     }
 }

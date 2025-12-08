@@ -257,6 +257,68 @@ impl<'a> Manager<'a> {
 
         Ok(())
     }
+
+    /// Get the HEAD commit information for the main repository
+    ///
+    /// Returns (`branch_name`, `short_commit_hash`)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if HEAD cannot be read
+    pub fn head_info(&self) -> Result<(String, String)> {
+        let head = self.repo.head().context("Failed to get HEAD")?;
+        let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
+
+        let branch_name = if head.is_branch() {
+            head.shorthand()
+                .map_or_else(|| "HEAD".to_string(), String::from)
+        } else {
+            "HEAD (detached)".to_string()
+        };
+
+        let short_hash = commit.id().to_string()[..7].to_string();
+
+        Ok((branch_name, short_hash))
+    }
+
+    /// Get the HEAD commit information for an existing worktree
+    ///
+    /// Returns (`branch_name`, `short_commit_hash`) if the worktree exists and has a valid HEAD
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worktree or its HEAD cannot be read
+    pub fn worktree_head_info(&self, name: &str) -> Result<(String, String)> {
+        let worktree_name = name.replace('/', "-");
+        let worktree = self
+            .repo
+            .find_worktree(&worktree_name)
+            .with_context(|| format!("Worktree not found: {name}"))?;
+
+        // Open the worktree as a repository to get its HEAD
+        let wt_repo = git2::Repository::open(worktree.path()).with_context(|| {
+            format!(
+                "Failed to open worktree repository at {}",
+                worktree.path().display()
+            )
+        })?;
+
+        let head = wt_repo.head().context("Failed to get worktree HEAD")?;
+        let commit = head
+            .peel_to_commit()
+            .context("Failed to get worktree HEAD commit")?;
+
+        let branch_name = if head.is_branch() {
+            head.shorthand()
+                .map_or_else(|| "HEAD".to_string(), String::from)
+        } else {
+            "HEAD (detached)".to_string()
+        };
+
+        let short_hash = commit.id().to_string()[..7].to_string();
+
+        Ok((branch_name, short_hash))
+    }
 }
 
 /// Information about a worktree
@@ -600,6 +662,48 @@ mod tests {
         // The marker file should not exist (fresh worktree)
         assert!(!marker_file.exists());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_head_info() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let (branch, commit) = manager.head_info()?;
+
+        // Should be on master/main branch
+        assert!(branch == "master" || branch == "main");
+        // Commit hash should be 7 characters
+        assert_eq!(commit.len(), 7);
+        Ok(())
+    }
+
+    #[test]
+    fn test_worktree_head_info() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        // Create a worktree first
+        let wt_path = temp_dir.path().join("worktrees").join("feature-info");
+        manager.create_with_new_branch(&wt_path, "feature-info-test")?;
+
+        let (branch, commit) = manager.worktree_head_info("feature-info-test")?;
+
+        // Should be on the feature branch
+        assert_eq!(branch, "feature-info-test");
+        // Commit hash should be 7 characters
+        assert_eq!(commit.len(), 7);
+        Ok(())
+    }
+
+    #[test]
+    fn test_worktree_head_info_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let result = manager.worktree_head_info("nonexistent-worktree");
+        assert!(result.is_err());
         Ok(())
     }
 }

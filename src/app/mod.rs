@@ -6,4 +6,4 @@ mod state;
 
 pub use event::{Event, Handler};
 pub use handler::Actions;
-pub use state::{App, ConfirmAction, InputMode, Mode, Tab};
+pub use state::{App, ConfirmAction, InputMode, Mode, Tab, WorktreeConflictInfo};

@@ -18,7 +18,7 @@ use ratatui::{
 use std::io;
 use std::process::Command;
 use std::time::Duration;
-use tenex::app::{Actions, App, Event, Handler, Mode};
+use tenex::app::{Actions, App, ConfirmAction, Event, Handler, Mode};
 use tenex::config::Action;
 
 /// Run the TUI application
@@ -184,11 +184,17 @@ fn handle_key_event(
     modifiers: KeyModifiers,
 ) -> Result<()> {
     match &app.mode {
-        Mode::Creating | Mode::Prompting | Mode::ChildPrompt | Mode::Broadcasting => {
+        Mode::Creating
+        | Mode::Prompting
+        | Mode::ChildPrompt
+        | Mode::Broadcasting
+        | Mode::ReconnectPrompt => {
             match code {
                 KeyCode::Enter => {
                     let input = app.input_buffer.clone();
-                    if !input.is_empty() {
+                    if !input.is_empty() || matches!(app.mode, Mode::ReconnectPrompt) {
+                        // Remember the original mode before the action
+                        let original_mode = app.mode.clone();
                         let result = match app.mode {
                             Mode::Creating => action_handler.create_agent(app, &input, None),
                             Mode::Prompting => {
@@ -196,6 +202,14 @@ fn handle_key_event(
                             }
                             Mode::ChildPrompt => action_handler.spawn_children(app, &input),
                             Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
+                            Mode::ReconnectPrompt => {
+                                // Update the prompt in the conflict info and reconnect
+                                if let Some(ref mut conflict) = app.worktree_conflict {
+                                    conflict.prompt =
+                                        if input.is_empty() { None } else { Some(input) };
+                                }
+                                action_handler.reconnect_to_worktree(app)
+                            }
                             _ => Ok(()),
                         };
                         if let Err(e) = result {
@@ -203,10 +217,22 @@ fn handle_key_event(
                             // Don't call exit_mode() - set_error already set ErrorModal mode
                             return Ok(());
                         }
+                        // Only exit mode if it wasn't changed by the action
+                        // (e.g., create_agent might set Confirming mode for worktree conflicts)
+                        if app.mode == original_mode {
+                            app.exit_mode();
+                        }
+                        return Ok(());
                     }
                     app.exit_mode();
                 }
-                KeyCode::Esc => app.exit_mode(),
+                KeyCode::Esc => {
+                    // For ReconnectPrompt, cancel and clear conflict info
+                    if matches!(app.mode, Mode::ReconnectPrompt) {
+                        app.worktree_conflict = None;
+                    }
+                    app.exit_mode();
+                }
                 KeyCode::Char(c) => app.handle_char(c),
                 KeyCode::Backspace => app.handle_backspace(),
                 _ => {}
@@ -220,10 +246,33 @@ fn handle_key_event(
             KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
             _ => {}
         },
-        Mode::Confirming(_) => match code {
-            KeyCode::Char('y' | 'Y') => return action_handler.handle_action(app, Action::Confirm),
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => app.exit_mode(),
-            _ => {}
+        Mode::Confirming(action) => match action {
+            ConfirmAction::WorktreeConflict => match code {
+                KeyCode::Char('r' | 'R') => {
+                    // Transition to ReconnectPrompt mode to allow editing the prompt
+                    // Pre-fill input buffer with existing prompt if available
+                    if let Some(ref conflict) = app.worktree_conflict {
+                        app.input_buffer = conflict.prompt.clone().unwrap_or_default();
+                    }
+                    app.enter_mode(Mode::ReconnectPrompt);
+                }
+                KeyCode::Char('d' | 'D') => {
+                    app.exit_mode();
+                    action_handler.recreate_worktree(app)?;
+                }
+                KeyCode::Esc => {
+                    app.worktree_conflict = None;
+                    app.exit_mode();
+                }
+                _ => {}
+            },
+            _ => match code {
+                KeyCode::Char('y' | 'Y') => {
+                    return action_handler.handle_action(app, Action::Confirm);
+                }
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => app.exit_mode(),
+                _ => {}
+            },
         },
         Mode::Help => app.exit_mode(),
         Mode::ErrorModal(_) => app.dismiss_error(),
@@ -616,13 +665,24 @@ mod tests {
         // Enter with input tries to create agent (will fail without git repo, but sets error)
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // On error, should show error modal; on success, should be in normal mode
+        // Possible outcomes:
+        // 1. Error modal (no git repo)
+        // 2. Normal mode (agent created successfully)
+        // 3. Confirming(WorktreeConflict) if worktree already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
-            "Expected ErrorModal or Normal mode"
+            matches!(app.mode, Mode::ErrorModal(_))
+                || app.mode == Mode::Normal
+                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
+            app.mode
         );
-        // Error should be set since we're not in a git repo, or agent was created
-        assert!(app.last_error.is_some() || app.storage.len() == 1);
+        // One of these should be true:
+        // - Error was set (no git repo or other failure)
+        // - Agent was created
+        // - Worktree conflict detected (waiting for user input)
+        assert!(
+            app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
+        );
         Ok(())
     }
 
@@ -640,13 +700,24 @@ mod tests {
         // Enter with input tries to create agent with prompt (will fail without git repo)
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // On error, should show error modal; on success, should be in normal mode
+        // Possible outcomes (same as creating mode test):
+        // 1. Error modal (no git repo)
+        // 2. Normal mode (agent created successfully)
+        // 3. Confirming(WorktreeConflict) if worktree already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
-            "Expected ErrorModal or Normal mode"
+            matches!(app.mode, Mode::ErrorModal(_))
+                || app.mode == Mode::Normal
+                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
+            app.mode
         );
-        // Error should be set since we're not in a git repo, or agent was created
-        assert!(app.last_error.is_some() || app.storage.len() == 1);
+        // One of these should be true:
+        // - Error was set (no git repo or other failure)
+        // - Agent was created
+        // - Worktree conflict detected (waiting for user input)
+        assert!(
+            app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
+        );
         Ok(())
     }
 
@@ -902,9 +973,12 @@ mod tests {
         handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // On error, should show error modal; on success with no agent, exits normally
+        // Could also enter WorktreeConflict mode if the branch already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_)) || app.mode == Mode::Normal,
-            "Expected ErrorModal or Normal mode, got {:?}",
+            matches!(app.mode, Mode::ErrorModal(_))
+                || app.mode == Mode::Normal
+                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            "Expected ErrorModal, Normal, or WorktreeConflict mode, got {:?}",
             app.mode
         );
         Ok(())

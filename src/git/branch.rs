@@ -333,4 +333,14 @@ mod tests {
         assert!(result.is_err());
         Ok(())
     }
+
+    #[test]
+    fn test_manager_debug() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let debug = format!("{manager:?}");
+        assert!(debug.contains("Manager"));
+        Ok(())
+    }
 }

@@ -81,6 +81,21 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "Enter message to broadcast to leaf agents:",
             &app.input_buffer,
         ),
+        Mode::ReconnectPrompt => {
+            let title = app.worktree_conflict.as_ref().map_or("Reconnect", |c| {
+                if c.swarm_child_count.is_some() {
+                    "Reconnect Swarm"
+                } else {
+                    "Reconnect Agent"
+                }
+            });
+            render_input_overlay(
+                frame,
+                title,
+                "Edit prompt (or leave empty):",
+                &app.input_buffer,
+            );
+        }
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
                 tenex::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
@@ -176,8 +191,18 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ]
                     },
                 ),
+                tenex::app::ConfirmAction::WorktreeConflict => {
+                    // This case is handled by render_worktree_conflict_overlay
+                    vec![]
+                }
             };
-            render_confirm_overlay(frame, lines);
+
+            // Special handling for worktree conflict with different buttons
+            if matches!(action, tenex::app::ConfirmAction::WorktreeConflict) {
+                render_worktree_conflict_overlay(frame, app);
+            } else {
+                render_confirm_overlay(frame, lines);
+            }
         }
         Mode::ErrorModal(message) => render_error_modal(frame, message),
         _ => {}
@@ -722,6 +747,145 @@ fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "UI layout requires verbose styling code"
+)]
+fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
+    let Some(conflict) = &app.worktree_conflict else {
+        return;
+    };
+
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            "Worktree Already Exists",
+            Style::default()
+                .fg(colors::MODAL_BORDER_WARNING)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("A worktree for \"{}\" already exists.", conflict.title),
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )),
+        Line::from(""),
+    ];
+
+    // Show existing worktree info
+    lines.push(Line::from(Span::styled(
+        "Existing worktree:",
+        Style::default()
+            .fg(colors::TEXT_DIM)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    if let Some(ref branch) = conflict.existing_branch {
+        lines.push(Line::from(vec![
+            Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(branch.clone(), Style::default().fg(colors::TEXT_PRIMARY)),
+        ]));
+    }
+
+    if let Some(ref commit) = conflict.existing_commit {
+        lines.push(Line::from(vec![
+            Span::styled("  Commit: ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(commit.clone(), Style::default().fg(colors::TEXT_MUTED)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Show what a new worktree would be based on
+    lines.push(Line::from(Span::styled(
+        "New worktree would be based on:",
+        Style::default()
+            .fg(colors::TEXT_DIM)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
+        Span::styled(
+            conflict.current_branch.clone(),
+            Style::default().fg(colors::TEXT_PRIMARY),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Commit: ", Style::default().fg(colors::TEXT_DIM)),
+        Span::styled(
+            conflict.current_commit.clone(),
+            Style::default().fg(colors::TEXT_MUTED),
+        ),
+    ]));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "What would you like to do?",
+        Style::default().fg(colors::TEXT_PRIMARY),
+    )));
+    lines.push(Line::from(""));
+
+    // Add the choice buttons
+    lines.push(Line::from(vec![
+        Span::styled(
+            "[R]",
+            Style::default()
+                .fg(colors::ACCENT_POSITIVE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "econnect to existing worktree",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "    (you can edit the prompt before starting)",
+        Style::default().fg(colors::TEXT_MUTED),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "[D]",
+            Style::default()
+                .fg(colors::ACCENT_NEGATIVE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "elete and create new from ",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        ),
+        Span::styled(
+            conflict.current_branch.clone(),
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "[Esc]",
+            Style::default()
+                .fg(colors::TEXT_MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" Cancel", Style::default().fg(colors::TEXT_MUTED)),
+    ]));
+
+    // Height: content lines + 2 for borders
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+    let area = centered_rect_absolute(60, height, frame.area());
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Worktree Conflict ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
 /// Calculate the inner dimensions of the preview pane (content area without borders)
 ///
 /// This is used to resize tmux windows to match the preview pane size.
@@ -1202,5 +1366,102 @@ mod tests {
         assert_eq!(width, 26);
         // Height = 10 - 1 - 1 - 2 = 6
         assert_eq!(height, 6);
+    }
+
+    #[test]
+    fn test_render_worktree_conflict_overlay() -> Result<(), Box<dyn std::error::Error>> {
+        use tenex::app::WorktreeConflictInfo;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up worktree conflict info
+        app.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "test-agent".to_string(),
+            prompt: Some("test prompt".to_string()),
+            branch: "tenex/test-agent".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp/worktrees/test-agent"),
+            existing_branch: Some("tenex/test-agent".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+        app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_worktree_conflict_overlay_swarm() -> Result<(), Box<dyn std::error::Error>> {
+        use tenex::app::WorktreeConflictInfo;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up worktree conflict info for a swarm
+        app.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "swarm-root".to_string(),
+            prompt: Some("swarm task".to_string()),
+            branch: "tenex/swarm-root".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp/worktrees/swarm-root"),
+            existing_branch: Some("tenex/swarm-root".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: Some(3),
+        });
+        app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_reconnect_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+        use tenex::app::WorktreeConflictInfo;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up for reconnect prompt mode
+        app.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "test-agent".to_string(),
+            prompt: Some("original prompt".to_string()),
+            branch: "tenex/test-agent".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp/worktrees/test-agent"),
+            existing_branch: Some("tenex/test-agent".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+        app.enter_mode(Mode::ReconnectPrompt);
+        app.handle_char('t');
+        app.handle_char('e');
+        app.handle_char('s');
+        app.handle_char('t');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
     }
 }
