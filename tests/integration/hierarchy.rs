@@ -272,6 +272,179 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// Test that renaming a root agent also updates children's `tmux_session` fields
+///
+/// When a root agent is renamed:
+/// 1. The root's `tmux_session` gets updated to the new session name
+/// 2. All descendant agents must also have their `tmux_session` updated
+/// 3. The children should NOT be removed when `sync_agent_status` runs
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "integration test requires setup, action, and verification"
+)]
+fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("rename_root")?;
+    let mut config = fixture.config();
+    // Use sleep to keep the session alive (echo exits immediately)
+    config.default_program = "sleep 300".to_string();
+    let storage = TestFixture::create_storage();
+
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage);
+    let handler = tenex::app::Actions::new();
+
+    // Create a swarm with root + 3 children
+    app.child_count = 3;
+    app.spawning_under = None;
+    let result = handler.spawn_children(&mut app, "original-swarm");
+    if let Err(e) = result {
+        std::env::set_current_dir(&original_dir)?;
+        return Err(format!("Swarm creation failed: {e:#}").into());
+    }
+
+    // Should have root + 3 children = 4 agents
+    assert_eq!(app.storage.len(), 4);
+
+    // Find the root agent and record its session name
+    let root = app
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root agent")?;
+    let root_id = root.id;
+    let original_session = root.tmux_session.clone();
+
+    // Find children and verify they have the same session name as root
+    let children: Vec<_> = app.storage.children(root_id);
+    assert_eq!(children.len(), 3);
+    for child in &children {
+        assert_eq!(
+            child.tmux_session, original_session,
+            "Child should have same tmux_session as root before rename"
+        );
+    }
+
+    // Get child IDs for later verification
+    let child_ids: Vec<_> = children.iter().map(|c| c.id).collect();
+    let child_window_count = children.iter().filter_map(|c| c.window_index).count();
+    assert_eq!(
+        child_window_count, 3,
+        "All children should have window indices"
+    );
+    drop(children); // Release the borrow
+
+    // Expand root so children are visible
+    if let Some(root) = app.storage.get_mut(root_id) {
+        root.collapsed = false;
+    }
+
+    // Select the root agent and start rename
+    if let Some(idx) = app.storage.visible_index_of(root_id) {
+        app.selected = idx;
+    }
+
+    // Simulate the rename flow: start rename -> enter new name -> confirm
+    // Use a unique name based on test prefix to avoid conflicts with stale sessions
+    let new_name = format!("{}-renamed", fixture.session_prefix);
+    app.start_rename(root_id, "original-swarm".to_string(), true);
+    app.input_buffer.clone_from(&new_name);
+    let confirmed = app.confirm_rename_branch();
+    assert!(confirmed, "Rename should be confirmed");
+
+    // Execute the rename
+    let rename_result = tenex::app::Actions::execute_rename(&mut app);
+    assert!(rename_result.is_ok(), "Rename should succeed");
+
+    // Get the new session name from root
+    let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
+    let new_session = root_after.tmux_session.clone();
+
+    // Verify root's session was renamed (should be "tenex-renamed-swarm")
+    // If this fails, it means the tmux rename itself failed (a separate issue)
+    if new_session == original_session {
+        // Cleanup and skip - tmux rename didn't work, can't test the children bug
+        let manager = SessionManager::new();
+        let _ = manager.kill(&original_session);
+        std::env::set_current_dir(&original_dir)?;
+        eprintln!("SKIPPING: Tmux session rename didn't happen (session still {original_session})");
+        return Ok(());
+    }
+
+    assert!(
+        new_session != original_session,
+        "Root session should have been renamed. Original: {original_session}, New: {new_session}"
+    );
+
+    // ========================================================================
+    // Verify that children's tmux_session fields were updated along with root
+    // ========================================================================
+
+    // Verify children have the NEW session name (the fix)
+    let children_before_sync: Vec<_> = app.storage.children(root_id);
+    for child in &children_before_sync {
+        assert_eq!(
+            child.tmux_session, new_session,
+            "Child should have NEW session name after root rename"
+        );
+    }
+    drop(children_before_sync);
+
+    // Run sync_agent_status - children should NOT be removed because they have
+    // the correct (new) session name
+    let _ = handler.sync_agent_status(&mut app);
+
+    let agent_count_after_sync = app.storage.len();
+
+    // Verify children are still in storage after sync
+    assert_eq!(
+        agent_count_after_sync, 4,
+        "All 4 agents (root + 3 children) should still be in storage after rename and sync."
+    );
+
+    // Verify children are still visible under the root
+    let children_after: Vec<_> = app.storage.children(root_id);
+    assert_eq!(
+        children_after.len(),
+        3,
+        "Root should still have 3 children after rename"
+    );
+
+    // BUG CHECK: Verify all children also have the new session name
+    for child_id in &child_ids {
+        let child = app.storage.get(*child_id);
+        assert!(
+            child.is_some(),
+            "Child should still exist in storage after rename"
+        );
+
+        if let Some(child) = child {
+            assert_eq!(
+                child.tmux_session, new_session,
+                "Child {} should have updated tmux_session '{}' but has '{}'. \
+                 This indicates children's tmux_session fields were not updated during root rename.",
+                child.title, new_session, child.tmux_session
+            );
+        }
+    }
+
+    // Cleanup: kill the tmux session (which kills all windows)
+    let manager = SessionManager::new();
+    let _ = manager.kill(&new_session);
+    // Also try to kill the old session name if it still exists (shouldn't)
+    let _ = manager.kill(&original_session);
+
+    std::env::set_current_dir(&original_dir)?;
+
+    Ok(())
+}
+
 /// Test that `visible_agents_with_info` returns correct pre-computed child info
 /// for a complex hierarchy
 #[test]

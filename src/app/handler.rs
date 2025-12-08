@@ -1050,10 +1050,28 @@ impl Actions {
 
         // Rename tmux session
         let session_manager = SessionManager::new();
-        if let Err(e) = session_manager.rename(&tmux_session, &format!("tenex-{new_name}")) {
+        let new_session_name = format!("tenex-{new_name}");
+        if let Err(e) = session_manager.rename(&tmux_session, &new_session_name) {
             warn!(error = %e, "Failed to rename tmux session");
-        } else if let Some(agent) = app.storage.get_mut(agent_id) {
-            agent.tmux_session = format!("tenex-{new_name}");
+        } else {
+            // Update root agent's tmux_session
+            if let Some(agent) = app.storage.get_mut(agent_id) {
+                agent.tmux_session.clone_from(&new_session_name);
+            }
+
+            // Update all descendants' tmux_session to the new session name
+            let descendant_ids: Vec<uuid::Uuid> = app
+                .storage
+                .descendants(agent_id)
+                .iter()
+                .map(|a| a.id)
+                .collect();
+            for desc_id in descendant_ids {
+                if let Some(desc) = app.storage.get_mut(desc_id) {
+                    desc.tmux_session.clone_from(&new_session_name);
+                }
+            }
+
             app.storage.save()?;
         }
 
