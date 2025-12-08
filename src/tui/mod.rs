@@ -280,6 +280,47 @@ fn handle_key_event(
             KeyCode::Backspace => app.handle_branch_filter_backspace(),
             _ => {}
         },
+        Mode::ConfirmPush => match code {
+            KeyCode::Char('y' | 'Y') => {
+                if let Err(e) = Actions::execute_push(app) {
+                    app.set_error(format!("Push failed: {e:#}"));
+                }
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                app.clear_git_op_state();
+                app.exit_mode();
+            }
+            _ => {}
+        },
+        Mode::RenameBranch => match code {
+            KeyCode::Enter => {
+                if app.confirm_rename_branch()
+                    && let Err(e) = Actions::execute_rename(app)
+                {
+                    app.set_error(format!("Rename failed: {e:#}"));
+                }
+                // If rename failed (empty name), stay in mode
+            }
+            KeyCode::Esc => {
+                app.clear_git_op_state();
+                app.exit_mode();
+            }
+            KeyCode::Char(c) => app.handle_char(c),
+            KeyCode::Backspace => app.handle_backspace(),
+            _ => {}
+        },
+        Mode::ConfirmPushForPR => match code {
+            KeyCode::Char('y' | 'Y') => {
+                if let Err(e) = Actions::execute_push_and_open_pr(app) {
+                    app.set_error(format!("Failed to push and open PR: {e:#}"));
+                }
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                app.clear_git_op_state();
+                app.exit_mode();
+            }
+            _ => {}
+        },
         Mode::Confirming(action) => match action {
             ConfirmAction::WorktreeConflict => match code {
                 KeyCode::Char('r' | 'R') => {
@@ -1281,6 +1322,200 @@ mod tests {
 
         // Should show ReviewInfo mode
         assert_eq!(app.mode, Mode::ReviewInfo);
+        Ok(())
+    }
+
+    // === Git Operations Key Event Tests ===
+
+    #[test]
+    fn test_handle_key_event_confirm_push_mode_no() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPush);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+
+        // 'n' should cancel and exit
+        handle_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.git_op_agent_id.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_mode_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPush);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+
+        // Escape should cancel and exit
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.git_op_agent_id.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_yes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPush);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+
+        // 'y' should try to execute push (will fail, no agent in storage)
+        handle_key_event(&mut app, handler, KeyCode::Char('Y'), KeyModifiers::NONE)?;
+
+        // Should show error (no agent in storage)
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_rename_branch_input() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::RenameBranch);
+        app.git_op_branch_name = "feature/old".to_string();
+        app.input_buffer = "feature/old".to_string();
+
+        // Type some characters
+        handle_key_event(&mut app, handler, KeyCode::Char('-'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('e'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('w'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.input_buffer, "feature/old-new");
+        assert_eq!(app.mode, Mode::RenameBranch);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_rename_branch_backspace() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::RenameBranch);
+        app.input_buffer = "feature/test".to_string();
+
+        handle_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
+
+        assert_eq!(app.input_buffer, "feature/tes");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_rename_branch_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::RenameBranch);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.input_buffer = "feature/test".to_string();
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.git_op_agent_id.is_none()); // State cleared
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_rename_branch_enter() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::RenameBranch);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_original_branch = "feature/old".to_string();
+        app.git_op_branch_name = "feature/old".to_string();
+        app.input_buffer = "feature/new".to_string();
+
+        // Enter tries to confirm rename and execute (will fail without agent)
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        // Branch name should have been updated before failing
+        assert_eq!(app.git_op_branch_name, "feature/new");
+        // Should show error (no agent in storage)
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_for_pr_no() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPushForPR);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+
+        // 'n' should cancel and exit
+        handle_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.git_op_agent_id.is_none()); // State cleared
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_for_pr_escape() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPushForPR);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.git_op_agent_id.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_for_pr_yes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPushForPR);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+        app.git_op_base_branch = "main".to_string();
+
+        // 'y' should try to push and open PR (will fail, no agent in storage)
+        handle_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
+
+        // Should show error (no agent in storage)
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_confirm_push_other_keys_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ConfirmPush);
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+
+        // Other keys should be ignored
+        handle_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        // Should still be in ConfirmPush mode
+        assert_eq!(app.mode, Mode::ConfirmPush);
         Ok(())
     }
 }

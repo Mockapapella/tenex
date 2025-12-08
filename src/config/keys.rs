@@ -15,6 +15,10 @@ pub enum Action {
     Kill,
     /// Push branch to remote
     Push,
+    /// Rename branch (local and remote)
+    RenameBranch,
+    /// Open pull request (push first if needed)
+    OpenPR,
     /// Switch between preview/diff tabs
     SwitchTab,
     /// Select next agent
@@ -58,6 +62,8 @@ pub enum Action {
 pub enum ActionGroup {
     /// Agent creation and management actions
     Agents,
+    /// Git operations (push, rename, PR)
+    GitOps,
     /// Navigation and scrolling actions
     Navigation,
     /// Miscellaneous actions
@@ -72,6 +78,7 @@ impl ActionGroup {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Agents => "Agents",
+            Self::GitOps => "Git Ops",
             Self::Navigation => "Navigation",
             Self::Other => "Other",
             Self::Hidden => "",
@@ -243,6 +250,22 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::NONE,
         action: Action::Quit,
     },
+    // Git operations
+    Binding {
+        code: KeyCode::Char('p'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::Push,
+    },
+    Binding {
+        code: KeyCode::Char('r'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::RenameBranch,
+    },
+    Binding {
+        code: KeyCode::Char('o'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::OpenPR,
+    },
     // Hidden (not shown in help but still functional)
     Binding {
         code: KeyCode::Esc,
@@ -265,7 +288,9 @@ impl Action {
             Self::NewAgentWithPrompt => "[A]dd agent with prompt",
             Self::Attach => "[Enter] into agent",
             Self::Kill => "[d]elete agent and sub-agents",
-            Self::Push => "Push branch to remote",
+            Self::Push => "[Ctrl+p]ush branch to remote",
+            Self::RenameBranch => "[r]ename branch",
+            Self::OpenPR => "[Ctrl+o]pen pull request",
             Self::SwitchTab => "[Tab] switch preview/diff",
             Self::NextAgent => "[j] / [↓] next agent",
             Self::PrevAgent => "[k] / [↑] prev agent",
@@ -313,7 +338,9 @@ impl Action {
             Self::ToggleCollapse => "Space",
             Self::Broadcast => "B",
             Self::ReviewSwarm => "R",
-            Self::Push => "",
+            Self::Push => "Ctrl+p",
+            Self::RenameBranch => "r",
+            Self::OpenPR => "Ctrl+o",
         }
     }
 
@@ -330,6 +357,7 @@ impl Action {
             | Self::Synthesize
             | Self::Broadcast
             | Self::ReviewSwarm => ActionGroup::Agents,
+            Self::Push | Self::RenameBranch | Self::OpenPR => ActionGroup::GitOps,
             Self::Attach
             | Self::ToggleCollapse
             | Self::NextAgent
@@ -340,7 +368,7 @@ impl Action {
             | Self::ScrollTop
             | Self::ScrollBottom => ActionGroup::Navigation,
             Self::Help | Self::Quit => ActionGroup::Other,
-            Self::Push | Self::Cancel | Self::Confirm => ActionGroup::Hidden,
+            Self::Cancel | Self::Confirm => ActionGroup::Hidden,
         }
     }
 
@@ -356,6 +384,10 @@ impl Action {
         Self::AddChildren,
         Self::Synthesize,
         Self::Broadcast,
+        // Git Ops
+        Self::Push,
+        Self::RenameBranch,
+        Self::OpenPR,
         // Navigation
         Self::Attach,
         Self::ToggleCollapse,
@@ -433,6 +465,18 @@ mod tests {
         assert_eq!(
             get_action(KeyCode::Char('d'), KeyModifiers::CONTROL),
             Some(Action::ScrollDown)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            Some(Action::Push)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('r'), KeyModifiers::NONE),
+            Some(Action::RenameBranch)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            Some(Action::OpenPR)
         );
     }
 

@@ -41,6 +41,7 @@ mod colors {
     // Accent (for confirmations)
     pub const ACCENT_POSITIVE: Color = Color::Rgb(120, 180, 120);
     pub const ACCENT_NEGATIVE: Color = Color::Rgb(200, 100, 100);
+    pub const ACCENT_WARNING: Color = Color::Rgb(200, 160, 80);
 }
 
 /// Render the full application UI
@@ -208,6 +209,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::ReviewInfo => render_review_info_overlay(frame),
         Mode::ReviewChildCount => render_review_count_picker_overlay(frame, app),
         Mode::BranchSelector => render_branch_selector_overlay(frame, app),
+        Mode::ConfirmPush => render_confirm_push_overlay(frame, app),
+        Mode::RenameBranch => render_rename_overlay(frame, app),
+        Mode::ConfirmPushForPR => render_confirm_push_for_pr_overlay(frame, app),
         _ => {}
     }
 }
@@ -1140,6 +1144,203 @@ fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
+    let agent = app.git_op_agent_id.and_then(|id| app.storage.get(id));
+
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            "Push Branch to Remote?",
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if let Some(agent) = agent {
+        lines.push(Line::from(vec![
+            Span::styled("  Agent:  ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(
+                &agent.title,
+                Style::default()
+                    .fg(colors::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(
+                &app.git_op_branch_name,
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Agent not found",
+            Style::default().fg(colors::MODAL_BORDER_ERROR),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "[Y]",
+            Style::default()
+                .fg(colors::ACCENT_POSITIVE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("es  ", Style::default().fg(colors::TEXT_PRIMARY)),
+        Span::styled(
+            "[N]",
+            Style::default()
+                .fg(colors::ACCENT_NEGATIVE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("o", Style::default().fg(colors::TEXT_PRIMARY)),
+    ]));
+
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+    let area = centered_rect_absolute(50, height, frame.area());
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Push Branch ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
+    let is_root = app.git_op_is_root_rename;
+
+    let (title, description) = if is_root {
+        (
+            "Rename Agent",
+            "Renames agent title, branch, and tmux session:",
+        )
+    } else {
+        ("Rename Agent", "Renames agent title and tmux window:")
+    };
+
+    // 7 lines of content + 2 for borders = 9 lines
+    let area = centered_rect_absolute(55, 9, frame.area());
+
+    let text = vec![
+        Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            description,
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{}_", &app.input_buffer),
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press Enter to rename, Esc to cancel",
+            Style::default().fg(colors::TEXT_MUTED),
+        )),
+    ];
+
+    let block_title = if is_root {
+        " Rename Agent (+ Branch) "
+    } else {
+        " Rename Agent "
+    };
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title(block_title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
+    // 9 lines of content + 2 for borders = 11 lines
+    let area = centered_rect_absolute(55, 11, frame.area());
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Push and Open Pull Request?",
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "You have unpushed commits.",
+            Style::default().fg(colors::ACCENT_WARNING),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Branch: ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(
+                &app.git_op_branch_name,
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+            Span::styled(" → ", Style::default().fg(colors::TEXT_MUTED)),
+            Span::styled(
+                &app.git_op_base_branch,
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Push commits and open PR in browser?",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(colors::ACCENT_POSITIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("es  ", Style::default().fg(colors::TEXT_PRIMARY)),
+            Span::styled(
+                "[N]",
+                Style::default()
+                    .fg(colors::ACCENT_NEGATIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("o", Style::default().fg(colors::TEXT_PRIMARY)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title(" Open PR ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::ACCENT_POSITIVE)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
 /// Calculate the inner dimensions of the preview pane (content area without borders)
 ///
 /// This is used to resize tmux windows to match the preview pane size.
@@ -1956,6 +2157,128 @@ mod tests {
         app.handle_char('m');
         app.handle_char('s');
         app.handle_char('g');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    // === Push Feature Render Tests ===
+
+    #[test]
+    fn test_render_confirm_push_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Get first agent's ID
+        let agent_id = app.storage.visible_agent_at(0).map(|a| a.id);
+        app.git_op_agent_id = agent_id;
+        app.git_op_branch_name = "feature/test".to_string();
+        app.enter_mode(Mode::ConfirmPush);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirm_push_mode_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set invalid agent ID
+        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op_branch_name = "test".to_string();
+        app.enter_mode(Mode::ConfirmPush);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_rename_root_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.git_op_original_branch = "old-name".to_string();
+        app.input_buffer = "new-name".to_string();
+        app.git_op_is_root_rename = true;
+        app.enter_mode(Mode::RenameBranch);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_rename_subagent_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.git_op_original_branch = "sub-agent".to_string();
+        app.input_buffer = "new-name".to_string();
+        app.git_op_is_root_rename = false;
+        app.enter_mode(Mode::RenameBranch);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_rename_empty_input() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.git_op_original_branch = "test-agent".to_string();
+        app.input_buffer.clear();
+        app.enter_mode(Mode::RenameBranch);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirm_push_for_pr_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.git_op_branch_name = "feature/new-branch".to_string();
+        app.git_op_base_branch = "main".to_string();
+        app.git_op_has_unpushed = true;
+        app.enter_mode(Mode::ConfirmPushForPR);
 
         terminal.draw(|frame| {
             render(frame, &app);

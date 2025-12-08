@@ -19,6 +19,10 @@ pub struct AttachRequest {
 
 /// Main application state
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "app state naturally has multiple boolean flags"
+)]
 pub struct App {
     /// Application configuration
     pub config: Config,
@@ -89,6 +93,25 @@ pub struct App {
 
     /// Selected base branch for review
     pub review_base_branch: Option<String>,
+
+    // === Git Operations (Push, Rename, PR) ===
+    /// Agent ID for git operations (push, rename, PR)
+    pub git_op_agent_id: Option<uuid::Uuid>,
+
+    /// Branch name for operations (current or new name when renaming)
+    pub git_op_branch_name: String,
+
+    /// Original branch name (for rename operations)
+    pub git_op_original_branch: String,
+
+    /// Base branch for PR (detected from git history)
+    pub git_op_base_branch: String,
+
+    /// Whether there are unpushed commits (for PR flow)
+    pub git_op_has_unpushed: bool,
+
+    /// Whether this rename is for a root agent (includes branch rename) or sub-agent (title only)
+    pub git_op_is_root_rename: bool,
 }
 
 impl App {
@@ -119,6 +142,12 @@ impl App {
             review_branch_filter: String::new(),
             review_branch_selected: 0,
             review_base_branch: None,
+            git_op_agent_id: None,
+            git_op_branch_name: String::new(),
+            git_op_original_branch: String::new(),
+            git_op_base_branch: String::new(),
+            git_op_has_unpushed: false,
+            git_op_is_root_rename: false,
         }
     }
 
@@ -213,6 +242,7 @@ impl App {
     /// Enter a new application mode
     pub fn enter_mode(&mut self, mode: Mode) {
         debug!(new_mode = ?mode, old_mode = ?self.mode, "Entering mode");
+        // Don't clear for PushRenameBranch - we pre-fill it with the branch name
         let should_clear = matches!(
             mode,
             Mode::Creating
@@ -308,6 +338,7 @@ impl App {
                 | Mode::Confirming(_)
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
+                | Mode::RenameBranch
         ) {
             self.input_buffer.push(c);
         }
@@ -322,6 +353,7 @@ impl App {
                 | Mode::Confirming(_)
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
+                | Mode::RenameBranch
         ) {
             self.input_buffer.pop();
         }
@@ -496,6 +528,68 @@ impl App {
         self.review_branch_selected = 0;
         self.review_base_branch = None;
     }
+
+    // === Git Operations Methods (Push, Rename, PR) ===
+
+    /// Start the push flow - show confirmation dialog
+    pub fn start_push(&mut self, agent_id: uuid::Uuid, branch_name: String) {
+        self.git_op_agent_id = Some(agent_id);
+        self.git_op_branch_name = branch_name;
+        self.enter_mode(Mode::ConfirmPush);
+    }
+
+    /// Start the rename flow
+    ///
+    /// For root agents (`is_root=true`): Renames branch + agent title + tmux session
+    /// For sub-agents (`is_root=false`): Renames agent title + tmux window only
+    pub fn start_rename(&mut self, agent_id: uuid::Uuid, current_name: String, is_root: bool) {
+        self.git_op_agent_id = Some(agent_id);
+        self.git_op_original_branch = current_name.clone();
+        self.git_op_branch_name.clone_from(&current_name);
+        self.git_op_is_root_rename = is_root;
+        self.input_buffer = current_name;
+        self.enter_mode(Mode::RenameBranch);
+    }
+
+    /// Confirm the branch rename (update `branch_name` from `input_buffer`)
+    pub fn confirm_rename_branch(&mut self) -> bool {
+        let new_name = self.input_buffer.trim().to_string();
+        if new_name.is_empty() {
+            return false;
+        }
+        self.git_op_branch_name = new_name;
+        true
+    }
+
+    /// Start the open PR flow - may show push confirmation first
+    pub fn start_open_pr(
+        &mut self,
+        agent_id: uuid::Uuid,
+        branch_name: String,
+        base_branch: String,
+        has_unpushed: bool,
+    ) {
+        self.git_op_agent_id = Some(agent_id);
+        self.git_op_branch_name = branch_name;
+        self.git_op_base_branch = base_branch;
+        self.git_op_has_unpushed = has_unpushed;
+
+        if has_unpushed {
+            self.enter_mode(Mode::ConfirmPushForPR);
+        } else {
+            // No unpushed commits, will open PR directly (handled in handler)
+        }
+    }
+
+    /// Clear all git operation state
+    pub fn clear_git_op_state(&mut self) {
+        self.git_op_agent_id = None;
+        self.git_op_branch_name.clear();
+        self.git_op_original_branch.clear();
+        self.git_op_base_branch.clear();
+        self.git_op_has_unpushed = false;
+        self.git_op_is_root_rename = false;
+    }
 }
 
 impl Default for App {
@@ -536,6 +630,12 @@ pub enum Mode {
     ReviewChildCount,
     /// Selecting base branch for review
     BranchSelector,
+    /// Confirming push to remote (Y/N)
+    ConfirmPush,
+    /// Renaming branch (input mode) - triggered by 'r' key
+    RenameBranch,
+    /// Confirming push before opening PR (Y/N) - triggered by Ctrl+o
+    ConfirmPushForPR,
 }
 
 /// Actions that require confirmation
@@ -708,6 +808,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         } = App::default();
 
         // Start at 0 to test scroll operations
@@ -735,6 +841,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         };
 
         app.scroll_down(10);
@@ -778,6 +890,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         } = App::default();
 
         let mut app = App {
@@ -804,6 +922,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         };
         app.scroll_to_top();
         assert_eq!(app.preview_scroll, 0);
@@ -1019,6 +1143,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         } = App::default();
 
         let mut app = App {
@@ -1045,6 +1175,12 @@ mod tests {
             review_branch_filter,
             review_branch_selected,
             review_base_branch,
+            git_op_agent_id,
+            git_op_branch_name,
+            git_op_original_branch,
+            git_op_base_branch,
+            git_op_has_unpushed,
+            git_op_is_root_rename,
         };
 
         app.reset_scroll();
@@ -1446,5 +1582,168 @@ mod tests {
         assert!(app.review_branch_filter.is_empty());
         assert_eq!(app.review_branch_selected, 0);
         assert!(app.review_base_branch.is_none());
+    }
+
+    // === Git Operations Tests ===
+
+    #[test]
+    fn test_start_push() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+
+        app.start_push(agent_id, "feature/test".to_string());
+
+        assert_eq!(app.mode, Mode::ConfirmPush);
+        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op_branch_name, "feature/test");
+    }
+
+    #[test]
+    fn test_start_rename_root() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+
+        app.start_rename(agent_id, "my-agent".to_string(), true);
+
+        assert_eq!(app.mode, Mode::RenameBranch);
+        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op_original_branch, "my-agent");
+        assert_eq!(app.git_op_branch_name, "my-agent");
+        assert_eq!(app.input_buffer, "my-agent");
+        assert!(app.git_op_is_root_rename);
+    }
+
+    #[test]
+    fn test_start_rename_subagent() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+
+        app.start_rename(agent_id, "my-subagent".to_string(), false);
+
+        assert_eq!(app.mode, Mode::RenameBranch);
+        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op_original_branch, "my-subagent");
+        assert_eq!(app.git_op_branch_name, "my-subagent");
+        assert_eq!(app.input_buffer, "my-subagent");
+        assert!(!app.git_op_is_root_rename);
+    }
+
+    #[test]
+    fn test_confirm_rename_branch() {
+        let mut app = App {
+            input_buffer: "feature/new-name".to_string(),
+            git_op_branch_name: "feature/old-name".to_string(),
+            ..App::default()
+        };
+
+        let result = app.confirm_rename_branch();
+
+        assert!(result);
+        assert_eq!(app.git_op_branch_name, "feature/new-name");
+    }
+
+    #[test]
+    fn test_confirm_rename_branch_empty() {
+        let mut app = App {
+            input_buffer: "   ".to_string(),
+            git_op_branch_name: "feature/old-name".to_string(),
+            ..App::default()
+        };
+
+        let result = app.confirm_rename_branch();
+
+        assert!(!result);
+        assert_eq!(app.git_op_branch_name, "feature/old-name"); // Unchanged
+    }
+
+    #[test]
+    fn test_start_open_pr_with_unpushed() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+
+        app.start_open_pr(
+            agent_id,
+            "feature/test".to_string(),
+            "main".to_string(),
+            true, // has unpushed commits
+        );
+
+        assert_eq!(app.mode, Mode::ConfirmPushForPR);
+        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op_branch_name, "feature/test");
+        assert_eq!(app.git_op_base_branch, "main");
+        assert!(app.git_op_has_unpushed);
+    }
+
+    #[test]
+    fn test_start_open_pr_no_unpushed() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+
+        app.start_open_pr(
+            agent_id,
+            "feature/test".to_string(),
+            "main".to_string(),
+            false, // no unpushed commits
+        );
+
+        // Mode is not changed when no unpushed commits (handler opens PR directly)
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op_branch_name, "feature/test");
+        assert_eq!(app.git_op_base_branch, "main");
+        assert!(!app.git_op_has_unpushed);
+    }
+
+    #[test]
+    fn test_clear_git_op_state() {
+        let mut app = App {
+            git_op_agent_id: Some(uuid::Uuid::new_v4()),
+            git_op_branch_name: "feature/test".to_string(),
+            git_op_original_branch: "feature/old".to_string(),
+            git_op_base_branch: "main".to_string(),
+            git_op_has_unpushed: true,
+            git_op_is_root_rename: true,
+            ..App::default()
+        };
+
+        app.clear_git_op_state();
+
+        assert!(app.git_op_agent_id.is_none());
+        assert!(app.git_op_branch_name.is_empty());
+        assert!(app.git_op_original_branch.is_empty());
+        assert!(app.git_op_base_branch.is_empty());
+        assert!(!app.git_op_has_unpushed);
+        assert!(!app.git_op_is_root_rename);
+    }
+
+    #[test]
+    fn test_handle_char_rename_branch_mode() {
+        let mut app = App {
+            mode: Mode::RenameBranch,
+            input_buffer: "feature/".to_string(),
+            ..App::default()
+        };
+
+        app.handle_char('t');
+        app.handle_char('e');
+        app.handle_char('s');
+        app.handle_char('t');
+
+        assert_eq!(app.input_buffer, "feature/test");
+    }
+
+    #[test]
+    fn test_handle_backspace_rename_branch_mode() {
+        let mut app = App {
+            mode: Mode::RenameBranch,
+            input_buffer: "feature/test".to_string(),
+            ..App::default()
+        };
+
+        app.handle_backspace();
+        app.handle_backspace();
+
+        assert_eq!(app.input_buffer, "feature/te");
     }
 }
