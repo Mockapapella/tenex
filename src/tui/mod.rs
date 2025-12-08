@@ -20,6 +20,7 @@ use std::process::Command;
 use std::time::Duration;
 use tenex::app::{Actions, App, ConfirmAction, Event, Handler, Mode};
 use tenex::config::Action;
+use uuid::Uuid;
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
@@ -202,7 +203,9 @@ fn handle_key_event(
                         let result = match app.mode {
                             Mode::Creating => action_handler.create_agent(app, &input, None),
                             Mode::Prompting => {
-                                action_handler.create_agent(app, "prompted-agent", Some(&input))
+                                let short_id = &Uuid::new_v4().to_string()[..8];
+                                let title = format!("Agent ({short_id})");
+                                action_handler.create_agent(app, &title, Some(&input))
                             }
                             Mode::ChildPrompt => action_handler.spawn_children(app, &input),
                             Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
