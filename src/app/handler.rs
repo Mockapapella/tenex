@@ -1300,9 +1300,11 @@ impl Actions {
             app.preview_content = String::from("(No agent selected)");
         }
 
-        // Auto-scroll to bottom so the latest output is visible
-        // Use a large value that will be clamped by the render function
-        app.preview_scroll = usize::MAX;
+        // Auto-scroll to bottom only if follow mode is enabled
+        // (disabled when user manually scrolls up, re-enabled when they scroll to bottom)
+        if app.preview_follow {
+            app.preview_scroll = usize::MAX;
+        }
 
         Ok(())
     }

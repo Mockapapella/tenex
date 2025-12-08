@@ -51,6 +51,10 @@ pub struct App {
     /// Scroll position in diff pane
     pub diff_scroll: usize,
 
+    /// Whether preview should auto-scroll to bottom on content updates
+    /// Set to false when user manually scrolls up, true when they scroll to bottom
+    pub preview_follow: bool,
+
     /// Last error message (if any)
     pub last_error: Option<String>,
 
@@ -128,6 +132,7 @@ impl App {
             input_buffer: String::new(),
             preview_scroll: 0,
             diff_scroll: 0,
+            preview_follow: true,
             last_error: None,
             status_message: None,
             preview_content: String::new(),
@@ -191,18 +196,25 @@ impl App {
         self.reset_scroll();
     }
 
-    /// Reset scroll positions for both panes (to bottom)
+    /// Reset scroll positions for both panes
+    /// Preview is pinned to bottom (with follow enabled), Diff is pinned to top
     pub const fn reset_scroll(&mut self) {
-        // Set to max so render functions clamp to bottom of content
+        // Preview: set to max so render functions clamp to bottom of content
         self.preview_scroll = usize::MAX;
-        self.diff_scroll = usize::MAX;
+        self.preview_follow = true;
+        // Diff: set to 0 to show from top
+        self.diff_scroll = 0;
     }
 
     /// Scroll up in the active pane by the given amount
-    pub const fn scroll_up(&mut self, amount: usize) {
+    pub fn scroll_up(&mut self, amount: usize) {
+        // Normalize scroll position first (handles usize::MAX from auto-bottom)
+        self.normalize_scroll();
         match self.active_tab {
             Tab::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_sub(amount);
+                // Disable auto-follow when user scrolls up
+                self.preview_follow = false;
             }
             Tab::Diff => {
                 self.diff_scroll = self.diff_scroll.saturating_sub(amount);
@@ -211,10 +223,14 @@ impl App {
     }
 
     /// Scroll down in the active pane by the given amount
-    pub const fn scroll_down(&mut self, amount: usize) {
+    pub fn scroll_down(&mut self, amount: usize) {
+        // Normalize scroll position first (handles usize::MAX from auto-bottom)
+        self.normalize_scroll();
         match self.active_tab {
             Tab::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_add(amount);
+                // Re-enable auto-follow if we've scrolled to the bottom
+                self.check_preview_follow();
             }
             Tab::Diff => {
                 self.diff_scroll = self.diff_scroll.saturating_add(amount);
@@ -222,10 +238,44 @@ impl App {
         }
     }
 
+    /// Check if preview scroll is at bottom and re-enable follow mode if so
+    fn check_preview_follow(&mut self) {
+        let preview_lines = self.preview_content.lines().count();
+        let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
+        let preview_max = preview_lines.saturating_sub(visible_height);
+
+        if self.preview_scroll >= preview_max {
+            self.preview_follow = true;
+        }
+    }
+
+    /// Normalize scroll positions to be within valid range
+    /// This handles the case where scroll is set to `usize::MAX` for auto-bottom
+    fn normalize_scroll(&mut self) {
+        let preview_lines = self.preview_content.lines().count();
+        let diff_lines = self.diff_content.lines().count();
+
+        // Use preview_dimensions if available, otherwise use a reasonable default
+        let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
+
+        let preview_max = preview_lines.saturating_sub(visible_height);
+        let diff_max = diff_lines.saturating_sub(visible_height);
+
+        if self.preview_scroll > preview_max {
+            self.preview_scroll = preview_max;
+        }
+        if self.diff_scroll > diff_max {
+            self.diff_scroll = diff_max;
+        }
+    }
+
     /// Scroll to the top of the active pane
     pub const fn scroll_to_top(&mut self) {
         match self.active_tab {
-            Tab::Preview => self.preview_scroll = 0,
+            Tab::Preview => {
+                self.preview_scroll = 0;
+                self.preview_follow = false;
+            }
             Tab::Diff => self.diff_scroll = 0,
         }
     }
@@ -234,7 +284,10 @@ impl App {
     pub const fn scroll_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
         let max_scroll = content_lines.saturating_sub(visible_lines);
         match self.active_tab {
-            Tab::Preview => self.preview_scroll = max_scroll,
+            Tab::Preview => {
+                self.preview_scroll = max_scroll;
+                self.preview_follow = true;
+            }
             Tab::Diff => self.diff_scroll = max_scroll,
         }
     }
@@ -794,15 +847,16 @@ mod tests {
             input_buffer,
             preview_scroll: _,
             diff_scroll: _,
+            preview_follow: _,
             last_error,
             status_message,
-            preview_content,
-            diff_content,
+            preview_content: _,
+            diff_content: _,
             attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
-            preview_dimensions,
+            preview_dimensions: _,
             worktree_conflict,
             review_branches,
             review_branch_filter,
@@ -817,6 +871,11 @@ mod tests {
         } = App::default();
 
         // Start at 0 to test scroll operations
+        // Need content and dimensions for scroll normalization to work
+        let content = (0..100)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut app = App {
             config,
             storage,
@@ -826,16 +885,17 @@ mod tests {
             should_quit,
             input_buffer,
             preview_scroll: 0,
+            preview_follow: true,
             diff_scroll: 0,
             last_error,
             status_message,
-            preview_content,
-            diff_content,
+            preview_content: content.clone(),
+            diff_content: content,
             attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
-            preview_dimensions,
+            preview_dimensions: Some((80, 20)), // 20 visible lines
             worktree_conflict,
             review_branches,
             review_branch_filter,
@@ -859,8 +919,8 @@ mod tests {
         assert_eq!(app.preview_scroll, 0);
 
         app.switch_tab();
-        // switch_tab resets scroll to MAX (bottom), scroll_down saturates at MAX
-        assert_eq!(app.diff_scroll, usize::MAX);
+        // switch_tab resets scroll: preview to MAX (bottom), diff to 0 (top)
+        assert_eq!(app.diff_scroll, 0);
     }
 
     #[test]
@@ -876,6 +936,7 @@ mod tests {
             input_buffer,
             preview_scroll: _,
             diff_scroll,
+            preview_follow,
             last_error,
             status_message,
             preview_content,
@@ -908,6 +969,7 @@ mod tests {
             input_buffer,
             preview_scroll: 100,
             diff_scroll,
+            preview_follow,
             last_error,
             status_message,
             preview_content,
@@ -942,9 +1004,16 @@ mod tests {
 
     #[test]
     fn test_scroll_diff_tab() {
+        // Need content and dimensions for scroll normalization to work
+        let content = (0..100)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut app = App {
             active_tab: Tab::Diff,
             diff_scroll: 0,
+            diff_content: content,
+            preview_dimensions: Some((80, 20)), // 20 visible lines
             ..App::default()
         };
 
@@ -1129,6 +1198,7 @@ mod tests {
             input_buffer,
             preview_scroll: _,
             diff_scroll: _,
+            preview_follow: _,
             last_error,
             status_message,
             preview_content,
@@ -1161,6 +1231,7 @@ mod tests {
             input_buffer,
             preview_scroll: 50,
             diff_scroll: 30,
+            preview_follow: false,
             last_error,
             status_message,
             preview_content,
@@ -1185,9 +1256,10 @@ mod tests {
 
         app.reset_scroll();
 
-        // reset_scroll sets to max (bottom) so render functions clamp appropriately
+        // reset_scroll: preview pinned to bottom with follow enabled, diff pinned to top
         assert_eq!(app.preview_scroll, usize::MAX);
-        assert_eq!(app.diff_scroll, usize::MAX);
+        assert_eq!(app.diff_scroll, 0);
+        assert!(app.preview_follow);
     }
 
     #[test]
