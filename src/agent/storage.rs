@@ -4,9 +4,23 @@ use super::Agent;
 use crate::config::Config;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
+
+/// Pre-computed visible agent information for efficient rendering
+#[derive(Debug, Clone)]
+pub struct VisibleAgentInfo<'a> {
+    /// Reference to the agent
+    pub agent: &'a Agent,
+    /// Depth in the tree (0 for root)
+    pub depth: usize,
+    /// Whether this agent has children
+    pub has_children: bool,
+    /// Number of children this agent has
+    pub child_count: usize,
+}
 
 /// Persisted state for all agents
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +272,80 @@ impl Storage {
         depth
     }
 
+    /// Get visible agents with pre-computed child info for efficient rendering.
+    /// This computes child counts in O(n) once, then builds the visible list.
+    /// Use this for rendering instead of calling `has_children`/`child_count` per agent.
+    #[must_use]
+    pub fn visible_agents_with_info(&self) -> Vec<VisibleAgentInfo<'_>> {
+        // Build child count map in single O(n) pass
+        let mut child_counts: HashMap<Uuid, usize> = HashMap::new();
+        for agent in &self.agents {
+            if let Some(parent_id) = agent.parent_id {
+                *child_counts.entry(parent_id).or_insert(0) += 1;
+            }
+        }
+
+        // Build children lookup for efficient tree traversal
+        let mut children_map: HashMap<Uuid, Vec<&Agent>> = HashMap::new();
+        for agent in &self.agents {
+            if let Some(parent_id) = agent.parent_id {
+                children_map.entry(parent_id).or_default().push(agent);
+            }
+        }
+
+        // Collect root agents
+        let roots: Vec<&Agent> = self.agents.iter().filter(|a| a.is_root()).collect();
+
+        // Build visible list with pre-computed info
+        let mut result = Vec::new();
+        for root in roots {
+            self.add_visible_with_info_recursive(
+                root,
+                0,
+                &child_counts,
+                &children_map,
+                &mut result,
+            );
+        }
+        result
+    }
+
+    /// Helper to recursively add visible agents with pre-computed info
+    #[expect(
+        clippy::only_used_in_recursion,
+        reason = "&self is needed for lifetime 'a to tie result to Storage"
+    )]
+    fn add_visible_with_info_recursive<'a>(
+        &'a self,
+        agent: &'a Agent,
+        depth: usize,
+        child_counts: &HashMap<Uuid, usize>,
+        children_map: &HashMap<Uuid, Vec<&'a Agent>>,
+        result: &mut Vec<VisibleAgentInfo<'a>>,
+    ) {
+        let child_count = child_counts.get(&agent.id).copied().unwrap_or(0);
+        result.push(VisibleAgentInfo {
+            agent,
+            depth,
+            has_children: child_count > 0,
+            child_count,
+        });
+
+        if !agent.collapsed
+            && let Some(children) = children_map.get(&agent.id)
+        {
+            for child in children {
+                self.add_visible_with_info_recursive(
+                    child,
+                    depth + 1,
+                    child_counts,
+                    children_map,
+                    result,
+                );
+            }
+        }
+    }
+
     /// Get visible agents (respecting collapsed state) in display order
     /// Returns a list of (agent, depth) tuples for rendering
     #[must_use]
@@ -331,6 +419,22 @@ impl Storage {
             .max()
             .unwrap_or(1);
         max_index + 1
+    }
+
+    /// Reserve multiple consecutive window indices for batch spawning.
+    /// Returns the starting index; use indices start..start+count.
+    /// This is O(n) once instead of O(n*count) for repeated `next_window_index` calls.
+    #[must_use]
+    pub fn reserve_window_indices(&self, root_id: Uuid) -> u32 {
+        // Window 1 is the root, children start at 2
+        let descendants = self.descendants(root_id);
+        let max_index = descendants
+            .iter()
+            .filter_map(|a| a.window_index)
+            .max()
+            .unwrap_or(1);
+        max_index + 1
+        // Caller should use indices: start_index, start_index+1, ..., start_index+count-1
     }
 }
 

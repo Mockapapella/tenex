@@ -6,4 +6,4 @@ mod storage;
 
 pub use instance::{Agent, ChildConfig};
 pub use status::Status;
-pub use storage::Storage;
+pub use storage::{Storage, VisibleAgentInfo};

@@ -195,13 +195,14 @@ fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let visible = app.storage.visible_agents();
+    // Use optimized method that pre-computes child info in O(n) instead of O(n²)
+    let visible = app.storage.visible_agents_with_info();
 
     let items: Vec<ListItem<'_>> = visible
         .iter()
         .enumerate()
-        .map(|(i, (agent, depth))| {
-            let status_color = match agent.status {
+        .map(|(i, info)| {
+            let status_color = match info.agent.status {
                 Status::Starting => colors::STATUS_STARTING,
                 Status::Running => colors::STATUS_RUNNING,
             };
@@ -216,20 +217,18 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             };
 
             // Build indentation based on depth
-            let indent = "    ".repeat(*depth);
+            let indent = "    ".repeat(info.depth);
 
-            // Collapse/expand indicator
-            let has_children = app.storage.has_children(agent.id);
-            let collapse_indicator = if has_children {
-                if agent.collapsed { "▶ " } else { "▼ " }
+            // Collapse/expand indicator (pre-computed)
+            let collapse_indicator = if info.has_children {
+                if info.agent.collapsed { "▶ " } else { "▼ " }
             } else {
                 ""
             };
 
-            // Child count indicator
-            let child_count = app.storage.child_count(agent.id);
-            let count_indicator = if child_count > 0 {
-                format!(" ({child_count})")
+            // Child count indicator (pre-computed)
+            let count_indicator = if info.child_count > 0 {
+                format!(" ({})", info.child_count)
             } else {
                 String::new()
             };
@@ -237,14 +236,14 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             let content = Line::from(vec![
                 Span::raw(indent),
                 Span::styled(
-                    format!("{} ", agent.status.symbol()),
+                    format!("{} ", info.agent.status.symbol()),
                     Style::default().fg(status_color),
                 ),
                 Span::styled(collapse_indicator, Style::default().fg(colors::TEXT_DIM)),
-                Span::styled(&agent.title, style),
+                Span::styled(&info.agent.title, style),
                 Span::styled(count_indicator, Style::default().fg(colors::TEXT_DIM)),
                 Span::styled(
-                    format!(" ({})", agent.age_string()),
+                    format!(" ({})", info.agent.age_string()),
                     Style::default().fg(colors::TEXT_MUTED),
                 ),
             ]);

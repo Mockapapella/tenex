@@ -527,10 +527,12 @@ impl Actions {
         };
 
         // Create child agents
+        // Reserve all window indices upfront to avoid O(n*count) lookups
+        let start_window_index = app.storage.reserve_window_indices(parent_agent_id);
         let plan_prompt = prompts::build_plan_prompt(task);
         for i in 0..count {
-            // Get next window index
-            let window_index = app.storage.next_window_index(parent_agent_id);
+            // Use pre-reserved window index (cast i to u32 for addition)
+            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
 
             // Create child first to get its ID, then build the title with short ID
             let child = Agent::new_child(
@@ -813,11 +815,21 @@ impl Actions {
     pub fn sync_agent_status(self, app: &mut App) -> Result<()> {
         let mut changed = false;
 
+        // Fetch all sessions once instead of calling exists() per agent
+        // This reduces subprocess calls from O(n) to O(1)
+        let active_sessions: std::collections::HashSet<String> = self
+            .session_manager
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+
         // Collect IDs of dead agents to remove
         let dead_agents: Vec<uuid::Uuid> = app
             .storage
             .iter()
-            .filter(|agent| !self.session_manager.exists(&agent.tmux_session))
+            .filter(|agent| !active_sessions.contains(&agent.tmux_session))
             .map(|agent| {
                 debug!(title = %agent.title, "Removing dead agent (session not found)");
                 agent.id

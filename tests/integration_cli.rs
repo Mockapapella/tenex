@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{Repository, Signature};
 use tempfile::TempDir;
-use tenex::agent::{Agent, Storage};
+use tenex::agent::{Agent, ChildConfig, Storage};
+use tenex::app::{Actions, App};
 use tenex::config::Config;
 use tenex::tmux::SessionManager;
 
@@ -1745,6 +1746,307 @@ fn test_git_exclude_tenex_directory() -> Result<(), Box<dyn std::error::Error>> 
     let contents = std::fs::read_to_string(&exclude_path)?;
     let count = contents.matches(".tenex/").count();
     assert_eq!(count, 1, "Should only have one .tenex/ entry");
+
+    Ok(())
+}
+
+// =============================================================================
+// Performance Optimization Tests
+// =============================================================================
+
+/// Helper to create a child agent with specified parent and window index
+fn create_child_agent(parent: &Agent, title: &str, window_index: u32) -> Agent {
+    Agent::new_child(
+        title.to_string(),
+        "echo".to_string(),
+        parent.branch.clone(),
+        parent.worktree_path.clone(),
+        None,
+        ChildConfig {
+            parent_id: parent.id,
+            tmux_session: parent.tmux_session.clone(),
+            window_index,
+        },
+    )
+}
+
+/// Test that `sync_agent_status` correctly removes agents whose sessions don't exist
+/// using the batched session list approach (single tmux list-sessions call)
+#[test]
+fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("sync_batched")?;
+    let manager = SessionManager::new();
+
+    // Create 3 agents in storage
+    let mut storage = Storage::new();
+
+    let agent1 = Agent::new(
+        "agent1".to_string(),
+        "echo".to_string(),
+        fixture.session_name("agent1"),
+        fixture.worktree_dir.path().to_path_buf(),
+        None,
+    );
+    let agent2 = Agent::new(
+        "agent2".to_string(),
+        "echo".to_string(),
+        fixture.session_name("agent2"),
+        fixture.worktree_dir.path().to_path_buf(),
+        None,
+    );
+    let agent3 = Agent::new(
+        "agent3".to_string(),
+        "echo".to_string(),
+        fixture.session_name("agent3"),
+        fixture.worktree_dir.path().to_path_buf(),
+        None,
+    );
+
+    let agent1_session = agent1.tmux_session.clone();
+    storage.add(agent1);
+    storage.add(agent2);
+    storage.add(agent3);
+
+    // Only create a real tmux session for agent1
+    manager.create(
+        &agent1_session,
+        fixture.worktree_dir.path(),
+        Some("sleep 60"),
+    )?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify the session was created
+    assert!(
+        manager.exists(&agent1_session),
+        "Session {agent1_session} should exist"
+    );
+
+    // Create app with the storage
+    let mut app = App::new(fixture.config(), storage);
+    assert_eq!(app.storage.len(), 3);
+
+    // Sync agent status - should remove agents without sessions
+    let handler = Actions::new();
+    handler.sync_agent_status(&mut app)?;
+
+    // Only agent1 should remain (the one with a real session)
+    assert_eq!(
+        app.storage.len(),
+        1,
+        "Expected 1 agent, got {}. Remaining: {:?}",
+        app.storage.len(),
+        app.storage.iter().map(|a| &a.title).collect::<Vec<_>>()
+    );
+    assert!(app.storage.iter().any(|a| a.title == "agent1"));
+
+    // Cleanup the session we created
+    let _ = manager.kill(&agent1_session);
+
+    Ok(())
+}
+
+/// Test that `visible_agents_with_info` returns correct pre-computed child info
+/// for a complex hierarchy
+#[test]
+fn test_visible_agents_with_info_hierarchy() {
+    let mut storage = Storage::new();
+
+    // Create hierarchy:
+    // Root1 (expanded, 2 children)
+    //   Child1 (expanded, 1 grandchild)
+    //     Grandchild1
+    //   Child2
+    // Root2 (collapsed, 1 child - child should not appear)
+    //   HiddenChild
+
+    let mut root1 = Agent::new(
+        "Root1".to_string(),
+        "echo".to_string(),
+        "branch1".to_string(),
+        PathBuf::from("/tmp/root1"),
+        None,
+    );
+    root1.collapsed = false; // Expanded
+
+    let mut child1 = create_child_agent(&root1, "Child1", 2);
+    child1.collapsed = false; // Expanded
+
+    let grandchild1 = create_child_agent(&child1, "Grandchild1", 3);
+    let child2 = create_child_agent(&root1, "Child2", 4);
+
+    let root2 = Agent::new(
+        "Root2".to_string(),
+        "echo".to_string(),
+        "branch2".to_string(),
+        PathBuf::from("/tmp/root2"),
+        None,
+    );
+    // root2.collapsed = true is default
+
+    let hidden_child = create_child_agent(&root2, "HiddenChild", 2);
+
+    // Add in order
+    let root1_id = root1.id;
+    let child1_id = child1.id;
+    let root2_id = root2.id;
+
+    storage.add(root1);
+    storage.add(child1);
+    storage.add(grandchild1);
+    storage.add(child2);
+    storage.add(root2);
+    storage.add(hidden_child);
+
+    // Get visible agents with info
+    let visible = storage.visible_agents_with_info();
+
+    // Should have 5 visible: Root1, Child1, Grandchild1, Child2, Root2
+    // (HiddenChild is not visible because Root2 is collapsed)
+    assert_eq!(visible.len(), 5);
+
+    // Verify Root1
+    assert_eq!(visible[0].agent.id, root1_id);
+    assert_eq!(visible[0].depth, 0);
+    assert!(visible[0].has_children);
+    assert_eq!(visible[0].child_count, 2);
+
+    // Verify Child1
+    assert_eq!(visible[1].agent.id, child1_id);
+    assert_eq!(visible[1].depth, 1);
+    assert!(visible[1].has_children);
+    assert_eq!(visible[1].child_count, 1);
+
+    // Verify Grandchild1
+    assert_eq!(visible[2].agent.title, "Grandchild1");
+    assert_eq!(visible[2].depth, 2);
+    assert!(!visible[2].has_children);
+    assert_eq!(visible[2].child_count, 0);
+
+    // Verify Child2
+    assert_eq!(visible[3].agent.title, "Child2");
+    assert_eq!(visible[3].depth, 1);
+    assert!(!visible[3].has_children);
+    assert_eq!(visible[3].child_count, 0);
+
+    // Verify Root2 (collapsed but still visible itself)
+    assert_eq!(visible[4].agent.id, root2_id);
+    assert_eq!(visible[4].depth, 0);
+    assert!(visible[4].has_children);
+    assert_eq!(visible[4].child_count, 1);
+}
+
+/// Test that `reserve_window_indices` returns correct starting index
+/// and spawning uses consecutive indices
+#[test]
+fn test_reserve_window_indices_consecutive() {
+    let mut storage = Storage::new();
+
+    // Create root agent
+    let root = Agent::new(
+        "Root".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        PathBuf::from("/tmp/root"),
+        None,
+    );
+    let root_id = root.id;
+    storage.add(root.clone());
+
+    // No children yet - next index should be 2 (window 1 is root)
+    let start_idx = storage.reserve_window_indices(root_id);
+    assert_eq!(start_idx, 2);
+
+    // Add 3 children with consecutive indices
+    for i in 0..3 {
+        let mut child = create_child_agent(&root, &format!("Child{}", i + 1), start_idx + i);
+        child.window_index = Some(start_idx + i);
+        storage.add(child);
+    }
+
+    // Now reserve again - should return 5 (after 2, 3, 4)
+    let next_idx = storage.reserve_window_indices(root_id);
+    assert_eq!(next_idx, 5);
+
+    // Add 2 more children
+    for i in 0..2 {
+        let mut child = create_child_agent(&root, &format!("Child{}", i + 4), next_idx + i);
+        child.window_index = Some(next_idx + i);
+        storage.add(child);
+    }
+
+    // Verify all 5 children have correct consecutive indices
+    let children = storage.children(root_id);
+    assert_eq!(children.len(), 5);
+
+    let mut indices: Vec<u32> = children.iter().filter_map(|c| c.window_index).collect();
+    indices.sort_unstable();
+    assert_eq!(indices, vec![2, 3, 4, 5, 6]);
+}
+
+/// Stress test: verify `sync_agent_status` handles many agents efficiently
+#[test]
+fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("large_swarm")?;
+    let manager = SessionManager::new();
+
+    // Create root agent with real session
+    let mut storage = Storage::new();
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        fixture.session_name("root"),
+        fixture.worktree_dir.path().to_path_buf(),
+        None,
+    );
+    let root_session = root.tmux_session.clone();
+    let root_id = root.id;
+    storage.add(root.clone());
+
+    // Create the root's tmux session with a long-running command
+    manager.create(&root_session, fixture.worktree_dir.path(), Some("sleep 60"))?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify session was created
+    assert!(
+        manager.exists(&root_session),
+        "Root session {root_session} should exist"
+    );
+
+    // Add 20 child agents to storage (they reference the root's session)
+    // These are just storage entries - they share the root's session
+    for i in 0u32..20 {
+        let mut child = create_child_agent(&root, &format!("child{}", i + 1), i + 2);
+        child.window_index = Some(i + 2);
+        storage.add(child);
+    }
+
+    assert_eq!(storage.len(), 21); // 1 root + 20 children
+
+    // Create app and sync status
+    let mut app = App::new(fixture.config(), storage);
+    let handler = Actions::new();
+
+    // Sync should complete quickly (single list call, not 21 exists calls)
+    // Note: sync_agent_status checks session existence, not window existence
+    // So root should remain (its session exists)
+    // Children also remain because they share the same session name as root
+    handler.sync_agent_status(&mut app)?;
+
+    // Root session exists, so root remains
+    // Children share the same session, so they also remain
+    // (The optimization is about *how* we check, not *what* we check)
+    assert!(
+        !app.storage.is_empty(),
+        "Root should remain since its session exists. Got {} agents.",
+        app.storage.len()
+    );
+    assert!(
+        app.storage.iter().any(|a| a.id == root_id),
+        "Root agent should be in storage"
+    );
+
+    // Cleanup the session we created
+    let _ = manager.kill(&root_session);
 
     Ok(())
 }

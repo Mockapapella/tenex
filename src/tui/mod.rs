@@ -61,6 +61,11 @@ fn run_loop(
         action_handler.resize_agent_windows(app);
     }
 
+    // Track selection to detect changes
+    let mut last_selected = app.selected;
+    // Force initial preview/diff update
+    let mut needs_content_update = true;
+
     loop {
         // Drain all queued events first (without drawing)
         // This prevents lag when returning focus after being away,
@@ -101,9 +106,19 @@ fn run_loop(
             }
         }
 
-        // Always update preview/diff before drawing for snappy response
-        let _ = action_handler.update_preview(app);
-        let _ = action_handler.update_diff(app);
+        // Detect selection change
+        if app.selected != last_selected {
+            last_selected = app.selected;
+            needs_content_update = true;
+        }
+
+        // Update preview/diff only on tick or selection change
+        // This avoids spawning tmux/git subprocesses every frame
+        if needs_tick || needs_content_update {
+            let _ = action_handler.update_preview(app);
+            let _ = action_handler.update_diff(app);
+            needs_content_update = false;
+        }
 
         // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
