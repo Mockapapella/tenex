@@ -37,8 +37,10 @@ pub enum Action {
     Cancel,
     /// Confirm current operation
     Confirm,
-    /// Spawn new root with children
+    /// Spawn new root with children (no pre-prompt)
     SpawnChildren,
+    /// Plan: spawn new root with children (with planning pre-prompt)
+    PlanSwarm,
     /// Add children to selected agent
     AddChildren,
     /// Synthesize children into parent
@@ -121,6 +123,16 @@ const BINDINGS: &[Binding] = &[
         code: KeyCode::Char('S'),
         modifiers: KeyModifiers::SHIFT,
         action: Action::SpawnChildren,
+    },
+    Binding {
+        code: KeyCode::Char('P'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::PlanSwarm,
+    },
+    Binding {
+        code: KeyCode::Char('P'),
+        modifiers: KeyModifiers::SHIFT,
+        action: Action::PlanSwarm,
     },
     Binding {
         code: KeyCode::Char('+'),
@@ -253,7 +265,8 @@ impl Action {
             Self::ScrollBottom => "[G]o to bottom",
             Self::Cancel => "Cancel",
             Self::Confirm => "Confirm",
-            Self::SpawnChildren => "[S]warm (new root)",
+            Self::SpawnChildren => "[S]pawn swarm",
+            Self::PlanSwarm => "[P]lanning swarm",
             Self::AddChildren => "[+] add children",
             Self::Synthesize => "[s]ynthesize children",
             Self::ToggleCollapse => "[Space] collapse/expand",
@@ -281,6 +294,7 @@ impl Action {
             Self::Cancel => "Esc",
             Self::Confirm => "y",
             Self::SpawnChildren => "S",
+            Self::PlanSwarm => "P",
             Self::AddChildren => "+",
             Self::Synthesize => "s",
             Self::ToggleCollapse => "Space",
@@ -297,6 +311,7 @@ impl Action {
             | Self::NewAgentWithPrompt
             | Self::Kill
             | Self::SpawnChildren
+            | Self::PlanSwarm
             | Self::AddChildren
             | Self::Synthesize
             | Self::Broadcast => ActionGroup::Agents,
@@ -321,6 +336,7 @@ impl Action {
         Self::NewAgentWithPrompt,
         Self::Kill,
         Self::SpawnChildren,
+        Self::PlanSwarm,
         Self::AddChildren,
         Self::Synthesize,
         Self::Broadcast,
@@ -460,6 +476,7 @@ mod tests {
     #[test]
     fn test_action_description() {
         assert_eq!(Action::NewAgent.description(), "[a]dd agent");
-        assert_eq!(Action::SpawnChildren.description(), "[S]warm (new root)");
+        assert_eq!(Action::SpawnChildren.description(), "[S]pawn swarm");
+        assert_eq!(Action::PlanSwarm.description(), "[P]lanning swarm");
     }
 }

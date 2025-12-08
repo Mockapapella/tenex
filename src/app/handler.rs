@@ -95,6 +95,9 @@ impl Actions {
             Action::SpawnChildren => {
                 app.start_spawning_root();
             }
+            Action::PlanSwarm => {
+                app.start_planning_swarm();
+            }
             Action::AddChildren => {
                 if let Some(agent) = app.selected_agent() {
                     let agent_id = agent.id;
@@ -372,7 +375,11 @@ impl Actions {
         task: &str,
     ) -> Result<()> {
         let start_window_index = app.storage.reserve_window_indices(parent_id);
-        let plan_prompt = prompts::build_plan_prompt(task);
+        let child_prompt = if app.use_plan_prompt {
+            prompts::build_plan_prompt(task)
+        } else {
+            task.to_string()
+        };
 
         for i in 0..count {
             let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
@@ -382,7 +389,7 @@ impl Actions {
                 app.config.default_program.clone(),
                 branch.to_string(),
                 worktree_path.to_path_buf(),
-                Some(plan_prompt.clone()),
+                Some(child_prompt.clone()),
                 ChildConfig {
                     parent_id,
                     tmux_session: root_session.to_string(),
@@ -397,7 +404,7 @@ impl Actions {
             let command = format!(
                 "{} \"{}\"",
                 app.config.default_program,
-                plan_prompt.replace('"', "\\\"")
+                child_prompt.replace('"', "\\\"")
             );
             let actual_index = self.session_manager.create_window(
                 root_session,
@@ -823,7 +830,11 @@ impl Actions {
         // Create child agents
         // Reserve all window indices upfront to avoid O(n*count) lookups
         let start_window_index = app.storage.reserve_window_indices(parent_agent_id);
-        let plan_prompt = prompts::build_plan_prompt(task);
+        let child_prompt = if app.use_plan_prompt {
+            prompts::build_plan_prompt(task)
+        } else {
+            task.to_string()
+        };
         for i in 0..count {
             // Use pre-reserved window index (cast i to u32 for addition)
             let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
@@ -834,7 +845,7 @@ impl Actions {
                 app.config.default_program.clone(),
                 branch.clone(),
                 worktree_path.clone(),
-                Some(plan_prompt.clone()),
+                Some(child_prompt.clone()),
                 ChildConfig {
                     parent_id: parent_agent_id,
                     tmux_session: root_session.clone(),
@@ -847,11 +858,11 @@ impl Actions {
             let mut child = child;
             child.title.clone_from(&child_title);
 
-            // Create window in the root's session with the planning prompt
+            // Create window in the root's session with the prompt
             let command = format!(
                 "{} \"{}\"",
                 app.config.default_program,
-                plan_prompt.replace('"', "\\\"")
+                child_prompt.replace('"', "\\\"")
             );
             let actual_index = self.session_manager.create_window(
                 &root_session,

@@ -65,6 +65,9 @@ pub struct App {
     /// Agent ID to spawn children under (None = create new root with children)
     pub spawning_under: Option<uuid::Uuid>,
 
+    /// Whether to use the planning pre-prompt when spawning children
+    pub use_plan_prompt: bool,
+
     /// Cached preview pane dimensions (width, height) for tmux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
@@ -93,6 +96,7 @@ impl App {
             attach_request: None,
             child_count: 3,
             spawning_under: None,
+            use_plan_prompt: false,
             preview_dimensions: None,
             worktree_conflict: None,
         }
@@ -331,13 +335,23 @@ impl App {
     pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
         self.spawning_under = Some(parent_id);
         self.child_count = 3; // Reset to default
+        self.use_plan_prompt = false;
         self.enter_mode(Mode::ChildCount);
     }
 
-    /// Start spawning a new root agent with children
+    /// Start spawning a new root agent with children (no plan prompt)
     pub fn start_spawning_root(&mut self) {
         self.spawning_under = None;
         self.child_count = 3; // Reset to default
+        self.use_plan_prompt = false;
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Start spawning a new root agent with children (with planning pre-prompt)
+    pub fn start_planning_swarm(&mut self) {
+        self.spawning_under = None;
+        self.child_count = 3; // Reset to default
+        self.use_plan_prompt = true;
         self.enter_mode(Mode::ChildCount);
     }
 
@@ -570,6 +584,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         } = App::default();
@@ -592,6 +607,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         };
@@ -630,6 +646,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         } = App::default();
@@ -651,6 +668,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         };
@@ -861,6 +879,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         } = App::default();
@@ -882,6 +901,7 @@ mod tests {
             attach_request,
             child_count,
             spawning_under,
+            use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
         };
