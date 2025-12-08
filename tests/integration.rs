@@ -17,6 +17,7 @@ mod integration {
     pub mod hierarchy;
     pub mod performance;
     pub mod persistence;
+    pub mod review;
     pub mod synthesis;
     pub mod tmux;
     pub mod workflow;

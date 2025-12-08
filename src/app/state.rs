@@ -5,6 +5,9 @@ use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+// Re-export BranchInfo so it's available from app module
+pub use crate::git::BranchInfo;
+
 /// Request to attach to a tmux session/window
 #[derive(Debug, Clone)]
 pub struct AttachRequest {
@@ -73,6 +76,19 @@ pub struct App {
 
     /// Information about a worktree conflict (when creating an agent with existing worktree)
     pub worktree_conflict: Option<WorktreeConflictInfo>,
+
+    // === Review Feature ===
+    /// List of branches for the branch selector
+    pub review_branches: Vec<BranchInfo>,
+
+    /// Current filter text for branch search
+    pub review_branch_filter: String,
+
+    /// Currently selected branch index in filtered list
+    pub review_branch_selected: usize,
+
+    /// Selected base branch for review
+    pub review_base_branch: Option<String>,
 }
 
 impl App {
@@ -99,6 +115,10 @@ impl App {
             use_plan_prompt: false,
             preview_dimensions: None,
             worktree_conflict: None,
+            review_branches: Vec::new(),
+            review_branch_filter: String::new(),
+            review_branch_selected: 0,
+            review_base_branch: None,
         }
     }
 
@@ -385,6 +405,97 @@ impl App {
         self.selected_agent()
             .map_or(0, |a| self.storage.depth(a.id))
     }
+
+    // === Review Feature Methods ===
+
+    /// Start the review flow - show info if no agent selected, otherwise proceed to count
+    pub fn start_review(&mut self, branches: Vec<BranchInfo>) {
+        self.review_branches = branches;
+        self.review_branch_filter.clear();
+        self.review_branch_selected = 0;
+        self.review_base_branch = None;
+        self.child_count = 3; // Reset to default
+        self.enter_mode(Mode::ReviewChildCount);
+    }
+
+    /// Show the review info modal (when no agent is selected)
+    pub fn show_review_info(&mut self) {
+        self.enter_mode(Mode::ReviewInfo);
+    }
+
+    /// Proceed from review count to branch selector
+    pub fn proceed_to_branch_selector(&mut self) {
+        self.enter_mode(Mode::BranchSelector);
+    }
+
+    /// Get filtered branches based on current filter
+    #[must_use]
+    pub fn filtered_review_branches(&self) -> Vec<&BranchInfo> {
+        let filter_lower = self.review_branch_filter.to_lowercase();
+        self.review_branches
+            .iter()
+            .filter(|b| filter_lower.is_empty() || b.name.to_lowercase().contains(&filter_lower))
+            .collect()
+    }
+
+    /// Select next branch in filtered list
+    pub fn select_next_branch(&mut self) {
+        let count = self.filtered_review_branches().len();
+        if count > 0 {
+            self.review_branch_selected = (self.review_branch_selected + 1) % count;
+        }
+    }
+
+    /// Select previous branch in filtered list
+    pub fn select_prev_branch(&mut self) {
+        let count = self.filtered_review_branches().len();
+        if count > 0 {
+            self.review_branch_selected = self
+                .review_branch_selected
+                .checked_sub(1)
+                .unwrap_or(count - 1);
+        }
+    }
+
+    /// Get the currently selected branch
+    #[must_use]
+    pub fn selected_branch(&self) -> Option<&BranchInfo> {
+        self.filtered_review_branches()
+            .get(self.review_branch_selected)
+            .copied()
+    }
+
+    /// Handle character input in branch filter
+    pub fn handle_branch_filter_char(&mut self, c: char) {
+        self.review_branch_filter.push(c);
+        // Reset selection to 0 when filter changes
+        self.review_branch_selected = 0;
+    }
+
+    /// Handle backspace in branch filter
+    pub fn handle_branch_filter_backspace(&mut self) {
+        self.review_branch_filter.pop();
+        // Reset selection when filter changes
+        self.review_branch_selected = 0;
+    }
+
+    /// Confirm branch selection and set `review_base_branch`
+    pub fn confirm_branch_selection(&mut self) -> bool {
+        if let Some(branch) = self.selected_branch() {
+            self.review_base_branch = Some(branch.name.clone());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear all review-related state
+    pub fn clear_review_state(&mut self) {
+        self.review_branches.clear();
+        self.review_branch_filter.clear();
+        self.review_branch_selected = 0;
+        self.review_base_branch = None;
+    }
 }
 
 impl Default for App {
@@ -419,6 +530,12 @@ pub enum Mode {
     ErrorModal(String),
     /// Editing prompt after choosing to reconnect to existing worktree
     ReconnectPrompt,
+    /// Showing info that an agent must be selected before review
+    ReviewInfo,
+    /// Selecting number of review agents
+    ReviewChildCount,
+    /// Selecting base branch for review
+    BranchSelector,
 }
 
 /// Actions that require confirmation
@@ -587,6 +704,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         } = App::default();
 
         // Start at 0 to test scroll operations
@@ -610,6 +731,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         };
 
         app.scroll_down(10);
@@ -649,6 +774,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         } = App::default();
 
         let mut app = App {
@@ -671,6 +800,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         };
         app.scroll_to_top();
         assert_eq!(app.preview_scroll, 0);
@@ -882,6 +1015,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         } = App::default();
 
         let mut app = App {
@@ -904,6 +1041,10 @@ mod tests {
             use_plan_prompt,
             preview_dimensions,
             worktree_conflict,
+            review_branches,
+            review_branch_filter,
+            review_branch_selected,
+            review_base_branch,
         };
 
         app.reset_scroll();
@@ -1050,5 +1191,260 @@ mod tests {
             app.attach_request.as_ref().and_then(|r| r.window_index),
             Some(5)
         );
+    }
+
+    fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
+        crate::git::BranchInfo {
+            name: name.to_string(),
+            full_name: if is_remote {
+                format!("refs/remotes/origin/{name}")
+            } else {
+                format!("refs/heads/{name}")
+            },
+            is_remote,
+            remote: if is_remote {
+                Some("origin".to_string())
+            } else {
+                None
+            },
+            last_commit_time: None,
+        }
+    }
+
+    #[test]
+    fn test_start_review() {
+        let mut app = App::default();
+        let branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+        ];
+
+        app.start_review(branches);
+
+        assert_eq!(app.mode, Mode::ReviewChildCount);
+        assert_eq!(app.review_branches.len(), 2);
+        assert!(app.review_branch_filter.is_empty());
+        assert_eq!(app.review_branch_selected, 0);
+    }
+
+    #[test]
+    fn test_show_review_info() {
+        let mut app = App::default();
+        app.show_review_info();
+        assert_eq!(app.mode, Mode::ReviewInfo);
+    }
+
+    #[test]
+    fn test_proceed_to_branch_selector() {
+        let mut app = App {
+            mode: Mode::ReviewChildCount,
+            ..App::default()
+        };
+        app.proceed_to_branch_selector();
+        assert_eq!(app.mode, Mode::BranchSelector);
+    }
+
+    #[test]
+    fn test_filtered_review_branches_no_filter() {
+        let app = App {
+            review_branches: vec![
+                create_test_branch_info("main", false),
+                create_test_branch_info("feature", false),
+                create_test_branch_info("develop", false),
+            ],
+            ..App::default()
+        };
+
+        let filtered = app.filtered_review_branches();
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_filtered_review_branches_with_filter() {
+        let app = App {
+            review_branches: vec![
+                create_test_branch_info("main", false),
+                create_test_branch_info("feature", false),
+                create_test_branch_info("main", true),
+            ],
+            review_branch_filter: "main".to_string(),
+            ..App::default()
+        };
+
+        let filtered = app.filtered_review_branches();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filtered_review_branches_case_insensitive() {
+        let app = App {
+            review_branches: vec![
+                create_test_branch_info("Main", false),
+                create_test_branch_info("MAIN", true),
+            ],
+            review_branch_filter: "main".to_string(),
+            ..App::default()
+        };
+
+        let filtered = app.filtered_review_branches();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_select_next_branch() {
+        let mut app = App {
+            review_branches: vec![
+                create_test_branch_info("branch1", false),
+                create_test_branch_info("branch2", false),
+                create_test_branch_info("branch3", false),
+            ],
+            ..App::default()
+        };
+
+        assert_eq!(app.review_branch_selected, 0);
+        app.select_next_branch();
+        assert_eq!(app.review_branch_selected, 1);
+        app.select_next_branch();
+        assert_eq!(app.review_branch_selected, 2);
+        // Wrap around
+        app.select_next_branch();
+        assert_eq!(app.review_branch_selected, 0);
+    }
+
+    #[test]
+    fn test_select_prev_branch() {
+        let mut app = App {
+            review_branches: vec![
+                create_test_branch_info("branch1", false),
+                create_test_branch_info("branch2", false),
+                create_test_branch_info("branch3", false),
+            ],
+            ..App::default()
+        };
+
+        assert_eq!(app.review_branch_selected, 0);
+        // Wrap to end
+        app.select_prev_branch();
+        assert_eq!(app.review_branch_selected, 2);
+        app.select_prev_branch();
+        assert_eq!(app.review_branch_selected, 1);
+    }
+
+    #[test]
+    fn test_select_branch_empty() {
+        let mut app = App {
+            review_branches: vec![],
+            ..App::default()
+        };
+
+        // Should not panic with empty list
+        app.select_next_branch();
+        assert_eq!(app.review_branch_selected, 0);
+        app.select_prev_branch();
+        assert_eq!(app.review_branch_selected, 0);
+    }
+
+    #[test]
+    fn test_selected_branch() {
+        let mut app = App {
+            review_branches: vec![
+                create_test_branch_info("main", false),
+                create_test_branch_info("feature", false),
+            ],
+            ..App::default()
+        };
+
+        let branch = app.selected_branch();
+        assert!(branch.is_some());
+        assert_eq!(branch.map(|b| b.name.as_str()), Some("main"));
+
+        app.review_branch_selected = 1;
+        let branch = app.selected_branch();
+        assert_eq!(branch.map(|b| b.name.as_str()), Some("feature"));
+    }
+
+    #[test]
+    fn test_selected_branch_empty() {
+        let app = App::default();
+        assert!(app.selected_branch().is_none());
+    }
+
+    #[test]
+    fn test_handle_branch_filter_char() {
+        let mut app = App {
+            review_branches: vec![create_test_branch_info("main", false)],
+            ..App::default()
+        };
+
+        app.handle_branch_filter_char('m');
+        assert_eq!(app.review_branch_filter, "m");
+        assert_eq!(app.review_branch_selected, 0);
+
+        app.handle_branch_filter_char('a');
+        assert_eq!(app.review_branch_filter, "ma");
+    }
+
+    #[test]
+    fn test_handle_branch_filter_backspace() {
+        let mut app = App {
+            review_branch_filter: "main".to_string(),
+            ..App::default()
+        };
+
+        app.handle_branch_filter_backspace();
+        assert_eq!(app.review_branch_filter, "mai");
+        assert_eq!(app.review_branch_selected, 0);
+
+        app.handle_branch_filter_backspace();
+        app.handle_branch_filter_backspace();
+        app.handle_branch_filter_backspace();
+        assert!(app.review_branch_filter.is_empty());
+
+        // Backspace on empty should not panic
+        app.handle_branch_filter_backspace();
+        assert!(app.review_branch_filter.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_branch_selection() {
+        let mut app = App {
+            review_branches: vec![
+                create_test_branch_info("main", false),
+                create_test_branch_info("develop", false),
+            ],
+            review_branch_selected: 1,
+            ..App::default()
+        };
+
+        let result = app.confirm_branch_selection();
+        assert!(result);
+        assert_eq!(app.review_base_branch, Some("develop".to_string()));
+    }
+
+    #[test]
+    fn test_confirm_branch_selection_empty() {
+        let mut app = App::default();
+
+        let result = app.confirm_branch_selection();
+        assert!(!result);
+        assert!(app.review_base_branch.is_none());
+    }
+
+    #[test]
+    fn test_clear_review_state() {
+        let mut app = App {
+            review_branches: vec![create_test_branch_info("main", false)],
+            review_branch_filter: "filter".to_string(),
+            review_branch_selected: 5,
+            review_base_branch: Some("main".to_string()),
+            ..App::default()
+        };
+
+        app.clear_review_state();
+
+        assert!(app.review_branches.is_empty());
+        assert!(app.review_branch_filter.is_empty());
+        assert_eq!(app.review_branch_selected, 0);
+        assert!(app.review_base_branch.is_none());
     }
 }

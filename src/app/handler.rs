@@ -121,7 +121,138 @@ impl Actions {
                     app.enter_mode(Mode::Broadcasting);
                 }
             }
+            Action::ReviewSwarm => {
+                Self::start_review_swarm(app)?;
+            }
         }
+        Ok(())
+    }
+
+    /// Start the review swarm flow
+    ///
+    /// If no agent is selected, shows an info popup.
+    /// If an agent is selected, fetches branches and enters review mode.
+    fn start_review_swarm(app: &mut App) -> Result<()> {
+        // Check if an agent with a worktree is selected
+        let selected = app.selected_agent();
+        if selected.is_none() {
+            app.show_review_info();
+            return Ok(());
+        }
+
+        // Store the selected agent's ID for later use
+        let agent_id = selected.map(|a| a.id);
+        app.spawning_under = agent_id;
+
+        // Fetch branches for the selector
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo = git::open_repository(&repo_path)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        let branches = branch_mgr.list_for_selector()?;
+
+        // Convert from git::BranchInfo to app::BranchInfo (they're the same type via re-export)
+        app.start_review(branches);
+        Ok(())
+    }
+
+    /// Spawn review agents for the selected agent against a base branch
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if spawning fails
+    pub fn spawn_review_agents(self, app: &mut App) -> Result<()> {
+        let count = app.child_count;
+        let parent_id = app
+            .spawning_under
+            .ok_or_else(|| anyhow::anyhow!("No agent selected for review"))?;
+        let base_branch = app
+            .review_base_branch
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No base branch selected for review"))?;
+
+        info!(
+            count,
+            parent_id = %parent_id,
+            base_branch,
+            "Spawning review agents"
+        );
+
+        // Get the root agent's session and worktree info
+        let root = app
+            .storage
+            .root_ancestor(parent_id)
+            .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
+
+        let root_session = root.tmux_session.clone();
+        let worktree_path = root.worktree_path.clone();
+        let branch = root.branch.clone();
+
+        // Build the review prompt
+        let review_prompt = prompts::build_review_prompt(&base_branch);
+
+        // Reserve window indices
+        let start_window_index = app.storage.reserve_window_indices(parent_id);
+
+        // Create review child agents
+        for i in 0..count {
+            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
+
+            let child = Agent::new_child(
+                String::new(), // Placeholder
+                app.config.default_program.clone(),
+                branch.clone(),
+                worktree_path.clone(),
+                Some(review_prompt.clone()),
+                ChildConfig {
+                    parent_id,
+                    tmux_session: root_session.clone(),
+                    window_index,
+                },
+            );
+
+            let child_title = format!("Review {} ({})", i + 1, child.short_id());
+            let mut child = child;
+            child.title.clone_from(&child_title);
+
+            // Create window in the root's session with the prompt
+            // Escape both double quotes and backticks (backticks are command substitution in bash)
+            let escaped_prompt = review_prompt.replace('"', "\\\"").replace('`', "\\`");
+            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
+            let actual_index = self.session_manager.create_window(
+                &root_session,
+                &child_title,
+                &worktree_path,
+                Some(&command),
+            )?;
+
+            // Resize the new window to match preview dimensions
+            if let Some((width, height)) = app.preview_dimensions {
+                let window_target = SessionManager::window_target(&root_session, actual_index);
+                let _ = self
+                    .session_manager
+                    .resize_window(&window_target, width, height);
+            }
+
+            // Update window index if it differs
+            child.window_index = Some(actual_index);
+
+            app.storage.add(child);
+        }
+
+        // Expand the parent to show children
+        if let Some(parent) = app.storage.get_mut(parent_id) {
+            parent.collapsed = false;
+        }
+
+        app.storage.save()?;
+        info!(count, parent_id = %parent_id, base_branch, "Review agents spawned successfully");
+        app.set_status(format!(
+            "Spawned {count} review agents against {base_branch}"
+        ));
+
+        // Clear review state
+        app.clear_review_state();
+
         Ok(())
     }
 
@@ -401,11 +532,9 @@ impl Actions {
             let mut child = child;
             child.title.clone_from(&child_title);
 
-            let command = format!(
-                "{} \"{}\"",
-                app.config.default_program,
-                child_prompt.replace('"', "\\\"")
-            );
+            // Escape both double quotes and backticks (backticks are command substitution in bash)
+            let escaped_prompt = child_prompt.replace('"', "\\\"").replace('`', "\\`");
+            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
             let actual_index = self.session_manager.create_window(
                 root_session,
                 &child_title,
@@ -859,11 +988,9 @@ impl Actions {
             child.title.clone_from(&child_title);
 
             // Create window in the root's session with the prompt
-            let command = format!(
-                "{} \"{}\"",
-                app.config.default_program,
-                child_prompt.replace('"', "\\\"")
-            );
+            // Escape both double quotes and backticks (backticks are command substitution in bash)
+            let escaped_prompt = child_prompt.replace('"', "\\\"").replace('`', "\\`");
+            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
             let actual_index = self.session_manager.create_window(
                 &root_session,
                 &child_title,
@@ -2317,5 +2444,95 @@ mod tests {
 
         let info = app.worktree_conflict.as_ref().unwrap();
         assert_eq!(info.swarm_child_count, Some(3));
+    }
+
+    #[test]
+    fn test_handle_action_review_swarm_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent - should show ReviewInfo
+        handler.handle_action(&mut app, Action::ReviewSwarm)?;
+        assert_eq!(app.mode, Mode::ReviewInfo);
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_review_agents_no_parent() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No spawning_under set - should error
+        app.spawning_under = None;
+        app.review_base_branch = Some("main".to_string());
+
+        let result = handler.spawn_review_agents(&mut app);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_spawn_review_agents_no_base_branch() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        let agent = Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let agent_id = agent.id;
+        app.storage.add(agent);
+
+        // spawning_under set but no base branch - should error
+        app.spawning_under = Some(agent_id);
+        app.review_base_branch = None;
+
+        let result = handler.spawn_review_agents(&mut app);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_review_state_cleared() {
+        let mut app = create_test_app();
+
+        // Set up some review state
+        app.review_branches = vec![crate::git::BranchInfo {
+            name: "test".to_string(),
+            full_name: "refs/heads/test".to_string(),
+            is_remote: false,
+            remote: None,
+            last_commit_time: None,
+        }];
+        app.review_branch_filter = "filter".to_string();
+        app.review_branch_selected = 1;
+
+        // Clear the state
+        app.clear_review_state();
+
+        assert!(app.review_branches.is_empty());
+        assert!(app.review_branch_filter.is_empty());
+        assert_eq!(app.review_branch_selected, 0);
+        assert!(app.review_base_branch.is_none());
+    }
+
+    #[test]
+    fn test_review_info_mode_exit() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Enter ReviewInfo mode
+        app.show_review_info();
+        assert_eq!(app.mode, Mode::ReviewInfo);
+
+        // Cancel should exit
+        handler.handle_action(&mut app, Action::Cancel)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 }

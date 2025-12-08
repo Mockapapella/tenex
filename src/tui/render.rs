@@ -205,6 +205,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             }
         }
         Mode::ErrorModal(message) => render_error_modal(frame, message),
+        Mode::ReviewInfo => render_review_info_overlay(frame),
+        Mode::ReviewChildCount => render_review_count_picker_overlay(frame, app),
+        Mode::BranchSelector => render_branch_selector_overlay(frame, app),
         _ => {}
     }
 }
@@ -635,6 +638,257 @@ fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
         .block(
             Block::default()
                 .title(" Spawn Children ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_review_info_overlay(frame: &mut Frame<'_>) {
+    let area = centered_rect_absolute(50, 9, frame.area());
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Select an Agent First",
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "To spawn review agents, you must first",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(Span::styled(
+            "select an agent that has a worktree.",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Use j/k or ↑/↓ to navigate the agent list.",
+            Style::default().fg(colors::TEXT_MUTED),
+        )),
+        Line::from(Span::styled(
+            "Press any key to dismiss",
+            Style::default().fg(colors::TEXT_MUTED),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title(" Review ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
+    // 10 lines of content + 2 for borders = 12 lines
+    let area = centered_rect_absolute(40, 12, frame.area());
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Spawn review agents for selected worktree",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "How many review agents?",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "        ▲",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(Span::styled(
+            format!("        {}", app.child_count),
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "        ▼",
+            Style::default().fg(colors::TEXT_DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "↑/k to increase, ↓/j to decrease",
+            Style::default().fg(colors::TEXT_MUTED),
+        )),
+        Line::from(Span::styled(
+            "Enter to continue, Esc to cancel",
+            Style::default().fg(colors::TEXT_MUTED),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title(" Review Agents ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::BORDER)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Branch selector has many UI elements"
+)]
+fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
+    // Calculate how many branches we can display
+    let max_visible_branches: usize = 10;
+    let header_lines: u16 = 5; // Title + search box + section headers
+    let footer_lines: u16 = 3; // Instructions + border
+    // Safe cast: max_visible_branches is a small constant (10)
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "max_visible_branches is small constant"
+    )]
+    let total_height = header_lines + (max_visible_branches as u16) + footer_lines;
+    let area = centered_rect_absolute(60, total_height, frame.area());
+
+    let filtered = app.filtered_review_branches();
+    let selected_idx = app.review_branch_selected;
+    let total_count = filtered.len();
+
+    // Calculate scroll offset to keep selection visible
+    let scroll_offset = if selected_idx >= max_visible_branches {
+        selected_idx - max_visible_branches + 1
+    } else {
+        0
+    };
+
+    // Build list content with sections
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Search box
+    lines.push(Line::from(vec![
+        Span::styled("Search: ", Style::default().fg(colors::TEXT_DIM)),
+        Span::styled(
+            format!("{}_", &app.review_branch_filter),
+            Style::default().fg(colors::TEXT_PRIMARY),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Track if we've shown section headers
+    let mut shown_local_header = false;
+    let mut shown_remote_header = false;
+    let mut displayed_count = 0;
+
+    // Iterate through filtered branches with proper indexing
+    for (idx, branch) in filtered.iter().enumerate() {
+        // Skip branches before scroll offset
+        if idx < scroll_offset {
+            // But still track if we passed local branches for header logic
+            if !branch.is_remote {
+                shown_local_header = true;
+            }
+            continue;
+        }
+
+        // Stop if we've shown enough branches
+        if displayed_count >= max_visible_branches {
+            break;
+        }
+
+        // Show section header when transitioning
+        if !branch.is_remote && !shown_local_header {
+            lines.push(Line::from(Span::styled(
+                "── Local ──",
+                Style::default().fg(colors::TEXT_MUTED),
+            )));
+            shown_local_header = true;
+        } else if branch.is_remote && !shown_remote_header {
+            lines.push(Line::from(Span::styled(
+                "── Remote ──",
+                Style::default().fg(colors::TEXT_MUTED),
+            )));
+            shown_remote_header = true;
+        }
+
+        let is_selected = idx == selected_idx;
+        let style = if is_selected {
+            Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .bg(colors::SURFACE_HIGHLIGHT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::TEXT_PRIMARY)
+        };
+        let prefix = if is_selected { "▶ " } else { "  " };
+
+        // Format branch name
+        let display_name = if branch.is_remote {
+            let remote_prefix = branch.remote.as_deref().unwrap_or("");
+            if remote_prefix.is_empty() {
+                branch.name.clone()
+            } else {
+                format!("{}/{}", remote_prefix, branch.name)
+            }
+        } else {
+            branch.name.clone()
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("{prefix}{display_name}"),
+            style,
+        )));
+        displayed_count += 1;
+    }
+
+    // Show scroll indicator if there are more branches
+    if total_count > max_visible_branches {
+        let hidden_above = scroll_offset;
+        let hidden_below = total_count.saturating_sub(scroll_offset + max_visible_branches);
+        if hidden_above > 0 || hidden_below > 0 {
+            let indicator = match (hidden_above > 0, hidden_below > 0) {
+                (true, true) => format!("  ↑{hidden_above} more above, ↓{hidden_below} more below"),
+                (true, false) => format!("  ↑{hidden_above} more above"),
+                (false, true) => format!("  ↓{hidden_below} more below"),
+                (false, false) => String::new(),
+            };
+            if !indicator.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    indicator,
+                    Style::default().fg(colors::TEXT_MUTED),
+                )));
+            }
+        }
+    }
+
+    // Empty state
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No matching branches",
+            Style::default().fg(colors::TEXT_MUTED),
+        )));
+    }
+
+    // Instructions
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "↑/↓ select • Enter confirm • Esc cancel",
+        Style::default().fg(colors::TEXT_MUTED),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Select Base Branch ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::BORDER)),
         )
@@ -1455,6 +1709,253 @@ mod tests {
         app.handle_char('e');
         app.handle_char('s');
         app.handle_char('t');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    fn create_test_branch_info(name: &str, is_remote: bool) -> tenex::git::BranchInfo {
+        tenex::git::BranchInfo {
+            name: name.to_string(),
+            full_name: if is_remote {
+                format!("refs/remotes/origin/{name}")
+            } else {
+                format!("refs/heads/{name}")
+            },
+            is_remote,
+            remote: if is_remote {
+                Some("origin".to_string())
+            } else {
+                None
+            },
+            last_commit_time: None,
+        }
+    }
+
+    #[test]
+    fn test_render_review_info_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(Mode::ReviewInfo);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_review_child_count_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.child_count = 5;
+        app.enter_mode(Mode::ReviewChildCount);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up some branches
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+            create_test_branch_info("develop", false),
+            create_test_branch_info("main", true),
+        ];
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_with_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up some branches and a filter
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature-abc", false),
+            create_test_branch_info("feature-xyz", false),
+        ];
+        app.review_branch_filter = "feature".to_string();
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_with_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Set up branches with a selection
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+            create_test_branch_info("develop", false),
+        ];
+        app.review_branch_selected = 1;
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Empty branch list
+        app.review_branches = vec![];
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_scrolled() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Create many branches to trigger scrolling
+        let mut branches = Vec::new();
+        for i in 0..30 {
+            branches.push(create_test_branch_info(&format!("branch-{i:02}"), false));
+        }
+        app.review_branches = branches;
+        app.review_branch_selected = 20; // Select one that requires scrolling
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_mixed_local_remote() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        // Mix of local and remote branches
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+            create_test_branch_info("main", true),
+            create_test_branch_info("develop", true),
+        ];
+        app.enter_mode(Mode::BranchSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_child_count_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.child_count = 5;
+        app.enter_mode(Mode::ChildCount);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_child_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.child_count = 3;
+        app.enter_mode(Mode::ChildPrompt);
+        app.handle_char('t');
+        app.handle_char('a');
+        app.handle_char('s');
+        app.handle_char('k');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_broadcasting_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(Mode::Broadcasting);
+        app.handle_char('m');
+        app.handle_char('s');
+        app.handle_char('g');
 
         terminal.draw(|frame| {
             render(frame, &app);

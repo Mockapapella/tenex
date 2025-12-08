@@ -49,6 +49,8 @@ pub enum Action {
     ToggleCollapse,
     /// Broadcast message to agent and all descendants
     Broadcast,
+    /// Review changes against a base branch
+    ReviewSwarm,
 }
 
 /// Categories for grouping actions in help display
@@ -164,6 +166,16 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::Broadcast,
     },
+    Binding {
+        code: KeyCode::Char('R'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::ReviewSwarm,
+    },
+    Binding {
+        code: KeyCode::Char('R'),
+        modifiers: KeyModifiers::SHIFT,
+        action: Action::ReviewSwarm,
+    },
     // Navigation
     Binding {
         code: KeyCode::Char('j'),
@@ -271,6 +283,7 @@ impl Action {
             Self::Synthesize => "[s]ynthesize children",
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to descendants",
+            Self::ReviewSwarm => "[R]eview against branch",
         }
     }
 
@@ -299,6 +312,7 @@ impl Action {
             Self::Synthesize => "s",
             Self::ToggleCollapse => "Space",
             Self::Broadcast => "B",
+            Self::ReviewSwarm => "R",
             Self::Push => "",
         }
     }
@@ -314,7 +328,8 @@ impl Action {
             | Self::PlanSwarm
             | Self::AddChildren
             | Self::Synthesize
-            | Self::Broadcast => ActionGroup::Agents,
+            | Self::Broadcast
+            | Self::ReviewSwarm => ActionGroup::Agents,
             Self::Attach
             | Self::ToggleCollapse
             | Self::NextAgent
@@ -338,6 +353,7 @@ impl Action {
         Self::SpawnChildren,
         Self::PlanSwarm,
         Self::AddChildren,
+        Self::ReviewSwarm,
         Self::Synthesize,
         Self::Broadcast,
         // Navigation

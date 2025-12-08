@@ -177,6 +177,10 @@ fn run_loop(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Key event handler needs to handle all modes"
+)]
 fn handle_key_event(
     app: &mut App,
     action_handler: Actions,
@@ -244,6 +248,36 @@ fn handle_key_event(
             KeyCode::Esc => app.exit_mode(),
             KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
             KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
+            _ => {}
+        },
+        Mode::ReviewInfo => {
+            // Any key dismisses the info popup
+            app.exit_mode();
+        }
+        Mode::ReviewChildCount => match code {
+            KeyCode::Enter => app.proceed_to_branch_selector(),
+            KeyCode::Esc => app.exit_mode(),
+            KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
+            KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
+            _ => {}
+        },
+        Mode::BranchSelector => match code {
+            KeyCode::Enter => {
+                if app.confirm_branch_selection()
+                    && let Err(e) = action_handler.spawn_review_agents(app)
+                {
+                    app.set_error(format!("Failed to spawn review agents: {e:#}"));
+                }
+                app.exit_mode();
+            }
+            KeyCode::Esc => {
+                app.clear_review_state();
+                app.exit_mode();
+            }
+            KeyCode::Up | KeyCode::Char('k') => app.select_prev_branch(),
+            KeyCode::Down | KeyCode::Char('j') => app.select_next_branch(),
+            KeyCode::Char(c) => app.handle_branch_filter_char(c),
+            KeyCode::Backspace => app.handle_branch_filter_backspace(),
             _ => {}
         },
         Mode::Confirming(action) => match action {
@@ -1002,6 +1036,251 @@ mod tests {
         // Should still be in ChildCount mode with same count
         assert_eq!(app.mode, Mode::ChildCount);
         assert_eq!(app.child_count, initial_count);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_info_mode_any_key_exits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ReviewInfo);
+
+        // Any key should dismiss
+        handle_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_info_mode_esc_exits() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ReviewInfo);
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_child_count_mode_up_down()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ReviewChildCount);
+        let initial_count = app.child_count;
+
+        // Up should increment
+        handle_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count + 1);
+
+        // Down should decrement
+        handle_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count);
+
+        // 'k' should also increment
+        handle_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count + 1);
+
+        // 'j' should also decrement
+        handle_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        assert_eq!(app.child_count, initial_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_child_count_mode_enter()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ReviewChildCount);
+
+        // Enter should proceed to branch selector
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+        assert_eq!(app.mode, Mode::BranchSelector);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_child_count_mode_escape()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::ReviewChildCount);
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    fn create_test_branch_info(name: &str, is_remote: bool) -> tenex::git::BranchInfo {
+        tenex::git::BranchInfo {
+            name: name.to_string(),
+            full_name: if is_remote {
+                format!("refs/remotes/origin/{name}")
+            } else {
+                format!("refs/heads/{name}")
+            },
+            is_remote,
+            remote: if is_remote {
+                Some("origin".to_string())
+            } else {
+                None
+            },
+            last_commit_time: None,
+        }
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_mode_navigation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+            create_test_branch_info("develop", false),
+        ];
+        app.enter_mode(Mode::BranchSelector);
+
+        assert_eq!(app.review_branch_selected, 0);
+
+        // Down should move to next
+        handle_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        assert_eq!(app.review_branch_selected, 1);
+
+        // 'j' should also move down
+        handle_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        assert_eq!(app.review_branch_selected, 2);
+
+        // Up should move to previous
+        handle_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
+        assert_eq!(app.review_branch_selected, 1);
+
+        // 'k' should also move up
+        handle_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        assert_eq!(app.review_branch_selected, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_mode_filter() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+        ];
+        app.enter_mode(Mode::BranchSelector);
+
+        // Type characters for filter
+        handle_key_event(&mut app, handler, KeyCode::Char('m'), KeyModifiers::NONE)?;
+        handle_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
+
+        assert_eq!(app.review_branch_filter, "ma");
+        assert_eq!(app.mode, Mode::BranchSelector);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_mode_backspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.review_branches = vec![create_test_branch_info("main", false)];
+        app.review_branch_filter = "main".to_string();
+        app.enter_mode(Mode::BranchSelector);
+
+        handle_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
+        assert_eq!(app.review_branch_filter, "mai");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_mode_escape() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.enter_mode(Mode::BranchSelector);
+        app.review_branches = vec![create_test_branch_info("main", false)];
+        app.review_branch_filter = "test".to_string();
+
+        handle_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        // State should be cleared on escape
+        assert!(app.review_branches.is_empty());
+        assert!(app.review_branch_filter.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_mode_enter() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.review_branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("develop", false),
+        ];
+        app.review_branch_selected = 1;
+        app.spawning_under = Some(uuid::Uuid::new_v4());
+        app.enter_mode(Mode::BranchSelector);
+
+        // Enter tries to spawn review agents (will fail without proper agent setup)
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        // Should have set review_base_branch before attempting spawn
+        assert!(
+            app.review_base_branch.is_some() || matches!(app.mode, Mode::ErrorModal(_)),
+            "Expected review_base_branch to be set or error modal, got {:?}",
+            app.mode
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_branch_selector_enter_empty() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        app.review_branches = vec![]; // Empty list
+        app.enter_mode(Mode::BranchSelector);
+
+        // Enter with empty list exits mode but doesn't set base branch
+        handle_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.review_base_branch.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_review_swarm_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        let handler = Actions::new();
+
+        // Press 'R' with no agent selected
+        handle_key_event(&mut app, handler, KeyCode::Char('R'), KeyModifiers::NONE)?;
+
+        // Should show ReviewInfo mode
+        assert_eq!(app.mode, Mode::ReviewInfo);
         Ok(())
     }
 }
