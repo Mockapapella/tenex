@@ -55,6 +55,10 @@ pub enum Action {
     Broadcast,
     /// Review changes against a base branch
     ReviewSwarm,
+    /// Spawn a new terminal (not a Claude agent)
+    SpawnTerminal,
+    /// Spawn a new terminal with a startup command
+    SpawnTerminalPrompted,
 }
 
 /// Categories for grouping actions in help display
@@ -62,6 +66,8 @@ pub enum Action {
 pub enum ActionGroup {
     /// Agent creation and management actions
     Agents,
+    /// Terminal (non-Claude shell) actions
+    Terminals,
     /// Git operations (push, rename, PR)
     GitOps,
     /// Navigation and scrolling actions
@@ -78,6 +84,7 @@ impl ActionGroup {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Agents => "Agents",
+            Self::Terminals => "Terminals",
             Self::GitOps => "Git Ops",
             Self::Navigation => "Navigation",
             Self::Other => "Other",
@@ -182,6 +189,22 @@ const BINDINGS: &[Binding] = &[
         code: KeyCode::Char('R'),
         modifiers: KeyModifiers::SHIFT,
         action: Action::ReviewSwarm,
+    },
+    // Terminals
+    Binding {
+        code: KeyCode::Char('t'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::SpawnTerminal,
+    },
+    Binding {
+        code: KeyCode::Char('T'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::SpawnTerminalPrompted,
+    },
+    Binding {
+        code: KeyCode::Char('T'),
+        modifiers: KeyModifiers::SHIFT,
+        action: Action::SpawnTerminalPrompted,
     },
     // Navigation
     Binding {
@@ -309,6 +332,8 @@ impl Action {
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to leaf sub-agents",
             Self::ReviewSwarm => "[R]eview swarm",
+            Self::SpawnTerminal => "[t]erminal",
+            Self::SpawnTerminalPrompted => "[T]erminal with command",
         }
     }
 
@@ -341,6 +366,8 @@ impl Action {
             Self::Push => "Ctrl+p",
             Self::RenameBranch => "r",
             Self::OpenPR => "Ctrl+o",
+            Self::SpawnTerminal => "t",
+            Self::SpawnTerminalPrompted => "T",
         }
     }
 
@@ -357,6 +384,7 @@ impl Action {
             | Self::Synthesize
             | Self::Broadcast
             | Self::ReviewSwarm => ActionGroup::Agents,
+            Self::SpawnTerminal | Self::SpawnTerminalPrompted => ActionGroup::Terminals,
             Self::Push | Self::RenameBranch | Self::OpenPR => ActionGroup::GitOps,
             Self::Attach
             | Self::ToggleCollapse
@@ -384,6 +412,9 @@ impl Action {
         Self::AddChildren,
         Self::Synthesize,
         Self::Broadcast,
+        // Terminals
+        Self::SpawnTerminal,
+        Self::SpawnTerminalPrompted,
         // Git Ops
         Self::Push,
         Self::RenameBranch,

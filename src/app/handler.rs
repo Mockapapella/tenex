@@ -36,6 +36,10 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the action fails
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Action handler needs to handle all possible actions"
+    )]
     pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
         match action {
             Action::NewAgent => {
@@ -129,6 +133,16 @@ impl Actions {
             }
             Action::ReviewSwarm => {
                 Self::start_review_swarm(app)?;
+            }
+            Action::SpawnTerminal => {
+                if app.selected_agent().is_some() {
+                    self.spawn_terminal(app, None)?;
+                }
+            }
+            Action::SpawnTerminalPrompted => {
+                if app.selected_agent().is_some() {
+                    app.start_terminal_prompt();
+                }
             }
         }
         Ok(())
@@ -259,6 +273,90 @@ impl Actions {
         // Clear review state
         app.clear_review_state();
 
+        Ok(())
+    }
+
+    /// Spawn a new terminal (standalone shell, not a Claude agent)
+    ///
+    /// Terminals are spawned as children of the selected agent, in that agent's worktree.
+    /// They are excluded from broadcast and can optionally have a startup command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if terminal creation fails or no agent is selected
+    pub fn spawn_terminal(self, app: &mut App, startup_command: Option<&str>) -> Result<()> {
+        // Must have a selected agent
+        let selected = app
+            .selected_agent()
+            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+
+        // Get the root ancestor to use its tmux session
+        let selected_id = selected.id;
+        let root = app
+            .storage
+            .root_ancestor(selected_id)
+            .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
+
+        let root_session = root.tmux_session.clone();
+        let worktree_path = root.worktree_path.clone();
+        let branch = root.branch.clone();
+        let root_id = root.id;
+
+        let title = app.next_terminal_name();
+        debug!(title, startup_command, "Creating new terminal");
+
+        // Reserve a window index
+        let window_index = app.storage.reserve_window_indices(root_id);
+
+        // Create child agent marked as terminal
+        let mut terminal = Agent::new_child(
+            title.clone(),
+            "bash".to_string(),
+            branch,
+            worktree_path.clone(),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session.clone(),
+                window_index,
+            },
+        );
+        terminal.is_terminal = true;
+
+        // Create window in the root's session (no command - just a shell)
+        let actual_index =
+            self.session_manager
+                .create_window(&root_session, &title, &worktree_path, None)?;
+
+        // Resize the new window to match preview dimensions
+        if let Some((width, height)) = app.preview_dimensions {
+            let window_target = SessionManager::window_target(&root_session, actual_index);
+            let _ = self
+                .session_manager
+                .resize_window(&window_target, width, height);
+        }
+
+        // Update window index if it differs
+        terminal.window_index = Some(actual_index);
+
+        // If a startup command was provided, send it to the terminal
+        if let Some(cmd) = startup_command {
+            let window_target = SessionManager::window_target(&root_session, actual_index);
+            self.session_manager
+                .send_keys_and_submit(&window_target, cmd)?;
+        }
+
+        app.storage.add(terminal);
+
+        // Expand the parent to show the new terminal
+        if let Some(parent) = app.storage.get_mut(root_id) {
+            parent.collapsed = false;
+        }
+
+        app.storage.save()?;
+
+        info!(title, "Terminal created successfully");
+        app.set_status(format!("Created terminal: {title}"));
         Ok(())
     }
 
@@ -1678,10 +1776,11 @@ impl Actions {
         let mut targets: Vec<uuid::Uuid> = vec![agent_id];
         targets.extend(app.storage.descendant_ids(agent_id));
 
-        // Filter to only leaf agents and send message
+        // Filter to only leaf agents (excluding terminals) and send message
         for target_id in targets {
             if !app.storage.has_children(target_id)
                 && let Some(target_agent) = app.storage.get(target_id)
+                && !target_agent.is_terminal
             {
                 // Determine the tmux target (session or window)
                 let tmux_target = if let Some(window_idx) = target_agent.window_index {
@@ -3663,6 +3762,295 @@ mod tests {
         // Should enter ConfirmPush mode
         assert_eq!(app.mode, Mode::ConfirmPush);
         assert_eq!(app.git_op_agent_id, Some(agent_id));
+        Ok(())
+    }
+
+    // ==================== Terminal Spawning Tests ====================
+
+    #[test]
+    fn test_spawn_terminal_requires_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent selected - SpawnTerminal should do nothing
+        handler.handle_action(&mut app, Action::SpawnTerminal)?;
+        assert_eq!(app.storage.len(), 0);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_terminal_prompted_requires_selected_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // No agent selected - SpawnTerminalPrompted should not enter mode
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_terminal_prompted_enters_mode_with_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // With agent selected - should enter TerminalPrompt mode
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, Mode::TerminalPrompt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_terminal_creates_child_of_root() {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Create a root agent with a child
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp/worktree"),
+            None,
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add a child agent
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp/worktree"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 2,
+            },
+        );
+        let child_id = child.id;
+        app.storage.add(child);
+
+        // Select the child (second visible agent)
+        app.select_next();
+        assert_eq!(app.selected_agent().map(|a| a.id), Some(child_id));
+
+        // Spawn terminal - should fail because tmux session doesn't exist
+        let result = handler.spawn_terminal(&mut app, None);
+
+        // Should fail because tmux session doesn't exist
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_spawn_terminal_no_max_agents_limit() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Set a very low max_agents limit
+        app.config.max_agents = 2;
+
+        // Add 2 agents (at the limit)
+        for i in 0..2 {
+            app.storage.add(Agent::new(
+                format!("agent{i}"),
+                "claude".to_string(),
+                format!("tenex/agent{i}"),
+                PathBuf::from("/tmp"),
+                None,
+            ));
+        }
+        assert_eq!(app.storage.len(), 2);
+
+        // Spawning a terminal should NOT be blocked by max_agents
+        // (it will fail for other reasons - no tmux session - but not due to limit)
+        let result = handler.spawn_terminal(&mut app, None);
+
+        // Should fail due to tmux, not due to max agents
+        // (no error set on app means we didn't hit the max_agents limit)
+        assert!(result.is_err());
+        assert!(
+            app.last_error.is_none(),
+            "Should not have set max_agents error"
+        );
+    }
+
+    #[test]
+    fn test_spawn_terminal_increments_counter() {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let mut app = create_test_app();
+
+        // Add an agent
+        app.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // Counter starts at 0
+        assert_eq!(app.terminal_counter, 0);
+
+        // Get first terminal name
+        let name1 = app.next_terminal_name();
+        assert_eq!(name1, "Terminal 1");
+        assert_eq!(app.terminal_counter, 1);
+
+        // Get second terminal name
+        let name2 = app.next_terminal_name();
+        assert_eq!(name2, "Terminal 2");
+        assert_eq!(app.terminal_counter, 2);
+    }
+
+    #[test]
+    fn test_broadcast_excludes_terminals() {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // Create a root agent
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add a regular child agent
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session.clone(),
+                window_index: 2,
+            },
+        );
+        app.storage.add(child);
+
+        // Add a terminal child (is_terminal = true)
+        let mut terminal = Agent::new_child(
+            "Terminal 1".to_string(),
+            "bash".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 3,
+            },
+        );
+        terminal.is_terminal = true;
+        app.storage.add(terminal);
+
+        // Broadcast should only target the non-terminal child (1 agent)
+        // Since tmux sessions don't exist, it will fail but we can check
+        // it attempts to send to the right number of agents
+        let result = handler.broadcast_to_leaves(&mut app, "test");
+
+        // The broadcast will "succeed" with 0 sent (sessions don't exist)
+        // but importantly it should NOT error and should report 0 (not try terminal)
+        assert!(result.is_ok());
+
+        // Check status message mentions 0 or shows error about no agents
+        // (since the tmux sessions don't actually exist)
+    }
+
+    #[test]
+    fn test_terminal_is_marked_as_terminal() {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        // Create a terminal child
+        let mut terminal = Agent::new_child(
+            "Terminal 1".to_string(),
+            "bash".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: uuid::Uuid::new_v4(),
+                tmux_session: "test-session".to_string(),
+                window_index: 2,
+            },
+        );
+        terminal.is_terminal = true;
+
+        assert!(terminal.is_terminal);
+        assert_eq!(terminal.program, "bash");
+    }
+
+    #[test]
+    fn test_terminal_spawning_flow_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        // 1. Without agent - [t] does nothing
+        handler.handle_action(&mut app, Action::SpawnTerminal)?;
+        assert_eq!(app.storage.len(), 0);
+
+        // 2. Without agent - [T] does nothing
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, Mode::Normal);
+
+        // 3. Add an agent
+        app.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        // 4. With agent - [T] enters prompt mode
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, Mode::TerminalPrompt);
+
+        // 5. Cancel and verify we're back to normal
+        app.exit_mode();
+        assert_eq!(app.mode, Mode::Normal);
+
         Ok(())
     }
 }

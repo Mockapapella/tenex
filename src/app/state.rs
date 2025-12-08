@@ -73,6 +73,9 @@ pub struct App {
     /// Number of child agents to spawn (for `ChildCount` mode)
     pub child_count: usize,
 
+    /// Number of terminals spawned so far (for naming "Terminal 1", "Terminal 2", etc.)
+    pub terminal_counter: usize,
+
     /// Agent ID to spawn children under (None = create new root with children)
     pub spawning_under: Option<uuid::Uuid>,
 
@@ -139,6 +142,7 @@ impl App {
             diff_content: String::new(),
             attach_request: None,
             child_count: 3,
+            terminal_counter: 0,
             spawning_under: None,
             use_plan_prompt: false,
             preview_dimensions: None,
@@ -303,6 +307,7 @@ impl App {
                 | Mode::Confirming(_)
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
+                | Mode::TerminalPrompt
         );
         self.mode = mode;
         if should_clear {
@@ -392,6 +397,7 @@ impl App {
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
+                | Mode::TerminalPrompt
         ) {
             self.input_buffer.push(c);
         }
@@ -407,6 +413,7 @@ impl App {
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
+                | Mode::TerminalPrompt
         ) {
             self.input_buffer.pop();
         }
@@ -463,6 +470,17 @@ impl App {
     /// Proceed from `ChildCount` to `ChildPrompt` mode
     pub fn proceed_to_child_prompt(&mut self) {
         self.enter_mode(Mode::ChildPrompt);
+    }
+
+    /// Get the next terminal name and increment the counter
+    pub fn next_terminal_name(&mut self) -> String {
+        self.terminal_counter += 1;
+        format!("Terminal {}", self.terminal_counter)
+    }
+
+    /// Start prompting for a terminal startup command
+    pub fn start_terminal_prompt(&mut self) {
+        self.enter_mode(Mode::TerminalPrompt);
     }
 
     /// Toggle collapse state of the selected agent
@@ -689,6 +707,8 @@ pub enum Mode {
     RenameBranch,
     /// Confirming push before opening PR (Y/N) - triggered by Ctrl+o
     ConfirmPushForPR,
+    /// Typing a startup command for a new terminal - triggered by 'T' key
+    TerminalPrompt,
 }
 
 /// Actions that require confirmation
@@ -868,6 +888,7 @@ mod tests {
             git_op_base_branch,
             git_op_has_unpushed,
             git_op_is_root_rename,
+            terminal_counter,
         } = App::default();
 
         // Start at 0 to test scroll operations
@@ -907,6 +928,7 @@ mod tests {
             git_op_base_branch,
             git_op_has_unpushed,
             git_op_is_root_rename,
+            terminal_counter,
         };
 
         app.scroll_down(10);
@@ -957,6 +979,7 @@ mod tests {
             git_op_base_branch,
             git_op_has_unpushed,
             git_op_is_root_rename,
+            terminal_counter,
         } = App::default();
 
         let mut app = App {
@@ -976,6 +999,7 @@ mod tests {
             diff_content,
             attach_request,
             child_count,
+            terminal_counter,
             spawning_under,
             use_plan_prompt,
             preview_dimensions,
@@ -1219,6 +1243,7 @@ mod tests {
             git_op_base_branch,
             git_op_has_unpushed,
             git_op_is_root_rename,
+            terminal_counter,
         } = App::default();
 
         let mut app = App {
@@ -1238,6 +1263,7 @@ mod tests {
             diff_content,
             attach_request,
             child_count,
+            terminal_counter,
             spawning_under,
             use_plan_prompt,
             preview_dimensions,

@@ -50,6 +50,10 @@ pub struct Agent {
     /// Whether children are collapsed in the UI (default: true)
     #[serde(default = "default_collapsed")]
     pub collapsed: bool,
+
+    /// Whether this is a terminal (not a Claude agent) - excluded from broadcast
+    #[serde(default)]
+    pub is_terminal: bool,
 }
 
 /// Default value for collapsed field
@@ -96,6 +100,7 @@ impl Agent {
             parent_id: None,
             window_index: None,
             collapsed: true,
+            is_terminal: false,
         }
     }
 
@@ -126,6 +131,7 @@ impl Agent {
             parent_id: Some(config.parent_id),
             window_index: Some(config.window_index),
             collapsed: true,
+            is_terminal: false,
         }
     }
 

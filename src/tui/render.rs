@@ -97,6 +97,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 &app.input_buffer,
             );
         }
+        Mode::TerminalPrompt => render_input_overlay(
+            frame,
+            "New Terminal",
+            "Enter startup command (or leave empty):",
+            &app.input_buffer,
+        ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
                 tenex::app::ConfirmAction::Kill => app.selected_agent().map_or_else(
@@ -498,8 +504,8 @@ fn render_help_overlay(frame: &mut Frame<'_>) {
     use tenex::config::Action;
 
     // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
-    // 4 sections with headers(4) + empty lines between(3) + 17 actions + footer(2) = 26 + 2 borders
-    let area = centered_rect_absolute(50, 28, frame.area());
+    // 5 sections with headers(5) + empty lines between(4) + 19 actions + footer(2) = 30 + 2 borders
+    let area = centered_rect_absolute(50, 32, frame.area());
 
     let mut help_text = vec![
         Line::from(Span::styled(

@@ -193,14 +193,18 @@ fn handle_key_event(
         | Mode::Prompting
         | Mode::ChildPrompt
         | Mode::Broadcasting
-        | Mode::ReconnectPrompt => {
+        | Mode::ReconnectPrompt
+        | Mode::TerminalPrompt => {
             match code {
                 KeyCode::Enter => {
                     let input = app.input_buffer.clone();
                     if !input.is_empty()
                         || matches!(
                             app.mode,
-                            Mode::ReconnectPrompt | Mode::Prompting | Mode::ChildPrompt
+                            Mode::ReconnectPrompt
+                                | Mode::Prompting
+                                | Mode::ChildPrompt
+                                | Mode::TerminalPrompt
                         )
                     {
                         // Remember the original mode before the action
@@ -233,6 +237,14 @@ fn handle_key_event(
                                         if input.is_empty() { None } else { Some(input) };
                                 }
                                 action_handler.reconnect_to_worktree(app)
+                            }
+                            Mode::TerminalPrompt => {
+                                let command = if input.is_empty() {
+                                    None
+                                } else {
+                                    Some(input.as_str())
+                                };
+                                action_handler.spawn_terminal(app, command)
                             }
                             _ => Ok(()),
                         };
