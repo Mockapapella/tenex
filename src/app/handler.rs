@@ -1066,7 +1066,11 @@ impl Actions {
         Ok(())
     }
 
-    /// Execute rename for a root agent (branch + agent + tmux session)
+    /// Execute rename for a root agent (branch + agent + tmux session + worktree path)
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Complex operation with many related steps"
+    )]
     fn execute_root_rename(
         app: &mut App,
         agent_id: uuid::Uuid,
@@ -1101,11 +1105,83 @@ impl Actions {
             return Ok(());
         }
 
-        // Update the agent's title and branch name
+        // Generate new worktree path based on new branch name
+        let new_worktree_path = app.config.worktree_dir.join(&new_branch);
+
+        // Move the worktree directory to match the new branch name
+        if worktree_path != new_worktree_path {
+            // Ensure parent directory exists
+            if let Some(parent) = new_worktree_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            // Move the worktree directory
+            if let Err(e) = std::fs::rename(&worktree_path, &new_worktree_path) {
+                warn!(error = %e, "Failed to move worktree directory");
+                app.set_error(format!("Failed to move worktree: {e}"));
+                return Ok(());
+            }
+
+            // Update git worktree metadata
+            // The worktree is registered under the old name (with slashes as dashes)
+            // We need to update the gitdir file in the new location
+            let gitdir_file = new_worktree_path.join(".git");
+            if gitdir_file.exists() {
+                // The .git file in a worktree points to the main repo's worktree metadata
+                // We need to update the main repo's worktree to point to the new path
+                let old_worktree_name = old_branch.replace('/', "-");
+                let repo_path = std::env::current_dir()?;
+                let worktree_meta_dir = repo_path
+                    .join(".git")
+                    .join("worktrees")
+                    .join(&old_worktree_name);
+
+                if worktree_meta_dir.exists() {
+                    // Update the gitdir file in the worktree metadata to point to new location
+                    let gitdir_path = worktree_meta_dir.join("gitdir");
+                    if gitdir_path.exists() {
+                        let new_gitdir_content =
+                            format!("{}\n", new_worktree_path.join(".git").display());
+                        if let Err(e) = std::fs::write(&gitdir_path, new_gitdir_content) {
+                            warn!(error = %e, "Failed to update worktree gitdir");
+                        }
+                    }
+
+                    // Rename the worktree metadata directory to match new branch
+                    let new_worktree_name = new_branch.replace('/', "-");
+                    let new_worktree_meta_dir = repo_path
+                        .join(".git")
+                        .join("worktrees")
+                        .join(&new_worktree_name);
+                    if old_worktree_name != new_worktree_name
+                        && let Err(e) = std::fs::rename(&worktree_meta_dir, &new_worktree_meta_dir)
+                    {
+                        warn!(error = %e, "Failed to rename worktree metadata directory");
+                    }
+                }
+            }
+        }
+
+        // Update the agent's title, branch name, and worktree path
         if let Some(agent) = app.storage.get_mut(agent_id) {
             agent.title = new_name.to_string();
             agent.branch.clone_from(&new_branch);
+            agent.worktree_path.clone_from(&new_worktree_path);
         }
+
+        // Update all descendants' worktree_path as well
+        let descendant_ids: Vec<uuid::Uuid> = app
+            .storage
+            .descendants(agent_id)
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        for desc_id in descendant_ids {
+            if let Some(desc) = app.storage.get_mut(desc_id) {
+                desc.worktree_path.clone_from(&new_worktree_path);
+            }
+        }
+
         app.storage.save()?;
 
         // Rename tmux session
@@ -1140,13 +1216,13 @@ impl Actions {
             // Delete old remote branch
             let _ = std::process::Command::new("git")
                 .args(["push", "origin", "--delete", &old_branch])
-                .current_dir(&worktree_path)
+                .current_dir(&new_worktree_path)
                 .output();
 
             // Push new branch to remote
             let push_output = std::process::Command::new("git")
                 .args(["push", "-u", "origin", &new_branch])
-                .current_dir(&worktree_path)
+                .current_dir(&new_worktree_path)
                 .output()
                 .context("Failed to push renamed branch")?;
 

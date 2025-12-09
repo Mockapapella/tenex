@@ -445,6 +445,228 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Test that renaming a root agent also moves the worktree directory
+/// and updates the git worktree metadata
+///
+/// When a root agent is renamed:
+/// 1. The worktree directory should be moved to match the new branch name
+/// 2. The git worktree metadata in `.git/worktrees` should be renamed
+/// 3. The agent's `worktree_path` should be updated
+/// 4. All descendant agents should have their `worktree_path` updated
+/// 5. After rename, killing the agent should properly clean up the worktree
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "integration test requires setup, action, and verification"
+)]
+fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("rename_wt")?;
+    let mut config = fixture.config();
+    // Use sleep to keep the session alive
+    config.default_program = "sleep 300".to_string();
+    let storage = TestFixture::create_storage();
+
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage);
+    let handler = tenex::app::Actions::new();
+
+    // Create a swarm with root + 2 children
+    app.child_count = 2;
+    app.spawning_under = None;
+    let result = handler.spawn_children(&mut app, Some("worktree-rename-test"));
+    if let Err(e) = result {
+        std::env::set_current_dir(&original_dir)?;
+        return Err(format!("Swarm creation failed: {e:#}").into());
+    }
+
+    // Should have root + 2 children = 3 agents
+    assert_eq!(app.storage.len(), 3);
+
+    // Find the root agent and record its worktree path
+    let root = app
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root agent")?;
+    let root_id = root.id;
+    let original_worktree_path = root.worktree_path.clone();
+    let original_branch = root.branch.clone();
+    let original_session = root.tmux_session.clone();
+
+    // Verify the worktree directory exists
+    assert!(
+        original_worktree_path.exists(),
+        "Original worktree directory should exist: {}",
+        original_worktree_path.display()
+    );
+
+    // Find children and verify they have the same worktree path as root
+    let children: Vec<_> = app.storage.children(root_id);
+    assert_eq!(children.len(), 2);
+    for child in &children {
+        assert_eq!(
+            child.worktree_path, original_worktree_path,
+            "Child should have same worktree_path as root before rename"
+        );
+    }
+
+    // Get child IDs for later verification
+    let child_ids: Vec<_> = children.iter().map(|c| c.id).collect();
+    drop(children);
+
+    // Expand root so children are visible
+    if let Some(root) = app.storage.get_mut(root_id) {
+        root.collapsed = false;
+    }
+
+    // Select the root agent and start rename
+    if let Some(idx) = app.storage.visible_index_of(root_id) {
+        app.selected = idx;
+    }
+
+    // Simulate the rename flow
+    let new_name = format!("{}-wt-renamed", fixture.session_prefix);
+    app.start_rename(root_id, "worktree-rename-test".to_string(), true);
+    app.input_buffer.clone_from(&new_name);
+    let confirmed = app.confirm_rename_branch();
+    assert!(confirmed, "Rename should be confirmed");
+
+    // Execute the rename
+    let rename_result = tenex::app::Actions::execute_rename(&mut app);
+    assert!(rename_result.is_ok(), "Rename should succeed");
+
+    // Get the updated root agent
+    let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
+    let new_worktree_path = root_after.worktree_path.clone();
+    let new_branch = root_after.branch.clone();
+    let new_session = root_after.tmux_session.clone();
+
+    // Verify branch was renamed
+    assert_ne!(
+        original_branch, new_branch,
+        "Branch should have been renamed"
+    );
+
+    // Verify worktree path was updated
+    assert_ne!(
+        original_worktree_path,
+        new_worktree_path,
+        "Worktree path should have been updated. Original: {}, New: {}",
+        original_worktree_path.display(),
+        new_worktree_path.display()
+    );
+
+    // Verify old worktree directory no longer exists
+    assert!(
+        !original_worktree_path.exists(),
+        "Original worktree directory should have been moved: {}",
+        original_worktree_path.display()
+    );
+
+    // Verify new worktree directory exists
+    assert!(
+        new_worktree_path.exists(),
+        "New worktree directory should exist: {}",
+        new_worktree_path.display()
+    );
+
+    // Verify .git file exists in new worktree (it's a valid git worktree)
+    assert!(
+        new_worktree_path.join(".git").exists(),
+        "New worktree should have .git file"
+    );
+
+    // Verify git worktree metadata was renamed
+    let old_worktree_meta_name = original_branch.replace('/', "-");
+    let new_worktree_meta_name = new_branch.replace('/', "-");
+    let old_worktree_meta_dir = fixture
+        .repo_path
+        .join(".git")
+        .join("worktrees")
+        .join(&old_worktree_meta_name);
+    let new_worktree_meta_dir = fixture
+        .repo_path
+        .join(".git")
+        .join("worktrees")
+        .join(&new_worktree_meta_name);
+
+    assert!(
+        !old_worktree_meta_dir.exists(),
+        "Old git worktree metadata directory should have been renamed: {}",
+        old_worktree_meta_dir.display()
+    );
+    assert!(
+        new_worktree_meta_dir.exists(),
+        "New git worktree metadata directory should exist: {}",
+        new_worktree_meta_dir.display()
+    );
+
+    // Verify children's worktree_path was updated
+    for child_id in &child_ids {
+        let child = app
+            .storage
+            .get(*child_id)
+            .ok_or("Child gone after rename")?;
+        assert_eq!(
+            child.worktree_path,
+            new_worktree_path,
+            "Child {} should have updated worktree_path '{}' but has '{}'",
+            child.title,
+            new_worktree_path.display(),
+            child.worktree_path.display()
+        );
+    }
+
+    // Now test that killing the agent properly cleans up the worktree
+    // (This was the original bug - rename changed the branch but not worktree path,
+    // so kill couldn't find the worktree to remove it)
+    if let Some(idx) = app.storage.visible_index_of(root_id) {
+        app.selected = idx;
+    }
+
+    app.enter_mode(tenex::app::Mode::Confirming(
+        tenex::app::ConfirmAction::Kill,
+    ));
+    let kill_result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
+    assert!(kill_result.is_ok(), "Kill should succeed");
+
+    // Verify all agents were removed
+    assert_eq!(
+        app.storage.len(),
+        0,
+        "All agents should be removed after kill"
+    );
+
+    // Verify worktree directory was cleaned up
+    assert!(
+        !new_worktree_path.exists(),
+        "Worktree directory should have been removed after kill: {}",
+        new_worktree_path.display()
+    );
+
+    // Verify git worktree metadata was cleaned up
+    assert!(
+        !new_worktree_meta_dir.exists(),
+        "Git worktree metadata should have been removed after kill: {}",
+        new_worktree_meta_dir.display()
+    );
+
+    // Cleanup: try to kill any remaining sessions
+    let manager = SessionManager::new();
+    let _ = manager.kill(&new_session);
+    let _ = manager.kill(&original_session);
+
+    std::env::set_current_dir(&original_dir)?;
+
+    Ok(())
+}
+
 /// Test that `visible_agents_with_info` returns correct pre-computed child info
 /// for a complex hierarchy
 #[test]
