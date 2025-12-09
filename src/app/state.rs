@@ -45,6 +45,12 @@ pub struct App {
     /// Input buffer for text input modes
     pub input_buffer: String,
 
+    /// Cursor position within `input_buffer` (byte offset)
+    pub input_cursor: usize,
+
+    /// Scroll position in input modal (for multiline text)
+    pub input_scroll: u16,
+
     /// Scroll position in preview pane
     pub preview_scroll: usize,
 
@@ -133,6 +139,8 @@ impl App {
             active_tab: Tab::Preview,
             should_quit: false,
             input_buffer: String::new(),
+            input_cursor: 0,
+            input_scroll: 0,
             preview_scroll: 0,
             diff_scroll: 0,
             preview_follow: true,
@@ -312,6 +320,8 @@ impl App {
         self.mode = mode;
         if should_clear {
             self.input_buffer.clear();
+            self.input_cursor = 0;
+            self.input_scroll = 0;
         }
     }
 
@@ -320,6 +330,8 @@ impl App {
         debug!(old_mode = ?self.mode, "Exiting mode");
         self.mode = Mode::Normal;
         self.input_buffer.clear();
+        self.input_cursor = 0;
+        self.input_scroll = 0;
     }
 
     /// Set an error message and show the error modal
@@ -397,9 +409,12 @@ impl App {
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
+                | Mode::ReconnectPrompt
                 | Mode::TerminalPrompt
         ) {
-            self.input_buffer.push(c);
+            // Insert at cursor position
+            self.input_buffer.insert(self.input_cursor, c);
+            self.input_cursor += c.len_utf8();
         }
     }
 
@@ -413,10 +428,113 @@ impl App {
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
+                | Mode::ReconnectPrompt
                 | Mode::TerminalPrompt
         ) {
-            self.input_buffer.pop();
+            // Delete character before cursor
+            if self.input_cursor > 0 {
+                // Find the previous character boundary
+                let prev_char_boundary = self.input_buffer[..self.input_cursor]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i);
+                self.input_buffer.remove(prev_char_boundary);
+                self.input_cursor = prev_char_boundary;
+            }
         }
+    }
+
+    /// Handle delete key in text input modes (delete char at cursor)
+    pub fn handle_delete(&mut self) {
+        if matches!(
+            self.mode,
+            Mode::Creating
+                | Mode::Prompting
+                | Mode::Confirming(_)
+                | Mode::ChildPrompt
+                | Mode::Broadcasting
+                | Mode::RenameBranch
+                | Mode::ReconnectPrompt
+                | Mode::TerminalPrompt
+        ) {
+            // Delete character at cursor (if not at end)
+            if self.input_cursor < self.input_buffer.len() {
+                self.input_buffer.remove(self.input_cursor);
+            }
+        }
+    }
+
+    /// Move cursor left in text input
+    pub fn input_cursor_left(&mut self) {
+        if self.input_cursor > 0 {
+            // Find previous character boundary
+            self.input_cursor = self.input_buffer[..self.input_cursor]
+                .char_indices()
+                .next_back()
+                .map_or(0, |(i, _)| i);
+        }
+    }
+
+    /// Move cursor right in text input
+    pub fn input_cursor_right(&mut self) {
+        if self.input_cursor < self.input_buffer.len() {
+            // Find next character boundary
+            self.input_cursor = self.input_buffer[self.input_cursor..]
+                .char_indices()
+                .nth(1)
+                .map_or(self.input_buffer.len(), |(i, _)| self.input_cursor + i);
+        }
+    }
+
+    /// Move cursor up one line in text input
+    pub fn input_cursor_up(&mut self) {
+        let text = &self.input_buffer[..self.input_cursor];
+        // Find current line start and column
+        let current_line_start = text.rfind('\n').map_or(0, |i| i + 1);
+        let column = self.input_cursor - current_line_start;
+
+        if current_line_start > 0 {
+            // Find previous line
+            let prev_text = &self.input_buffer[..current_line_start - 1];
+            let prev_line_start = prev_text.rfind('\n').map_or(0, |i| i + 1);
+            let prev_line_len = current_line_start - 1 - prev_line_start;
+
+            // Move to same column or end of previous line
+            self.input_cursor = prev_line_start + column.min(prev_line_len);
+        }
+    }
+
+    /// Move cursor down one line in text input
+    pub fn input_cursor_down(&mut self) {
+        let text = &self.input_buffer;
+        // Find current line start and column
+        let before_cursor = &text[..self.input_cursor];
+        let current_line_start = before_cursor.rfind('\n').map_or(0, |i| i + 1);
+        let column = self.input_cursor - current_line_start;
+
+        // Find next line
+        if let Some(next_newline) = text[self.input_cursor..].find('\n') {
+            let next_line_start = self.input_cursor + next_newline + 1;
+            let next_line_end = text[next_line_start..]
+                .find('\n')
+                .map_or(text.len(), |i| next_line_start + i);
+            let next_line_len = next_line_end - next_line_start;
+
+            // Move to same column or end of next line
+            self.input_cursor = next_line_start + column.min(next_line_len);
+        }
+    }
+
+    /// Move cursor to start of line
+    pub fn input_cursor_home(&mut self) {
+        let text = &self.input_buffer[..self.input_cursor];
+        self.input_cursor = text.rfind('\n').map_or(0, |i| i + 1);
+    }
+
+    /// Move cursor to end of line
+    pub fn input_cursor_end(&mut self) {
+        let text = &self.input_buffer[self.input_cursor..];
+        self.input_cursor += text.find('\n').unwrap_or(text.len());
     }
 
     /// Ensure the selection index is valid for the current visible agents
@@ -619,6 +737,7 @@ impl App {
         self.git_op_branch_name.clone_from(&current_name);
         self.git_op_is_root_rename = is_root;
         self.input_buffer = current_name;
+        self.input_cursor = self.input_buffer.len(); // Cursor at end
         self.enter_mode(Mode::RenameBranch);
     }
 
@@ -865,6 +984,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: _,
             diff_scroll: _,
             preview_follow: _,
@@ -905,6 +1026,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: 0,
             preview_follow: true,
             diff_scroll: 0,
@@ -956,6 +1079,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: _,
             diff_scroll,
             preview_follow,
@@ -990,6 +1115,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: 100,
             diff_scroll,
             preview_follow,
@@ -1141,14 +1268,17 @@ mod tests {
         let mut app = App::default();
         app.enter_mode(Mode::Creating);
         app.input_buffer = "test".to_string();
+        app.input_cursor = 4; // Cursor at end
 
         app.handle_backspace();
         assert_eq!(app.input_buffer, "tes");
+        assert_eq!(app.input_cursor, 3);
 
         app.handle_backspace();
         app.handle_backspace();
         app.handle_backspace();
         assert!(app.input_buffer.is_empty());
+        assert_eq!(app.input_cursor, 0);
 
         app.handle_backspace();
         assert!(app.input_buffer.is_empty());
@@ -1220,6 +1350,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: _,
             diff_scroll: _,
             preview_follow: _,
@@ -1254,6 +1386,8 @@ mod tests {
             active_tab,
             should_quit,
             input_buffer,
+            input_cursor,
+            input_scroll,
             preview_scroll: 50,
             diff_scroll: 30,
             preview_follow: false,
@@ -1820,6 +1954,7 @@ mod tests {
         let mut app = App {
             mode: Mode::RenameBranch,
             input_buffer: "feature/".to_string(),
+            input_cursor: 8, // Cursor at end of "feature/"
             ..App::default()
         };
 
@@ -1829,6 +1964,7 @@ mod tests {
         app.handle_char('t');
 
         assert_eq!(app.input_buffer, "feature/test");
+        assert_eq!(app.input_cursor, 12);
     }
 
     #[test]
@@ -1836,6 +1972,7 @@ mod tests {
         let mut app = App {
             mode: Mode::RenameBranch,
             input_buffer: "feature/test".to_string(),
+            input_cursor: 12, // Cursor at end
             ..App::default()
         };
 
@@ -1843,5 +1980,6 @@ mod tests {
         app.handle_backspace();
 
         assert_eq!(app.input_buffer, "feature/te");
+        assert_eq!(app.input_cursor, 10);
     }
 }

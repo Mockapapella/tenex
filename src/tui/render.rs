@@ -37,6 +37,7 @@ mod colors {
     pub const MODAL_BG: Color = Color::Rgb(25, 27, 35);
     pub const MODAL_BORDER_WARNING: Color = Color::Rgb(200, 160, 80);
     pub const MODAL_BORDER_ERROR: Color = Color::Rgb(200, 100, 100);
+    pub const INPUT_BG: Color = Color::Rgb(35, 40, 50);
 
     // Accent (for confirmations)
     pub const ACCENT_POSITIVE: Color = Color::Rgb(120, 180, 120);
@@ -61,13 +62,20 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     match &app.mode {
         Mode::Help => render_help_overlay(frame),
         Mode::Creating => {
-            render_input_overlay(frame, "New Agent", "Enter agent name:", &app.input_buffer);
+            render_input_overlay(
+                frame,
+                "New Agent",
+                "Enter agent name:",
+                &app.input_buffer,
+                app.input_cursor,
+            );
         }
         Mode::Prompting => render_input_overlay(
             frame,
             "New Agent with Prompt",
             "Enter prompt:",
             &app.input_buffer,
+            app.input_cursor,
         ),
         Mode::ChildCount => render_count_picker_overlay(frame, app),
         Mode::ChildPrompt => render_input_overlay(
@@ -75,12 +83,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "Spawn Children",
             "Enter task for children:",
             &app.input_buffer,
+            app.input_cursor,
         ),
         Mode::Broadcasting => render_input_overlay(
             frame,
             "Broadcast Message",
             "Enter message to broadcast to leaf agents:",
             &app.input_buffer,
+            app.input_cursor,
         ),
         Mode::ReconnectPrompt => {
             let title = app.worktree_conflict.as_ref().map_or("Reconnect", |c| {
@@ -95,6 +105,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 title,
                 "Edit prompt (or leave empty):",
                 &app.input_buffer,
+                app.input_cursor,
             );
         }
         Mode::TerminalPrompt => render_input_overlay(
@@ -102,6 +113,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "New Terminal",
             "Enter startup command (or leave empty):",
             &app.input_buffer,
+            app.input_cursor,
         ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
@@ -565,30 +577,107 @@ fn render_help_overlay(frame: &mut Frame<'_>) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input: &str) {
-    // 5 lines of content + 2 for borders = 7 lines
-    let area = centered_rect_absolute(50, 7, frame.area());
+#[expect(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    reason = "Complex but cohesive rendering; casts are bounded by max_input_height=20"
+)]
+fn render_input_overlay(
+    frame: &mut Frame<'_>,
+    title: &str,
+    prompt: &str,
+    input: &str,
+    cursor_pos: usize,
+) {
+    // Insert cursor marker at cursor position
+    let text_with_cursor = if cursor_pos >= input.len() {
+        format!("{input}│")
+    } else {
+        let before = &input[..cursor_pos];
+        let after = &input[cursor_pos..];
+        format!("{before}│{after}")
+    };
 
-    let text = vec![
+    // Split into lines
+    let input_lines: Vec<String> = if text_with_cursor.is_empty() {
+        vec!["│".to_string()]
+    } else {
+        text_with_cursor.lines().map(String::from).collect()
+    };
+
+    let num_input_lines = input_lines.len();
+
+    // Expandable height: min 3 lines for input, max 20, then scroll
+    let min_input_height = 3_usize;
+    let max_input_height = 20_usize;
+    let input_area_height = num_input_lines.clamp(min_input_height, max_input_height);
+
+    // Find which line has the cursor for auto-scroll
+    let cursor_line = text_with_cursor[..text_with_cursor.find('│').unwrap_or(0)]
+        .matches('\n')
+        .count();
+
+    // Calculate scroll to keep cursor visible
+    let scroll_offset = if cursor_line >= input_area_height {
+        cursor_line - input_area_height + 1
+    } else {
+        0
+    };
+
+    // Total height: borders(2) + prompt(1) + empty(1) + input area + empty(1) + help(1)
+    let total_height = (6 + input_area_height) as u16;
+    let area = centered_rect_absolute(60, total_height, frame.area());
+
+    // Check if scrolling is needed
+    let needs_scrollbar = num_input_lines > input_area_height;
+
+    // Calculate inner area for the input box (after removing borders and prompt)
+    // Reserve 1 column for scrollbar if needed
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 3, // After border + prompt + empty line
+        width: area
+            .width
+            .saturating_sub(if needs_scrollbar { 3 } else { 2 }),
+        height: input_area_height as u16,
+    };
+
+    // Get visible lines with scroll
+    let visible_lines: Vec<Line<'_>> = input_lines
+        .iter()
+        .skip(scroll_offset)
+        .take(input_area_height)
+        .map(|line| {
+            Line::from(Span::styled(
+                line.clone(),
+                Style::default()
+                    .fg(colors::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
+
+    // Build content: prompt, empty, (input rendered separately), empty, help
+    let header = vec![
         Line::from(Span::styled(
             prompt,
             Style::default().fg(colors::TEXT_PRIMARY),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            format!("{input}_"),
-            Style::default()
-                .fg(colors::TEXT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press Enter to confirm, Esc to cancel",
-            Style::default().fg(colors::TEXT_MUTED),
-        )),
     ];
 
-    let paragraph = Paragraph::new(text)
+    // Pad for input area
+    let mut content_lines = header;
+    for _ in 0..input_area_height {
+        content_lines.push(Line::from(""));
+    }
+    content_lines.push(Line::from(""));
+    content_lines.push(Line::from(Span::styled(
+        "Enter: submit | Alt+Enter: newline | ←→↑↓: move | Esc: cancel",
+        Style::default().fg(colors::TEXT_MUTED),
+    )));
+
+    let paragraph = Paragraph::new(content_lines)
         .block(
             Block::default()
                 .title(format!(" {title} "))
@@ -599,6 +688,51 @@ fn render_input_overlay(frame: &mut Frame<'_>, title: &str, prompt: &str, input:
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
+
+    // Render input area with different background
+    let input_paragraph =
+        Paragraph::new(visible_lines).style(Style::default().bg(colors::INPUT_BG));
+    frame.render_widget(input_paragraph, inner_area);
+
+    // Render scrollbar if needed
+    if needs_scrollbar {
+        let scrollbar_area = Rect {
+            x: inner_area.x + inner_area.width,
+            y: inner_area.y,
+            width: 1,
+            height: input_area_height as u16,
+        };
+
+        // Calculate thumb position and size
+        let total_lines = num_input_lines;
+        let visible_height = input_area_height;
+        let thumb_height = ((visible_height * visible_height) / total_lines).max(1);
+        let max_scroll = total_lines - visible_height;
+        let thumb_pos = if max_scroll > 0 {
+            (scroll_offset * (visible_height - thumb_height)) / max_scroll
+        } else {
+            0
+        };
+
+        // Render scrollbar track and thumb
+        for i in 0..visible_height {
+            let ch = if i >= thumb_pos && i < thumb_pos + thumb_height {
+                "█" // Thumb
+            } else {
+                "░" // Track
+            };
+            let scrollbar_cell = Rect {
+                x: scrollbar_area.x,
+                y: scrollbar_area.y + i as u16,
+                width: 1,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(ch).style(Style::default().fg(colors::TEXT_DIM)),
+                scrollbar_cell,
+            );
+        }
+    }
 }
 
 fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {

@@ -196,6 +196,10 @@ fn handle_key_event(
         | Mode::ReconnectPrompt
         | Mode::TerminalPrompt => {
             match code {
+                KeyCode::Enter if modifiers.contains(KeyModifiers::ALT) => {
+                    // Alt+Enter inserts a newline
+                    app.handle_char('\n');
+                }
                 KeyCode::Enter => {
                     let input = app.input_buffer.clone();
                     if !input.is_empty()
@@ -271,6 +275,13 @@ fn handle_key_event(
                 }
                 KeyCode::Char(c) => app.handle_char(c),
                 KeyCode::Backspace => app.handle_backspace(),
+                KeyCode::Delete => app.handle_delete(),
+                KeyCode::Left => app.input_cursor_left(),
+                KeyCode::Right => app.input_cursor_right(),
+                KeyCode::Up => app.input_cursor_up(),
+                KeyCode::Down => app.input_cursor_down(),
+                KeyCode::Home => app.input_cursor_home(),
+                KeyCode::End => app.input_cursor_end(),
                 _ => {}
             }
             return Ok(());
@@ -360,6 +371,7 @@ fn handle_key_event(
                     // Pre-fill input buffer with existing prompt if available
                     if let Some(ref conflict) = app.worktree_conflict {
                         app.input_buffer = conflict.prompt.clone().unwrap_or_default();
+                        app.input_cursor = app.input_buffer.len();
                     }
                     app.enter_mode(Mode::ReconnectPrompt);
                 }
@@ -1485,6 +1497,7 @@ mod tests {
         app.enter_mode(Mode::RenameBranch);
         app.git_op_branch_name = "feature/old".to_string();
         app.input_buffer = "feature/old".to_string();
+        app.input_cursor = app.input_buffer.len(); // Cursor at end
 
         // Type some characters
         handle_key_event(&mut app, handler, KeyCode::Char('-'), KeyModifiers::NONE)?;
@@ -1504,6 +1517,7 @@ mod tests {
 
         app.enter_mode(Mode::RenameBranch);
         app.input_buffer = "feature/test".to_string();
+        app.input_cursor = app.input_buffer.len(); // Cursor at end
 
         handle_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
