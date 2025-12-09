@@ -567,4 +567,124 @@ mod tests {
         };
         assert!(session.attached);
     }
+
+    #[test]
+    fn test_window_struct() {
+        let window = Window {
+            index: 3,
+            name: "editor".to_string(),
+        };
+        assert_eq!(window.index, 3);
+        assert_eq!(window.name, "editor");
+
+        // Test debug and clone
+        let cloned = window.clone();
+        assert_eq!(cloned.index, window.index);
+        assert_eq!(cloned.name, window.name);
+        assert!(!format!("{window:?}").is_empty());
+    }
+
+    #[test]
+    fn test_session_clone_and_debug() {
+        let session = Session {
+            name: "test".to_string(),
+            created: 1_234_567_890,
+            attached: false,
+        };
+        let cloned = session.clone();
+        assert_eq!(cloned.name, session.name);
+        assert_eq!(cloned.created, session.created);
+        assert_eq!(cloned.attached, session.attached);
+        assert!(!format!("{session:?}").is_empty());
+    }
+
+    #[test]
+    fn test_send_keys_and_submit_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.send_keys_and_submit("tenex-nonexistent-xyz", "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_windows_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.list_windows("tenex-nonexistent-xyz");
+        // Returns empty vec for nonexistent session
+        assert!(result.is_ok());
+        if let Ok(windows) = result {
+            assert!(windows.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_create_session_with_command() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-cmd";
+
+        let _ = manager.kill(session_name);
+
+        let result = manager.create(
+            session_name,
+            std::path::Path::new("/tmp"),
+            Some("echo hello"),
+        );
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = manager.kill(session_name);
+        }
+    }
+
+    #[test]
+    fn test_create_window_with_command() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-win-cmd";
+
+        let _ = manager.kill(session_name);
+
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            let win_result = manager.create_window(
+                session_name,
+                "test-win",
+                std::path::Path::new("/tmp"),
+                Some("echo hello"),
+            );
+
+            if let Ok(window_index) = win_result {
+                let _ = manager.kill_window(session_name, window_index);
+            }
+
+            let _ = manager.kill(session_name);
+        }
+    }
+
+    #[test]
+    fn test_list_sessions_result() {
+        if skip_if_no_tmux() {
+            return;
+        }
+        let manager = Manager::new();
+        let result = manager.list();
+        assert!(result.is_ok());
+    }
 }
