@@ -3681,12 +3681,7 @@ mod tests {
         assert!(!app.git_op_is_root_rename);
     }
 
-    /// Test the open PR flow with an agent
-    ///
-    /// This test is skipped on Windows because it uses `/tmp` which is a Unix path,
-    /// and the test requires git filesystem access (reading reflog).
     #[test]
-    #[cfg(unix)]
     fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;

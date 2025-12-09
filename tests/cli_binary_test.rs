@@ -128,11 +128,7 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Test that the log file is cleared on startup
-///
-/// This test only runs on Unix systems because the log file path is hardcoded to /tmp/tenex.log
 #[test]
-#[cfg(unix)]
 fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use std::path::Path;
