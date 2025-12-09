@@ -1,5 +1,7 @@
 //! Helper functions for test setup and common operations
 
+use std::path::Path;
+
 /// Check if tmux is available on the system
 pub fn tmux_available() -> bool {
     tenex::tmux::is_available()
@@ -12,4 +14,14 @@ pub fn skip_if_no_tmux() -> bool {
         return true;
     }
     false
+}
+
+/// Assert two paths are equal after canonicalization.
+///
+/// This is necessary on macOS where `/var` is a symlink to `/private/var`,
+/// causing path comparisons to fail unexpectedly.
+pub fn assert_paths_eq(left: &Path, right: &Path, msg: &str) {
+    let left_canonical = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right_canonical = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    assert_eq!(left_canonical, right_canonical, "{msg}");
 }

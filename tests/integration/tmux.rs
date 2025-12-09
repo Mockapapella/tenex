@@ -18,7 +18,7 @@ fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!manager.exists(&session_name));
 
     // Create session with a command that stays alive
-    let result = manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 10"));
+    let result = manager.create(&session_name, &fixture.worktree_path(), Some("sleep 10"));
     assert!(result.is_ok());
 
     // Give tmux time to start
@@ -50,7 +50,7 @@ fn test_tmux_session_list() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, fixture.worktree_dir.path(), None)?;
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -77,7 +77,7 @@ fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
+    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -111,7 +111,7 @@ fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
+    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -145,7 +145,7 @@ fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, fixture.worktree_dir.path(), Some("sleep 60"))?;
+    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -190,7 +190,7 @@ fn test_tmux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, fixture.worktree_dir.path(), None)?;
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 

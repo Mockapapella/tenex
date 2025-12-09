@@ -15,7 +15,7 @@ fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
         "persistent-agent".to_string(),
         "echo".to_string(),
         fixture.session_name("persist"),
-        fixture.worktree_dir.path().join("persist"),
+        fixture.worktree_path().join("persist"),
         None,
     ));
 

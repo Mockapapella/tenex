@@ -26,7 +26,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/existing-agent", fixture.session_prefix);
-    let worktree_path = fixture.worktree_dir.path().join(&branch_name);
+    let worktree_path = fixture.worktree_path().join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Now try to create an agent with the same name
@@ -84,7 +84,7 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/reconnect-test", fixture.session_prefix);
-    let worktree_path = fixture.worktree_dir.path().join(&branch_name);
+    let worktree_path = fixture.worktree_path().join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Trigger conflict detection
@@ -142,7 +142,7 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/recreate-test", fixture.session_prefix);
-    let worktree_path = fixture.worktree_dir.path().join(&branch_name);
+    let worktree_path = fixture.worktree_path().join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Add a marker file to the old worktree
@@ -208,7 +208,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/swarm-task", fixture.session_prefix);
-    let worktree_path = fixture.worktree_dir.path().join(&branch_name);
+    let worktree_path = fixture.worktree_path().join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning (simulating S key flow)
@@ -375,7 +375,7 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/swarm-recreate", fixture.session_prefix);
-    let worktree_path = fixture.worktree_dir.path().join(&branch_name);
+    let worktree_path = fixture.worktree_path().join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Add a marker file
