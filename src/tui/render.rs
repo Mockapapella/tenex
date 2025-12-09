@@ -16,6 +16,7 @@ mod colors {
 
     // UI Chrome
     pub const BORDER: Color = Color::Rgb(100, 110, 130);
+    pub const SELECTED: Color = Color::Rgb(100, 180, 220);
     pub const SURFACE: Color = Color::Rgb(30, 32, 40);
     pub const SURFACE_HIGHLIGHT: Color = Color::Rgb(50, 55, 70);
 
@@ -303,12 +304,20 @@ fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .collect();
 
     let title = format!(" Agents ({}) ", app.storage.len());
+
+    // Highlight agents list border when it has focus (not in PreviewFocused mode)
+    let border_color = if app.mode == Mode::PreviewFocused {
+        colors::BORDER
+    } else {
+        colors::SELECTED
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(border_color)),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -359,6 +368,7 @@ fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.preview_content;
+    let is_focused = app.mode == Mode::PreviewFocused;
 
     // Parse ANSI escape sequences to preserve terminal colors
     let text = ansi_to_tui::IntoText::into_text(content).unwrap_or_else(|_| {
@@ -373,12 +383,19 @@ fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .min(line_count.saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
+    // Use highlighted border when focused, show exit hint in title
+    let (border_color, title) = if is_focused {
+        (colors::SELECTED, " Terminal Output [Ctrl+q to exit] ")
+    } else {
+        (colors::BORDER, " Terminal Output ")
+    };
+
     let paragraph = Paragraph::new(text)
         .block(
             Block::default()
-                .title(" Terminal Output ")
+                .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(border_color)),
         )
         .scroll((scroll_pos, 0))
         .wrap(Wrap { trim: false });

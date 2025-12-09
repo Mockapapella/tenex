@@ -9,8 +9,10 @@ pub enum Action {
     NewAgent,
     /// Create a new agent with a prompt
     NewAgentWithPrompt,
-    /// Attach to selected agent
-    Attach,
+    /// Focus the preview pane (keystrokes forwarded to agent)
+    FocusPreview,
+    /// Unfocus the preview pane (return to agent list)
+    UnfocusPreview,
     /// Kill selected agent
     Kill,
     /// Push branch to remote
@@ -122,7 +124,12 @@ const BINDINGS: &[Binding] = &[
     Binding {
         code: KeyCode::Enter,
         modifiers: KeyModifiers::NONE,
-        action: Action::Attach,
+        action: Action::FocusPreview,
+    },
+    Binding {
+        code: KeyCode::Char('q'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::Quit,
     },
     Binding {
         code: KeyCode::Char('d'),
@@ -268,11 +275,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::Help,
     },
-    Binding {
-        code: KeyCode::Char('q'),
-        modifiers: KeyModifiers::NONE,
-        action: Action::Quit,
-    },
     // Git operations
     Binding {
         code: KeyCode::Char('p'),
@@ -309,7 +311,8 @@ impl Action {
         match self {
             Self::NewAgent => "[a]dd agent",
             Self::NewAgentWithPrompt => "[A]dd agent with prompt",
-            Self::Attach => "[Enter] into agent",
+            Self::FocusPreview => "[Enter] focus preview",
+            Self::UnfocusPreview => "[Ctrl+q]uit preview / app",
             Self::Kill => "[d]elete agent and sub-agents",
             Self::Push => "[Ctrl+p]ush branch to remote",
             Self::RenameBranch => "[r]ename branch",
@@ -318,7 +321,7 @@ impl Action {
             Self::NextAgent => "[j] / [↓] next agent",
             Self::PrevAgent => "[k] / [↑] prev agent",
             Self::Help => "[?] help",
-            Self::Quit => "[q]uit",
+            Self::Quit => "[Ctrl+q]uit",
             Self::ScrollUp => "[Ctrl+u] scroll up",
             Self::ScrollDown => "[Ctrl+d] scroll down",
             Self::ScrollTop => "[g]o to top",
@@ -343,13 +346,14 @@ impl Action {
         match self {
             Self::NewAgent => "a",
             Self::NewAgentWithPrompt => "A",
-            Self::Attach => "Enter",
+            Self::FocusPreview => "Enter",
             Self::Kill => "d",
             Self::SwitchTab => "Tab",
             Self::NextAgent => "j/↓",
             Self::PrevAgent => "k/↑",
             Self::Help => "?",
-            Self::Quit => "q",
+            // Both use Ctrl+q: UnfocusPreview when in preview, Quit otherwise
+            Self::UnfocusPreview | Self::Quit => "Ctrl+q",
             Self::ScrollUp => "Ctrl+u",
             Self::ScrollDown => "Ctrl+d",
             Self::ScrollTop => "g",
@@ -386,7 +390,8 @@ impl Action {
             | Self::ReviewSwarm => ActionGroup::Agents,
             Self::SpawnTerminal | Self::SpawnTerminalPrompted => ActionGroup::Terminals,
             Self::Push | Self::RenameBranch | Self::OpenPR => ActionGroup::GitOps,
-            Self::Attach
+            Self::FocusPreview
+            | Self::UnfocusPreview
             | Self::ToggleCollapse
             | Self::NextAgent
             | Self::PrevAgent
@@ -420,7 +425,8 @@ impl Action {
         Self::RenameBranch,
         Self::OpenPR,
         // Navigation
-        Self::Attach,
+        Self::FocusPreview,
+        Self::UnfocusPreview,
         Self::ToggleCollapse,
         Self::NextAgent,
         Self::PrevAgent,
@@ -431,7 +437,6 @@ impl Action {
         Self::ScrollBottom,
         // Other
         Self::Help,
-        Self::Quit,
     ];
 }
 
@@ -449,22 +454,7 @@ pub fn get_action(code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
 /// Generate status bar hint text
 #[must_use]
 pub fn status_hints() -> String {
-    let hints = [
-        (Action::NewAgent, "add"),
-        (Action::Kill, "del"),
-        (Action::SwitchTab, "switch"),
-        (Action::Help, "help"),
-        (Action::Quit, "quit"),
-    ];
-
-    hints
-        .iter()
-        .map(|(action, label)| {
-            let key = action.keys().split('/').next().unwrap_or("");
-            format!("[{key}]{label}")
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    "[?]help".to_string()
 }
 
 #[cfg(test)]
@@ -477,13 +467,16 @@ mod tests {
             get_action(KeyCode::Char('a'), KeyModifiers::NONE),
             Some(Action::NewAgent)
         );
-        assert_eq!(
-            get_action(KeyCode::Char('q'), KeyModifiers::NONE),
-            Some(Action::Quit)
-        );
+        // Plain 'q' no longer quits - only Ctrl+q does
+        assert_eq!(get_action(KeyCode::Char('q'), KeyModifiers::NONE), None);
         assert_eq!(
             get_action(KeyCode::Enter, KeyModifiers::NONE),
-            Some(Action::Attach)
+            Some(Action::FocusPreview)
+        );
+        // Ctrl+q maps to Quit (but exits preview focus when in PreviewFocused mode)
+        assert_eq!(
+            get_action(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            Some(Action::Quit)
         );
     }
 
@@ -558,10 +551,7 @@ mod tests {
     #[test]
     fn test_status_hints() {
         let hints = status_hints();
-        assert!(hints.contains("[a]add"));
-        assert!(hints.contains("[d]del"));
-        assert!(hints.contains("[?]help"));
-        assert!(hints.contains("[q]quit"));
+        assert_eq!(hints, "[?]help");
     }
 
     #[test]

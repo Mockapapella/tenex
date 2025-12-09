@@ -186,12 +186,12 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[test]
-fn test_actions_attach_integration() -> Result<(), Box<dyn std::error::Error>> {
+fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
         return Ok(());
     }
 
-    let fixture = TestFixture::new("actions_attach")?;
+    let fixture = TestFixture::new("actions_focus_preview")?;
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
@@ -202,19 +202,22 @@ fn test_actions_attach_integration() -> Result<(), Box<dyn std::error::Error>> {
     let handler = tenex::app::Actions::new();
 
     // Create an agent
-    handler.create_agent(&mut app, "attachable", None)?;
+    handler.create_agent(&mut app, "focusable", None)?;
     app.select_next();
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Request attach - this sets the attach_session field if session exists
-    // Note: The session may have already exited (echo command), so attach may fail
-    let _result = handler.handle_action(&mut app, tenex::config::Action::Attach);
+    // FocusPreview should enter PreviewFocused mode
+    let result = handler.handle_action(&mut app, tenex::config::Action::FocusPreview);
+    assert!(result.is_ok());
+    assert_eq!(app.mode, tenex::app::Mode::PreviewFocused);
+
+    // UnfocusPreview should return to Normal mode
+    let result = handler.handle_action(&mut app, tenex::config::Action::UnfocusPreview);
+    assert!(result.is_ok());
+    assert_eq!(app.mode, tenex::app::Mode::Normal);
 
     let _ = std::env::set_current_dir(&original_dir);
-
-    // The attach action either succeeds or sets an error
-    // We just verify the action was processed without panic
 
     // Cleanup
     let manager = SessionManager::new();

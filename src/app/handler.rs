@@ -48,8 +48,16 @@ impl Actions {
             Action::NewAgentWithPrompt => {
                 app.enter_mode(Mode::Prompting);
             }
-            Action::Attach => {
-                self.attach_to_agent(app)?;
+            Action::FocusPreview => {
+                // Only enter PreviewFocused mode if an agent is selected
+                if app.selected_agent().is_some() {
+                    app.enter_mode(Mode::PreviewFocused);
+                }
+            }
+            Action::UnfocusPreview => {
+                if app.mode == Mode::PreviewFocused {
+                    app.exit_mode();
+                }
             }
             Action::Kill => {
                 if app.selected_agent().is_some() {
@@ -803,42 +811,6 @@ impl Actions {
             app.set_status("Agent killed");
         }
         Ok(())
-    }
-
-    /// Attach to the selected agent's tmux session
-    fn attach_to_agent(self, app: &mut App) -> Result<()> {
-        // Log all visible agents for debugging
-        for (i, (agent, depth)) in app.storage.visible_agents().iter().enumerate() {
-            debug!(
-                index = i,
-                agent_id = %agent.short_id(),
-                agent_title = %agent.title,
-                window_index = ?agent.window_index,
-                depth = depth,
-                "Visible agent"
-            );
-        }
-
-        let agent = app
-            .selected_agent()
-            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
-
-        debug!(
-            selected_index = app.selected,
-            agent_id = %agent.short_id(),
-            agent_title = %agent.title,
-            window_index = ?agent.window_index,
-            session = %agent.tmux_session,
-            "Attaching to agent"
-        );
-
-        if self.session_manager.exists(&agent.tmux_session) {
-            app.request_attach(agent.tmux_session.clone(), agent.window_index);
-            Ok(())
-        } else {
-            app.set_error("Tmux session not found");
-            Err(anyhow::anyhow!("Tmux session not found"))
-        }
     }
 
     // === Git Operations: Push, Rename Branch, Open PR ===
@@ -2213,12 +2185,14 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_attach_no_agent() {
+    fn test_handle_focus_preview_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let result = handler.handle_action(&mut app, Action::Attach);
-        assert!(result.is_err());
+        // FocusPreview does nothing when no agent is selected (stays in Normal mode)
+        let result = handler.handle_action(&mut app, Action::FocusPreview);
+        assert!(result.is_ok());
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]
@@ -2356,25 +2330,31 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_attach_session_not_found() {
+    fn test_handle_focus_preview_with_agent() {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        // Add an agent with a non-existent session
+        // Add an agent
         app.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
-            "nonexistent-session".to_string(),
+            "test-session".to_string(),
             PathBuf::from("/tmp"),
             None,
         ));
 
-        // Attach should fail
-        let result = handler.handle_action(&mut app, Action::Attach);
-        assert!(result.is_err());
+        // FocusPreview should enter PreviewFocused mode
+        let result = handler.handle_action(&mut app, Action::FocusPreview);
+        assert!(result.is_ok());
+        assert_eq!(app.mode, Mode::PreviewFocused);
+
+        // UnfocusPreview should exit to Normal mode
+        let result = handler.handle_action(&mut app, Action::UnfocusPreview);
+        assert!(result.is_ok());
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]
@@ -2959,29 +2939,6 @@ mod tests {
         handler.kill_agent(&mut app)?;
         assert_eq!(app.storage.len(), 0);
         Ok(())
-    }
-
-    #[test]
-    fn test_attach_to_agent_no_session() {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Add an agent with non-existent session
-        app.storage.add(Agent::new(
-            "test".to_string(),
-            "claude".to_string(),
-            "nonexistent-session".to_string(),
-            PathBuf::from("/tmp"),
-            None,
-        ));
-
-        // Attach should fail
-        let result = handler.attach_to_agent(&mut app);
-        assert!(result.is_err());
-        assert!(app.last_error.is_some());
     }
 
     #[test]

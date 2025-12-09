@@ -8,15 +8,6 @@ use tracing::{debug, warn};
 // Re-export BranchInfo so it's available from app module
 pub use crate::git::BranchInfo;
 
-/// Request to attach to a tmux session/window
-#[derive(Debug, Clone)]
-pub struct AttachRequest {
-    /// Tmux session name
-    pub session: String,
-    /// Optional window index (for child agents)
-    pub window_index: Option<u32>,
-}
-
 /// Main application state
 #[derive(Debug)]
 #[expect(
@@ -72,9 +63,6 @@ pub struct App {
 
     /// Cached diff content
     pub diff_content: String,
-
-    /// Session to attach to (when set, TUI should suspend and attach)
-    pub attach_request: Option<AttachRequest>,
 
     /// Number of child agents to spawn (for `ChildCount` mode)
     pub child_count: usize,
@@ -148,7 +136,6 @@ impl App {
             status_message: None,
             preview_content: String::new(),
             diff_content: String::new(),
-            attach_request: None,
             child_count: 3,
             terminal_counter: 0,
             spawning_under: None,
@@ -363,25 +350,6 @@ impl App {
     /// Clear the current status message
     pub fn clear_status(&mut self) {
         self.status_message = None;
-    }
-
-    /// Request to attach to a tmux session/window
-    pub fn request_attach(&mut self, session: String, window_index: Option<u32>) {
-        self.attach_request = Some(AttachRequest {
-            session,
-            window_index,
-        });
-    }
-
-    /// Clear the attach request after attaching
-    pub fn clear_attach_request(&mut self) {
-        self.attach_request = None;
-    }
-
-    /// Check if there's a pending attach request
-    #[must_use]
-    pub const fn has_attach_request(&self) -> bool {
-        self.attach_request.is_some()
     }
 
     /// Check if there are any running agents
@@ -804,6 +772,8 @@ pub enum Mode {
     Help,
     /// Scrolling through preview/diff
     Scrolling,
+    /// Preview pane is focused - keystrokes are forwarded to tmux
+    PreviewFocused,
     /// Selecting number of child agents to spawn
     ChildCount,
     /// Typing the task/prompt for child agents
@@ -993,7 +963,6 @@ mod tests {
             status_message,
             preview_content: _,
             diff_content: _,
-            attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
@@ -1035,7 +1004,6 @@ mod tests {
             status_message,
             preview_content: content.clone(),
             diff_content: content,
-            attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
@@ -1088,7 +1056,6 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
@@ -1124,7 +1091,6 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_request,
             child_count,
             terminal_counter,
             spawning_under,
@@ -1359,7 +1325,6 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_request,
             child_count,
             spawning_under,
             use_plan_prompt,
@@ -1395,7 +1360,6 @@ mod tests {
             status_message,
             preview_content,
             diff_content,
-            attach_request,
             child_count,
             terminal_counter,
             spawning_under,
@@ -1525,40 +1489,6 @@ mod tests {
         // Calling dismiss_error in normal mode should be a no-op for mode
         app.dismiss_error();
         assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn test_attach_request() {
-        let mut app = App::default();
-
-        // Initially no attach request
-        assert!(!app.has_attach_request());
-        assert!(app.attach_request.is_none());
-
-        // Request attach without window index
-        app.request_attach("test-session".to_string(), None);
-        assert!(app.has_attach_request());
-        assert_eq!(
-            app.attach_request.as_ref().map(|r| r.session.as_str()),
-            Some("test-session")
-        );
-        assert_eq!(
-            app.attach_request.as_ref().and_then(|r| r.window_index),
-            None
-        );
-
-        // Clear attach request
-        app.clear_attach_request();
-        assert!(!app.has_attach_request());
-        assert!(app.attach_request.is_none());
-
-        // Request attach with window index
-        app.request_attach("another-session".to_string(), Some(5));
-        assert!(app.has_attach_request());
-        assert_eq!(
-            app.attach_request.as_ref().and_then(|r| r.window_index),
-            Some(5)
-        );
     }
 
     fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
