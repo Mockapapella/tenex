@@ -23,7 +23,12 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
       - name: Install pre-commit
         run: pip install pre-commit
+      - name: Start tmux server
+        run: tmux start-server
       - name: Run pre-commit
         run: pre-commit run --all-files
