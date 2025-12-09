@@ -390,7 +390,11 @@ impl Actions {
                 }
             }
         }
-        app.exit_mode();
+        // Only exit mode if we're not showing an error modal
+        // (error modal is set by operations like synthesize when they fail)
+        if !matches!(app.mode, Mode::ErrorModal(_)) {
+            app.exit_mode();
+        }
         Ok(())
     }
 
