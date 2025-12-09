@@ -75,7 +75,15 @@ fn test_cli_unexpected_argument_shows_help() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// Test --set-agent flag saves config correctly
+///
+/// This test only runs on Linux because:
+/// - The dirs crate does NOT respect `XDG_CONFIG_HOME` on macOS (it uses ~/Library/Application Support)
+/// - On Windows, the config directory is in `AppData`
+///
+/// See: <https://lib.rs/crates/dirs>
 #[test]
+#[cfg(target_os = "linux")]
 fn test_cli_set_agent() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use tempfile::TempDir;
@@ -86,6 +94,7 @@ fn test_cli_set_agent() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&config_dir)?;
 
     // Run with XDG_CONFIG_HOME set to temp directory
+    // Note: This only works on Linux; the dirs crate ignores XDG_CONFIG_HOME on macOS
     let output = tenex_bin()
         .args(["--set-agent", "test-agent"])
         .env("XDG_CONFIG_HOME", temp_dir.path())
@@ -119,7 +128,11 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Test that the log file is cleared on startup
+///
+/// This test only runs on Unix systems because the log file path is hardcoded to /tmp/tenex.log
 #[test]
+#[cfg(unix)]
 fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use std::path::Path;

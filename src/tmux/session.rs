@@ -206,9 +206,13 @@ impl Manager {
 
     /// Attach to a session (this will replace the current process)
     ///
+    /// This method is only available on Unix systems as it uses `exec()` to replace
+    /// the current process with tmux.
+    ///
     /// # Errors
     ///
     /// Returns an error if exec fails
+    #[cfg(unix)]
     pub fn attach(&self, name: &str) -> Result<()> {
         use std::os::unix::process::CommandExt;
 
@@ -219,6 +223,18 @@ impl Manager {
             .exec();
 
         Err(err).context("Failed to attach to tmux session")
+    }
+
+    /// Attach to a session (Windows stub - not supported)
+    ///
+    /// tmux is not available on Windows, so this always returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Always returns an error on Windows as tmux is not supported.
+    #[cfg(not(unix))]
+    pub fn attach(&self, _name: &str) -> Result<()> {
+        bail!("tmux attach is not supported on Windows")
     }
 
     /// Create a new window in an existing session
