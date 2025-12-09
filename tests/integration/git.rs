@@ -8,7 +8,7 @@ fn test_git_worktree_create_and_remove() -> Result<(), Box<dyn std::error::Error
     let repo = tenex::git::open_repository(&fixture.repo_path)?;
     let manager = tenex::git::WorktreeManager::new(&repo);
 
-    let worktree_path = fixture.worktree_dir.path().join("test-worktree");
+    let worktree_path = fixture.worktree_path().join("test-worktree");
     let branch_name = "test-branch";
 
     // Create worktree with new branch

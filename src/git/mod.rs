@@ -127,7 +127,10 @@ mod tests {
     fn test_repository_root() -> Result<(), Box<dyn std::error::Error>> {
         let (temp_dir, _repo) = init_test_repo()?;
         let root = repository_root(temp_dir.path())?;
-        assert_eq!(root, temp_dir.path());
+        // Canonicalize both paths to handle macOS /var -> /private/var symlink
+        let expected = temp_dir.path().canonicalize()?;
+        let actual = root.canonicalize()?;
+        assert_eq!(actual, expected);
         Ok(())
     }
 

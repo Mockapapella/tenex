@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -23,7 +23,14 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
       - name: Install pre-commit
         run: pip install pre-commit
+      - name: Start persistent tmux server
+        run: |
+          # Create a dummy session to keep the server running
+          tmux new-session -d -s keepalive 'sleep 3600'
       - name: Run pre-commit
         run: pre-commit run --all-files

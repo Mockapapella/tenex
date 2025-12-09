@@ -21,21 +21,21 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
         "agent1".to_string(),
         "echo".to_string(),
         fixture.session_name("agent1"),
-        fixture.worktree_dir.path().to_path_buf(),
+        fixture.worktree_path(),
         None,
     );
     let agent2 = Agent::new(
         "agent2".to_string(),
         "echo".to_string(),
         fixture.session_name("agent2"),
-        fixture.worktree_dir.path().to_path_buf(),
+        fixture.worktree_path(),
         None,
     );
     let agent3 = Agent::new(
         "agent3".to_string(),
         "echo".to_string(),
         fixture.session_name("agent3"),
-        fixture.worktree_dir.path().to_path_buf(),
+        fixture.worktree_path(),
         None,
     );
 
@@ -45,11 +45,7 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
     storage.add(agent3);
 
     // Only create a real tmux session for agent1
-    manager.create(
-        &agent1_session,
-        fixture.worktree_dir.path(),
-        Some("sleep 60"),
-    )?;
+    manager.create(&agent1_session, &fixture.worktree_path(), Some("sleep 60"))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Verify the session was created
@@ -142,7 +138,7 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
         "root".to_string(),
         "echo".to_string(),
         fixture.session_name("root"),
-        fixture.worktree_dir.path().to_path_buf(),
+        fixture.worktree_path(),
         None,
     );
     let root_session = root.tmux_session.clone();
@@ -150,7 +146,7 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
     storage.add(root.clone());
 
     // Create the root's tmux session with a long-running command
-    manager.create(&root_session, fixture.worktree_dir.path(), Some("sleep 60"))?;
+    manager.create(&root_session, &fixture.worktree_path(), Some("sleep 60"))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Verify session was created

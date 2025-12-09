@@ -27,7 +27,11 @@ pub struct TestFixture {
 impl TestFixture {
     pub fn new(test_name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
-        let repo_path = temp_dir.path().to_path_buf();
+        // Canonicalize to handle macOS symlink (/var -> /private/var)
+        let repo_path = temp_dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| temp_dir.path().to_path_buf());
 
         // Initialize git repo with initial commit
         let repo = Repository::init(&repo_path)?;
@@ -61,10 +65,17 @@ impl TestFixture {
     }
 
     pub fn config(&self) -> Config {
+        // Canonicalize worktree_dir to handle macOS symlink (/var -> /private/var)
+        let worktree_dir = self
+            .worktree_dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| self.worktree_dir.path().to_path_buf());
+
         Config {
             default_program: "echo".to_string(), // Use echo instead of claude for testing
             branch_prefix: format!("{}/", self.session_prefix),
-            worktree_dir: self.worktree_dir.path().to_path_buf(),
+            worktree_dir,
             auto_yes: false,
             poll_interval_ms: 100,
             max_agents: 10,
@@ -73,6 +84,15 @@ impl TestFixture {
 
     pub fn storage_path(&self) -> PathBuf {
         self.state_dir.path().join("agents.json")
+    }
+
+    /// Returns the canonicalized worktree directory path.
+    /// This handles macOS symlink (/var -> /private/var).
+    pub fn worktree_path(&self) -> PathBuf {
+        self.worktree_dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| self.worktree_dir.path().to_path_buf())
     }
 
     pub const fn create_storage() -> Storage {

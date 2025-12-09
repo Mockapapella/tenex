@@ -6,4 +6,4 @@ pub mod helpers;
 
 pub use agent_factory::create_child_agent;
 pub use fixture::TestFixture;
-pub use helpers::skip_if_no_tmux;
+pub use helpers::{assert_paths_eq, skip_if_no_tmux};
