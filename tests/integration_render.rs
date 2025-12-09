@@ -21,7 +21,6 @@ fn create_test_config() -> Config {
         worktree_dir: PathBuf::from("/tmp/test-worktrees"),
         auto_yes: false,
         poll_interval_ms: 100,
-        max_agents: 10,
     }
 }
 

@@ -25,24 +25,6 @@ fn test_cli_version() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_cli_config_show() -> Result<(), Box<dyn std::error::Error>> {
-    let output = tenex_bin().arg("config").output()?;
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("default_program"));
-    Ok(())
-}
-
-#[test]
-fn test_cli_config_path() -> Result<(), Box<dyn std::error::Error>> {
-    let output = tenex_bin().args(["config", "--path"]).output()?;
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("tenex"));
-    Ok(())
-}
-
-#[test]
 fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
     let output = tenex_bin().arg("--invalid-flag").output()?;
 
@@ -56,59 +38,6 @@ fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Erro
     // Should show help text on stdout
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage:"));
-    Ok(())
-}
-
-#[test]
-fn test_cli_unexpected_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
-    // Simulates typo like `--set` instead of `--set-agent`
-    let output = tenex_bin().args(["--set", "codex"]).output()?;
-
-    assert!(!output.status.success());
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error:"));
-
-    // Help on stdout should show the correct flag
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--set-agent"));
-    Ok(())
-}
-
-/// Test --set-agent flag saves config correctly
-///
-/// This test only runs on Linux because:
-/// - The dirs crate does NOT respect `XDG_CONFIG_HOME` on macOS (it uses ~/Library/Application Support)
-/// - On Windows, the config directory is in `AppData`
-///
-/// See: <https://lib.rs/crates/dirs>
-#[test]
-#[cfg(target_os = "linux")]
-fn test_cli_set_agent() -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs;
-    use tempfile::TempDir;
-
-    // Create a temp directory for config
-    let temp_dir = TempDir::new()?;
-    let config_dir = temp_dir.path().join("tenex");
-    fs::create_dir_all(&config_dir)?;
-
-    // Run with XDG_CONFIG_HOME set to temp directory
-    // Note: This only works on Linux; the dirs crate ignores XDG_CONFIG_HOME on macOS
-    let output = tenex_bin()
-        .args(["--set-agent", "test-agent"])
-        .env("XDG_CONFIG_HOME", temp_dir.path())
-        .output()?;
-
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Default agent set to: test-agent"));
-
-    // Verify config file was created with correct value
-    let config_path = config_dir.join("config.json");
-    let config_content = fs::read_to_string(&config_path)?;
-    assert!(config_content.contains("test-agent"));
     Ok(())
 }
 

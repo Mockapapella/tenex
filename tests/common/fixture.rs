@@ -78,7 +78,6 @@ impl TestFixture {
             worktree_dir,
             auto_yes: false,
             poll_interval_ms: 100,
-            max_agents: 10,
         }
     }
 

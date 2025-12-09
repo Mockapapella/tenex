@@ -1560,7 +1560,6 @@ mod tests {
             worktree_dir: PathBuf::from(format!("/tmp/tenex-render-test-{pid}")),
             auto_yes: false,
             poll_interval_ms: 100,
-            max_agents: 10,
         }
     }
 

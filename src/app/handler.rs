@@ -409,19 +409,6 @@ impl Actions {
     pub fn create_agent(self, app: &mut App, title: &str, prompt: Option<&str>) -> Result<()> {
         debug!(title, prompt, "Creating new agent");
 
-        if app.storage.len() >= app.config.max_agents {
-            warn!(
-                max = app.config.max_agents,
-                current = app.storage.len(),
-                "Maximum agents reached"
-            );
-            app.set_error(format!(
-                "Maximum agents ({}) reached",
-                app.config.max_agents
-            ));
-            return Ok(());
-        }
-
         let branch = app.config.generate_branch_name(title);
         let worktree_path = app.config.worktree_dir.join(&branch);
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
@@ -2479,32 +2466,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_agent_max_reached() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-        app.config.max_agents = 2;
-
-        // Add max agents
-        for i in 0..2 {
-            app.storage.add(Agent::new(
-                format!("agent{i}"),
-                "claude".to_string(),
-                format!("muster/agent{i}"),
-                PathBuf::from("/tmp"),
-                None,
-            ));
-        }
-
-        // Try to create another - should fail with error
-        handler.create_agent(&mut app, "overflow", None)?;
-        assert!(app.last_error.is_some());
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_push_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
@@ -3835,42 +3796,6 @@ mod tests {
 
         // Should fail because tmux session doesn't exist
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_spawn_terminal_no_max_agents_limit() {
-        use crate::agent::Agent;
-        use std::path::PathBuf;
-
-        let handler = Actions::new();
-        let mut app = create_test_app();
-
-        // Set a very low max_agents limit
-        app.config.max_agents = 2;
-
-        // Add 2 agents (at the limit)
-        for i in 0..2 {
-            app.storage.add(Agent::new(
-                format!("agent{i}"),
-                "claude".to_string(),
-                format!("tenex/agent{i}"),
-                PathBuf::from("/tmp"),
-                None,
-            ));
-        }
-        assert_eq!(app.storage.len(), 2);
-
-        // Spawning a terminal should NOT be blocked by max_agents
-        // (it will fail for other reasons - no tmux session - but not due to limit)
-        let result = handler.spawn_terminal(&mut app, None);
-
-        // Should fail due to tmux, not due to max agents
-        // (no error set on app means we didn't hit the max_agents limit)
-        assert!(result.is_err());
-        assert!(
-            app.last_error.is_none(),
-            "Should not have set max_agents error"
-        );
     }
 
     #[test]

@@ -1,8 +1,7 @@
-//! Tests for storage and config persistence
+//! Tests for storage persistence
 
 use crate::common::TestFixture;
 use tenex::agent::{Agent, Storage};
-use tenex::config::Config;
 
 #[test]
 fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,28 +30,6 @@ fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
 
     let agent = loaded.iter().next().ok_or("No agent found in storage")?;
     assert_eq!(agent.title, "persistent-agent");
-
-    Ok(())
-}
-
-#[test]
-fn test_config_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = TestFixture::new("config_persist")?;
-    let config_path = fixture.state_dir.path().join("config.json");
-
-    let config = Config {
-        default_program: "custom-program".to_string(),
-        max_agents: 20,
-        ..Config::default()
-    };
-
-    // Save config
-    config.save_to(&config_path)?;
-
-    // Load config
-    let loaded = Config::load_from(&config_path)?;
-    assert_eq!(loaded.default_program, "custom-program");
-    assert_eq!(loaded.max_agents, 20);
 
     Ok(())
 }
