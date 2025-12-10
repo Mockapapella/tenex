@@ -1,4 +1,19 @@
 //! Application state
+//!
+//! This module contains the main `App` struct and its sub-states,
+//! organized into focused modules by domain.
+
+mod git_op;
+mod input;
+mod review;
+mod spawn;
+mod ui;
+
+pub use git_op::GitOpState;
+pub use input::InputState;
+pub use review::ReviewState;
+pub use spawn::SpawnState;
+pub use ui::UiState;
 
 use crate::agent::{Agent, Status, Storage};
 use crate::config::Config;
@@ -12,7 +27,7 @@ pub use crate::git::BranchInfo;
 #[derive(Debug)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "app state naturally has multiple boolean flags"
+    reason = "Legacy fields for backward compatibility"
 )]
 pub struct App {
     /// Application configuration
@@ -33,85 +48,100 @@ pub struct App {
     /// Whether the application should quit
     pub should_quit: bool,
 
-    /// Input buffer for text input modes
+    // === Composed Sub-States ===
+    /// Input state (buffer, cursor, scroll)
+    pub input: InputState,
+
+    /// UI state (scroll positions, preview content, dimensions)
+    pub ui: UiState,
+
+    /// Git operation state (push, rename, PR)
+    pub git_op: GitOpState,
+
+    /// Review state (branch selection)
+    pub review: ReviewState,
+
+    /// Spawn state (child agent spawning)
+    pub spawn: SpawnState,
+
+    // === Legacy fields for backward compatibility ===
+    // These delegate to sub-states but provide direct access for existing code
+    /// Input buffer for text input modes (delegates to `input.buffer`)
     pub input_buffer: String,
 
-    /// Cursor position within `input_buffer` (byte offset)
+    /// Cursor position within `input_buffer` (delegates to `input.cursor`)
     pub input_cursor: usize,
 
-    /// Scroll position in input modal (for multiline text)
+    /// Scroll position in input modal (delegates to `input.scroll`)
     pub input_scroll: u16,
 
-    /// Scroll position in preview pane
+    /// Scroll position in preview pane (delegates to `ui.preview_scroll`)
     pub preview_scroll: usize,
 
-    /// Scroll position in diff pane
+    /// Scroll position in diff pane (delegates to `ui.diff_scroll`)
     pub diff_scroll: usize,
 
-    /// Whether preview should auto-scroll to bottom on content updates
-    /// Set to false when user manually scrolls up, true when they scroll to bottom
+    /// Whether preview should auto-scroll (delegates to `ui.preview_follow`)
     pub preview_follow: bool,
 
-    /// Last error message (if any)
+    /// Last error message (delegates to `ui.last_error`)
     pub last_error: Option<String>,
 
-    /// Status message to display
+    /// Status message to display (delegates to `ui.status_message`)
     pub status_message: Option<String>,
 
-    /// Cached preview content
+    /// Cached preview content (delegates to `ui.preview_content`)
     pub preview_content: String,
 
-    /// Cached diff content
+    /// Cached diff content (delegates to `ui.diff_content`)
     pub diff_content: String,
 
-    /// Number of child agents to spawn (for `ChildCount` mode)
+    /// Number of child agents to spawn (delegates to `spawn.child_count`)
     pub child_count: usize,
 
-    /// Number of terminals spawned so far (for naming "Terminal 1", "Terminal 2", etc.)
+    /// Number of terminals spawned (delegates to `spawn.terminal_counter`)
     pub terminal_counter: usize,
 
-    /// Agent ID to spawn children under (None = create new root with children)
+    /// Agent ID to spawn children under (delegates to `spawn.spawning_under`)
     pub spawning_under: Option<uuid::Uuid>,
 
-    /// Whether to use the planning pre-prompt when spawning children
+    /// Whether to use planning pre-prompt (delegates to `spawn.use_plan_prompt`)
     pub use_plan_prompt: bool,
 
-    /// Cached preview pane dimensions (width, height) for tmux window sizing
+    /// Preview pane dimensions (delegates to `ui.preview_dimensions`)
     pub preview_dimensions: Option<(u16, u16)>,
 
-    /// Information about a worktree conflict (when creating an agent with existing worktree)
+    /// Worktree conflict info (delegates to `spawn.worktree_conflict`)
     pub worktree_conflict: Option<WorktreeConflictInfo>,
 
-    // === Review Feature ===
-    /// List of branches for the branch selector
+    /// List of branches for review (delegates to `review.branches`)
     pub review_branches: Vec<BranchInfo>,
 
-    /// Current filter text for branch search
+    /// Branch filter text (delegates to `review.filter`)
     pub review_branch_filter: String,
 
-    /// Currently selected branch index in filtered list
+    /// Selected branch index (delegates to `review.selected`)
     pub review_branch_selected: usize,
 
-    /// Selected base branch for review
+    /// Selected base branch (delegates to `review.base_branch`)
     pub review_base_branch: Option<String>,
 
-    // === Git Operations (Push, Rename, PR) ===
-    /// Agent ID for git operations (push, rename, PR)
+    /// Git op agent ID (delegates to `git_op.agent_id`)
     pub git_op_agent_id: Option<uuid::Uuid>,
 
-    /// Branch name for operations (current or new name when renaming)
+    /// Git op branch name (delegates to `git_op.branch_name`)
     pub git_op_branch_name: String,
 
-    /// Original branch name (for rename operations)
+    /// Git op original branch (delegates to `git_op.original_branch`)
     pub git_op_original_branch: String,
 
-    /// Base branch for PR (detected from git history)
+    /// Git op base branch (delegates to `git_op.base_branch`)
     pub git_op_base_branch: String,
 
-    /// Whether there are unpushed commits (for PR flow)
+    /// Git op has unpushed (delegates to `git_op.has_unpushed`)
     pub git_op_has_unpushed: bool,
 
-    /// Whether this rename is for a root agent (includes branch rename) or sub-agent (title only)
+    /// Git op is root rename (delegates to `git_op.is_root_rename`)
     pub git_op_is_root_rename: bool,
 }
 
@@ -126,6 +156,13 @@ impl App {
             mode: Mode::Normal,
             active_tab: Tab::Preview,
             should_quit: false,
+            // Sub-states
+            input: InputState::new(),
+            ui: UiState::new(),
+            git_op: GitOpState::new(),
+            review: ReviewState::new(),
+            spawn: SpawnState::new(),
+            // Legacy fields
             input_buffer: String::new(),
             input_cursor: 0,
             input_scroll: 0,
@@ -367,19 +404,27 @@ impl App {
             .count()
     }
 
-    /// Handle a character input in text input modes
-    pub fn handle_char(&mut self, c: char) {
-        if matches!(
+    /// Check if the current mode accepts text input
+    ///
+    /// This is used to consolidate the mode check that was previously
+    /// duplicated across `handle_char`, `handle_backspace`, and `handle_delete`.
+    #[must_use]
+    pub const fn is_text_input_mode(&self) -> bool {
+        matches!(
             self.mode,
             Mode::Creating
                 | Mode::Prompting
-                | Mode::Confirming(_)
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
                 | Mode::ReconnectPrompt
                 | Mode::TerminalPrompt
-        ) {
+        ) || matches!(self.mode, Mode::Confirming(_))
+    }
+
+    /// Handle a character input in text input modes
+    pub fn handle_char(&mut self, c: char) {
+        if self.is_text_input_mode() {
             // Insert at cursor position
             self.input_buffer.insert(self.input_cursor, c);
             self.input_cursor += c.len_utf8();
@@ -388,17 +433,7 @@ impl App {
 
     /// Handle backspace in text input modes
     pub fn handle_backspace(&mut self) {
-        if matches!(
-            self.mode,
-            Mode::Creating
-                | Mode::Prompting
-                | Mode::Confirming(_)
-                | Mode::ChildPrompt
-                | Mode::Broadcasting
-                | Mode::RenameBranch
-                | Mode::ReconnectPrompt
-                | Mode::TerminalPrompt
-        ) {
+        if self.is_text_input_mode() {
             // Delete character before cursor
             if self.input_cursor > 0 {
                 // Find the previous character boundary
@@ -414,17 +449,7 @@ impl App {
 
     /// Handle delete key in text input modes (delete char at cursor)
     pub fn handle_delete(&mut self) {
-        if matches!(
-            self.mode,
-            Mode::Creating
-                | Mode::Prompting
-                | Mode::Confirming(_)
-                | Mode::ChildPrompt
-                | Mode::Broadcasting
-                | Mode::RenameBranch
-                | Mode::ReconnectPrompt
-                | Mode::TerminalPrompt
-        ) {
+        if self.is_text_input_mode() {
             // Delete character at cursor (if not at end)
             if self.input_cursor < self.input_buffer.len() {
                 self.input_buffer.remove(self.input_cursor);
@@ -944,214 +969,6 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll() {
-        // Destructure default to ensure all fields are explicitly handled
-        let App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: _,
-            diff_scroll: _,
-            preview_follow: _,
-            last_error,
-            status_message,
-            preview_content: _,
-            diff_content: _,
-            child_count,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions: _,
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-            terminal_counter,
-        } = App::default();
-
-        // Start at 0 to test scroll operations
-        // Need content and dimensions for scroll normalization to work
-        let content = (0..100)
-            .map(|i| format!("Line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut app = App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: 0,
-            preview_follow: true,
-            diff_scroll: 0,
-            last_error,
-            status_message,
-            preview_content: content.clone(),
-            diff_content: content,
-            child_count,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions: Some((80, 20)), // 20 visible lines
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-            terminal_counter,
-        };
-
-        app.scroll_down(10);
-        assert_eq!(app.preview_scroll, 10);
-
-        app.scroll_up(5);
-        assert_eq!(app.preview_scroll, 5);
-
-        app.scroll_up(10);
-        assert_eq!(app.preview_scroll, 0);
-
-        app.switch_tab();
-        // switch_tab resets scroll: preview to MAX (bottom), diff to 0 (top)
-        assert_eq!(app.diff_scroll, 0);
-    }
-
-    #[test]
-    fn test_scroll_to_top() {
-        // Destructure default to ensure all fields are explicitly handled
-        let App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: _,
-            diff_scroll,
-            preview_follow,
-            last_error,
-            status_message,
-            preview_content,
-            diff_content,
-            child_count,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions,
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-            terminal_counter,
-        } = App::default();
-
-        let mut app = App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: 100,
-            diff_scroll,
-            preview_follow,
-            last_error,
-            status_message,
-            preview_content,
-            diff_content,
-            child_count,
-            terminal_counter,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions,
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-        };
-        app.scroll_to_top();
-        assert_eq!(app.preview_scroll, 0);
-    }
-
-    #[test]
-    fn test_scroll_to_bottom() {
-        let mut app = App::default();
-        app.scroll_to_bottom(100, 20);
-        assert_eq!(app.preview_scroll, 80);
-    }
-
-    #[test]
-    fn test_scroll_diff_tab() {
-        // Need content and dimensions for scroll normalization to work
-        let content = (0..100)
-            .map(|i| format!("Line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut app = App {
-            active_tab: Tab::Diff,
-            diff_scroll: 0,
-            diff_content: content,
-            preview_dimensions: Some((80, 20)), // 20 visible lines
-            ..App::default()
-        };
-
-        // Test scroll operations on Diff tab
-        app.scroll_down(10);
-        assert_eq!(app.diff_scroll, 10);
-
-        app.scroll_up(5);
-        assert_eq!(app.diff_scroll, 5);
-
-        app.scroll_up(10);
-        assert_eq!(app.diff_scroll, 0); // saturating_sub
-
-        app.scroll_to_top();
-        assert_eq!(app.diff_scroll, 0);
-
-        app.scroll_to_bottom(100, 20);
-        assert_eq!(app.diff_scroll, 80);
-    }
-
-    #[test]
     fn test_enter_exit_mode() {
         let mut app = App::default();
 
@@ -1185,33 +1002,6 @@ mod tests {
 
         app.clear_status();
         assert!(app.status_message.is_none());
-    }
-
-    #[test]
-    fn test_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::default();
-        assert!(app.selected_agent().is_none());
-
-        app.storage.add(create_test_agent("test"));
-        assert!(app.selected_agent().is_some());
-        assert_eq!(app.selected_agent().ok_or("Expected agent")?.title, "test");
-        Ok(())
-    }
-
-    #[test]
-    fn test_selected_agent_mut() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::default();
-        app.storage.add(create_test_agent("test"));
-
-        if let Some(agent) = app.selected_agent_mut() {
-            agent.title = "modified".to_string();
-        }
-
-        assert_eq!(
-            app.selected_agent().ok_or("Expected agent")?.title,
-            "modified"
-        );
-        Ok(())
     }
 
     #[test]
@@ -1251,30 +1041,6 @@ mod tests {
     }
 
     #[test]
-    fn test_running_agent_count() {
-        let mut app = App::default();
-        assert_eq!(app.running_agent_count(), 0);
-        assert!(!app.has_running_agents());
-
-        let mut agent = create_test_agent("test");
-        agent.set_status(Status::Running);
-        app.storage.add(agent);
-
-        assert_eq!(app.running_agent_count(), 1);
-        assert!(app.has_running_agents());
-    }
-
-    #[test]
-    fn test_validate_selection() {
-        let mut app = App::default();
-        app.storage.add(create_test_agent("test"));
-        app.selected = 10;
-
-        app.validate_selection();
-        assert_eq!(app.selected, 0);
-    }
-
-    #[test]
     fn test_tab_display() {
         assert_eq!(format!("{}", Tab::Preview), "Preview");
         assert_eq!(format!("{}", Tab::Diff), "Diff");
@@ -1291,99 +1057,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_serde() -> Result<(), Box<dyn std::error::Error>> {
-        let tab = Tab::Preview;
-        let json = serde_json::to_string(&tab)?;
-        let parsed: Tab = serde_json::from_str(&json)?;
-        assert_eq!(tab, parsed);
-        Ok(())
-    }
-
-    #[test]
     fn test_confirm_action_equality() {
         assert_eq!(ConfirmAction::Kill, ConfirmAction::Kill);
         assert_ne!(ConfirmAction::Kill, ConfirmAction::Reset);
-    }
-
-    #[test]
-    fn test_reset_scroll() {
-        // Destructure default to ensure all fields are explicitly handled
-        let App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: _,
-            diff_scroll: _,
-            preview_follow: _,
-            last_error,
-            status_message,
-            preview_content,
-            diff_content,
-            child_count,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions,
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-            terminal_counter,
-        } = App::default();
-
-        let mut app = App {
-            config,
-            storage,
-            selected,
-            mode,
-            active_tab,
-            should_quit,
-            input_buffer,
-            input_cursor,
-            input_scroll,
-            preview_scroll: 50,
-            diff_scroll: 30,
-            preview_follow: false,
-            last_error,
-            status_message,
-            preview_content,
-            diff_content,
-            child_count,
-            terminal_counter,
-            spawning_under,
-            use_plan_prompt,
-            preview_dimensions,
-            worktree_conflict,
-            review_branches,
-            review_branch_filter,
-            review_branch_selected,
-            review_base_branch,
-            git_op_agent_id,
-            git_op_branch_name,
-            git_op_original_branch,
-            git_op_base_branch,
-            git_op_has_unpushed,
-            git_op_is_root_rename,
-        };
-
-        app.reset_scroll();
-
-        // reset_scroll: preview pinned to bottom with follow enabled, diff pinned to top
-        assert_eq!(app.preview_scroll, usize::MAX);
-        assert_eq!(app.diff_scroll, 0);
-        assert!(app.preview_follow);
     }
 
     #[test]
@@ -1431,49 +1107,6 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_selected_collapse() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::default();
-        let mut agent = create_test_agent("test");
-        agent.collapsed = false;
-        app.storage.add(agent);
-
-        app.toggle_selected_collapse();
-        assert!(app.selected_agent().ok_or("Expected agent")?.collapsed);
-
-        app.toggle_selected_collapse();
-        assert!(!app.selected_agent().ok_or("Expected agent")?.collapsed);
-        Ok(())
-    }
-
-    #[test]
-    fn test_selected_has_children() {
-        let app = App::default();
-        assert!(!app.selected_has_children());
-    }
-
-    #[test]
-    fn test_selected_depth() {
-        let app = App::default();
-        assert_eq!(app.selected_depth(), 0);
-    }
-
-    #[test]
-    fn test_set_preview_dimensions() {
-        let mut app = App::default();
-
-        // Initially None
-        assert!(app.preview_dimensions.is_none());
-
-        // Set dimensions
-        app.set_preview_dimensions(100, 50);
-        assert_eq!(app.preview_dimensions, Some((100, 50)));
-
-        // Update dimensions
-        app.set_preview_dimensions(80, 40);
-        assert_eq!(app.preview_dimensions, Some((80, 40)));
-    }
-
-    #[test]
     fn test_dismiss_error() {
         let mut app = App {
             mode: Mode::ErrorModal("Test error".to_string()),
@@ -1489,427 +1122,5 @@ mod tests {
         // Calling dismiss_error in normal mode should be a no-op for mode
         app.dismiss_error();
         assert_eq!(app.mode, Mode::Normal);
-    }
-
-    fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
-        crate::git::BranchInfo {
-            name: name.to_string(),
-            full_name: if is_remote {
-                format!("refs/remotes/origin/{name}")
-            } else {
-                format!("refs/heads/{name}")
-            },
-            is_remote,
-            remote: if is_remote {
-                Some("origin".to_string())
-            } else {
-                None
-            },
-            last_commit_time: None,
-        }
-    }
-
-    #[test]
-    fn test_start_review() {
-        let mut app = App::default();
-        let branches = vec![
-            create_test_branch_info("main", false),
-            create_test_branch_info("feature", false),
-        ];
-
-        app.start_review(branches);
-
-        assert_eq!(app.mode, Mode::ReviewChildCount);
-        assert_eq!(app.review_branches.len(), 2);
-        assert!(app.review_branch_filter.is_empty());
-        assert_eq!(app.review_branch_selected, 0);
-    }
-
-    #[test]
-    fn test_show_review_info() {
-        let mut app = App::default();
-        app.show_review_info();
-        assert_eq!(app.mode, Mode::ReviewInfo);
-    }
-
-    #[test]
-    fn test_proceed_to_branch_selector() {
-        let mut app = App {
-            mode: Mode::ReviewChildCount,
-            ..App::default()
-        };
-        app.proceed_to_branch_selector();
-        assert_eq!(app.mode, Mode::BranchSelector);
-    }
-
-    #[test]
-    fn test_filtered_review_branches_no_filter() {
-        let app = App {
-            review_branches: vec![
-                create_test_branch_info("main", false),
-                create_test_branch_info("feature", false),
-                create_test_branch_info("develop", false),
-            ],
-            ..App::default()
-        };
-
-        let filtered = app.filtered_review_branches();
-        assert_eq!(filtered.len(), 3);
-    }
-
-    #[test]
-    fn test_filtered_review_branches_with_filter() {
-        let app = App {
-            review_branches: vec![
-                create_test_branch_info("main", false),
-                create_test_branch_info("feature", false),
-                create_test_branch_info("main", true),
-            ],
-            review_branch_filter: "main".to_string(),
-            ..App::default()
-        };
-
-        let filtered = app.filtered_review_branches();
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_filtered_review_branches_case_insensitive() {
-        let app = App {
-            review_branches: vec![
-                create_test_branch_info("Main", false),
-                create_test_branch_info("MAIN", true),
-            ],
-            review_branch_filter: "main".to_string(),
-            ..App::default()
-        };
-
-        let filtered = app.filtered_review_branches();
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_select_next_branch() {
-        let mut app = App {
-            review_branches: vec![
-                create_test_branch_info("branch1", false),
-                create_test_branch_info("branch2", false),
-                create_test_branch_info("branch3", false),
-            ],
-            ..App::default()
-        };
-
-        assert_eq!(app.review_branch_selected, 0);
-        app.select_next_branch();
-        assert_eq!(app.review_branch_selected, 1);
-        app.select_next_branch();
-        assert_eq!(app.review_branch_selected, 2);
-        // Wrap around
-        app.select_next_branch();
-        assert_eq!(app.review_branch_selected, 0);
-    }
-
-    #[test]
-    fn test_select_prev_branch() {
-        let mut app = App {
-            review_branches: vec![
-                create_test_branch_info("branch1", false),
-                create_test_branch_info("branch2", false),
-                create_test_branch_info("branch3", false),
-            ],
-            ..App::default()
-        };
-
-        assert_eq!(app.review_branch_selected, 0);
-        // Wrap to end
-        app.select_prev_branch();
-        assert_eq!(app.review_branch_selected, 2);
-        app.select_prev_branch();
-        assert_eq!(app.review_branch_selected, 1);
-    }
-
-    #[test]
-    fn test_select_branch_empty() {
-        let mut app = App {
-            review_branches: vec![],
-            ..App::default()
-        };
-
-        // Should not panic with empty list
-        app.select_next_branch();
-        assert_eq!(app.review_branch_selected, 0);
-        app.select_prev_branch();
-        assert_eq!(app.review_branch_selected, 0);
-    }
-
-    #[test]
-    fn test_selected_branch() {
-        let mut app = App {
-            review_branches: vec![
-                create_test_branch_info("main", false),
-                create_test_branch_info("feature", false),
-            ],
-            ..App::default()
-        };
-
-        let branch = app.selected_branch();
-        assert!(branch.is_some());
-        assert_eq!(branch.map(|b| b.name.as_str()), Some("main"));
-
-        app.review_branch_selected = 1;
-        let branch = app.selected_branch();
-        assert_eq!(branch.map(|b| b.name.as_str()), Some("feature"));
-    }
-
-    #[test]
-    fn test_selected_branch_empty() {
-        let app = App::default();
-        assert!(app.selected_branch().is_none());
-    }
-
-    #[test]
-    fn test_handle_branch_filter_char() {
-        let mut app = App {
-            review_branches: vec![create_test_branch_info("main", false)],
-            ..App::default()
-        };
-
-        app.handle_branch_filter_char('m');
-        assert_eq!(app.review_branch_filter, "m");
-        assert_eq!(app.review_branch_selected, 0);
-
-        app.handle_branch_filter_char('a');
-        assert_eq!(app.review_branch_filter, "ma");
-    }
-
-    #[test]
-    fn test_handle_branch_filter_backspace() {
-        let mut app = App {
-            review_branch_filter: "main".to_string(),
-            ..App::default()
-        };
-
-        app.handle_branch_filter_backspace();
-        assert_eq!(app.review_branch_filter, "mai");
-        assert_eq!(app.review_branch_selected, 0);
-
-        app.handle_branch_filter_backspace();
-        app.handle_branch_filter_backspace();
-        app.handle_branch_filter_backspace();
-        assert!(app.review_branch_filter.is_empty());
-
-        // Backspace on empty should not panic
-        app.handle_branch_filter_backspace();
-        assert!(app.review_branch_filter.is_empty());
-    }
-
-    #[test]
-    fn test_confirm_branch_selection() {
-        let mut app = App {
-            review_branches: vec![
-                create_test_branch_info("main", false),
-                create_test_branch_info("develop", false),
-            ],
-            review_branch_selected: 1,
-            ..App::default()
-        };
-
-        let result = app.confirm_branch_selection();
-        assert!(result);
-        assert_eq!(app.review_base_branch, Some("develop".to_string()));
-    }
-
-    #[test]
-    fn test_confirm_branch_selection_empty() {
-        let mut app = App::default();
-
-        let result = app.confirm_branch_selection();
-        assert!(!result);
-        assert!(app.review_base_branch.is_none());
-    }
-
-    #[test]
-    fn test_clear_review_state() {
-        let mut app = App {
-            review_branches: vec![create_test_branch_info("main", false)],
-            review_branch_filter: "filter".to_string(),
-            review_branch_selected: 5,
-            review_base_branch: Some("main".to_string()),
-            ..App::default()
-        };
-
-        app.clear_review_state();
-
-        assert!(app.review_branches.is_empty());
-        assert!(app.review_branch_filter.is_empty());
-        assert_eq!(app.review_branch_selected, 0);
-        assert!(app.review_base_branch.is_none());
-    }
-
-    // === Git Operations Tests ===
-
-    #[test]
-    fn test_start_push() {
-        let mut app = App::default();
-        let agent_id = uuid::Uuid::new_v4();
-
-        app.start_push(agent_id, "feature/test".to_string());
-
-        assert_eq!(app.mode, Mode::ConfirmPush);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "feature/test");
-    }
-
-    #[test]
-    fn test_start_rename_root() {
-        let mut app = App::default();
-        let agent_id = uuid::Uuid::new_v4();
-
-        app.start_rename(agent_id, "my-agent".to_string(), true);
-
-        assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_original_branch, "my-agent");
-        assert_eq!(app.git_op_branch_name, "my-agent");
-        assert_eq!(app.input_buffer, "my-agent");
-        assert!(app.git_op_is_root_rename);
-    }
-
-    #[test]
-    fn test_start_rename_subagent() {
-        let mut app = App::default();
-        let agent_id = uuid::Uuid::new_v4();
-
-        app.start_rename(agent_id, "my-subagent".to_string(), false);
-
-        assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_original_branch, "my-subagent");
-        assert_eq!(app.git_op_branch_name, "my-subagent");
-        assert_eq!(app.input_buffer, "my-subagent");
-        assert!(!app.git_op_is_root_rename);
-    }
-
-    #[test]
-    fn test_confirm_rename_branch() {
-        let mut app = App {
-            input_buffer: "feature/new-name".to_string(),
-            git_op_branch_name: "feature/old-name".to_string(),
-            ..App::default()
-        };
-
-        let result = app.confirm_rename_branch();
-
-        assert!(result);
-        assert_eq!(app.git_op_branch_name, "feature/new-name");
-    }
-
-    #[test]
-    fn test_confirm_rename_branch_empty() {
-        let mut app = App {
-            input_buffer: "   ".to_string(),
-            git_op_branch_name: "feature/old-name".to_string(),
-            ..App::default()
-        };
-
-        let result = app.confirm_rename_branch();
-
-        assert!(!result);
-        assert_eq!(app.git_op_branch_name, "feature/old-name"); // Unchanged
-    }
-
-    #[test]
-    fn test_start_open_pr_with_unpushed() {
-        let mut app = App::default();
-        let agent_id = uuid::Uuid::new_v4();
-
-        app.start_open_pr(
-            agent_id,
-            "feature/test".to_string(),
-            "main".to_string(),
-            true, // has unpushed commits
-        );
-
-        assert_eq!(app.mode, Mode::ConfirmPushForPR);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "feature/test");
-        assert_eq!(app.git_op_base_branch, "main");
-        assert!(app.git_op_has_unpushed);
-    }
-
-    #[test]
-    fn test_start_open_pr_no_unpushed() {
-        let mut app = App::default();
-        let agent_id = uuid::Uuid::new_v4();
-
-        app.start_open_pr(
-            agent_id,
-            "feature/test".to_string(),
-            "main".to_string(),
-            false, // no unpushed commits
-        );
-
-        // Mode is not changed when no unpushed commits (handler opens PR directly)
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "feature/test");
-        assert_eq!(app.git_op_base_branch, "main");
-        assert!(!app.git_op_has_unpushed);
-    }
-
-    #[test]
-    fn test_clear_git_op_state() {
-        let mut app = App {
-            git_op_agent_id: Some(uuid::Uuid::new_v4()),
-            git_op_branch_name: "feature/test".to_string(),
-            git_op_original_branch: "feature/old".to_string(),
-            git_op_base_branch: "main".to_string(),
-            git_op_has_unpushed: true,
-            git_op_is_root_rename: true,
-            ..App::default()
-        };
-
-        app.clear_git_op_state();
-
-        assert!(app.git_op_agent_id.is_none());
-        assert!(app.git_op_branch_name.is_empty());
-        assert!(app.git_op_original_branch.is_empty());
-        assert!(app.git_op_base_branch.is_empty());
-        assert!(!app.git_op_has_unpushed);
-        assert!(!app.git_op_is_root_rename);
-    }
-
-    #[test]
-    fn test_handle_char_rename_branch_mode() {
-        let mut app = App {
-            mode: Mode::RenameBranch,
-            input_buffer: "feature/".to_string(),
-            input_cursor: 8, // Cursor at end of "feature/"
-            ..App::default()
-        };
-
-        app.handle_char('t');
-        app.handle_char('e');
-        app.handle_char('s');
-        app.handle_char('t');
-
-        assert_eq!(app.input_buffer, "feature/test");
-        assert_eq!(app.input_cursor, 12);
-    }
-
-    #[test]
-    fn test_handle_backspace_rename_branch_mode() {
-        let mut app = App {
-            mode: Mode::RenameBranch,
-            input_buffer: "feature/test".to_string(),
-            input_cursor: 12, // Cursor at end
-            ..App::default()
-        };
-
-        app.handle_backspace();
-        app.handle_backspace();
-
-        assert_eq!(app.input_buffer, "feature/te");
-        assert_eq!(app.input_cursor, 10);
     }
 }

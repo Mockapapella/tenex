@@ -1,5 +1,6 @@
 //! Terminal User Interface for Tenex
 
+mod input;
 mod render;
 
 use anyhow::Result;
@@ -7,9 +8,7 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
-        event::{
-            self as crossterm_event, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers,
-        },
+        event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture},
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
@@ -18,9 +17,7 @@ use ratatui::{
 use std::io;
 use std::process::Command;
 use std::time::Duration;
-use tenex::app::{Actions, App, ConfirmAction, Event, Handler, Mode};
-use tenex::config::Action;
-use uuid::Uuid;
+use tenex::app::{Actions, App, Event, Handler, Mode};
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
@@ -83,7 +80,7 @@ fn run_loop(
                     break; // Timeout - exit inner loop
                 }
                 Event::Key(key) => {
-                    handle_key_event(
+                    input::handle_key_event(
                         app,
                         action_handler,
                         key.code,
@@ -169,290 +166,11 @@ fn run_loop(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Key event handler needs to handle all modes"
-)]
-fn handle_key_event(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    batched_keys: &mut Vec<String>,
-) -> Result<()> {
-    match &app.mode {
-        Mode::Creating
-        | Mode::Prompting
-        | Mode::ChildPrompt
-        | Mode::Broadcasting
-        | Mode::ReconnectPrompt
-        | Mode::TerminalPrompt => {
-            match code {
-                KeyCode::Enter if modifiers.contains(KeyModifiers::ALT) => {
-                    // Alt+Enter inserts a newline
-                    app.handle_char('\n');
-                }
-                KeyCode::Enter => {
-                    let input = app.input_buffer.clone();
-                    if !input.is_empty()
-                        || matches!(
-                            app.mode,
-                            Mode::ReconnectPrompt
-                                | Mode::Prompting
-                                | Mode::ChildPrompt
-                                | Mode::TerminalPrompt
-                        )
-                    {
-                        // Remember the original mode before the action
-                        let original_mode = app.mode.clone();
-                        let result = match app.mode {
-                            Mode::Creating => action_handler.create_agent(app, &input, None),
-                            Mode::Prompting => {
-                                let short_id = &Uuid::new_v4().to_string()[..8];
-                                let title = format!("Agent ({short_id})");
-                                let prompt = if input.is_empty() {
-                                    None
-                                } else {
-                                    Some(input.as_str())
-                                };
-                                action_handler.create_agent(app, &title, prompt)
-                            }
-                            Mode::ChildPrompt => {
-                                let prompt = if input.is_empty() {
-                                    None
-                                } else {
-                                    Some(input.as_str())
-                                };
-                                action_handler.spawn_children(app, prompt)
-                            }
-                            Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
-                            Mode::ReconnectPrompt => {
-                                // Update the prompt in the conflict info and reconnect
-                                if let Some(ref mut conflict) = app.worktree_conflict {
-                                    conflict.prompt =
-                                        if input.is_empty() { None } else { Some(input) };
-                                }
-                                action_handler.reconnect_to_worktree(app)
-                            }
-                            Mode::TerminalPrompt => {
-                                let command = if input.is_empty() {
-                                    None
-                                } else {
-                                    Some(input.as_str())
-                                };
-                                action_handler.spawn_terminal(app, command)
-                            }
-                            _ => Ok(()),
-                        };
-                        if let Err(e) = result {
-                            app.set_error(format!("Failed: {e:#}"));
-                            // Don't call exit_mode() - set_error already set ErrorModal mode
-                            return Ok(());
-                        }
-                        // Only exit mode if it wasn't changed by the action
-                        // (e.g., create_agent might set Confirming mode for worktree conflicts)
-                        if app.mode == original_mode {
-                            app.exit_mode();
-                        }
-                        return Ok(());
-                    }
-                    app.exit_mode();
-                }
-                KeyCode::Esc => {
-                    // For ReconnectPrompt, cancel and clear conflict info
-                    if matches!(app.mode, Mode::ReconnectPrompt) {
-                        app.worktree_conflict = None;
-                    }
-                    app.exit_mode();
-                }
-                KeyCode::Char(c) => app.handle_char(c),
-                KeyCode::Backspace => app.handle_backspace(),
-                KeyCode::Delete => app.handle_delete(),
-                KeyCode::Left => app.input_cursor_left(),
-                KeyCode::Right => app.input_cursor_right(),
-                KeyCode::Up => app.input_cursor_up(),
-                KeyCode::Down => app.input_cursor_down(),
-                KeyCode::Home => app.input_cursor_home(),
-                KeyCode::End => app.input_cursor_end(),
-                _ => {}
-            }
-            return Ok(());
-        }
-        Mode::ChildCount => match code {
-            KeyCode::Enter => app.proceed_to_child_prompt(),
-            KeyCode::Esc => app.exit_mode(),
-            KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
-            KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
-            _ => {}
-        },
-        Mode::ReviewInfo => {
-            // Any key dismisses the info popup
-            app.exit_mode();
-        }
-        Mode::ReviewChildCount => match code {
-            KeyCode::Enter => app.proceed_to_branch_selector(),
-            KeyCode::Esc => app.exit_mode(),
-            KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
-            KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
-            _ => {}
-        },
-        Mode::BranchSelector => match code {
-            KeyCode::Enter => {
-                if app.confirm_branch_selection()
-                    && let Err(e) = action_handler.spawn_review_agents(app)
-                {
-                    app.set_error(format!("Failed to spawn review agents: {e:#}"));
-                }
-                app.exit_mode();
-            }
-            KeyCode::Esc => {
-                app.clear_review_state();
-                app.exit_mode();
-            }
-            KeyCode::Up | KeyCode::Char('k') => app.select_prev_branch(),
-            KeyCode::Down | KeyCode::Char('j') => app.select_next_branch(),
-            KeyCode::Char(c) => app.handle_branch_filter_char(c),
-            KeyCode::Backspace => app.handle_branch_filter_backspace(),
-            _ => {}
-        },
-        Mode::ConfirmPush => match code {
-            KeyCode::Char('y' | 'Y') => {
-                if let Err(e) = Actions::execute_push(app) {
-                    app.set_error(format!("Push failed: {e:#}"));
-                }
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.clear_git_op_state();
-                app.exit_mode();
-            }
-            _ => {}
-        },
-        Mode::RenameBranch => match code {
-            KeyCode::Enter => {
-                if app.confirm_rename_branch()
-                    && let Err(e) = Actions::execute_rename(app)
-                {
-                    app.set_error(format!("Rename failed: {e:#}"));
-                }
-                // If rename failed (empty name), stay in mode
-            }
-            KeyCode::Esc => {
-                app.clear_git_op_state();
-                app.exit_mode();
-            }
-            KeyCode::Char(c) => app.handle_char(c),
-            KeyCode::Backspace => app.handle_backspace(),
-            _ => {}
-        },
-        Mode::ConfirmPushForPR => match code {
-            KeyCode::Char('y' | 'Y') => {
-                if let Err(e) = Actions::execute_push_and_open_pr(app) {
-                    app.set_error(format!("Failed to push and open PR: {e:#}"));
-                }
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.clear_git_op_state();
-                app.exit_mode();
-            }
-            _ => {}
-        },
-        Mode::Confirming(action) => match action {
-            ConfirmAction::WorktreeConflict => match code {
-                KeyCode::Char('r' | 'R') => {
-                    // Transition to ReconnectPrompt mode to allow editing the prompt
-                    // Pre-fill input buffer with existing prompt if available
-                    if let Some(ref conflict) = app.worktree_conflict {
-                        app.input_buffer = conflict.prompt.clone().unwrap_or_default();
-                        app.input_cursor = app.input_buffer.len();
-                    }
-                    app.enter_mode(Mode::ReconnectPrompt);
-                }
-                KeyCode::Char('d' | 'D') => {
-                    app.exit_mode();
-                    action_handler.recreate_worktree(app)?;
-                }
-                KeyCode::Esc => {
-                    app.worktree_conflict = None;
-                    app.exit_mode();
-                }
-                _ => {}
-            },
-            _ => match code {
-                KeyCode::Char('y' | 'Y') => {
-                    return action_handler.handle_action(app, Action::Confirm);
-                }
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => app.exit_mode(),
-                _ => {}
-            },
-        },
-        Mode::Help => app.exit_mode(),
-        Mode::ErrorModal(_) => app.dismiss_error(),
-        Mode::PreviewFocused => {
-            // Ctrl+q exits preview focus mode (same key quits app when not focused)
-            if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
-                app.exit_mode();
-                return Ok(());
-            }
-
-            // Collect keys for batched sending (done after event drain loop)
-            if let Some(keys) = keycode_to_tmux_keys(code, modifiers) {
-                batched_keys.push(keys);
-            }
-        }
-        Mode::Normal | Mode::Scrolling => {
-            if let Some(action) = tenex::config::get_action(code, modifiers) {
-                action_handler.handle_action(app, action)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Convert a `KeyCode` and modifiers to tmux send-keys format
-fn keycode_to_tmux_keys(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
-    let base_key = match code {
-        KeyCode::Char(c) => {
-            if modifiers.contains(KeyModifiers::CONTROL) {
-                // Ctrl+letter: C-a, C-b, etc.
-                return Some(format!("C-{c}"));
-            } else if modifiers.contains(KeyModifiers::ALT) {
-                // Alt+letter: M-a, M-b, etc.
-                return Some(format!("M-{c}"));
-            }
-            c.to_string()
-        }
-        KeyCode::Enter => "Enter".to_string(),
-        KeyCode::Esc => "Escape".to_string(),
-        KeyCode::Backspace => "BSpace".to_string(),
-        KeyCode::Tab => "Tab".to_string(),
-        KeyCode::BackTab => "BTab".to_string(),
-        KeyCode::Up => "Up".to_string(),
-        KeyCode::Down => "Down".to_string(),
-        KeyCode::Left => "Left".to_string(),
-        KeyCode::Right => "Right".to_string(),
-        KeyCode::Home => "Home".to_string(),
-        KeyCode::End => "End".to_string(),
-        KeyCode::PageUp => "PageUp".to_string(),
-        KeyCode::PageDown => "PageDown".to_string(),
-        KeyCode::Delete => "DC".to_string(),
-        KeyCode::Insert => "IC".to_string(),
-        KeyCode::F(n) => format!("F{n}"),
-        _ => return None,
-    };
-
-    // Handle Ctrl/Alt modifiers for non-character keys
-    if modifiers.contains(KeyModifiers::CONTROL) && !matches!(code, KeyCode::Char(_)) {
-        Some(format!("C-{base_key}"))
-    } else if modifiers.contains(KeyModifiers::ALT) && !matches!(code, KeyCode::Char(_)) {
-        Some(format!("M-{base_key}"))
-    } else {
-        Some(base_key)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use input::keycode_to_tmux_keys;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
     use tenex::agent::Storage;
     use tenex::app::ConfirmAction;
@@ -525,7 +243,7 @@ mod tests {
         (App::new(config, Storage::default()), cleanup)
     }
 
-    /// Test helper that wraps `handle_key_event` with an empty `batched_keys` vec
+    /// Test helper that wraps `input::handle_key_event` with an empty `batched_keys` vec
     fn test_key_event(
         app: &mut App,
         handler: Actions,
@@ -533,7 +251,7 @@ mod tests {
         modifiers: KeyModifiers,
     ) -> Result<()> {
         let mut keys = Vec::new();
-        handle_key_event(app, handler, code, modifiers, &mut keys)
+        input::handle_key_event(app, handler, code, modifiers, &mut keys)
     }
 
     #[test]
@@ -1867,7 +1585,7 @@ mod tests {
 
         // Regular keys should be collected for batching (not change mode)
         let mut keys = Vec::new();
-        handle_key_event(
+        input::handle_key_event(
             &mut app,
             handler,
             KeyCode::Char('a'),
@@ -1878,7 +1596,7 @@ mod tests {
         assert_eq!(keys, vec!["a".to_string()]);
 
         // Special keys also collected
-        handle_key_event(
+        input::handle_key_event(
             &mut app,
             handler,
             KeyCode::Enter,
