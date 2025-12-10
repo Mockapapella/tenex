@@ -321,11 +321,12 @@ fn test_full_render_normal_mode() -> Result<(), Box<dyn std::error::Error>> {
         let content_area = Rect::new(30, 0, area.width - 30, area.height - 1);
         match app.active_tab {
             Tab::Preview => {
-                let preview = PreviewWidget::new(&app.preview_content).scroll(app.preview_scroll);
+                let preview =
+                    PreviewWidget::new(&app.ui.preview_content).scroll(app.ui.preview_scroll);
                 frame.render_widget(preview.to_paragraph(), content_area);
             }
             Tab::Diff => {
-                let diff = DiffViewWidget::new(&app.diff_content).scroll(app.diff_scroll);
+                let diff = DiffViewWidget::new(&app.ui.diff_content).scroll(app.ui.diff_scroll);
                 frame.render_widget(diff.to_paragraph(), content_area);
             }
         }
@@ -363,7 +364,7 @@ fn test_full_render_creating_mode() -> Result<(), Box<dyn std::error::Error>> {
         frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
 
         // Status bar shows input prompt
-        let status = StatusBarWidget::status(format!("Enter name: {}", app.input_buffer).as_str());
+        let status = StatusBarWidget::status(format!("Enter name: {}", app.input.buffer).as_str());
         frame.render_widget(
             status.to_paragraph(),
             Rect::new(0, area.height - 1, area.width, 1),
@@ -443,7 +444,7 @@ fn test_full_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(app.active_tab, Tab::Diff);
 
     // Set some diff content
-    app.diff_content = "diff --git a/file.txt b/file.txt\n+added line".to_string();
+    app.ui.diff_content = "diff --git a/file.txt b/file.txt\n+added line".to_string();
 
     terminal.draw(|frame| {
         let area = frame.area();
@@ -452,13 +453,14 @@ fn test_full_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
         frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
 
         // Clamp scroll like the real render function does (switch_tab sets to usize::MAX)
-        let line_count = app.diff_content.lines().count();
+        let line_count = app.ui.diff_content.lines().count();
         let visible_height = usize::from(area.height.saturating_sub(3));
         let scroll = app
+            .ui
             .diff_scroll
             .min(line_count.saturating_sub(visible_height));
 
-        let diff = DiffViewWidget::new(&app.diff_content).scroll(scroll);
+        let diff = DiffViewWidget::new(&app.ui.diff_content).scroll(scroll);
         frame.render_widget(
             diff.to_paragraph(),
             Rect::new(30, 0, area.width - 30, area.height - 1),
@@ -491,14 +493,14 @@ fn test_full_render_with_error() -> Result<(), Box<dyn std::error::Error>> {
         let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
         frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
 
-        let preview = PreviewWidget::new(&app.preview_content).scroll(app.preview_scroll);
+        let preview = PreviewWidget::new(&app.ui.preview_content).scroll(app.ui.preview_scroll);
         frame.render_widget(
             preview.to_paragraph(),
             Rect::new(30, 0, area.width - 30, area.height - 1),
         );
 
         // Error should be shown in status bar
-        if let Some(ref error) = app.last_error {
+        if let Some(ref error) = app.ui.last_error {
             let status = StatusBarWidget::error(error);
             frame.render_widget(
                 status.to_paragraph(),
@@ -534,7 +536,8 @@ fn test_render_various_terminal_sizes() -> Result<(), Box<dyn std::error::Error>
             );
 
             if area.width > 30 {
-                let preview = PreviewWidget::new(&app.preview_content).scroll(app.preview_scroll);
+                let preview =
+                    PreviewWidget::new(&app.ui.preview_content).scroll(app.ui.preview_scroll);
                 frame.render_widget(
                     preview.to_paragraph(),
                     Rect::new(list_width, 0, area.width - list_width, area.height - 1),

@@ -190,7 +190,8 @@ impl Actions {
     /// Returns an error if the push operation fails
     pub fn execute_push(app: &mut App) -> Result<()> {
         let agent_id = app
-            .git_op_agent_id
+            .git_op
+            .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID for push"))?;
 
         let agent = app
@@ -199,7 +200,7 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let worktree_path = agent.worktree_path.clone();
-        let branch_name = app.git_op_branch_name.clone();
+        let branch_name = app.git_op.branch_name.clone();
 
         debug!(branch = %branch_name, "Executing push");
 
@@ -235,7 +236,8 @@ impl Actions {
     /// Returns an error if the rename operation fails
     pub fn execute_rename(app: &mut App) -> Result<()> {
         let agent_id = app
-            .git_op_agent_id
+            .git_op
+            .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID for rename"))?;
 
         // Verify agent exists
@@ -243,9 +245,9 @@ impl Actions {
             anyhow::bail!("Agent not found");
         }
 
-        let old_name = app.git_op_original_branch.clone();
-        let new_name = app.git_op_branch_name.clone();
-        let is_root = app.git_op_is_root_rename;
+        let old_name = app.git_op.original_branch.clone();
+        let new_name = app.git_op.branch_name.clone();
+        let is_root = app.git_op.is_root_rename;
 
         if old_name == new_name {
             app.set_status("Name unchanged");
@@ -508,7 +510,8 @@ impl Actions {
     /// Returns an error if the push or PR open fails
     pub fn execute_push_and_open_pr(app: &mut App) -> Result<()> {
         let agent_id = app
-            .git_op_agent_id
+            .git_op
+            .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID for push"))?;
 
         let agent = app
@@ -517,7 +520,7 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let worktree_path = agent.worktree_path.clone();
-        let branch_name = app.git_op_branch_name.clone();
+        let branch_name = app.git_op.branch_name.clone();
 
         debug!(branch = %branch_name, "Executing push before opening PR");
 
@@ -544,7 +547,8 @@ impl Actions {
     /// Open PR in browser using gh CLI
     pub(crate) fn open_pr_in_browser(app: &mut App) -> Result<()> {
         let agent_id = app
-            .git_op_agent_id
+            .git_op
+            .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID for PR"))?;
 
         let agent = app
@@ -553,8 +557,8 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let worktree_path = agent.worktree_path.clone();
-        let branch = app.git_op_branch_name.clone();
-        let base_branch = app.git_op_base_branch.clone();
+        let branch = app.git_op.branch_name.clone();
+        let base_branch = app.git_op.base_branch.clone();
 
         debug!(
             branch = %branch,
@@ -631,15 +635,15 @@ mod tests {
         handler.handle_action(&mut app, crate::config::Action::Push)?;
 
         assert_eq!(app.mode, Mode::ConfirmPush);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "muster/test");
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.git_op.branch_name, "muster/test");
         Ok(())
     }
 
     #[test]
     fn test_execute_push_no_agent_id() {
         let mut app = create_test_app();
-        app.git_op_agent_id = None;
+        app.git_op.agent_id = None;
 
         let result = Actions::execute_push(&mut app);
         assert!(result.is_err());
@@ -648,8 +652,8 @@ mod tests {
     #[test]
     fn test_execute_push_agent_not_found() {
         let mut app = create_test_app();
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
 
         let result = Actions::execute_push(&mut app);
         assert!(result.is_err());
@@ -658,7 +662,7 @@ mod tests {
     #[test]
     fn test_execute_rename_no_agent_id() {
         let mut app = create_test_app();
-        app.git_op_agent_id = None;
+        app.git_op.agent_id = None;
 
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
@@ -667,9 +671,9 @@ mod tests {
     #[test]
     fn test_execute_rename_agent_not_found() {
         let mut app = create_test_app();
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "new-name".to_string();
-        app.git_op_original_branch = "old-name".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "new-name".to_string();
+        app.git_op.original_branch = "old-name".to_string();
 
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
@@ -678,7 +682,7 @@ mod tests {
     #[test]
     fn test_open_pr_in_browser_no_agent_id() {
         let mut app = create_test_app();
-        app.git_op_agent_id = None;
+        app.git_op.agent_id = None;
 
         let result = Actions::open_pr_in_browser(&mut app);
         assert!(result.is_err());
@@ -687,9 +691,9 @@ mod tests {
     #[test]
     fn test_open_pr_in_browser_agent_not_found() {
         let mut app = create_test_app();
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
-        app.git_op_base_branch = "main".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
+        app.git_op.base_branch = "main".to_string();
 
         let result = Actions::open_pr_in_browser(&mut app);
         assert!(result.is_err());
@@ -713,13 +717,13 @@ mod tests {
         // Start push flow
         app.start_push(agent_id, "feature/test".to_string());
         assert_eq!(app.mode, Mode::ConfirmPush);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "feature/test");
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.git_op.branch_name, "feature/test");
 
         // Clear git op state
         app.clear_git_op_state();
-        assert!(app.git_op_branch_name.is_empty());
-        assert!(app.git_op_agent_id.is_none());
+        assert!(app.git_op.branch_name.is_empty());
+        assert!(app.git_op.agent_id.is_none());
     }
 
     #[test]
@@ -740,11 +744,11 @@ mod tests {
         // Start rename flow for root agent
         app.start_rename(agent_id, "test-agent".to_string(), true);
         assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_original_branch, "test-agent");
-        assert_eq!(app.git_op_branch_name, "test-agent");
-        assert_eq!(app.input_buffer, "test-agent");
-        assert!(app.git_op_is_root_rename);
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.git_op.original_branch, "test-agent");
+        assert_eq!(app.git_op.branch_name, "test-agent");
+        assert_eq!(app.input.buffer, "test-agent");
+        assert!(app.git_op.is_root_rename);
 
         // Simulate user input
         app.handle_backspace();
@@ -755,12 +759,12 @@ mod tests {
         app.handle_char('n');
         app.handle_char('e');
         app.handle_char('w');
-        assert_eq!(app.input_buffer, "test-new");
+        assert_eq!(app.input.buffer, "test-new");
 
         // Confirm rename
         let result = app.confirm_rename_branch();
         assert!(result);
-        assert_eq!(app.git_op_branch_name, "test-new");
+        assert_eq!(app.git_op.branch_name, "test-new");
     }
 
     #[test]
@@ -796,9 +800,9 @@ mod tests {
         // Start rename flow for sub-agent
         app.start_rename(child_id, "sub-agent".to_string(), false);
         assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(child_id));
-        assert_eq!(app.git_op_original_branch, "sub-agent");
-        assert!(!app.git_op_is_root_rename);
+        assert_eq!(app.git_op.agent_id, Some(child_id));
+        assert_eq!(app.git_op.original_branch, "sub-agent");
+        assert!(!app.git_op.is_root_rename);
 
         // Simulate user input
         app.handle_backspace();
@@ -809,12 +813,12 @@ mod tests {
         app.handle_char('n');
         app.handle_char('e');
         app.handle_char('w');
-        assert_eq!(app.input_buffer, "sub-new");
+        assert_eq!(app.input.buffer, "sub-new");
 
         // Confirm rename
         let result = app.confirm_rename_branch();
         assert!(result);
-        assert_eq!(app.git_op_branch_name, "sub-new");
+        assert_eq!(app.git_op.branch_name, "sub-new");
     }
 
     #[test]
@@ -841,10 +845,10 @@ mod tests {
         );
 
         assert_eq!(app.mode, Mode::ConfirmPushForPR);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "feature/test");
-        assert_eq!(app.git_op_base_branch, "main");
-        assert!(app.git_op_has_unpushed);
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.git_op.branch_name, "feature/test");
+        assert_eq!(app.git_op.base_branch, "main");
+        assert!(app.git_op.has_unpushed);
     }
 
     #[test]
@@ -872,8 +876,8 @@ mod tests {
 
         // Mode should stay Normal (handler opens PR directly)
         assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert!(!app.git_op_has_unpushed);
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert!(!app.git_op.has_unpushed);
     }
 
     #[test]
@@ -924,11 +928,11 @@ mod tests {
         handler.handle_action(&mut app, crate::config::Action::RenameBranch)?;
 
         assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
-        assert_eq!(app.git_op_branch_name, "test-agent");
-        assert_eq!(app.git_op_original_branch, "test-agent");
-        assert_eq!(app.input_buffer, "test-agent");
-        assert!(app.git_op_is_root_rename);
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.git_op.branch_name, "test-agent");
+        assert_eq!(app.git_op.original_branch, "test-agent");
+        assert_eq!(app.input.buffer, "test-agent");
+        assert!(app.git_op.is_root_rename);
         Ok(())
     }
 
@@ -976,11 +980,11 @@ mod tests {
         handler.handle_action(&mut app, crate::config::Action::RenameBranch)?;
 
         assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.git_op_agent_id, Some(child_id));
-        assert_eq!(app.git_op_branch_name, "child");
-        assert_eq!(app.git_op_original_branch, "child");
-        assert_eq!(app.input_buffer, "child");
-        assert!(!app.git_op_is_root_rename);
+        assert_eq!(app.git_op.agent_id, Some(child_id));
+        assert_eq!(app.git_op.branch_name, "child");
+        assert_eq!(app.git_op.original_branch, "child");
+        assert_eq!(app.input.buffer, "child");
+        assert!(!app.git_op.is_root_rename);
         Ok(())
     }
 
@@ -1003,9 +1007,9 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up state but with an invalid agent ID
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "new-name".to_string();
-        app.git_op_is_root_rename = true;
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "new-name".to_string();
+        app.git_op.is_root_rename = true;
 
         // Execute should fail gracefully
         let result = Actions::execute_rename(&mut app);
@@ -1017,9 +1021,9 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up state but with an invalid agent ID
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "new-name".to_string();
-        app.git_op_is_root_rename = false;
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "new-name".to_string();
+        app.git_op.is_root_rename = false;
 
         // Execute should fail gracefully
         let result = Actions::execute_rename(&mut app);
@@ -1031,7 +1035,7 @@ mod tests {
         let mut app = create_test_app();
 
         // No agent ID set
-        app.git_op_agent_id = None;
+        app.git_op.agent_id = None;
 
         let result = Actions::execute_push_and_open_pr(&mut app);
         assert!(result.is_err());
@@ -1042,7 +1046,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Set invalid agent ID
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         let result = Actions::execute_push_and_open_pr(&mut app);
         assert!(result.is_err());
@@ -1086,7 +1090,7 @@ mod tests {
 
         // Should enter ConfirmPushForPR mode
         assert_eq!(app.mode, Mode::ConfirmPushForPR);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
         Ok(())
     }
 
@@ -1110,7 +1114,7 @@ mod tests {
 
         // Should enter ConfirmPush mode
         assert_eq!(app.mode, Mode::ConfirmPush);
-        assert_eq!(app.git_op_agent_id, Some(agent_id));
+        assert_eq!(app.git_op.agent_id, Some(agent_id));
         Ok(())
     }
 }

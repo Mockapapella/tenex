@@ -23,8 +23,8 @@ impl Actions {
         reason = "Complex swarm spawning logic with multiple branches"
     )]
     pub fn spawn_children(self, app: &mut App, task: Option<&str>) -> Result<()> {
-        let count = app.child_count;
-        let parent_id = app.spawning_under;
+        let count = app.spawn.child_count;
+        let parent_id = app.spawn.spawning_under;
 
         info!(
             count,
@@ -83,7 +83,7 @@ impl Actions {
                     .map(|(b, c)| (Some(b), Some(c)))
                     .unwrap_or((None, None));
 
-                app.worktree_conflict = Some(WorktreeConflictInfo {
+                app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
                     title: root_title,
                     prompt: task.map(String::from),
                     branch,
@@ -121,7 +121,7 @@ impl Actions {
             )?;
 
             // Resize the session to match preview dimensions
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&root_session, width, height);
@@ -135,7 +135,7 @@ impl Actions {
         // Reserve all window indices upfront to avoid O(n*count) lookups
         let start_window_index = app.storage.reserve_window_indices(parent_agent_id);
         let child_prompt: Option<String> = task.map(|t| {
-            if app.use_plan_prompt {
+            if app.spawn.use_plan_prompt {
                 prompts::build_plan_prompt(t)
             } else {
                 t.to_string()
@@ -161,7 +161,7 @@ impl Actions {
 
             // Include short ID in title to distinguish agents with same base name
             // Use descriptive names based on agent type
-            let child_title = if app.use_plan_prompt && task.is_some() {
+            let child_title = if app.spawn.use_plan_prompt && task.is_some() {
                 format!("Planner {} ({})", i + 1, child.short_id())
             } else {
                 format!("Agent {} ({})", i + 1, child.short_id())
@@ -185,7 +185,7 @@ impl Actions {
             )?;
 
             // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(&root_session, actual_index);
                 let _ = self
                     .session_manager
@@ -227,7 +227,7 @@ impl Actions {
         task: &str,
     ) -> Result<()> {
         let start_window_index = app.storage.reserve_window_indices(parent_id);
-        let child_prompt = if app.use_plan_prompt {
+        let child_prompt = if app.spawn.use_plan_prompt {
             prompts::build_plan_prompt(task)
         } else {
             task.to_string()
@@ -250,7 +250,7 @@ impl Actions {
             );
 
             // Use descriptive names based on agent type
-            let child_title = if app.use_plan_prompt {
+            let child_title = if app.spawn.use_plan_prompt {
                 format!("Planner {} ({})", i + 1, child.short_id())
             } else {
                 format!("Agent {} ({})", i + 1, child.short_id())
@@ -268,7 +268,7 @@ impl Actions {
                 Some(&command),
             )?;
 
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(root_session, actual_index);
                 let _ = self
                     .session_manager
@@ -293,12 +293,14 @@ impl Actions {
     ///
     /// Returns an error if spawning fails
     pub fn spawn_review_agents(self, app: &mut App) -> Result<()> {
-        let count = app.child_count;
+        let count = app.spawn.child_count;
         let parent_id = app
+            .spawn
             .spawning_under
             .ok_or_else(|| anyhow::anyhow!("No agent selected for review"))?;
         let base_branch = app
-            .review_base_branch
+            .review
+            .base_branch
             .clone()
             .ok_or_else(|| anyhow::anyhow!("No base branch selected for review"))?;
 
@@ -358,7 +360,7 @@ impl Actions {
             )?;
 
             // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(&root_session, actual_index);
                 let _ = self
                     .session_manager
@@ -570,9 +572,10 @@ mod tests {
 
         // Should set error when agent has no children
         handler.synthesize(&mut app)?;
-        assert!(app.last_error.is_some());
+        assert!(app.ui.last_error.is_some());
         assert!(
-            app.last_error
+            app.ui
+                .last_error
                 .as_ref()
                 .ok_or("Expected last_error")?
                 .contains("no children to synthesize")
@@ -586,8 +589,8 @@ mod tests {
         let mut app = create_test_app();
 
         // No spawning_under set - should error
-        app.spawning_under = None;
-        app.review_base_branch = Some("main".to_string());
+        app.spawn.spawning_under = None;
+        app.review.base_branch = Some("main".to_string());
 
         let result = handler.spawn_review_agents(&mut app);
         assert!(result.is_err());
@@ -610,8 +613,8 @@ mod tests {
         app.storage.add(agent);
 
         // spawning_under set but no base branch - should error
-        app.spawning_under = Some(agent_id);
-        app.review_base_branch = None;
+        app.spawn.spawning_under = Some(agent_id);
+        app.review.base_branch = None;
 
         let result = handler.spawn_review_agents(&mut app);
         assert!(result.is_err());

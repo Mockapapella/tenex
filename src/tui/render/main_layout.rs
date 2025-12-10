@@ -149,7 +149,7 @@ pub fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the preview pane
 pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = &app.preview_content;
+    let content = &app.ui.preview_content;
     let is_focused = app.mode == Mode::PreviewFocused;
 
     // Parse ANSI escape sequences to preserve terminal colors
@@ -161,6 +161,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let line_count = text.lines.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
     let scroll = app
+        .ui
         .preview_scroll
         .min(line_count.saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
@@ -187,7 +188,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the diff pane
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = &app.diff_content;
+    let content = &app.ui.diff_content;
 
     let lines: Vec<Line<'_>> = content
         .lines()
@@ -208,6 +209,7 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let visible_height = usize::from(area.height.saturating_sub(2));
     let scroll = app
+        .ui
         .diff_scroll
         .min(lines.len().saturating_sub(visible_height));
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
@@ -230,7 +232,11 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Don't show error in status bar when error modal is displayed
     let showing_error_modal = matches!(app.mode, Mode::ErrorModal(_));
 
-    let content = match (&app.last_error, &app.status_message, showing_error_modal) {
+    let content = match (
+        &app.ui.last_error,
+        &app.ui.status_message,
+        showing_error_modal,
+    ) {
         (Some(error), _, false) => Span::styled(
             format!(" Error: {error} "),
             Style::default()

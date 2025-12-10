@@ -41,54 +41,58 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 frame,
                 "New Agent",
                 "Enter agent name:",
-                &app.input_buffer,
-                app.input_cursor,
+                &app.input.buffer,
+                app.input.cursor,
             );
         }
         Mode::Prompting => modals::render_input_overlay(
             frame,
             "New Agent with Prompt",
             "Enter prompt:",
-            &app.input_buffer,
-            app.input_cursor,
+            &app.input.buffer,
+            app.input.cursor,
         ),
         Mode::ChildCount => modals::render_count_picker_overlay(frame, app),
         Mode::ChildPrompt => modals::render_input_overlay(
             frame,
             "Spawn Children",
             "Enter task for children:",
-            &app.input_buffer,
-            app.input_cursor,
+            &app.input.buffer,
+            app.input.cursor,
         ),
         Mode::Broadcasting => modals::render_input_overlay(
             frame,
             "Broadcast Message",
             "Enter message to broadcast to leaf agents:",
-            &app.input_buffer,
-            app.input_cursor,
+            &app.input.buffer,
+            app.input.cursor,
         ),
         Mode::ReconnectPrompt => {
-            let title = app.worktree_conflict.as_ref().map_or("Reconnect", |c| {
-                if c.swarm_child_count.is_some() {
-                    "Reconnect Swarm"
-                } else {
-                    "Reconnect Agent"
-                }
-            });
+            let title = app
+                .spawn
+                .worktree_conflict
+                .as_ref()
+                .map_or("Reconnect", |c| {
+                    if c.swarm_child_count.is_some() {
+                        "Reconnect Swarm"
+                    } else {
+                        "Reconnect Agent"
+                    }
+                });
             modals::render_input_overlay(
                 frame,
                 title,
                 "Edit prompt (or leave empty):",
-                &app.input_buffer,
-                app.input_cursor,
+                &app.input.buffer,
+                app.input.cursor,
             );
         }
         Mode::TerminalPrompt => modals::render_input_overlay(
             frame,
             "New Terminal",
             "Enter startup command (or leave empty):",
-            &app.input_buffer,
-            app.input_cursor,
+            &app.input.buffer,
+            app.input.cursor,
         ),
         Mode::Confirming(action) => {
             let lines: Vec<Line<'_>> = match action {
@@ -414,7 +418,7 @@ mod tests {
         assert_eq!(app.active_tab, tenex::app::Tab::Diff);
 
         // Set diff content with various line types
-        app.diff_content = r"diff --git a/file.txt b/file.txt
+        app.ui.diff_content = r"diff --git a/file.txt b/file.txt
 --- a/file.txt
 +++ b/file.txt
 @@ -1,3 +1,4 @@
@@ -438,7 +442,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
+        app.ui.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -454,11 +458,11 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.preview_content = (0..100)
+        app.ui.preview_content = (0..100)
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.preview_scroll = 50;
+        app.ui.preview_scroll = 50;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -475,11 +479,11 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
-        app.diff_content = (0..100)
+        app.ui.diff_content = (0..100)
             .map(|i| format!("+Added line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.diff_scroll = 50;
+        app.ui.diff_scroll = 50;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -560,9 +564,9 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.preview_content = "Line 1\nLine 2".to_string();
+        app.ui.preview_content = "Line 1\nLine 2".to_string();
         // Set scroll position beyond content length
-        app.preview_scroll = 1000;
+        app.ui.preview_scroll = 1000;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -659,7 +663,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info
-        app.worktree_conflict = Some(WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test-agent".to_string(),
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
@@ -690,7 +694,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info for a swarm
-        app.worktree_conflict = Some(WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "swarm-root".to_string(),
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm-root".to_string(),
@@ -721,7 +725,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up for reconnect prompt mode
-        app.worktree_conflict = Some(WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test-agent".to_string(),
             prompt: Some("original prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
@@ -786,7 +790,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.child_count = 5;
+        app.spawn.child_count = 5;
         app.enter_mode(Mode::ReviewChildCount);
 
         terminal.draw(|frame| {
@@ -805,7 +809,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
@@ -829,12 +833,12 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches and a filter
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature-abc", false),
             create_test_branch_info("feature-xyz", false),
         ];
-        app.review_branch_filter = "feature".to_string();
+        app.review.filter = "feature".to_string();
         app.enter_mode(Mode::BranchSelector);
 
         terminal.draw(|frame| {
@@ -853,12 +857,12 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up branches with a selection
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
         ];
-        app.review_branch_selected = 1;
+        app.review.selected = 1;
         app.enter_mode(Mode::BranchSelector);
 
         terminal.draw(|frame| {
@@ -877,7 +881,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Empty branch list
-        app.review_branches = vec![];
+        app.review.branches = vec![];
         app.enter_mode(Mode::BranchSelector);
 
         terminal.draw(|frame| {
@@ -900,8 +904,8 @@ mod tests {
         for i in 0..30 {
             branches.push(create_test_branch_info(&format!("branch-{i:02}"), false));
         }
-        app.review_branches = branches;
-        app.review_branch_selected = 20; // Select one that requires scrolling
+        app.review.branches = branches;
+        app.review.selected = 20; // Select one that requires scrolling
         app.enter_mode(Mode::BranchSelector);
 
         terminal.draw(|frame| {
@@ -920,7 +924,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Mix of local and remote branches
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("main", true),
@@ -942,7 +946,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.child_count = 5;
+        app.spawn.child_count = 5;
         app.enter_mode(Mode::ChildCount);
 
         terminal.draw(|frame| {
@@ -959,7 +963,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.child_count = 3;
+        app.spawn.child_count = 3;
         app.enter_mode(Mode::ChildPrompt);
         app.handle_char('t');
         app.handle_char('a');
@@ -1004,8 +1008,8 @@ mod tests {
 
         // Get first agent's ID
         let agent_id = app.storage.visible_agent_at(0).map(|a| a.id);
-        app.git_op_agent_id = agent_id;
-        app.git_op_branch_name = "feature/test".to_string();
+        app.git_op.agent_id = agent_id;
+        app.git_op.branch_name = "feature/test".to_string();
         app.enter_mode(Mode::ConfirmPush);
 
         terminal.draw(|frame| {
@@ -1024,8 +1028,8 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set invalid agent ID
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
         app.enter_mode(Mode::ConfirmPush);
 
         terminal.draw(|frame| {
@@ -1043,9 +1047,9 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op_original_branch = "old-name".to_string();
-        app.input_buffer = "new-name".to_string();
-        app.git_op_is_root_rename = true;
+        app.git_op.original_branch = "old-name".to_string();
+        app.input.buffer = "new-name".to_string();
+        app.git_op.is_root_rename = true;
         app.enter_mode(Mode::RenameBranch);
 
         terminal.draw(|frame| {
@@ -1063,9 +1067,9 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op_original_branch = "sub-agent".to_string();
-        app.input_buffer = "new-name".to_string();
-        app.git_op_is_root_rename = false;
+        app.git_op.original_branch = "sub-agent".to_string();
+        app.input.buffer = "new-name".to_string();
+        app.git_op.is_root_rename = false;
         app.enter_mode(Mode::RenameBranch);
 
         terminal.draw(|frame| {
@@ -1083,8 +1087,8 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op_original_branch = "test-agent".to_string();
-        app.input_buffer.clear();
+        app.git_op.original_branch = "test-agent".to_string();
+        app.input.buffer.clear();
         app.enter_mode(Mode::RenameBranch);
 
         terminal.draw(|frame| {
@@ -1102,9 +1106,9 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op_branch_name = "feature/new-branch".to_string();
-        app.git_op_base_branch = "main".to_string();
-        app.git_op_has_unpushed = true;
+        app.git_op.branch_name = "feature/new-branch".to_string();
+        app.git_op.base_branch = "main".to_string();
+        app.git_op.has_unpushed = true;
         app.enter_mode(Mode::ConfirmPushForPR);
 
         terminal.draw(|frame| {

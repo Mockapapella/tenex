@@ -45,6 +45,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
 
     // Conflict info should be populated
     let conflict = app
+        .spawn
         .worktree_conflict
         .as_ref()
         .expect("Conflict info should be set");
@@ -97,7 +98,7 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     ));
 
     // Modify the prompt before reconnecting (simulating user editing)
-    if let Some(ref mut conflict) = app.worktree_conflict {
+    if let Some(ref mut conflict) = app.spawn.worktree_conflict {
         conflict.prompt = Some("modified prompt".to_string());
     }
 
@@ -212,8 +213,8 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning (simulating S key flow)
-    app.spawning_under = None; // No parent = new root swarm
-    app.child_count = 3;
+    app.spawn.spawning_under = None; // No parent = new root swarm
+    app.spawn.child_count = 3;
 
     // Try to spawn children - should detect conflict
     let handler = Actions::new();
@@ -231,6 +232,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 
     // Conflict info should indicate this is a swarm
     let conflict = app
+        .spawn
         .worktree_conflict
         .as_ref()
         .expect("Conflict info should be set");
@@ -278,8 +280,8 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning
-    app.spawning_under = None;
-    app.child_count = 2;
+    app.spawn.spawning_under = None;
+    app.spawn.child_count = 2;
 
     // Trigger conflict detection - use the same task so branch names match
     let handler = Actions::new();
@@ -295,17 +297,21 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
         app.mode
     );
     assert_eq!(
-        app.worktree_conflict.as_ref().unwrap().swarm_child_count,
+        app.spawn
+            .worktree_conflict
+            .as_ref()
+            .unwrap()
+            .swarm_child_count,
         Some(2)
     );
     assert_eq!(
-        app.worktree_conflict.as_ref().unwrap().prompt,
+        app.spawn.worktree_conflict.as_ref().unwrap().prompt,
         Some(task.to_string())
     );
 
     // Modify the prompt before reconnecting (simulating user editing in ReconnectPrompt mode)
     let updated_task = "updated task for children";
-    if let Some(ref mut conflict) = app.worktree_conflict {
+    if let Some(ref mut conflict) = app.spawn.worktree_conflict {
         conflict.prompt = Some(updated_task.to_string());
     }
 
@@ -383,8 +389,8 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     fs::write(&marker_path, "old swarm worktree")?;
 
     // Set up for swarm spawning
-    app.spawning_under = None;
-    app.child_count = 2;
+    app.spawn.spawning_under = None;
+    app.spawn.child_count = 2;
 
     // Trigger conflict detection
     let handler = Actions::new();
@@ -452,8 +458,8 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
     let parent_id = app.storage.iter().next().unwrap().id;
 
     // Now add children to the existing agent (A key flow)
-    app.spawning_under = Some(parent_id);
-    app.child_count = 2;
+    app.spawn.spawning_under = Some(parent_id);
+    app.spawn.child_count = 2;
 
     let handler2 = Actions::new();
     handler2.spawn_children(&mut app, Some("child task"))?;

@@ -43,7 +43,7 @@ impl Actions {
                 .map(|(b, c)| (Some(b), Some(c)))
                 .unwrap_or((None, None));
 
-            app.worktree_conflict = Some(WorktreeConflictInfo {
+            app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
                 title: title.to_string(),
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
@@ -96,7 +96,7 @@ impl Actions {
             .create(&agent.tmux_session, worktree_path, Some(&command))?;
 
         // Resize the new session to match preview dimensions
-        if let Some((width, height)) = app.preview_dimensions {
+        if let Some((width, height)) = app.ui.preview_dimensions {
             let _ = self
                 .session_manager
                 .resize_window(&agent.tmux_session, width, height);
@@ -117,6 +117,7 @@ impl Actions {
     /// Returns an error if the tmux session cannot be created or storage fails
     pub fn reconnect_to_worktree(self, app: &mut App) -> Result<()> {
         let conflict = app
+            .spawn
             .worktree_conflict
             .take()
             .ok_or_else(|| anyhow::anyhow!("No worktree conflict info available"))?;
@@ -145,7 +146,7 @@ impl Actions {
             )?;
 
             // Resize the session to match preview dimensions
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&root_session, width, height);
@@ -189,7 +190,7 @@ impl Actions {
             )?;
 
             // Resize the new session to match preview dimensions
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&agent.tmux_session, width, height);
@@ -212,6 +213,7 @@ impl Actions {
     /// Returns an error if the worktree cannot be removed/recreated or agent creation fails
     pub fn recreate_worktree(self, app: &mut App) -> Result<()> {
         let conflict = app
+            .spawn
             .worktree_conflict
             .take()
             .ok_or_else(|| anyhow::anyhow!("No worktree conflict info available"))?;
@@ -227,8 +229,8 @@ impl Actions {
         // Check if this is a swarm creation
         if let Some(child_count) = conflict.swarm_child_count {
             // Set up app state for spawn_children
-            app.spawning_under = None;
-            app.child_count = child_count;
+            app.spawn.spawning_under = None;
+            app.spawn.child_count = child_count;
 
             // Call spawn_children with the task/prompt (if any)
             self.spawn_children(app, conflict.prompt.as_deref())
@@ -393,7 +395,7 @@ impl Actions {
                 .create_window(&root_session, &title, &worktree_path, None)?;
 
         // Resize the new window to match preview dimensions
-        if let Some((width, height)) = app.preview_dimensions {
+        if let Some((width, height)) = app.ui.preview_dimensions {
             let window_target = SessionManager::window_target(&root_session, actual_index);
             let _ = self
                 .session_manager

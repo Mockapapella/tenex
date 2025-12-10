@@ -112,7 +112,7 @@ mod tests {
 
         // Broadcast should set error when no children
         handler.broadcast_to_leaves(&mut app, "test message")?;
-        assert!(app.last_error.is_some());
+        assert!(app.ui.last_error.is_some());
         Ok(())
     }
 
@@ -154,7 +154,7 @@ mod tests {
         // This exercises the "No leaf agents found" path since send_keys fails
         handler.broadcast_to_leaves(&mut app, "test message")?;
         // Since sessions don't exist, send_keys fails and error is set
-        assert!(app.last_error.is_some());
+        assert!(app.ui.last_error.is_some());
         Ok(())
     }
 }

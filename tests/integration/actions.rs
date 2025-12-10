@@ -135,7 +135,7 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
     let result = handler.update_preview(&mut app);
     assert!(result.is_ok());
     // Preview content should be set (either actual content or session not running)
-    assert!(!app.preview_content.is_empty());
+    assert!(!app.ui.preview_content.is_empty());
 
     let _ = std::env::set_current_dir(&original_dir);
 
@@ -172,7 +172,7 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
     let result = handler.update_diff(&mut app);
     assert!(result.is_ok());
     // Diff content should be set (either "No changes" or actual diff)
-    assert!(!app.diff_content.is_empty());
+    assert!(!app.ui.diff_content.is_empty());
 
     let _ = std::env::set_current_dir(&original_dir);
 

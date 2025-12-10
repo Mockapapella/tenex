@@ -173,7 +173,7 @@ pub fn render_input_overlay(
 
 /// Render the rename overlay
 pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
-    let is_root = app.git_op_is_root_rename;
+    let is_root = app.git_op.is_root_rename;
 
     let (title, description) = if is_root {
         (
@@ -201,7 +201,7 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            format!("{}_", &app.input_buffer),
+            format!("{}_", &app.input.buffer),
             Style::default()
                 .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),

@@ -206,7 +206,7 @@ impl Actions {
 
         // Store the selected agent's ID for later use
         let agent_id = selected.map(|a| a.id);
-        app.spawning_under = agent_id;
+        app.spawn.spawning_under = agent_id;
 
         // Fetch branches for the selector
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
@@ -370,13 +370,13 @@ mod tests {
         let mut app = create_test_app();
 
         handler.handle_action(&mut app, Action::ScrollDown)?;
-        assert_eq!(app.preview_scroll, 5);
+        assert_eq!(app.ui.preview_scroll, 5);
 
         handler.handle_action(&mut app, Action::ScrollUp)?;
-        assert_eq!(app.preview_scroll, 0);
+        assert_eq!(app.ui.preview_scroll, 0);
 
         handler.handle_action(&mut app, Action::ScrollTop)?;
-        assert_eq!(app.preview_scroll, 0);
+        assert_eq!(app.ui.preview_scroll, 0);
         Ok(())
     }
 
@@ -568,7 +568,7 @@ mod tests {
 
         handler.handle_action(&mut app, Action::SpawnChildren)?;
         assert_eq!(app.mode, Mode::ChildCount);
-        assert!(app.spawning_under.is_none());
+        assert!(app.spawn.spawning_under.is_none());
         Ok(())
     }
 
@@ -592,7 +592,7 @@ mod tests {
 
         handler.handle_action(&mut app, Action::AddChildren)?;
         assert_eq!(app.mode, Mode::ChildCount);
-        assert_eq!(app.spawning_under, Some(agent_id));
+        assert_eq!(app.spawn.spawning_under, Some(agent_id));
         Ok(())
     }
 
@@ -715,7 +715,7 @@ mod tests {
 
         handler.handle_action(&mut app, Action::ScrollBottom)?;
         // ScrollBottom calls scroll_to_bottom(10000, 0) so preview_scroll becomes 10000
-        assert_eq!(app.preview_scroll, 10000);
+        assert_eq!(app.ui.preview_scroll, 10000);
         Ok(())
     }
 
@@ -735,23 +735,23 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up some review state
-        app.review_branches = vec![crate::git::BranchInfo {
+        app.review.branches = vec![crate::git::BranchInfo {
             name: "test".to_string(),
             full_name: "refs/heads/test".to_string(),
             is_remote: false,
             remote: None,
             last_commit_time: None,
         }];
-        app.review_branch_filter = "filter".to_string();
-        app.review_branch_selected = 1;
+        app.review.filter = "filter".to_string();
+        app.review.selected = 1;
 
         // Clear the state
         app.clear_review_state();
 
-        assert!(app.review_branches.is_empty());
-        assert!(app.review_branch_filter.is_empty());
-        assert_eq!(app.review_branch_selected, 0);
-        assert!(app.review_base_branch.is_none());
+        assert!(app.review.branches.is_empty());
+        assert!(app.review.filter.is_empty());
+        assert_eq!(app.review.selected, 0);
+        assert!(app.review.base_branch.is_none());
     }
 
     #[test]
@@ -774,23 +774,23 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up git op state
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test-branch".to_string();
-        app.git_op_original_branch = "original".to_string();
-        app.git_op_base_branch = "main".to_string();
-        app.git_op_has_unpushed = true;
-        app.git_op_is_root_rename = true;
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test-branch".to_string();
+        app.git_op.original_branch = "original".to_string();
+        app.git_op.base_branch = "main".to_string();
+        app.git_op.has_unpushed = true;
+        app.git_op.is_root_rename = true;
 
         // Clear the state
         app.clear_git_op_state();
 
         // Verify all fields are cleared
-        assert!(app.git_op_agent_id.is_none());
-        assert!(app.git_op_branch_name.is_empty());
-        assert!(app.git_op_original_branch.is_empty());
-        assert!(app.git_op_base_branch.is_empty());
-        assert!(!app.git_op_has_unpushed);
-        assert!(!app.git_op_is_root_rename);
+        assert!(app.git_op.agent_id.is_none());
+        assert!(app.git_op.branch_name.is_empty());
+        assert!(app.git_op.original_branch.is_empty());
+        assert!(app.git_op.base_branch.is_empty());
+        assert!(!app.git_op.has_unpushed);
+        assert!(!app.git_op.is_root_rename);
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up conflict info manually
-        app.worktree_conflict = Some(WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test".to_string(),
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test".to_string(),
@@ -814,8 +814,8 @@ mod tests {
         });
 
         // Verify the conflict info is set
-        assert!(app.worktree_conflict.is_some());
-        let info = app.worktree_conflict.as_ref().unwrap();
+        assert!(app.spawn.worktree_conflict.is_some());
+        let info = app.spawn.worktree_conflict.as_ref().unwrap();
         assert_eq!(info.title, "test");
         assert_eq!(info.swarm_child_count, None);
     }
@@ -828,7 +828,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up conflict info for a swarm
-        app.worktree_conflict = Some(WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "swarm".to_string(),
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm".to_string(),
@@ -840,7 +840,7 @@ mod tests {
             swarm_child_count: Some(3),
         });
 
-        let info = app.worktree_conflict.as_ref().unwrap();
+        let info = app.spawn.worktree_conflict.as_ref().unwrap();
         assert_eq!(info.swarm_child_count, Some(3));
     }
 
@@ -911,17 +911,17 @@ mod tests {
         ));
 
         // Counter starts at 0
-        assert_eq!(app.terminal_counter, 0);
+        assert_eq!(app.spawn.terminal_counter, 0);
 
         // Get first terminal name
         let name1 = app.next_terminal_name();
         assert_eq!(name1, "Terminal 1");
-        assert_eq!(app.terminal_counter, 1);
+        assert_eq!(app.spawn.terminal_counter, 1);
 
         // Get second terminal name
         let name2 = app.next_terminal_name();
         assert_eq!(name2, "Terminal 2");
-        assert_eq!(app.terminal_counter, 2);
+        assert_eq!(app.spawn.terminal_counter, 2);
     }
 
     #[test]

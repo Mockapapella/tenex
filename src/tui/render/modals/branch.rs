@@ -30,7 +30,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect_absolute(60, total_height, frame.area());
 
     let filtered = app.filtered_review_branches();
-    let selected_idx = app.review_branch_selected;
+    let selected_idx = app.review.selected;
     let total_count = filtered.len();
 
     // Calculate scroll offset to keep selection visible
@@ -47,7 +47,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("Search: ", Style::default().fg(colors::TEXT_DIM)),
         Span::styled(
-            format!("{}_", &app.review_branch_filter),
+            format!("{}_", &app.review.filter),
             Style::default().fg(colors::TEXT_PRIMARY),
         ),
     ]));

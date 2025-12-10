@@ -92,9 +92,9 @@ fn handle_worktree_conflict_mode(
         KeyCode::Char('r' | 'R') => {
             // Transition to ReconnectPrompt mode to allow editing the prompt
             // Pre-fill input buffer with existing prompt if available
-            if let Some(ref conflict) = app.worktree_conflict {
-                app.input_buffer = conflict.prompt.clone().unwrap_or_default();
-                app.input_cursor = app.input_buffer.len();
+            if let Some(ref conflict) = app.spawn.worktree_conflict {
+                app.input.buffer = conflict.prompt.clone().unwrap_or_default();
+                app.input.cursor = app.input.buffer.len();
             }
             app.enter_mode(Mode::ReconnectPrompt);
         }
@@ -103,7 +103,7 @@ fn handle_worktree_conflict_mode(
             action_handler.recreate_worktree(app)?;
         }
         KeyCode::Esc => {
-            app.worktree_conflict = None;
+            app.spawn.worktree_conflict = None;
             app.exit_mode();
         }
         _ => {}

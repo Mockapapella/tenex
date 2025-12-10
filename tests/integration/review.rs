@@ -67,13 +67,13 @@ fn test_review_action_with_agent_selected_shows_count_picker()
 
     // Should have branches loaded
     assert!(
-        !app.review_branches.is_empty(),
+        !app.review.branches.is_empty(),
         "Expected branches to be loaded"
     );
 
     // spawning_under should be set to the selected agent
     assert!(
-        app.spawning_under.is_some(),
+        app.spawn.spawning_under.is_some(),
         "Expected spawning_under to be set"
     );
 
@@ -96,7 +96,7 @@ fn test_review_branch_filtering() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = tenex::App::new(config, storage);
 
     // Manually set up branch list for testing filtering
-    app.review_branches = vec![
+    app.review.branches = vec![
         tenex::git::BranchInfo {
             name: "main".to_string(),
             full_name: "refs/heads/main".to_string(),
@@ -131,19 +131,19 @@ fn test_review_branch_filtering() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(app.filtered_review_branches().len(), 4);
 
     // Filter for "main" - should return 2 (local and remote)
-    app.review_branch_filter = "main".to_string();
+    app.review.filter = "main".to_string();
     assert_eq!(app.filtered_review_branches().len(), 2);
 
     // Filter for "feature" - should return 1
-    app.review_branch_filter = "feature".to_string();
+    app.review.filter = "feature".to_string();
     assert_eq!(app.filtered_review_branches().len(), 1);
 
     // Filter for non-existent - should return 0
-    app.review_branch_filter = "nonexistent".to_string();
+    app.review.filter = "nonexistent".to_string();
     assert_eq!(app.filtered_review_branches().len(), 0);
 
     // Case insensitive filtering
-    app.review_branch_filter = "MAIN".to_string();
+    app.review.filter = "MAIN".to_string();
     assert_eq!(app.filtered_review_branches().len(), 2);
 
     Ok(())
@@ -158,7 +158,7 @@ fn test_review_branch_navigation() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = tenex::App::new(config, storage);
 
     // Set up branch list
-    app.review_branches = vec![
+    app.review.branches = vec![
         tenex::git::BranchInfo {
             name: "branch1".to_string(),
             full_name: "refs/heads/branch1".to_string(),
@@ -183,25 +183,25 @@ fn test_review_branch_navigation() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     // Start at 0
-    assert_eq!(app.review_branch_selected, 0);
+    assert_eq!(app.review.selected, 0);
 
     // Navigate down
     app.select_next_branch();
-    assert_eq!(app.review_branch_selected, 1);
+    assert_eq!(app.review.selected, 1);
 
     app.select_next_branch();
-    assert_eq!(app.review_branch_selected, 2);
+    assert_eq!(app.review.selected, 2);
 
     // Wrap around at end
     app.select_next_branch();
-    assert_eq!(app.review_branch_selected, 0);
+    assert_eq!(app.review.selected, 0);
 
     // Navigate up - wrap to end
     app.select_prev_branch();
-    assert_eq!(app.review_branch_selected, 2);
+    assert_eq!(app.review.selected, 2);
 
     app.select_prev_branch();
-    assert_eq!(app.review_branch_selected, 1);
+    assert_eq!(app.review.selected, 1);
 
     Ok(())
 }
@@ -215,7 +215,7 @@ fn test_review_branch_selection_confirmation() -> Result<(), Box<dyn std::error:
     let mut app = tenex::App::new(config, storage);
 
     // Set up branch list
-    app.review_branches = vec![
+    app.review.branches = vec![
         tenex::git::BranchInfo {
             name: "main".to_string(),
             full_name: "refs/heads/main".to_string(),
@@ -233,17 +233,17 @@ fn test_review_branch_selection_confirmation() -> Result<(), Box<dyn std::error:
     ];
 
     // Select second branch
-    app.review_branch_selected = 1;
+    app.review.selected = 1;
 
     // Confirm selection
     assert!(app.confirm_branch_selection());
-    assert_eq!(app.review_base_branch, Some("develop".to_string()));
+    assert_eq!(app.review.base_branch, Some("develop".to_string()));
 
     // Test with empty branch list
-    app.review_branches.clear();
-    app.review_base_branch = None;
+    app.review.branches.clear();
+    app.review.base_branch = None;
     assert!(!app.confirm_branch_selection());
-    assert!(app.review_base_branch.is_none());
+    assert!(app.review.base_branch.is_none());
 
     Ok(())
 }
@@ -265,8 +265,8 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with children (swarm) to get a proper tmux session
-    app.child_count = 1;
-    app.spawning_under = None;
+    app.spawn.child_count = 1;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("test-swarm"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -284,9 +284,9 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     let root_id = root.id;
 
     // Set up for review spawning under the root
-    app.spawning_under = Some(root_id);
-    app.child_count = 2;
-    app.review_base_branch = Some("master".to_string());
+    app.spawn.spawning_under = Some(root_id);
+    app.spawn.child_count = 2;
+    app.review.base_branch = Some("master".to_string());
 
     // Spawn review agents
     let result = handler.spawn_review_agents(&mut app);
@@ -315,9 +315,9 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(review_agent_count, 2);
 
     // Review state should be cleared
-    assert!(app.review_branches.is_empty());
-    assert!(app.review_branch_filter.is_empty());
-    assert!(app.review_base_branch.is_none());
+    assert!(app.review.branches.is_empty());
+    assert!(app.review.filter.is_empty());
+    assert!(app.review.base_branch.is_none());
 
     Ok(())
 }
@@ -355,7 +355,7 @@ fn test_review_modes_flow() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = tenex::App::new(config, storage);
 
     // Set up some branches
-    app.review_branches = vec![tenex::git::BranchInfo {
+    app.review.branches = vec![tenex::git::BranchInfo {
         name: "main".to_string(),
         full_name: "refs/heads/main".to_string(),
         is_remote: false,
@@ -364,7 +364,7 @@ fn test_review_modes_flow() -> Result<(), Box<dyn std::error::Error>> {
     }];
 
     // Start in ReviewChildCount mode
-    app.start_review(app.review_branches.clone());
+    app.start_review(app.review.branches.clone());
     assert!(matches!(app.mode, Mode::ReviewChildCount));
 
     // Proceed to branch selector

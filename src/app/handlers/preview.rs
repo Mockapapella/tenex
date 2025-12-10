@@ -33,18 +33,18 @@ impl Actions {
                     .output_capture
                     .capture_pane_with_history(&tmux_target, 1000)
                     .unwrap_or_default();
-                app.preview_content = content;
+                app.ui.preview_content = content;
             } else {
-                app.preview_content = String::from("(Session not running)");
+                app.ui.preview_content = String::from("(Session not running)");
             }
         } else {
-            app.preview_content = String::from("(No agent selected)");
+            app.ui.preview_content = String::from("(No agent selected)");
         }
 
         // Auto-scroll to bottom only if follow mode is enabled
         // (disabled when user manually scrolls up, re-enabled when they scroll to bottom)
-        if app.preview_follow {
-            app.preview_scroll = usize::MAX;
+        if app.ui.preview_follow {
+            app.ui.preview_scroll = usize::MAX;
         }
 
         Ok(())
@@ -72,15 +72,15 @@ impl Actions {
                         content = String::from("(No changes)");
                     }
 
-                    app.diff_content = content;
+                    app.ui.diff_content = content;
                 } else {
-                    app.diff_content = String::from("(Not a git repository)");
+                    app.ui.diff_content = String::from("(Not a git repository)");
                 }
             } else {
-                app.diff_content = String::from("(Worktree not found)");
+                app.ui.diff_content = String::from("(Worktree not found)");
             }
         } else {
-            app.diff_content = String::from("(No agent selected)");
+            app.ui.diff_content = String::from("(No agent selected)");
         }
         Ok(())
     }
@@ -103,7 +103,7 @@ mod tests {
         let mut app = create_test_app();
 
         handler.update_preview(&mut app)?;
-        assert!(app.preview_content.contains("No agent selected"));
+        assert!(app.ui.preview_content.contains("No agent selected"));
         Ok(())
     }
 
@@ -113,7 +113,7 @@ mod tests {
         let mut app = create_test_app();
 
         handler.update_diff(&mut app)?;
-        assert!(app.diff_content.contains("No agent selected"));
+        assert!(app.ui.diff_content.contains("No agent selected"));
         Ok(())
     }
 
@@ -132,7 +132,7 @@ mod tests {
         ));
 
         handler.update_preview(&mut app)?;
-        assert!(app.preview_content.contains("Session not running"));
+        assert!(app.ui.preview_content.contains("Session not running"));
         Ok(())
     }
 
@@ -151,7 +151,7 @@ mod tests {
         ));
 
         handler.update_diff(&mut app)?;
-        assert!(app.diff_content.contains("Worktree not found"));
+        assert!(app.ui.diff_content.contains("Worktree not found"));
         Ok(())
     }
 
@@ -175,7 +175,7 @@ mod tests {
         ));
 
         handler.update_diff(&mut app)?;
-        assert!(app.diff_content.contains("Not a git repository"));
+        assert!(app.ui.diff_content.contains("Not a git repository"));
         Ok(())
     }
 }

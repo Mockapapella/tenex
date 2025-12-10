@@ -124,7 +124,7 @@ impl Actions {
                 .create(&agent.tmux_session, &wt.path, Some(&command))?;
 
             // Resize the session to match preview dimensions if available
-            if let Some((width, height)) = app.preview_dimensions {
+            if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&agent.tmux_session, width, height);

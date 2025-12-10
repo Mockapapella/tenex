@@ -23,8 +23,8 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with 3 children (swarm)
-    app.child_count = 3;
-    app.spawning_under = None;
+    app.spawn.child_count = 3;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("test-swarm"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -57,8 +57,8 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     }
 
     // Add 3 grandchildren under Child 2
-    app.child_count = 3;
-    app.spawning_under = Some(child2_id);
+    app.spawn.child_count = 3;
+    app.spawn.spawning_under = Some(child2_id);
 
     // Expand Child 2 to see grandchildren
     if let Some(c2) = app.storage.get_mut(child2_id) {
@@ -171,8 +171,8 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
-    app.child_count = 2;
-    app.spawning_under = None;
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("id-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -231,8 +231,8 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
-    app.child_count = 3;
-    app.spawning_under = None;
+    app.spawn.child_count = 3;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("descending-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -301,8 +301,8 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 3 children
-    app.child_count = 3;
-    app.spawning_under = None;
+    app.spawn.child_count = 3;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("original-swarm"));
     if let Err(e) = result {
         std::env::set_current_dir(&original_dir)?;
@@ -354,7 +354,7 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     // Use a unique name based on test prefix to avoid conflicts with stale sessions
     let new_name = format!("{}-renamed", fixture.session_prefix);
     app.start_rename(root_id, "original-swarm".to_string(), true);
-    app.input_buffer.clone_from(&new_name);
+    app.input.buffer.clone_from(&new_name);
     let confirmed = app.confirm_rename_branch();
     assert!(confirmed, "Rename should be confirmed");
 
@@ -477,8 +477,8 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 2 children
-    app.child_count = 2;
-    app.spawning_under = None;
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("worktree-rename-test"));
     if let Err(e) = result {
         std::env::set_current_dir(&original_dir)?;
@@ -533,7 +533,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     // Simulate the rename flow
     let new_name = format!("{}-wt-renamed", fixture.session_prefix);
     app.start_rename(root_id, "worktree-rename-test".to_string(), true);
-    app.input_buffer.clone_from(&new_name);
+    app.input.buffer.clone_from(&new_name);
     let confirmed = app.confirm_rename_branch();
     assert!(confirmed, "Rename should be confirmed");
 

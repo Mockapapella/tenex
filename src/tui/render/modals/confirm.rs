@@ -57,7 +57,7 @@ pub fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
     reason = "UI layout requires verbose styling code"
 )]
 pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
-    let Some(conflict) = &app.worktree_conflict else {
+    let Some(conflict) = &app.spawn.worktree_conflict else {
         return;
     };
 
@@ -193,7 +193,7 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
 
 /// Render the confirm push overlay
 pub fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
-    let agent = app.git_op_agent_id.and_then(|id| app.storage.get(id));
+    let agent = app.git_op.agent_id.and_then(|id| app.storage.get(id));
 
     let mut lines: Vec<Line<'_>> = vec![
         Line::from(Span::styled(
@@ -218,7 +218,7 @@ pub fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
         lines.push(Line::from(vec![
             Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
             Span::styled(
-                &app.git_op_branch_name,
+                &app.git_op.branch_name,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
         ]));
@@ -284,12 +284,12 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
         Line::from(vec![
             Span::styled("Branch: ", Style::default().fg(colors::TEXT_DIM)),
             Span::styled(
-                &app.git_op_branch_name,
+                &app.git_op.branch_name,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
             Span::styled(" → ", Style::default().fg(colors::TEXT_MUTED)),
             Span::styled(
-                &app.git_op_base_branch,
+                &app.git_op.base_branch,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
         ]),

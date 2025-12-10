@@ -33,19 +33,19 @@ pub fn handle_text_input_mode(
         KeyCode::Char(c) => app.handle_char(c),
         KeyCode::Backspace => app.handle_backspace(),
         KeyCode::Delete => app.handle_delete(),
-        KeyCode::Left => app.input_cursor_left(),
-        KeyCode::Right => app.input_cursor_right(),
-        KeyCode::Up => app.input_cursor_up(),
-        KeyCode::Down => app.input_cursor_down(),
-        KeyCode::Home => app.input_cursor_home(),
-        KeyCode::End => app.input_cursor_end(),
+        KeyCode::Left => app.input.cursor_left(),
+        KeyCode::Right => app.input.cursor_right(),
+        KeyCode::Up => app.input.cursor_up(),
+        KeyCode::Down => app.input.cursor_down(),
+        KeyCode::Home => app.input.cursor_home(),
+        KeyCode::End => app.input.cursor_end(),
         _ => {}
     }
 }
 
 /// Handle Enter key in text input modes
 fn handle_enter(app: &mut App, action_handler: Actions) {
-    let input = app.input_buffer.clone();
+    let input = app.input.buffer.clone();
 
     // Some modes allow empty input, others don't
     if !input.is_empty()
@@ -80,7 +80,7 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
             Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
             Mode::ReconnectPrompt => {
                 // Update the prompt in the conflict info and reconnect
-                if let Some(ref mut conflict) = app.worktree_conflict {
+                if let Some(ref mut conflict) = app.spawn.worktree_conflict {
                     conflict.prompt = if input.is_empty() { None } else { Some(input) };
                 }
                 action_handler.reconnect_to_worktree(app)
@@ -118,7 +118,7 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
 fn handle_escape(app: &mut App) {
     // For ReconnectPrompt, cancel and clear conflict info
     if matches!(app.mode, Mode::ReconnectPrompt) {
-        app.worktree_conflict = None;
+        app.spawn.worktree_conflict = None;
     }
     app.exit_mode();
 }

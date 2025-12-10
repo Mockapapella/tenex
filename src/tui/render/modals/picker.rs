@@ -16,7 +16,7 @@ pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
     // 10 lines of content + 2 for borders = 12 lines
     let area = centered_rect_absolute(40, 12, frame.area());
 
-    let context = if app.spawning_under.is_some() {
+    let context = if app.spawn.spawning_under.is_some() {
         "Add children to selected agent"
     } else {
         "Create new agent with children"
@@ -35,7 +35,7 @@ pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
             Style::default().fg(colors::TEXT_DIM),
         )),
         Line::from(Span::styled(
-            format!("        {}", app.child_count),
+            format!("        {}", app.spawn.child_count),
             Style::default()
                 .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -133,7 +133,7 @@ pub fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
             Style::default().fg(colors::TEXT_DIM),
         )),
         Line::from(Span::styled(
-            format!("        {}", app.child_count),
+            format!("        {}", app.spawn.child_count),
             Style::default()
                 .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),

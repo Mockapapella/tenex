@@ -63,8 +63,8 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
-    app.child_count = 2;
-    app.spawning_under = None;
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-confirm-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -110,8 +110,8 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
-    app.child_count = 3;
-    app.spawning_under = None;
+    app.spawn.child_count = 3;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-desc-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -139,8 +139,8 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let child2_id = child2.id;
 
     // Add 2 grandchildren under Child 2
-    app.child_count = 2;
-    app.spawning_under = Some(child2_id);
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = Some(child2_id);
 
     // Expand Child 2
     if let Some(c2) = app.storage.get_mut(child2_id) {
@@ -214,8 +214,8 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children (non-terminal agents)
-    app.child_count = 2;
-    app.spawning_under = None;
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-term-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -415,8 +415,8 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children
-    app.child_count = 2;
-    app.spawning_under = None;
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-gc-test"));
     if result.is_err() {
         std::env::set_current_dir(&original_dir)?;
@@ -440,8 +440,8 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let child1_id = child1.id;
 
     // Add 2 grandchildren under Child 1
-    app.child_count = 2;
-    app.spawning_under = Some(child1_id);
+    app.spawn.child_count = 2;
+    app.spawn.spawning_under = Some(child1_id);
 
     if let Some(c1) = app.storage.get_mut(child1_id) {
         c1.collapsed = false;

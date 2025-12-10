@@ -50,7 +50,7 @@ fn run_loop(
     action_handler: Actions,
 ) -> Result<()> {
     // Initialize preview dimensions before first draw
-    if app.preview_dimensions.is_none()
+    if app.ui.preview_dimensions.is_none()
         && let Ok(size) = terminal.size()
     {
         let area = Rect::new(0, 0, size.width, size.height);
@@ -127,7 +127,7 @@ fn run_loop(
         if let Some((width, height)) = last_resize {
             let (preview_width, preview_height) =
                 render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
-            if app.preview_dimensions != Some((preview_width, preview_height)) {
+            if app.ui.preview_dimensions != Some((preview_width, preview_height)) {
                 app.set_preview_dimensions(preview_width, preview_height);
                 action_handler.resize_agent_windows(app);
             }
@@ -320,7 +320,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('b'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('c'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "abc");
+        assert_eq!(app.input.buffer, "abc");
         Ok(())
     }
 
@@ -334,7 +334,7 @@ mod tests {
         app.handle_char('b');
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "a");
+        assert_eq!(app.input.buffer, "a");
         Ok(())
     }
 
@@ -353,7 +353,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input_buffer.is_empty());
+        assert!(app.input.buffer.is_empty());
         Ok(())
     }
 
@@ -561,7 +561,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('h'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('i'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "hi");
+        assert_eq!(app.input.buffer, "hi");
         assert_eq!(app.mode, Mode::Prompting);
         Ok(())
     }
@@ -639,7 +639,9 @@ mod tests {
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
         assert!(
-            app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
+            app.ui.last_error.is_some()
+                || app.storage.len() == 1
+                || app.spawn.worktree_conflict.is_some()
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -675,7 +677,9 @@ mod tests {
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
         assert!(
-            app.last_error.is_some() || app.storage.len() == 1 || app.worktree_conflict.is_some()
+            app.ui.last_error.is_some()
+                || app.storage.len() == 1
+                || app.spawn.worktree_conflict.is_some()
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -725,7 +729,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('l'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('o'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "hello");
+        assert_eq!(app.input.buffer, "hello");
         assert_eq!(app.mode, Mode::Broadcasting);
         Ok(())
     }
@@ -757,7 +761,7 @@ mod tests {
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "a");
+        assert_eq!(app.input.buffer, "a");
         Ok(())
     }
 
@@ -777,7 +781,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         assert!(matches!(app.mode, Mode::ErrorModal(_)));
-        assert!(app.last_error.is_some());
+        assert!(app.ui.last_error.is_some());
         Ok(())
     }
 
@@ -809,7 +813,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.last_error.is_none());
+        assert!(app.ui.last_error.is_none());
         Ok(())
     }
 
@@ -862,23 +866,23 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ChildCount);
-        let initial_count = app.child_count;
+        let initial_count = app.spawn.child_count;
 
         // Up should increment
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count + 1);
+        assert_eq!(app.spawn.child_count, initial_count + 1);
 
         // Down should decrement
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count);
+        assert_eq!(app.spawn.child_count, initial_count);
 
         // 'k' should also increment
         test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count + 1);
+        assert_eq!(app.spawn.child_count, initial_count + 1);
 
         // 'j' should also decrement
         test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count);
+        assert_eq!(app.spawn.child_count, initial_count);
 
         Ok(())
     }
@@ -896,7 +900,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('s'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('t'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "test");
+        assert_eq!(app.input.buffer, "test");
         assert_eq!(app.mode, Mode::ChildPrompt);
         Ok(())
     }
@@ -913,7 +917,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input_buffer.is_empty());
+        assert!(app.input.buffer.is_empty());
         Ok(())
     }
 
@@ -952,7 +956,7 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ChildCount);
-        let initial_count = app.child_count;
+        let initial_count = app.spawn.child_count;
 
         // Other keys should be ignored
         test_key_event(&mut app, handler, KeyCode::Left, KeyModifiers::NONE)?;
@@ -962,7 +966,7 @@ mod tests {
 
         // Should still be in ChildCount mode with same count
         assert_eq!(app.mode, Mode::ChildCount);
-        assert_eq!(app.child_count, initial_count);
+        assert_eq!(app.spawn.child_count, initial_count);
         Ok(())
     }
 
@@ -1000,23 +1004,23 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ReviewChildCount);
-        let initial_count = app.child_count;
+        let initial_count = app.spawn.child_count;
 
         // Up should increment
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count + 1);
+        assert_eq!(app.spawn.child_count, initial_count + 1);
 
         // Down should decrement
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count);
+        assert_eq!(app.spawn.child_count, initial_count);
 
         // 'k' should also increment
         test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count + 1);
+        assert_eq!(app.spawn.child_count, initial_count + 1);
 
         // 'j' should also decrement
         test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        assert_eq!(app.child_count, initial_count);
+        assert_eq!(app.spawn.child_count, initial_count);
 
         Ok(())
     }
@@ -1072,30 +1076,30 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
         ];
         app.enter_mode(Mode::BranchSelector);
 
-        assert_eq!(app.review_branch_selected, 0);
+        assert_eq!(app.review.selected, 0);
 
         // Down should move to next
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.review_branch_selected, 1);
+        assert_eq!(app.review.selected, 1);
 
         // 'j' should also move down
         test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        assert_eq!(app.review_branch_selected, 2);
+        assert_eq!(app.review.selected, 2);
 
         // Up should move to previous
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.review_branch_selected, 1);
+        assert_eq!(app.review.selected, 1);
 
         // 'k' should also move up
         test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
-        assert_eq!(app.review_branch_selected, 0);
+        assert_eq!(app.review.selected, 0);
 
         Ok(())
     }
@@ -1106,7 +1110,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
         ];
@@ -1116,7 +1120,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('m'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.review_branch_filter, "ma");
+        assert_eq!(app.review.filter, "ma");
         assert_eq!(app.mode, Mode::BranchSelector);
         Ok(())
     }
@@ -1127,12 +1131,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review_branches = vec![create_test_branch_info("main", false)];
-        app.review_branch_filter = "main".to_string();
+        app.review.branches = vec![create_test_branch_info("main", false)];
+        app.review.filter = "main".to_string();
         app.enter_mode(Mode::BranchSelector);
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
-        assert_eq!(app.review_branch_filter, "mai");
+        assert_eq!(app.review.filter, "mai");
         Ok(())
     }
 
@@ -1143,15 +1147,15 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::BranchSelector);
-        app.review_branches = vec![create_test_branch_info("main", false)];
-        app.review_branch_filter = "test".to_string();
+        app.review.branches = vec![create_test_branch_info("main", false)];
+        app.review.filter = "test".to_string();
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
         // State should be cleared on escape
-        assert!(app.review_branches.is_empty());
-        assert!(app.review_branch_filter.is_empty());
+        assert!(app.review.branches.is_empty());
+        assert!(app.review.filter.is_empty());
         Ok(())
     }
 
@@ -1161,12 +1165,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review_branches = vec![
+        app.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("develop", false),
         ];
-        app.review_branch_selected = 1;
-        app.spawning_under = Some(uuid::Uuid::new_v4());
+        app.review.selected = 1;
+        app.spawn.spawning_under = Some(uuid::Uuid::new_v4());
         app.enter_mode(Mode::BranchSelector);
 
         // Enter tries to spawn review agents (will fail without proper agent setup)
@@ -1174,7 +1178,7 @@ mod tests {
 
         // Should have set review_base_branch before attempting spawn
         assert!(
-            app.review_base_branch.is_some() || matches!(app.mode, Mode::ErrorModal(_)),
+            app.review.base_branch.is_some() || matches!(app.mode, Mode::ErrorModal(_)),
             "Expected review_base_branch to be set or error modal, got {:?}",
             app.mode
         );
@@ -1187,14 +1191,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review_branches = vec![]; // Empty list
+        app.review.branches = vec![]; // Empty list
         app.enter_mode(Mode::BranchSelector);
 
         // Enter with empty list exits mode but doesn't set base branch
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.review_base_branch.is_none());
+        assert!(app.review.base_branch.is_none());
         Ok(())
     }
 
@@ -1219,14 +1223,14 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPush);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
 
         // 'n' should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op_agent_id.is_none());
+        assert!(app.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1236,14 +1240,14 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPush);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
 
         // Escape should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op_agent_id.is_none());
+        assert!(app.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1253,8 +1257,8 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPush);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
 
         // 'y' should try to execute push (will fail, no agent in storage)
         test_key_event(&mut app, handler, KeyCode::Char('Y'), KeyModifiers::NONE)?;
@@ -1270,9 +1274,9 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::RenameBranch);
-        app.git_op_branch_name = "feature/old".to_string();
-        app.input_buffer = "feature/old".to_string();
-        app.input_cursor = app.input_buffer.len(); // Cursor at end
+        app.git_op.branch_name = "feature/old".to_string();
+        app.input.buffer = "feature/old".to_string();
+        app.input.cursor = app.input.buffer.len(); // Cursor at end
 
         // Type some characters
         test_key_event(&mut app, handler, KeyCode::Char('-'), KeyModifiers::NONE)?;
@@ -1280,7 +1284,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('e'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('w'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "feature/old-new");
+        assert_eq!(app.input.buffer, "feature/old-new");
         assert_eq!(app.mode, Mode::RenameBranch);
         Ok(())
     }
@@ -1291,12 +1295,12 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::RenameBranch);
-        app.input_buffer = "feature/test".to_string();
-        app.input_cursor = app.input_buffer.len(); // Cursor at end
+        app.input.buffer = "feature/test".to_string();
+        app.input.cursor = app.input.buffer.len(); // Cursor at end
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input_buffer, "feature/tes");
+        assert_eq!(app.input.buffer, "feature/tes");
         Ok(())
     }
 
@@ -1306,13 +1310,13 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::RenameBranch);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.input_buffer = "feature/test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.input.buffer = "feature/test".to_string();
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op_agent_id.is_none()); // State cleared
+        assert!(app.git_op.agent_id.is_none()); // State cleared
         Ok(())
     }
 
@@ -1322,16 +1326,16 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::RenameBranch);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_original_branch = "feature/old".to_string();
-        app.git_op_branch_name = "feature/old".to_string();
-        app.input_buffer = "feature/new".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.original_branch = "feature/old".to_string();
+        app.git_op.branch_name = "feature/old".to_string();
+        app.input.buffer = "feature/new".to_string();
 
         // Enter tries to confirm rename and execute (will fail without agent)
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Branch name should have been updated before failing
-        assert_eq!(app.git_op_branch_name, "feature/new");
+        assert_eq!(app.git_op.branch_name, "feature/new");
         // Should show error (no agent in storage)
         assert!(matches!(app.mode, Mode::ErrorModal(_)));
         Ok(())
@@ -1343,14 +1347,14 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
 
         // 'n' should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op_agent_id.is_none()); // State cleared
+        assert!(app.git_op.agent_id.is_none()); // State cleared
         Ok(())
     }
 
@@ -1361,12 +1365,12 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op_agent_id.is_none());
+        assert!(app.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1376,9 +1380,9 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op_branch_name = "test".to_string();
-        app.git_op_base_branch = "main".to_string();
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.branch_name = "test".to_string();
+        app.git_op.base_branch = "main".to_string();
 
         // 'y' should try to push and open PR (will fail, no agent in storage)
         test_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
@@ -1395,7 +1399,7 @@ mod tests {
         let handler = Actions::new();
 
         app.enter_mode(Mode::ConfirmPush);
-        app.git_op_agent_id = Some(uuid::Uuid::new_v4());
+        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         // Other keys should be ignored
         test_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;

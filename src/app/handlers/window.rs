@@ -10,7 +10,7 @@ impl Actions {
     ///
     /// This ensures the terminal output renders correctly in the preview pane.
     pub fn resize_agent_windows(&self, app: &App) {
-        let Some((width, height)) = app.preview_dimensions else {
+        let Some((width, height)) = app.ui.preview_dimensions else {
             return;
         };
 
@@ -112,7 +112,7 @@ mod tests {
 
         // Should not panic when no dimensions are set
         handler.resize_agent_windows(&app);
-        assert!(app.preview_dimensions.is_none());
+        assert!(app.ui.preview_dimensions.is_none());
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
 
         // Should not panic when resizing non-existent sessions
         handler.resize_agent_windows(&app);
-        assert_eq!(app.preview_dimensions, Some((100, 50)));
+        assert_eq!(app.ui.preview_dimensions, Some((100, 50)));
     }
 
     #[test]
