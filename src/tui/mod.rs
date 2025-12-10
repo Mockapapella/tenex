@@ -425,6 +425,7 @@ fn keycode_to_tmux_keys(code: KeyCode, modifiers: KeyModifiers) -> Option<String
         KeyCode::Esc => "Escape".to_string(),
         KeyCode::Backspace => "BSpace".to_string(),
         KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "BTab".to_string(),
         KeyCode::Up => "Up".to_string(),
         KeyCode::Down => "Down".to_string(),
         KeyCode::Left => "Left".to_string(),
