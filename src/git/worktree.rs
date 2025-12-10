@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::Repository;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Manager for git worktree operations
 pub struct Manager<'a> {
@@ -130,32 +130,65 @@ impl<'a> Manager<'a> {
     ///
     /// # Errors
     ///
-    /// This function is idempotent and does not return errors for missing
-    /// worktrees or branches.
+    /// Returns an error if the worktree exists but cannot be removed after retries.
+    /// Does not return errors for missing worktrees or branches.
     pub fn remove(&self, name: &str) -> Result<()> {
         debug!(name, "Removing worktree and branch");
 
         // Worktree name has slashes replaced with dashes
         let worktree_name = name.replace('/', "-");
 
-        // Try to remove the worktree (may already be gone)
+        // Try to remove the worktree with retries (may already be gone)
         if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
             let wt_path = worktree.path().to_path_buf();
 
-            let _ = worktree.prune(Some(
-                git2::WorktreePruneOptions::new()
-                    .valid(true)
-                    .working_tree(true),
-            ));
+            // Retry prune up to 3 times with increasing delays
+            // This handles race conditions where processes are still terminating
+            let mut prune_succeeded = false;
+            for attempt in 0u64..3 {
+                if attempt > 0 {
+                    debug!(name, attempt, "Retrying worktree prune");
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                }
 
-            if wt_path.exists() {
-                let _ = fs::remove_dir_all(&wt_path);
+                match worktree.prune(Some(
+                    git2::WorktreePruneOptions::new()
+                        .valid(true)
+                        .working_tree(true),
+                )) {
+                    Ok(()) => {
+                        prune_succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        debug!(name, error = %e, attempt, "Worktree prune failed");
+                    }
+                }
             }
+
+            // Always try to remove the directory even if prune failed
+            if wt_path.exists()
+                && let Err(e) = fs::remove_dir_all(&wt_path)
+            {
+                warn!(name, path = ?wt_path, error = %e, "Failed to remove worktree directory");
+            }
+
+            // Verify the worktree is actually gone from git's perspective
+            if !prune_succeeded {
+                // Check if it's still registered with git
+                if self.repo.find_worktree(&worktree_name).is_ok() {
+                    warn!(name, "Worktree still exists in git after prune attempts");
+                    return Err(anyhow::anyhow!(
+                        "Failed to remove worktree '{name}' - it may still be in use"
+                    ));
+                }
+            }
+
             debug!(name, "Worktree pruned");
         }
 
         // Always try to delete the branch (critical for cleanup)
-        // Ignore errors - branch may already be deleted
+        // Ignore errors - branch may already be deleted or checked out elsewhere
         let branch_mgr = super::BranchManager::new(self.repo);
         let _ = branch_mgr.delete(name);
 

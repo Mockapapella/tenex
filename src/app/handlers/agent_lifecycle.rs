@@ -4,7 +4,7 @@ use crate::agent::{Agent, ChildConfig};
 use crate::git::{self, WorktreeManager};
 use crate::tmux::SessionManager;
 use anyhow::{Context, Result};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::Actions;
 use crate::app::state::{App, Mode, WorktreeConflictInfo};
@@ -281,11 +281,19 @@ impl Actions {
                 // Kill the session
                 let _ = self.session_manager.kill(&session);
 
+                // Brief delay to allow tmux processes to terminate
+                // tmux kill-session sends SIGTERM and returns immediately,
+                // but processes may still be running and have files open
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
                 // Remove worktree
                 let repo_path = std::env::current_dir()?;
                 if let Ok(repo) = git::open_repository(&repo_path) {
                     let worktree_mgr = WorktreeManager::new(&repo);
-                    let _ = worktree_mgr.remove(&worktree_name);
+                    if let Err(e) = worktree_mgr.remove(&worktree_name) {
+                        warn!("Failed to remove worktree: {e}");
+                        app.set_status(format!("Warning: {e}"));
+                    }
                 }
             } else {
                 // Child agent: kill just this window and its descendants

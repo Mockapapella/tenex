@@ -218,3 +218,97 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
 
     Ok(())
 }
+
+/// Regression test: Deleted agents should not reappear after restart
+///
+/// This test verifies the fix for a bug where:
+/// 1. User creates an agent (creates worktree + adds to storage)
+/// 2. User deletes the agent (removes from storage, should remove worktree)
+/// 3. User restarts tenex (`auto_connect_worktrees` runs)
+/// 4. BUG: Agent would reappear because worktree removal failed silently
+///
+/// The fix ensures worktree removal errors are handled properly with retries,
+/// and errors are reported instead of silently ignored.
+///
+/// See: `src/git/worktree.rs:remove()` and `src/app/handlers/agent_lifecycle.rs:kill_agent()`
+#[test]
+#[expect(clippy::unwrap_used, reason = "test assertions")]
+fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let original_dir = std::env::current_dir()?;
+    let fixture = TestFixture::new("deleted_agent_restart")?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+    let mut app = App::new(config.clone(), storage);
+    let handler = Actions::new();
+
+    // Step 1: Create an agent
+    handler.create_agent(&mut app, "will-be-deleted", None)?;
+
+    // Handle potential worktree conflict
+    if matches!(
+        app.mode,
+        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+    ) {
+        handler.reconnect_to_worktree(&mut app)?;
+    }
+
+    assert_eq!(app.storage.len(), 1, "Should have one agent after creation");
+
+    let branch_name = app.storage.iter().next().map(|a| a.branch.clone()).unwrap();
+
+    // Verify the worktree exists
+    let repo = git2::Repository::open(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    assert!(
+        worktree_mgr.exists(&branch_name),
+        "Worktree should exist after agent creation"
+    );
+
+    // Step 2: Delete the agent (simulating kill_agent)
+    // Select the agent first
+    app.select_next();
+
+    // Enter confirming mode and confirm the kill
+    app.enter_mode(tenex::app::Mode::Confirming(
+        tenex::app::ConfirmAction::Kill,
+    ));
+    handler.handle_action(&mut app, tenex::config::Action::Confirm)?;
+
+    assert_eq!(app.storage.len(), 0, "Should have no agents after deletion");
+
+    // Verify the worktree was removed
+    // Re-open the repo to get fresh state
+    let repo = git2::Repository::open(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    assert!(
+        !worktree_mgr.exists(&branch_name),
+        "Worktree should be removed after agent deletion"
+    );
+
+    // Step 3: Simulate restart by calling auto_connect_worktrees
+    // This is what happens on tenex startup
+    let storage2 = TestFixture::create_storage(); // Fresh empty storage (simulating restart)
+    let mut app2 = App::new(config, storage2);
+
+    handler.auto_connect_worktrees(&mut app2)?;
+
+    // Step 4: Verify the deleted agent does NOT reappear
+    assert_eq!(
+        app2.storage.len(),
+        0,
+        "Deleted agent should NOT reappear after restart - worktree should have been cleaned up"
+    );
+
+    // Cleanup
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+    let _ = std::env::set_current_dir(&original_dir);
+
+    Ok(())
+}
