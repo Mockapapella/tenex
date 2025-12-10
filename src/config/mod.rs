@@ -28,7 +28,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_program: "claude".to_string(),
+            default_program: "claude --allow-dangerously-skip-permissions".to_string(),
             branch_prefix: "tenex/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
@@ -80,7 +80,10 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.default_program, "claude");
+        assert_eq!(
+            config.default_program,
+            "claude --allow-dangerously-skip-permissions"
+        );
         assert_eq!(config.branch_prefix, "tenex/");
         assert!(!config.auto_yes);
         assert_eq!(config.poll_interval_ms, 100);
