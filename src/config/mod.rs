@@ -42,8 +42,14 @@ impl Default for Config {
 
 impl Config {
     /// Get the state file path (for agent persistence)
+    ///
+    /// Respects the `TENEX_STATE_PATH` environment variable if set,
+    /// allowing tests to use an isolated state file.
     #[must_use]
     pub fn state_path() -> PathBuf {
+        if let Ok(path) = std::env::var("TENEX_STATE_PATH") {
+            return PathBuf::from(path);
+        }
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("tenex")

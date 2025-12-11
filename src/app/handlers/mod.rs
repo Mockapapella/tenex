@@ -271,9 +271,12 @@ mod tests {
     use super::*;
     use crate::agent::{Status, Storage};
     use crate::config::Config;
+    use tempfile::NamedTempFile;
 
-    fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((App::new(Config::default(), storage), temp_file))
     }
 
     #[test]
@@ -291,7 +294,7 @@ mod tests {
     #[test]
     fn test_handle_action_new_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::NewAgent)?;
         assert_eq!(app.mode, Mode::Creating);
@@ -301,7 +304,7 @@ mod tests {
     #[test]
     fn test_handle_action_new_agent_with_prompt() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::NewAgentWithPrompt)?;
         assert_eq!(app.mode, Mode::Prompting);
@@ -311,7 +314,7 @@ mod tests {
     #[test]
     fn test_handle_action_help() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Help)?;
         assert_eq!(app.mode, Mode::Help);
@@ -321,7 +324,7 @@ mod tests {
     #[test]
     fn test_handle_action_quit_no_agents() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Quit)?;
         assert!(app.should_quit);
@@ -331,7 +334,7 @@ mod tests {
     #[test]
     fn test_handle_action_switch_tab() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::SwitchTab)?;
         assert_eq!(app.active_tab, super::super::state::Tab::Diff);
@@ -344,7 +347,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         for i in 0..3 {
             app.storage.add(Agent::new(
@@ -367,7 +370,7 @@ mod tests {
     #[test]
     fn test_handle_action_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::ScrollDown)?;
         assert_eq!(app.ui.preview_scroll, 5);
@@ -383,7 +386,7 @@ mod tests {
     #[test]
     fn test_handle_action_cancel() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         app.enter_mode(Mode::Creating);
         handler.handle_action(&mut app, Action::Cancel)?;
@@ -394,7 +397,7 @@ mod tests {
     #[test]
     fn test_handle_kill_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Kill)?;
         assert_eq!(app.mode, Mode::Normal);
@@ -402,14 +405,15 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_focus_preview_no_agent() {
+    fn test_handle_focus_preview_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // FocusPreview does nothing when no agent is selected (stays in Normal mode)
         let result = handler.handle_action(&mut app, Action::FocusPreview);
         assert!(result.is_ok());
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
@@ -418,7 +422,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a running agent
         let mut agent = Agent::new(
@@ -443,7 +447,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         app.storage.add(Agent::new(
@@ -463,7 +467,7 @@ mod tests {
     #[test]
     fn test_handle_confirm_quit() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Enter confirming mode for quit
         app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
@@ -480,7 +484,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add agents
         for i in 0..3 {
@@ -503,12 +507,12 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_focus_preview_with_agent() {
+    fn test_handle_focus_preview_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         app.storage.add(Agent::new(
@@ -528,12 +532,13 @@ mod tests {
         let result = handler.handle_action(&mut app, Action::UnfocusPreview);
         assert!(result.is_ok());
         assert_eq!(app.mode, Mode::Normal);
+        Ok(())
     }
 
     #[test]
     fn test_toggle_collapse_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Should not error with no agent selected
         handler.toggle_collapse(&mut app)?;
@@ -546,7 +551,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         app.storage.add(Agent::new(
             "test".to_string(),
@@ -564,7 +569,7 @@ mod tests {
     #[test]
     fn test_handle_action_spawn_children() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::SpawnChildren)?;
         assert_eq!(app.mode, Mode::ChildCount);
@@ -578,7 +583,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let agent = Agent::new(
             "test".to_string(),
@@ -599,7 +604,7 @@ mod tests {
     #[test]
     fn test_handle_action_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent - should not enter confirming mode
         handler.handle_action(&mut app, Action::Synthesize)?;
@@ -613,7 +618,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add parent agent
         let parent = Agent::new(
@@ -649,7 +654,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add agent with no children
         app.storage.add(Agent::new(
@@ -669,7 +674,7 @@ mod tests {
     #[test]
     fn test_handle_action_toggle_collapse() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent - should not error
         handler.handle_action(&mut app, Action::ToggleCollapse)?;
@@ -679,7 +684,7 @@ mod tests {
     #[test]
     fn test_handle_action_broadcast_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent - should not enter mode
         handler.handle_action(&mut app, Action::Broadcast)?;
@@ -693,7 +698,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         app.storage.add(Agent::new(
             "test".to_string(),
@@ -711,7 +716,7 @@ mod tests {
     #[test]
     fn test_handle_scroll_bottom() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::ScrollBottom)?;
         // ScrollBottom calls scroll_to_bottom(10000, 0) so preview_scroll becomes 10000
@@ -722,7 +727,7 @@ mod tests {
     #[test]
     fn test_handle_action_review_swarm_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent - should show ReviewInfo
         handler.handle_action(&mut app, Action::ReviewSwarm)?;
@@ -731,8 +736,8 @@ mod tests {
     }
 
     #[test]
-    fn test_review_state_cleared() {
-        let mut app = create_test_app();
+    fn test_review_state_cleared() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up some review state
         app.review.branches = vec![crate::git::BranchInfo {
@@ -752,12 +757,13 @@ mod tests {
         assert!(app.review.filter.is_empty());
         assert_eq!(app.review.selected, 0);
         assert!(app.review.base_branch.is_none());
+        Ok(())
     }
 
     #[test]
     fn test_review_info_mode_exit() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Enter ReviewInfo mode
         app.show_review_info();
@@ -770,8 +776,8 @@ mod tests {
     }
 
     #[test]
-    fn test_git_op_state_cleared_properly() {
-        let mut app = create_test_app();
+    fn test_git_op_state_cleared_properly() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up git op state
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
@@ -791,14 +797,15 @@ mod tests {
         assert!(app.git_op.base_branch.is_empty());
         assert!(!app.git_op.has_unpushed);
         assert!(!app.git_op.is_root_rename);
+        Ok(())
     }
 
     #[test]
     #[expect(clippy::unwrap_used, reason = "test assertion")]
-    fn test_worktree_conflict_info_struct() {
+    fn test_worktree_conflict_info_struct() -> Result<(), Box<dyn std::error::Error>> {
         use crate::app::WorktreeConflictInfo;
 
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up conflict info manually
         app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
@@ -818,14 +825,15 @@ mod tests {
         let info = app.spawn.worktree_conflict.as_ref().unwrap();
         assert_eq!(info.title, "test");
         assert_eq!(info.swarm_child_count, None);
+        Ok(())
     }
 
     #[test]
     #[expect(clippy::unwrap_used, reason = "test assertion")]
-    fn test_worktree_conflict_info_swarm() {
+    fn test_worktree_conflict_info_swarm() -> Result<(), Box<dyn std::error::Error>> {
         use crate::app::WorktreeConflictInfo;
 
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up conflict info for a swarm
         app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
@@ -842,6 +850,7 @@ mod tests {
 
         let info = app.spawn.worktree_conflict.as_ref().unwrap();
         assert_eq!(info.swarm_child_count, Some(3));
+        Ok(())
     }
 
     // === Terminal Spawning Tests ===
@@ -849,7 +858,7 @@ mod tests {
     #[test]
     fn test_spawn_terminal_requires_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent selected - SpawnTerminal should do nothing
         handler.handle_action(&mut app, Action::SpawnTerminal)?;
@@ -862,7 +871,7 @@ mod tests {
     fn test_spawn_terminal_prompted_requires_selected_agent()
     -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent selected - SpawnTerminalPrompted should not enter mode
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
@@ -877,7 +886,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         app.storage.add(Agent::new(
@@ -895,11 +904,11 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_terminal_increments_counter() {
+    fn test_spawn_terminal_increments_counter() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         app.storage.add(Agent::new(
@@ -922,6 +931,7 @@ mod tests {
         let name2 = app.next_terminal_name();
         assert_eq!(name2, "Terminal 2");
         assert_eq!(app.spawn.terminal_counter, 2);
+        Ok(())
     }
 
     #[test]
@@ -954,7 +964,7 @@ mod tests {
         use std::path::PathBuf;
 
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // 1. Without agent - [t] does nothing
         handler.handle_action(&mut app, Action::SpawnTerminal)?;

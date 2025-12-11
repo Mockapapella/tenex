@@ -102,14 +102,21 @@ fn cmd_reset(force: bool) -> Result<()> {
     let storage = Storage::load().unwrap_or_default();
     let tmux = SessionManager::new();
 
+    // Skip orphan detection when using isolated state (TENEX_STATE_PATH set).
+    // Otherwise we'd kill real tenex sessions that aren't in the isolated state.
+    let using_isolated_state = std::env::var("TENEX_STATE_PATH").is_ok();
+
     // Find orphaned muster tmux sessions (not in storage)
     let storage_sessions: HashSet<_> = storage.iter().map(|a| a.tmux_session.clone()).collect();
-    let orphaned_sessions: Vec<_> = tmux
-        .list()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|s| s.name.starts_with("tenex-") && !storage_sessions.contains(&s.name))
-        .collect();
+    let orphaned_sessions: Vec<_> = if using_isolated_state {
+        Vec::new() // Don't scan for orphans when using isolated state
+    } else {
+        tmux.list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.name.starts_with("tenex-") && !storage_sessions.contains(&s.name))
+            .collect()
+    };
 
     if storage.is_empty() && orphaned_sessions.is_empty() {
         println!("No agents to reset.");
@@ -204,10 +211,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_cmd_reset_force() {
-        // With force=true should work without interactive input
-        let result = cmd_reset(true);
-        assert!(result.is_ok());
-    }
+    // Note: test_cmd_reset_force moved to tests/cli_binary_test.rs
+    // to properly isolate state via subprocess + TENEX_STATE_PATH env var.
+    // Running cmd_reset directly in a unit test would corrupt real state.
 }

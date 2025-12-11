@@ -146,15 +146,18 @@ mod tests {
     use crate::agent::Storage;
     use crate::config::Config;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
-    fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((App::new(Config::default(), storage), temp_file))
     }
 
     #[test]
     fn test_sync_agent_status() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         handler.sync_agent_status(&mut app)?;
         Ok(())
@@ -163,7 +166,7 @@ mod tests {
     #[test]
     fn test_sync_agent_status_with_agents() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add agents with different statuses
         let mut running = Agent::new(

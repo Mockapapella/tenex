@@ -43,8 +43,16 @@ fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Erro
 
 #[test]
 fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    // Use isolated state file to avoid affecting real agents
+    let temp_state = NamedTempFile::new()?;
+
     // reset with --force should succeed (even if no agents)
-    let output = tenex_bin().args(["reset", "--force"]).output()?;
+    let output = tenex_bin()
+        .args(["reset", "--force"])
+        .env("TENEX_STATE_PATH", temp_state.path())
+        .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // "No agents to reset", or lists agents/orphaned sessions

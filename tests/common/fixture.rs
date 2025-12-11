@@ -138,29 +138,15 @@ impl TestFixture {
             }
         }
     }
-
-    /// Clean up agents from the real storage that have this test's prefix
-    pub fn cleanup_storage(&self) {
-        if let Ok(mut storage) = Storage::load() {
-            let agents_to_remove: Vec<_> = storage
-                .iter()
-                .filter(|a| a.branch.starts_with(&self.session_prefix))
-                .map(|a| a.id)
-                .collect();
-
-            for id in agents_to_remove {
-                storage.remove(id);
-            }
-
-            let _ = storage.save();
-        }
-    }
 }
 
 impl Drop for TestFixture {
     fn drop(&mut self) {
         self.cleanup_sessions();
         self.cleanup_branches();
-        self.cleanup_storage();
+        // Note: We intentionally do NOT call cleanup_storage() here.
+        // Tests use isolated state via state_dir TempDir, so there's
+        // no need to touch the real state file. Doing so would cause
+        // race conditions with any running tenex instance.
     }
 }

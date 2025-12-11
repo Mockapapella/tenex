@@ -601,24 +601,28 @@ mod tests {
     use crate::app::state::Mode;
     use crate::config::Config;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
-    fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((App::new(Config::default(), storage), temp_file))
     }
 
     #[test]
-    fn test_handle_push_no_agent() {
+    fn test_handle_push_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let result = handler.handle_action(&mut app, crate::config::Action::Push);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
     fn test_handle_push_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         let agent = Agent::new(
@@ -641,67 +645,73 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_push_no_agent_id() {
-        let mut app = create_test_app();
+    fn test_execute_push_no_agent_id() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = None;
 
         let result = Actions::execute_push(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_push_agent_not_found() {
-        let mut app = create_test_app();
+    fn test_execute_push_agent_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.git_op.branch_name = "test".to_string();
 
         let result = Actions::execute_push(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_rename_no_agent_id() {
-        let mut app = create_test_app();
+    fn test_execute_rename_no_agent_id() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = None;
 
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_rename_agent_not_found() {
-        let mut app = create_test_app();
+    fn test_execute_rename_agent_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.git_op.branch_name = "new-name".to_string();
         app.git_op.original_branch = "old-name".to_string();
 
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_open_pr_in_browser_no_agent_id() {
-        let mut app = create_test_app();
+    fn test_open_pr_in_browser_no_agent_id() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = None;
 
         let result = Actions::open_pr_in_browser(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_open_pr_in_browser_agent_not_found() {
-        let mut app = create_test_app();
+    fn test_open_pr_in_browser_agent_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.git_op.branch_name = "test".to_string();
         app.git_op.base_branch = "main".to_string();
 
         let result = Actions::open_pr_in_browser(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_push_flow_state_transitions() {
-        let mut app = create_test_app();
+    fn test_push_flow_state_transitions() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         let agent = Agent::new(
@@ -724,11 +734,12 @@ mod tests {
         app.clear_git_op_state();
         assert!(app.git_op.branch_name.is_empty());
         assert!(app.git_op.agent_id.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_rename_root_flow_state_transitions() {
-        let mut app = create_test_app();
+    fn test_rename_root_flow_state_transitions() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent
         let agent = Agent::new(
@@ -765,11 +776,12 @@ mod tests {
         let result = app.confirm_rename_branch();
         assert!(result);
         assert_eq!(app.git_op.branch_name, "test-new");
+        Ok(())
     }
 
     #[test]
-    fn test_rename_subagent_flow_state_transitions() {
-        let mut app = create_test_app();
+    fn test_rename_subagent_flow_state_transitions() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent first
         let root = Agent::new(
@@ -819,11 +831,12 @@ mod tests {
         let result = app.confirm_rename_branch();
         assert!(result);
         assert_eq!(app.git_op.branch_name, "sub-new");
+        Ok(())
     }
 
     #[test]
-    fn test_open_pr_flow_state_with_unpushed() {
-        let mut app = create_test_app();
+    fn test_open_pr_flow_state_with_unpushed() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         let agent = Agent::new(
@@ -849,11 +862,12 @@ mod tests {
         assert_eq!(app.git_op.branch_name, "feature/test");
         assert_eq!(app.git_op.base_branch, "main");
         assert!(app.git_op.has_unpushed);
+        Ok(())
     }
 
     #[test]
-    fn test_open_pr_flow_state_no_unpushed() {
-        let mut app = create_test_app();
+    fn test_open_pr_flow_state_no_unpushed() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         let agent = Agent::new(
@@ -878,6 +892,7 @@ mod tests {
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.git_op.agent_id, Some(agent_id));
         assert!(!app.git_op.has_unpushed);
+        Ok(())
     }
 
     #[test]
@@ -911,7 +926,7 @@ mod tests {
     #[test]
     fn test_handle_rename_with_root_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent
         let agent = Agent::new(
@@ -940,7 +955,7 @@ mod tests {
     #[expect(clippy::expect_used, reason = "test code")]
     fn test_handle_rename_with_subagent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent first
         let root = Agent::new(
@@ -1003,8 +1018,8 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_rename_clears_state_on_no_agent() {
-        let mut app = create_test_app();
+    fn test_execute_rename_clears_state_on_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up state but with an invalid agent ID
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
@@ -1014,11 +1029,13 @@ mod tests {
         // Execute should fail gracefully
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_rename_subagent_clears_state_on_no_agent() {
-        let mut app = create_test_app();
+    fn test_execute_rename_subagent_clears_state_on_no_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Set up state but with an invalid agent ID
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
@@ -1028,52 +1045,57 @@ mod tests {
         // Execute should fail gracefully
         let result = Actions::execute_rename(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_push_and_open_pr_no_agent_id() {
-        let mut app = create_test_app();
+    fn test_execute_push_and_open_pr_no_agent_id() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // No agent ID set
         app.git_op.agent_id = None;
 
         let result = Actions::execute_push_and_open_pr(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_execute_push_and_open_pr_agent_not_found() {
-        let mut app = create_test_app();
+    fn test_execute_push_and_open_pr_agent_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
 
         // Set invalid agent ID
         app.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         let result = Actions::execute_push_and_open_pr(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_open_pr_no_agent() {
+    fn test_handle_open_pr_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let result = handler.handle_action(&mut app, crate::config::Action::OpenPR);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_handle_rename_no_agent() {
+    fn test_handle_rename_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let result = handler.handle_action(&mut app, crate::config::Action::RenameBranch);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
     fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let agent = Agent::new(
             "test-agent".to_string(),
@@ -1097,7 +1119,7 @@ mod tests {
     #[test]
     fn test_push_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         let agent = Agent::new(
             "test-agent".to_string(),

@@ -511,15 +511,18 @@ mod tests {
     use crate::agent::Storage;
     use crate::config::Config;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
-    fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((App::new(Config::default(), storage), temp_file))
     }
 
     #[test]
-    fn test_spawn_children_for_root_no_session() {
+    fn test_spawn_children_for_root_no_session() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent (the session won't exist)
         let root = Agent::new(
@@ -545,22 +548,24 @@ mod tests {
 
         // This should error because the session doesn't exist
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_synthesize_no_agent() {
+    fn test_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Should error with no agent selected
         let result = handler.synthesize(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
     fn test_synthesize_no_children() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         app.storage.add(Agent::new(
             "test".to_string(),
@@ -584,9 +589,9 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_review_agents_no_parent() {
+    fn test_spawn_review_agents_no_parent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No spawning_under set - should error
         app.spawn.spawning_under = None;
@@ -594,12 +599,13 @@ mod tests {
 
         let result = handler.spawn_review_agents(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_spawn_review_agents_no_base_branch() {
+    fn test_spawn_review_agents_no_base_branch() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         let agent = Agent::new(
@@ -618,12 +624,13 @@ mod tests {
 
         let result = handler.spawn_review_agents(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_broadcast_excludes_terminals() {
+    fn test_broadcast_excludes_terminals() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Create a root agent
         let mut root = Agent::new(
@@ -680,5 +687,6 @@ mod tests {
 
         // Check status message mentions 0 or shows error about no agents
         // (since the tmux sessions don't actually exist)
+        Ok(())
     }
 }

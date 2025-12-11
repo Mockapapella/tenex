@@ -31,6 +31,11 @@ pub struct Storage {
     /// Version of the state file format
     #[serde(default = "default_version")]
     pub version: u32,
+
+    /// Custom state file path (if set, overrides default location)
+    /// When None, uses `Config::state_path()`
+    #[serde(skip)]
+    pub state_path: Option<std::path::PathBuf>,
 }
 
 impl Default for Storage {
@@ -50,6 +55,18 @@ impl Storage {
         Self {
             agents: Vec::new(),
             version: default_version(),
+            state_path: None,
+        }
+    }
+
+    /// Create a new empty storage with a custom state file path
+    /// Use this in tests to avoid writing to the real state file
+    #[must_use]
+    pub const fn with_path(path: std::path::PathBuf) -> Self {
+        Self {
+            agents: Vec::new(),
+            version: 1, // Can't call default_version() in const context
+            state_path: Some(path),
         }
     }
 
@@ -80,13 +97,13 @@ impl Storage {
         Ok(storage)
     }
 
-    /// Save state to the default location
+    /// Save state to the configured location (custom path or default)
     ///
     /// # Errors
     ///
     /// Returns an error if the state directory cannot be created or the file cannot be written
     pub fn save(&self) -> Result<()> {
-        let path = Config::state_path();
+        let path = self.state_path.clone().unwrap_or_else(Config::state_path);
         self.save_to(&path)
     }
 

@@ -441,35 +441,40 @@ mod tests {
     use crate::agent::Storage;
     use crate::config::Config;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
-    fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((App::new(Config::default(), storage), temp_file))
     }
 
     #[test]
-    fn test_reconnect_to_worktree_no_conflict_info() {
+    fn test_reconnect_to_worktree_no_conflict_info() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No conflict info set - should error
         let result = handler.reconnect_to_worktree(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_recreate_worktree_no_conflict_info() {
+    fn test_recreate_worktree_no_conflict_info() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // No conflict info set - should error
         let result = handler.recreate_worktree(&mut app);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
     fn test_handle_confirm_kill() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
         app.storage.add(Agent::new(
@@ -492,7 +497,7 @@ mod tests {
     #[test]
     fn test_kill_agent_root() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent
         app.storage.add(Agent::new(
@@ -512,7 +517,7 @@ mod tests {
     #[test]
     fn test_kill_agent_child() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent (expanded to show children)
         let mut root = Agent::new(
@@ -555,7 +560,7 @@ mod tests {
     #[test]
     fn test_kill_agent_with_descendants() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent
         let root = Agent::new(
@@ -592,9 +597,9 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_terminal_creates_child_of_root() {
+    fn test_spawn_terminal_creates_child_of_root() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
-        let mut app = create_test_app();
+        let (mut app, _temp) = create_test_app()?;
 
         // Create a root agent with a child
         let mut root = Agent::new(
@@ -634,5 +639,6 @@ mod tests {
 
         // Should fail because tmux session doesn't exist
         assert!(result.is_err());
+        Ok(())
     }
 }
