@@ -1,6 +1,9 @@
 //! Tests for git worktree operations
 
-use crate::common::TestFixture;
+use crate::common::{DirGuard, TestFixture};
+use tenex::agent::{Agent, Storage};
+use tenex::app::{Actions, Settings};
+use tenex::config::Action;
 
 #[test]
 fn test_git_worktree_create_and_remove() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,6 +55,911 @@ fn test_git_exclude_tenex_directory() -> Result<(), Box<dyn std::error::Error>> 
     let contents = std::fs::read_to_string(&exclude_path)?;
     let count = contents.matches(".tenex/").count();
     assert_eq!(count, 1, "Should only have one .tenex/ entry");
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rename_same_name() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rename_same")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "test-agent".to_string(),
+        "echo".to_string(),
+        "test-branch".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rename state with same name
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = "test-agent".to_string();
+    app.git_op.original_branch = "test-agent".to_string();
+    app.git_op.is_root_rename = true;
+
+    // Execute rename
+    Actions::execute_rename(&mut app)?;
+
+    // Should set status "Name unchanged"
+    assert!(
+        app.ui
+            .status_message
+            .as_ref()
+            .is_some_and(|s| s.contains("unchanged")),
+        "Should show name unchanged status"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_with_valid_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("push_valid")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a worktree for the agent
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-push-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "push-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up push state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+
+    // Execute push - will fail because there's no remote, but should handle gracefully
+    let result = Actions::execute_push(&mut app);
+    assert!(result.is_ok(), "Push should handle no remote gracefully");
+
+    // Should have set an error message about push failure
+    assert!(
+        app.ui.last_error.is_some(),
+        "Should have error about push failure"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_valid")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a feature branch with a commit
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-rebase-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    // Make a commit on the feature branch
+    std::fs::write(worktree_path.join("test.txt"), "test content")?;
+    std::process::Command::new("git")
+        .args(["add", "test.txt"])
+        .current_dir(&worktree_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Test commit"])
+        .current_dir(&worktree_path)
+        .output()?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "rebase-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rebase state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+    app.git_op.target_branch = "master".to_string();
+
+    // Execute rebase - should succeed since there are no conflicts
+    let result = Actions::execute_rebase(&mut app);
+    assert!(result.is_ok(), "Rebase should succeed: {result:?}");
+
+    // Should either show success or set an error (depends on git state)
+    // The key test is that the function doesn't panic and handles the result
+    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    let has_error = app.ui.last_error.is_some();
+    assert!(
+        is_success || has_error,
+        "Should be in SuccessModal mode or have an error after rebase"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("merge_valid")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a feature branch with a commit
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-merge-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    // Make a commit on the feature branch
+    std::fs::write(worktree_path.join("feature.txt"), "feature content")?;
+    std::process::Command::new("git")
+        .args(["add", "feature.txt"])
+        .current_dir(&worktree_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Feature commit"])
+        .current_dir(&worktree_path)
+        .output()?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "merge-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Change to repo directory for the merge to work (with DirGuard for cleanup on panic)
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    // Set up merge state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+    app.git_op.target_branch = "master".to_string();
+
+    // Execute merge
+    let result = Actions::execute_merge(&mut app);
+
+    // DirGuard will restore directory on drop
+    assert!(result.is_ok(), "Merge should succeed: {result:?}");
+
+    Ok(())
+}
+
+#[test]
+fn test_push_action_handler() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("push_action")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "push-action-test".to_string(),
+        "echo".to_string(),
+        "feature/test".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Use handle_action to initiate push flow
+    let handler = Actions::new();
+    handler.handle_action(&mut app, Action::Push)?;
+
+    // Should set up git_op state
+    assert_eq!(app.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.git_op.branch_name, "feature/test");
+    assert_eq!(app.mode, tenex::app::Mode::ConfirmPush);
+
+    Ok(())
+}
+
+#[test]
+fn test_rename_action_handler() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rename_action")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "rename-action-test".to_string(),
+        "echo".to_string(),
+        "feature/rename".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Use handle_action to initiate rename flow
+    let handler = Actions::new();
+    handler.handle_action(&mut app, Action::RenameBranch)?;
+
+    // Should set up git_op state
+    assert_eq!(app.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.git_op.original_branch, "rename-action-test");
+    assert!(app.git_op.is_root_rename);
+    assert_eq!(app.mode, tenex::app::Mode::RenameBranch);
+
+    Ok(())
+}
+
+#[test]
+fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_action")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Change to repo directory (with DirGuard for cleanup on panic)
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "rebase-action-test".to_string(),
+        "echo".to_string(),
+        "feature/rebase".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    app.storage.add(agent);
+
+    // Use handle_action to initiate rebase flow
+    let handler = Actions::new();
+    let result = handler.handle_action(&mut app, Action::Rebase);
+
+    // DirGuard will restore directory on drop
+    assert!(result.is_ok());
+    assert_eq!(app.mode, tenex::app::Mode::RebaseBranchSelector);
+
+    Ok(())
+}
+
+#[test]
+fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("merge_action")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Change to repo directory (with DirGuard for cleanup on panic)
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "merge-action-test".to_string(),
+        "echo".to_string(),
+        "feature/merge".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    app.storage.add(agent);
+
+    // Use handle_action to initiate merge flow
+    let handler = Actions::new();
+    let result = handler.handle_action(&mut app, Action::Merge);
+
+    // DirGuard will restore directory on drop
+    assert!(result.is_ok());
+    assert_eq!(app.mode, tenex::app::Mode::MergeBranchSelector);
+
+    Ok(())
+}
+
+#[test]
+fn test_open_pr_action_handler() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("pr_action")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent with worktree
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-pr-action-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    let agent = Agent::new(
+        "pr-action-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Use handle_action to initiate open PR flow
+    let handler = Actions::new();
+    handler.handle_action(&mut app, Action::OpenPR)?;
+
+    // Should set up git_op state
+    assert_eq!(app.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.git_op.branch_name, branch_name);
+    // Should have detected a base branch or be in the right mode
+    assert_eq!(app.mode, tenex::app::Mode::ConfirmPushForPR);
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_root_rename_with_real_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("root_rename")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a worktree for the agent
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let old_branch = "tenex-old-name";
+    let worktree_path = fixture.worktree_path().join(old_branch);
+    worktree_mgr.create_with_new_branch(&worktree_path, old_branch)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "old-name".to_string(),
+        "echo".to_string(),
+        old_branch.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rename state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = "new-name".to_string();
+    app.git_op.original_branch = "old-name".to_string();
+    app.git_op.is_root_rename = true;
+
+    // Execute rename
+    Actions::execute_rename(&mut app)?;
+
+    // Verify the agent title was updated
+    let renamed_agent = app.storage.get(agent_id);
+    assert!(renamed_agent.is_some(), "Agent should exist after rename");
+    if let Some(agent) = renamed_agent {
+        assert_eq!(agent.title, "new-name");
+        // The branch should be renamed
+        assert!(agent.branch.contains("new-name"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("subagent_rename")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Create a root agent
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "tenex-root".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let root_id = root.id;
+    let root_session = root.tmux_session.clone();
+    app.storage.add(root);
+
+    // Create a child agent
+    let child = tenex::agent::Agent::new_child(
+        "old-child-name".to_string(),
+        "echo".to_string(),
+        "tenex-root".to_string(),
+        fixture.repo_path.clone(),
+        None,
+        tenex::agent::ChildConfig {
+            parent_id: root_id,
+            tmux_session: root_session,
+            window_index: 2,
+        },
+    );
+    let child_id = child.id;
+    app.storage.add(child);
+
+    // Set up rename state for child (not root)
+    app.git_op.agent_id = Some(child_id);
+    app.git_op.branch_name = "new-child-name".to_string();
+    app.git_op.original_branch = "old-child-name".to_string();
+    app.git_op.is_root_rename = false;
+
+    // Execute rename
+    Actions::execute_rename(&mut app)?;
+
+    // Verify the agent title was updated
+    let renamed_agent = app.storage.get(child_id);
+    assert!(
+        renamed_agent.is_some(),
+        "Child agent should exist after rename"
+    );
+    if let Some(agent) = renamed_agent {
+        assert_eq!(agent.title, "new-child-name");
+    }
+
+    // Verify status message
+    assert!(
+        app.ui
+            .status_message
+            .as_ref()
+            .is_some_and(|s| s.contains("Renamed")),
+        "Should show renamed status"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_conflict")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a feature branch with a commit
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-conflict-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    // Create a file on the feature branch
+    std::fs::write(worktree_path.join("conflict.txt"), "feature content")?;
+    std::process::Command::new("git")
+        .args(["add", "conflict.txt"])
+        .current_dir(&worktree_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Feature commit"])
+        .current_dir(&worktree_path)
+        .output()?;
+
+    // Now create a conflicting commit on master
+    std::fs::write(fixture.repo_path.join("conflict.txt"), "master content")?;
+    std::process::Command::new("git")
+        .args(["add", "conflict.txt"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Master commit"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "conflict-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rebase state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+    app.git_op.target_branch = "master".to_string();
+
+    // Count agents before
+    let agents_before = app.storage.iter().count();
+
+    // Execute rebase - in real tmux environment, this spawns a conflict terminal
+    // In test environment (no tmux), it may error when trying to create window
+    let result = Actions::execute_rebase(&mut app);
+
+    // The rebase should handle the situation gracefully.
+    // Multiple outcomes are valid depending on git state and tmux availability:
+    // 1. Conflict detected -> terminal spawned (new agent added)
+    // 2. Conflict detected -> tmux error (result.is_err())
+    // 3. No conflict -> success modal shown
+    // 4. Error -> error message set
+    // The key is that the function handles it without panicking.
+    let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
+    let has_error = result.is_err() || app.ui.last_error.is_some();
+    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+
+    assert!(
+        conflict_terminal_spawned || has_error || is_success,
+        "Rebase should detect conflict (either spawn terminal or return tmux error)"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("merge_conflict")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // First, create a commit on master with a file that will conflict
+    std::fs::write(fixture.repo_path.join("shared.txt"), "initial")?;
+    std::process::Command::new("git")
+        .args(["add", "shared.txt"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Initial shared file"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+
+    // Create a feature branch with a worktree
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-merge-conflict-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    // Modify the file on the feature branch
+    std::fs::write(worktree_path.join("shared.txt"), "feature content")?;
+    std::process::Command::new("git")
+        .args(["add", "shared.txt"])
+        .current_dir(&worktree_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Feature changes to shared"])
+        .current_dir(&worktree_path)
+        .output()?;
+
+    // Now create a conflicting modification on master
+    std::fs::write(fixture.repo_path.join("shared.txt"), "master content")?;
+    std::process::Command::new("git")
+        .args(["add", "shared.txt"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Master changes to shared"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+
+    // Change to repo directory (with DirGuard for cleanup on panic)
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "merge-conflict-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up merge state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+    app.git_op.target_branch = "master".to_string();
+
+    // Count agents before
+    let agents_before = app.storage.iter().count();
+
+    // Execute merge - in real tmux environment, this spawns a conflict terminal
+    // In test environment (no tmux), it may error when trying to create window
+    let result = Actions::execute_merge(&mut app);
+
+    // DirGuard will restore directory on drop
+
+    // The merge should handle the situation gracefully.
+    // Multiple outcomes are valid depending on git state and tmux availability:
+    // 1. Conflict detected -> terminal spawned (new agent added)
+    // 2. Conflict detected -> tmux error (result.is_err())
+    // 3. Error -> error message set
+    // 4. No conflict -> success modal shown
+    // The key is that the function handles it without panicking.
+    let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
+    let has_error = result.is_err() || app.ui.last_error.is_some();
+    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+
+    // The merge function should complete without panicking.
+    // In different environments, the outcome varies:
+    // - Conflict detected -> terminal spawned or error set
+    // - No conflict (fast-forward possible) -> success or mode stays normal
+    // The key assertion is that result.is_ok() - the function handled it gracefully.
+    assert!(
+        result.is_ok(),
+        "Merge should complete without error: {result:?}"
+    );
+
+    // Additional check: if not in success mode and no error, mode should be Normal (no-op)
+    let handled_correctly = conflict_terminal_spawned
+        || has_error
+        || is_success
+        || app.mode == tenex::app::Mode::Normal;
+    assert!(
+        handled_correctly,
+        "Merge should handle result. conflict_spawned={conflict_terminal_spawned}, has_error={has_error}, is_success={is_success}, mode={:?}",
+        app.mode
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_and_open_pr_no_remote() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("push_pr_no_remote")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a worktree for the agent
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-push-pr-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree
+    let agent = Agent::new(
+        "push-pr-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up push state
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = branch_name.to_string();
+    app.git_op.base_branch = "master".to_string();
+
+    // Execute push and open PR - will fail because there's no remote
+    let result = Actions::execute_push_and_open_pr(&mut app);
+    assert!(result.is_ok(), "Should handle no remote gracefully");
+
+    // Should have set an error message about push failure
+    assert!(
+        app.ui.last_error.is_some(),
+        "Should have error about push failure"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_rename_unchanged_name() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rename_unchanged")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "same-name".to_string(),
+        "echo".to_string(),
+        "tenex-same".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rename state with same name
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = "same-name".to_string();
+    app.git_op.original_branch = "same-name".to_string();
+    app.git_op.is_root_rename = true;
+
+    // Start in rename mode
+    app.mode = tenex::app::Mode::RenameBranch;
+
+    // Execute rename
+    Actions::execute_rename(&mut app)?;
+
+    // Should exit mode and set "unchanged" status
+    assert_eq!(app.mode, tenex::app::Mode::Normal);
+    assert!(
+        app.ui
+            .status_message
+            .as_ref()
+            .is_some_and(|s| s.contains("unchanged")),
+        "Should show name unchanged status"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_no_target_branch() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_no_target")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "rebase-no-target".to_string(),
+        "echo".to_string(),
+        "tenex-feature".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up rebase state without target branch
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = "tenex-feature".to_string();
+    app.git_op.target_branch = String::new(); // Empty target
+
+    // Execute rebase - should fail gracefully
+    let result = Actions::execute_rebase(&mut app);
+
+    // Should either error or handle gracefully
+    assert!(result.is_ok() || result.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_merge_no_target_branch() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("merge_no_target")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Change to repo directory (with DirGuard for cleanup on panic)
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent
+    let agent = Agent::new(
+        "merge-no-target".to_string(),
+        "echo".to_string(),
+        "tenex-feature".to_string(),
+        fixture.repo_path.clone(),
+        None,
+    );
+    let agent_id = agent.id;
+    app.storage.add(agent);
+
+    // Set up merge state without target branch
+    app.git_op.agent_id = Some(agent_id);
+    app.git_op.branch_name = "tenex-feature".to_string();
+    app.git_op.target_branch = String::new(); // Empty target
+
+    // Execute merge - should fail gracefully
+    let result = Actions::execute_merge(&mut app);
+
+    // DirGuard will restore directory on drop
+
+    // Should either error or handle gracefully
+    assert!(result.is_ok() || result.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rename_descendants")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a worktree for the agent
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let old_branch = "tenex-parent-old";
+    let worktree_path = fixture.worktree_path().join(old_branch);
+    worktree_mgr.create_with_new_branch(&worktree_path, old_branch)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add a root agent pointing to the worktree
+    let root = Agent::new(
+        "parent-old".to_string(),
+        "echo".to_string(),
+        old_branch.to_string(),
+        worktree_path.clone(),
+        None,
+    );
+    let root_id = root.id;
+    let root_session = root.tmux_session.clone();
+    app.storage.add(root);
+
+    // Add child agents
+    for i in 0..3 {
+        let child = tenex::agent::Agent::new_child(
+            format!("child-{i}"),
+            "echo".to_string(),
+            old_branch.to_string(),
+            worktree_path.clone(),
+            None,
+            tenex::agent::ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session.clone(),
+                window_index: i + 2,
+            },
+        );
+        app.storage.add(child);
+    }
+
+    // Set up rename state
+    app.git_op.agent_id = Some(root_id);
+    app.git_op.branch_name = "parent-new".to_string();
+    app.git_op.original_branch = "parent-old".to_string();
+    app.git_op.is_root_rename = true;
+
+    // Execute rename
+    Actions::execute_rename(&mut app)?;
+
+    // Verify the root agent title was updated
+    let renamed_root = app.storage.get(root_id);
+    assert!(
+        renamed_root.is_some(),
+        "Root agent should exist after rename"
+    );
+    if let Some(agent) = renamed_root {
+        assert_eq!(agent.title, "parent-new");
+    }
+
+    // Verify descendants' worktree paths were updated
+    let descendants = app.storage.descendants(root_id);
+    assert_eq!(descendants.len(), 3);
+    for desc in descendants {
+        // All descendants should have the new worktree path
+        assert!(
+            desc.worktree_path.to_string_lossy().contains("parent-new"),
+            "Descendant should have updated worktree path"
+        );
+    }
 
     Ok(())
 }

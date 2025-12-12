@@ -19,7 +19,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with 3 children (swarm)
@@ -167,7 +167,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
@@ -227,7 +227,7 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
@@ -297,7 +297,7 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 3 children
@@ -473,7 +473,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 2 children

@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
 use tenex::agent::Storage;
+use tenex::app::Settings;
 use tenex::config::Config;
 
 mod tui;
@@ -71,6 +72,7 @@ fn main() -> Result<()> {
 
     let config = Config::default();
     let storage = Storage::load().unwrap_or_default();
+    let settings = Settings::load();
 
     match cli.command {
         Some(Commands::Reset { force }) => cmd_reset(force),
@@ -80,7 +82,8 @@ fn main() -> Result<()> {
                 let _ = tenex::git::ensure_tenex_excluded(&cwd);
             }
 
-            let mut app = App::new(config, storage);
+            // keyboard_enhancement_supported will be set in tui::run after terminal setup
+            let mut app = App::new(config, storage, settings, false);
 
             // Auto-connect to any existing worktrees
             let action_handler = tenex::app::Actions::new();

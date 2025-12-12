@@ -16,7 +16,7 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (no children)
@@ -59,7 +59,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
@@ -106,7 +106,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
@@ -210,7 +210,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children (non-terminal agents)
@@ -312,7 +312,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (root)
@@ -411,7 +411,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children

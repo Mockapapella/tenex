@@ -11,7 +11,7 @@ fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // No agents in storage, so none selected
@@ -44,7 +44,7 @@ fn test_review_action_with_agent_selected_shows_count_picker()
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -93,7 +93,7 @@ fn test_review_branch_filtering() -> Result<(), Box<dyn std::error::Error>> {
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Manually set up branch list for testing filtering
     app.review.branches = vec![
@@ -155,7 +155,7 @@ fn test_review_branch_navigation() -> Result<(), Box<dyn std::error::Error>> {
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Set up branch list
     app.review.branches = vec![
@@ -212,7 +212,7 @@ fn test_review_branch_selection_confirmation() -> Result<(), Box<dyn std::error:
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Set up branch list
     app.review.branches = vec![
@@ -261,7 +261,7 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with children (swarm) to get a proper tmux session
@@ -352,7 +352,7 @@ fn test_review_modes_flow() -> Result<(), Box<dyn std::error::Error>> {
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Set up some branches
     app.review.branches = vec![tenex::git::BranchInfo {

@@ -35,7 +35,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     main_layout::render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
-        Mode::Help => modals::render_help_overlay(frame),
+        Mode::Help => modals::render_help_overlay(frame, app.is_merge_key_remapped()),
         Mode::Creating => {
             modals::render_input_overlay(
                 frame,
@@ -205,10 +205,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::ErrorModal(message) => modals::render_error_modal(frame, message),
         Mode::ReviewInfo => modals::render_review_info_overlay(frame),
         Mode::ReviewChildCount => modals::render_review_count_picker_overlay(frame, app),
-        Mode::BranchSelector => modals::render_branch_selector_overlay(frame, app),
+        Mode::BranchSelector | Mode::RebaseBranchSelector | Mode::MergeBranchSelector => {
+            modals::render_branch_selector_overlay(frame, app);
+        }
         Mode::ConfirmPush => modals::render_confirm_push_overlay(frame, app),
         Mode::RenameBranch => modals::render_rename_overlay(frame, app),
         Mode::ConfirmPushForPR => modals::render_confirm_push_for_pr_overlay(frame, app),
+        Mode::SuccessModal(message) => modals::render_success_modal(frame, message),
+        Mode::KeyboardRemapPrompt => modals::render_keyboard_remap_overlay(frame),
         _ => {}
     }
 }
@@ -256,7 +260,7 @@ mod tests {
         storage.add(create_test_agent("agent-2", Status::Starting));
         storage.add(create_test_agent("agent-3", Status::Running));
 
-        App::new(config, storage)
+        App::new(config, storage, tenex::app::Settings::default(), false)
     }
 
     #[test]
@@ -498,7 +502,12 @@ mod tests {
     fn test_render_empty_agents() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
-        let app = App::new(create_test_config(), Storage::new());
+        let app = App::new(
+            create_test_config(),
+            Storage::new(),
+            tenex::app::Settings::default(),
+            false,
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);

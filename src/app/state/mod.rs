@@ -20,6 +20,8 @@ use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use super::Settings;
+
 // Re-export BranchInfo so it's available from app module
 pub use crate::git::BranchInfo;
 
@@ -58,12 +60,23 @@ pub struct App {
 
     /// Spawn state (child agent spawning)
     pub spawn: SpawnState,
+
+    /// User settings (persistent preferences)
+    pub settings: Settings,
+
+    /// Whether the terminal supports the keyboard enhancement protocol
+    pub keyboard_enhancement_supported: bool,
 }
 
 impl App {
-    /// Create a new application with the given config and storage
+    /// Create a new application with the given config, storage, and settings
     #[must_use]
-    pub const fn new(config: Config, storage: Storage) -> Self {
+    pub const fn new(
+        config: Config,
+        storage: Storage,
+        settings: Settings,
+        keyboard_enhancement_supported: bool,
+    ) -> Self {
         Self {
             config,
             storage,
@@ -76,6 +89,8 @@ impl App {
             git_op: GitOpState::new(),
             review: ReviewState::new(),
             spawn: SpawnState::new(),
+            settings,
+            keyboard_enhancement_supported,
         }
     }
 
@@ -657,18 +672,104 @@ impl App {
 
     /// Clear all git operation state
     pub fn clear_git_op_state(&mut self) {
-        self.git_op.agent_id = None;
-        self.git_op.branch_name.clear();
-        self.git_op.original_branch.clear();
-        self.git_op.base_branch.clear();
-        self.git_op.has_unpushed = false;
-        self.git_op.is_root_rename = false;
+        self.git_op.clear();
+    }
+
+    /// Start the rebase flow - show branch selector to choose target branch
+    pub fn start_rebase(
+        &mut self,
+        agent_id: uuid::Uuid,
+        current_branch: String,
+        branches: Vec<BranchInfo>,
+    ) {
+        self.git_op.start_rebase(agent_id, current_branch);
+        self.review.branches = branches;
+        self.review.filter.clear();
+        self.review.selected = 0;
+        self.review.base_branch = None;
+        self.enter_mode(Mode::RebaseBranchSelector);
+    }
+
+    /// Start the merge flow - show branch selector to choose source branch
+    pub fn start_merge(
+        &mut self,
+        agent_id: uuid::Uuid,
+        current_branch: String,
+        branches: Vec<BranchInfo>,
+    ) {
+        self.git_op.start_merge(agent_id, current_branch);
+        self.review.branches = branches;
+        self.review.filter.clear();
+        self.review.selected = 0;
+        self.review.base_branch = None;
+        self.enter_mode(Mode::MergeBranchSelector);
+    }
+
+    /// Confirm branch selection for rebase/merge and set target branch
+    pub fn confirm_rebase_merge_branch(&mut self) -> bool {
+        if let Some(branch) = self.selected_branch() {
+            self.git_op.set_target_branch(branch.name.clone());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Show success modal with message
+    pub fn show_success(&mut self, message: impl Into<String>) {
+        self.mode = Mode::SuccessModal(message.into());
+    }
+
+    /// Dismiss success modal
+    pub fn dismiss_success(&mut self) {
+        if matches!(self.mode, Mode::SuccessModal(_)) {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    /// Check if keyboard remap prompt should be shown at startup
+    /// Returns true if terminal doesn't support enhancement AND user hasn't been asked yet
+    #[must_use]
+    pub const fn should_show_keyboard_remap_prompt(&self) -> bool {
+        !self.keyboard_enhancement_supported && !self.settings.keyboard_remap_asked
+    }
+
+    /// Show the keyboard remap prompt modal
+    pub fn show_keyboard_remap_prompt(&mut self) {
+        self.mode = Mode::KeyboardRemapPrompt;
+    }
+
+    /// Accept the keyboard remap (Ctrl+M -> Ctrl+N)
+    pub fn accept_keyboard_remap(&mut self) {
+        if let Err(e) = self.settings.enable_merge_remap() {
+            warn!("Failed to save keyboard remap setting: {}", e);
+        }
+        self.mode = Mode::Normal;
+    }
+
+    /// Decline the keyboard remap
+    pub fn decline_keyboard_remap(&mut self) {
+        if let Err(e) = self.settings.decline_merge_remap() {
+            warn!("Failed to save keyboard remap setting: {}", e);
+        }
+        self.mode = Mode::Normal;
+    }
+
+    /// Check if merge key should use Ctrl+N instead of Ctrl+M
+    #[must_use]
+    pub const fn is_merge_key_remapped(&self) -> bool {
+        self.settings.merge_key_remapped
     }
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self::new(Config::default(), Storage::default())
+        Self::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        )
     }
 }
 
@@ -714,6 +815,14 @@ pub enum Mode {
     ConfirmPushForPR,
     /// Typing a startup command for a new terminal - triggered by 'T' key
     TerminalPrompt,
+    /// Selecting branch to rebase onto - triggered by Alt+r
+    RebaseBranchSelector,
+    /// Selecting branch to merge from - triggered by Alt+m
+    MergeBranchSelector,
+    /// Showing success modal after git operation
+    SuccessModal(String),
+    /// Prompting user to remap Ctrl+M due to terminal incompatibility
+    KeyboardRemapPrompt,
 }
 
 /// Actions that require confirmation

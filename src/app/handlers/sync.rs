@@ -144,6 +144,7 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::agent::Storage;
+    use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -151,7 +152,10 @@ mod tests {
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((App::new(Config::default(), storage), temp_file))
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
     }
 
     #[test]

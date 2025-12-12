@@ -17,7 +17,7 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
     let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent via the handler
@@ -51,7 +51,7 @@ fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent with a prompt
@@ -84,7 +84,7 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -121,7 +121,7 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -161,7 +161,7 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -198,7 +198,7 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -241,7 +241,7 @@ fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create multiple agents
@@ -275,7 +275,7 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
     let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent

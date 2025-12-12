@@ -122,3 +122,165 @@ fn handle_escape(app: &mut App) {
     }
     app.exit_mode();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use tenex::agent::Storage;
+    use tenex::app::Settings;
+    use tenex::config::Config;
+
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
+    }
+
+    #[test]
+    fn test_handle_text_input_char() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.input.buffer, "a");
+
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            KeyCode::Char('b'),
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.input.buffer, "ab");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_text_input_backspace() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = "test".to_string();
+        app.input.cursor = 4;
+
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.input.buffer, "tes");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_text_input_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = "test".to_string();
+        app.input.cursor = 0;
+
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            KeyCode::Delete,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.input.buffer, "est");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_text_input_cursor_movement() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = "test".to_string();
+        app.input.cursor = 2;
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(app.input.cursor, 1);
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.input.cursor, 2);
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.input.cursor, 0);
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.input.cursor, 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_text_input_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = "test".to_string();
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.mode, Mode::Normal);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_escape_reconnect_prompt_clears_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::ReconnectPrompt;
+        app.spawn.worktree_conflict = Some(tenex::app::WorktreeConflictInfo {
+            title: "test".to_string(),
+            branch: "test".to_string(),
+            worktree_path: std::path::PathBuf::from("/tmp"),
+            prompt: None,
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "abc1234".to_string(),
+            swarm_child_count: None,
+        });
+
+        handle_escape(&mut app);
+
+        assert!(app.spawn.worktree_conflict.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_enter_empty_creating_exits() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = String::new();
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.mode, Mode::Normal);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_alt_enter_inserts_newline() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Creating;
+        app.input.buffer = "test".to_string();
+        app.input.cursor = 4;
+
+        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Enter, KeyModifiers::ALT);
+        assert!(app.input.buffer.contains('\n'));
+
+        Ok(())
+    }
+}

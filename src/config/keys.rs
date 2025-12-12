@@ -61,6 +61,10 @@ pub enum Action {
     SpawnTerminal,
     /// Spawn a new terminal with a startup command
     SpawnTerminalPrompted,
+    /// Rebase current branch onto selected branch
+    Rebase,
+    /// Merge selected branch into current branch
+    Merge,
 }
 
 /// Categories for grouping actions in help display
@@ -275,7 +279,7 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::Help,
     },
-    // Git operations
+    // Git operations (all use Ctrl modifier, requires Kitty keyboard protocol)
     Binding {
         code: KeyCode::Char('p'),
         modifiers: KeyModifiers::CONTROL,
@@ -290,6 +294,22 @@ const BINDINGS: &[Binding] = &[
         code: KeyCode::Char('o'),
         modifiers: KeyModifiers::CONTROL,
         action: Action::OpenPR,
+    },
+    Binding {
+        code: KeyCode::Char('r'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::Rebase,
+    },
+    Binding {
+        code: KeyCode::Char('m'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::Merge,
+    },
+    // Alternative binding for Merge when terminal doesn't support Ctrl+M
+    Binding {
+        code: KeyCode::Char('n'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::Merge,
     },
     // Hidden (not shown in help but still functional)
     Binding {
@@ -337,6 +357,8 @@ impl Action {
             Self::ReviewSwarm => "[R]eview swarm",
             Self::SpawnTerminal => "[t]erminal",
             Self::SpawnTerminalPrompted => "[T]erminal with command",
+            Self::Rebase => "[Ctrl+r]ebase onto branch",
+            Self::Merge => "[Ctrl+m]erge branch",
         }
     }
 
@@ -372,6 +394,8 @@ impl Action {
             Self::OpenPR => "Ctrl+o",
             Self::SpawnTerminal => "t",
             Self::SpawnTerminalPrompted => "T",
+            Self::Rebase => "Ctrl+r",
+            Self::Merge => "Ctrl+m",
         }
     }
 
@@ -389,7 +413,9 @@ impl Action {
             | Self::Broadcast
             | Self::ReviewSwarm => ActionGroup::Agents,
             Self::SpawnTerminal | Self::SpawnTerminalPrompted => ActionGroup::Terminals,
-            Self::Push | Self::RenameBranch | Self::OpenPR => ActionGroup::GitOps,
+            Self::Push | Self::RenameBranch | Self::OpenPR | Self::Rebase | Self::Merge => {
+                ActionGroup::GitOps
+            }
             Self::FocusPreview
             | Self::UnfocusPreview
             | Self::ToggleCollapse
@@ -424,6 +450,8 @@ impl Action {
         Self::Push,
         Self::RenameBranch,
         Self::OpenPR,
+        Self::Rebase,
+        Self::Merge,
         // Navigation
         Self::FocusPreview,
         Self::UnfocusPreview,
@@ -449,6 +477,28 @@ pub fn get_action(code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
         }
     }
     None
+}
+
+/// Get the display keys for an action, considering keyboard remap settings
+/// Returns Ctrl+n instead of Ctrl+m for Merge when remapped
+#[must_use]
+pub fn get_display_keys(action: Action, merge_key_remapped: bool) -> &'static str {
+    if action == Action::Merge && merge_key_remapped {
+        "Ctrl+n"
+    } else {
+        action.keys()
+    }
+}
+
+/// Get the description for an action, considering keyboard remap settings
+/// Returns updated description for Merge when remapped
+#[must_use]
+pub fn get_display_description(action: Action, merge_key_remapped: bool) -> &'static str {
+    if action == Action::Merge && merge_key_remapped {
+        "[Ctrl+n] merge branch"
+    } else {
+        action.description()
+    }
 }
 
 /// Generate status bar hint text
@@ -501,6 +551,14 @@ mod tests {
         assert_eq!(
             get_action(KeyCode::Char('o'), KeyModifiers::CONTROL),
             Some(Action::OpenPR)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            Some(Action::Rebase)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('m'), KeyModifiers::CONTROL),
+            Some(Action::Merge)
         );
     }
 

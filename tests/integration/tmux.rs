@@ -203,3 +203,209 @@ fn test_tmux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_tmux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("send_submit")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("submit");
+
+    // Create a session
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Send keys with submit
+    let result = manager.send_keys_and_submit(&session_name, "pwd");
+    assert!(result.is_ok());
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("window_ops")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("winops");
+
+    // Create session
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Create a window
+    let window_result = manager.create_window(
+        &session_name,
+        "test-window",
+        &fixture.worktree_path(),
+        Some("echo hello"),
+    );
+    assert!(window_result.is_ok());
+
+    if let Ok(window_idx) = window_result {
+        // List windows
+        let windows = manager.list_windows(&session_name)?;
+        assert!(!windows.is_empty());
+
+        // Kill the window (may fail if window auto-closed)
+        let _ = manager.kill_window(&session_name, window_idx);
+    }
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("capture_tail")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("tail");
+
+    // Create session with output
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // Capture tail
+    let capture = tenex::tmux::OutputCapture::new();
+    let result = capture.tail(&session_name, 10);
+    assert!(result.is_ok());
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("pane_size")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("size");
+
+    // Create session
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Get pane size
+    let capture = tenex::tmux::OutputCapture::new();
+    let result = capture.pane_size(&session_name);
+    assert!(result.is_ok());
+
+    if let Ok((width, height)) = result {
+        assert!(width > 0);
+        assert!(height > 0);
+    }
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("cursor_pos")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("cursor");
+
+    // Create session
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Get cursor position
+    let capture = tenex::tmux::OutputCapture::new();
+    let result = capture.cursor_position(&session_name);
+    assert!(result.is_ok());
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("pane_cmd")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("cmd");
+
+    // Create session with a specific command
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // Get current command
+    let capture = tenex::tmux::OutputCapture::new();
+    let result = capture.pane_current_command(&session_name);
+    // Should succeed (though command may vary)
+    assert!(result.is_ok());
+
+    // Cleanup
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("session_rename")?;
+    let manager = SessionManager::new();
+    let old_name = fixture.session_name("old");
+    let new_name = fixture.session_name("new");
+
+    // Create session
+    let _ = manager.kill(&old_name);
+    let _ = manager.kill(&new_name);
+    manager.create(&old_name, &fixture.worktree_path(), None)?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Rename
+    let result = manager.rename(&old_name, &new_name);
+    assert!(result.is_ok());
+
+    // Verify
+    assert!(!manager.exists(&old_name));
+    assert!(manager.exists(&new_name));
+
+    // Cleanup
+    let _ = manager.kill(&new_name);
+
+    Ok(())
+}

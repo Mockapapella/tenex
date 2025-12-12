@@ -42,124 +42,115 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the action fails
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Action handler needs to handle all possible actions"
-    )]
     pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
         match action {
-            Action::NewAgent => {
-                app.enter_mode(Mode::Creating);
-            }
-            Action::NewAgentWithPrompt => {
-                app.enter_mode(Mode::Prompting);
-            }
-            Action::FocusPreview => {
-                // Only enter PreviewFocused mode if an agent is selected
-                if app.selected_agent().is_some() {
-                    app.enter_mode(Mode::PreviewFocused);
-                }
-            }
-            Action::UnfocusPreview => {
-                if app.mode == Mode::PreviewFocused {
-                    app.exit_mode();
-                }
-            }
-            Action::Kill => {
-                if app.selected_agent().is_some() {
-                    app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
-                }
-            }
-            Action::Push => {
-                self.push_branch(app)?;
-            }
-            Action::RenameBranch => {
-                self.rename_agent(app)?;
-            }
-            Action::OpenPR => {
-                self.open_pr_flow(app)?;
-            }
-            Action::SwitchTab => {
-                app.switch_tab();
-            }
-            Action::NextAgent => {
-                app.select_next();
-            }
-            Action::PrevAgent => {
-                app.select_prev();
-            }
-            Action::Help => {
-                app.enter_mode(Mode::Help);
-            }
-            Action::Quit => {
-                if app.has_running_agents() {
-                    app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-                } else {
-                    app.should_quit = true;
-                }
-            }
-            Action::ScrollUp => {
-                app.scroll_up(5);
-            }
-            Action::ScrollDown => {
-                app.scroll_down(5);
-            }
-            Action::ScrollTop => {
-                app.scroll_to_top();
-            }
-            Action::ScrollBottom => {
-                app.scroll_to_bottom(10000, 0);
-            }
-            Action::Cancel => {
-                app.exit_mode();
-            }
-            Action::Confirm => {
-                self.handle_confirm(app)?;
-            }
-            Action::SpawnChildren => {
-                app.start_spawning_root();
-            }
-            Action::PlanSwarm => {
-                app.start_planning_swarm();
-            }
-            Action::AddChildren => {
-                if let Some(agent) = app.selected_agent() {
-                    let agent_id = agent.id;
-                    app.start_spawning_under(agent_id);
-                }
-            }
-            Action::Synthesize => {
-                if let Some(agent) = app.selected_agent() {
-                    if app.storage.has_children(agent.id) {
-                        app.enter_mode(Mode::Confirming(ConfirmAction::Synthesize));
-                    } else {
-                        app.set_error("Selected agent has no children to synthesize");
-                    }
-                }
-            }
-            Action::ToggleCollapse => {
-                self.toggle_collapse(app)?;
-            }
-            Action::Broadcast => {
-                if app.selected_agent().is_some() {
-                    app.enter_mode(Mode::Broadcasting);
-                }
-            }
-            Action::ReviewSwarm => {
-                Self::start_review_swarm(app)?;
-            }
-            Action::SpawnTerminal => {
-                if app.selected_agent().is_some() {
-                    self.spawn_terminal(app, None)?;
-                }
-            }
-            Action::SpawnTerminalPrompted => {
-                if app.selected_agent().is_some() {
-                    app.start_terminal_prompt();
-                }
-            }
+            // Mode entry actions
+            Action::NewAgent => app.enter_mode(Mode::Creating),
+            Action::NewAgentWithPrompt => app.enter_mode(Mode::Prompting),
+            Action::Help => app.enter_mode(Mode::Help),
+            Action::Cancel => app.exit_mode(),
+            Action::Confirm => self.handle_confirm(app)?,
+
+            // Navigation actions
+            Action::SwitchTab => app.switch_tab(),
+            Action::NextAgent => app.select_next(),
+            Action::PrevAgent => app.select_prev(),
+
+            // Scroll actions
+            Action::ScrollUp => app.scroll_up(5),
+            Action::ScrollDown => app.scroll_down(5),
+            Action::ScrollTop => app.scroll_to_top(),
+            Action::ScrollBottom => app.scroll_to_bottom(10000, 0),
+
+            // Preview actions
+            Action::FocusPreview => Self::handle_focus_preview(app),
+            Action::UnfocusPreview => Self::handle_unfocus_preview(app),
+
+            // Agent lifecycle actions
+            Action::Kill => Self::handle_kill_action(app),
+            Action::Quit => Self::handle_quit_action(app),
+            Action::ToggleCollapse => self.toggle_collapse(app)?,
+
+            // Spawning actions
+            Action::SpawnChildren => app.start_spawning_root(),
+            Action::PlanSwarm => app.start_planning_swarm(),
+            Action::AddChildren => Self::handle_add_children(app),
+            Action::Synthesize => Self::handle_synthesize(app),
+            Action::ReviewSwarm => Self::start_review_swarm(app)?,
+            Action::SpawnTerminal => self.handle_spawn_terminal(app)?,
+            Action::SpawnTerminalPrompted => Self::handle_spawn_terminal_prompted(app),
+            Action::Broadcast => Self::handle_broadcast(app),
+
+            // Git operations
+            Action::Push => Self::push_branch(app)?,
+            Action::RenameBranch => Self::rename_agent(app)?,
+            Action::OpenPR => Self::open_pr_flow(app)?,
+            Action::Rebase => Self::rebase_branch(app)?,
+            Action::Merge => Self::merge_branch(app)?,
         }
         Ok(())
+    }
+
+    fn handle_focus_preview(app: &mut App) {
+        if app.selected_agent().is_some() {
+            app.enter_mode(Mode::PreviewFocused);
+        }
+    }
+
+    fn handle_unfocus_preview(app: &mut App) {
+        if app.mode == Mode::PreviewFocused {
+            app.exit_mode();
+        }
+    }
+
+    fn handle_kill_action(app: &mut App) {
+        if app.selected_agent().is_some() {
+            app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
+        }
+    }
+
+    fn handle_quit_action(app: &mut App) {
+        if app.has_running_agents() {
+            app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        } else {
+            app.should_quit = true;
+        }
+    }
+
+    fn handle_add_children(app: &mut App) {
+        if let Some(agent) = app.selected_agent() {
+            let agent_id = agent.id;
+            app.start_spawning_under(agent_id);
+        }
+    }
+
+    fn handle_synthesize(app: &mut App) {
+        if let Some(agent) = app.selected_agent() {
+            if app.storage.has_children(agent.id) {
+                app.enter_mode(Mode::Confirming(ConfirmAction::Synthesize));
+            } else {
+                app.set_error("Selected agent has no children to synthesize");
+            }
+        }
+    }
+
+    fn handle_spawn_terminal(self, app: &mut App) -> Result<()> {
+        if app.selected_agent().is_some() {
+            self.spawn_terminal(app, None)?;
+        }
+        Ok(())
+    }
+
+    fn handle_spawn_terminal_prompted(app: &mut App) {
+        if app.selected_agent().is_some() {
+            app.start_terminal_prompt();
+        }
+    }
+
+    fn handle_broadcast(app: &mut App) {
+        if app.selected_agent().is_some() {
+            app.enter_mode(Mode::Broadcasting);
+        }
     }
 
     /// Handle confirmation of an action
@@ -270,13 +261,17 @@ impl Default for Actions {
 mod tests {
     use super::*;
     use crate::agent::{Status, Storage};
+    use crate::app::Settings;
     use crate::config::Config;
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((App::new(Config::default(), storage), temp_file))
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
     }
 
     #[test]
@@ -801,7 +796,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn test_worktree_conflict_info_struct() -> Result<(), Box<dyn std::error::Error>> {
         use crate::app::WorktreeConflictInfo;
 
@@ -821,15 +815,21 @@ mod tests {
         });
 
         // Verify the conflict info is set
-        assert!(app.spawn.worktree_conflict.is_some());
-        let info = app.spawn.worktree_conflict.as_ref().unwrap();
+        assert!(
+            app.spawn.worktree_conflict.is_some(),
+            "Expected worktree_conflict to be set"
+        );
+        let info = app
+            .spawn
+            .worktree_conflict
+            .as_ref()
+            .ok_or("conflict info not set")?;
         assert_eq!(info.title, "test");
         assert_eq!(info.swarm_child_count, None);
         Ok(())
     }
 
     #[test]
-    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn test_worktree_conflict_info_swarm() -> Result<(), Box<dyn std::error::Error>> {
         use crate::app::WorktreeConflictInfo;
 
@@ -848,7 +848,15 @@ mod tests {
             swarm_child_count: Some(3),
         });
 
-        let info = app.spawn.worktree_conflict.as_ref().unwrap();
+        assert!(
+            app.spawn.worktree_conflict.is_some(),
+            "Expected worktree_conflict to be set"
+        );
+        let info = app
+            .spawn
+            .worktree_conflict
+            .as_ref()
+            .ok_or("conflict info not set")?;
         assert_eq!(info.swarm_child_count, Some(3));
         Ok(())
     }
@@ -991,6 +999,182 @@ mod tests {
         app.exit_mode();
         assert_eq!(app.mode, Mode::Normal);
 
+        Ok(())
+    }
+
+    // === New Handler Helper Function Tests ===
+
+    #[test]
+    fn test_handle_unfocus_preview() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::PreviewFocused;
+
+        Actions::handle_unfocus_preview(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_unfocus_preview_not_in_preview() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Normal;
+
+        // Should not change mode if not in PreviewFocused
+        Actions::handle_unfocus_preview(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_kill_action_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_kill_action(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_kill_action_with_agent() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let (mut app, _temp) = create_test_app()?;
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        Actions::handle_kill_action(&mut app);
+        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Kill));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_quit_action_no_running_agents() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_quit_action(&mut app);
+        assert!(app.should_quit);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_quit_action_with_running_agents() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let (mut app, _temp) = create_test_app()?;
+        let mut agent = Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.status = Status::Running;
+        app.storage.add(agent);
+
+        Actions::handle_quit_action(&mut app);
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Quit));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_add_children_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_add_children(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_synthesize(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_synthesize_no_children() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let (mut app, _temp) = create_test_app()?;
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        Actions::handle_synthesize(&mut app);
+        // Should show error, not enter mode
+        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_broadcast_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_broadcast(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_broadcast_with_agent() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let (mut app, _temp) = create_test_app()?;
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        Actions::handle_broadcast(&mut app);
+        assert_eq!(app.mode, Mode::Broadcasting);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_spawn_terminal_prompted_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        Actions::handle_spawn_terminal_prompted(&mut app);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_spawn_terminal_prompted_with_agent() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let (mut app, _temp) = create_test_app()?;
+        app.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        Actions::handle_spawn_terminal_prompted(&mut app);
+        assert_eq!(app.mode, Mode::TerminalPrompt);
         Ok(())
     }
 }

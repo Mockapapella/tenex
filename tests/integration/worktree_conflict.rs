@@ -19,7 +19,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // First, create a worktree manually to simulate existing state
@@ -78,7 +78,7 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Create a worktree manually
@@ -136,7 +136,7 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Create a worktree manually with some content
@@ -203,7 +203,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Create a worktree manually that matches what spawn_children would create
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -268,7 +268,7 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
     let mut config = fixture.config();
     config.default_program = "sleep 60".to_string();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Create a worktree manually with a branch name that matches what spawn_children will generate
     // spawn_children uses the task as the title, which gets converted to a branch name
@@ -375,7 +375,7 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     let mut config = fixture.config();
     config.default_program = "sleep 60".to_string();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
     // Create a worktree manually
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -448,7 +448,7 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
     let mut config = fixture.config();
     config.default_program = "sleep 60".to_string();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
     // First create a root agent normally
     let handler = Actions::new();

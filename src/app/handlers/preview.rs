@@ -90,11 +90,17 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::agent::{Agent, Storage};
+    use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
 
     fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+        App::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        )
     }
 
     #[test]

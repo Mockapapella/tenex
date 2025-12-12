@@ -2,7 +2,9 @@
 
 mod keys;
 
-pub use keys::{Action, ActionGroup, get_action, status_hints};
+pub use keys::{
+    Action, ActionGroup, get_action, get_display_description, get_display_keys, status_hints,
+};
 
 use std::path::PathBuf;
 

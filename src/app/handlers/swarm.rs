@@ -7,10 +7,19 @@ use crate::tmux::SessionManager;
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 use super::Actions;
 use crate::app::state::{App, Mode, WorktreeConflictInfo};
+
+/// Configuration for spawning child agents
+pub struct SpawnConfig {
+    pub root_session: String,
+    pub worktree_path: PathBuf,
+    pub branch: String,
+    pub parent_agent_id: uuid::Uuid,
+}
 
 impl Actions {
     /// Spawn child agents under a parent (or create new root with children)
@@ -18,10 +27,6 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Complex swarm spawning logic with multiple branches"
-    )]
     pub fn spawn_children(self, app: &mut App, task: Option<&str>) -> Result<()> {
         let count = app.spawn.child_count;
         let parent_id = app.spawn.spawning_under;
@@ -33,254 +38,265 @@ impl Actions {
             "Spawning child agents"
         );
 
-        // Determine the root agent and session/worktree to use
-        let (root_session, worktree_path, branch, parent_agent_id) = if let Some(pid) = parent_id {
-            // Adding children to existing agent
-            let root = app
-                .storage
-                .root_ancestor(pid)
-                .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
-            (
-                root.tmux_session.clone(),
-                root.worktree_path.clone(),
-                root.branch.clone(),
-                pid,
-            )
+        let spawn_config = if let Some(pid) = parent_id {
+            Self::get_existing_parent_config(app, pid)?
         } else {
-            // Create new root agent first
-            let root_title = match task {
-                Some(t) if t.len() > 30 => format!("{}...", &t[..27]),
-                Some(t) => t.to_string(),
-                None => {
-                    let short_id = &uuid::Uuid::new_v4().to_string()[..8];
-                    format!("Swarm ({short_id})")
-                }
-            };
-            let branch = app.config.generate_branch_name(&root_title);
-            let worktree_path = app.config.worktree_dir.join(&branch);
-            let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-            let repo = git::open_repository(&repo_path)?;
-
-            let worktree_mgr = WorktreeManager::new(&repo);
-
-            // Check if worktree/branch already exists - prompt user for action
-            let branch_exists = worktree_mgr.exists(&branch);
-            debug!(
-                branch,
-                branch_exists, "Checking if worktree exists for swarm"
-            );
-            if branch_exists {
-                debug!(branch, "Worktree already exists for swarm, prompting user");
-
-                // Get current HEAD info for new worktree context
-                let (current_branch, current_commit) = worktree_mgr
-                    .head_info()
-                    .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
-
-                // Try to get existing worktree info
-                let (existing_branch, existing_commit) = worktree_mgr
-                    .worktree_head_info(&branch)
-                    .map(|(b, c)| (Some(b), Some(c)))
-                    .unwrap_or((None, None));
-
-                app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
-                    title: root_title,
-                    prompt: task.map(String::from),
-                    branch,
-                    worktree_path,
-                    existing_branch,
-                    existing_commit,
-                    current_branch,
-                    current_commit,
-                    swarm_child_count: Some(count),
-                });
-                app.enter_mode(Mode::Confirming(
-                    crate::app::state::ConfirmAction::WorktreeConflict,
-                ));
-                return Ok(());
+            match self.create_new_root_for_swarm(app, task, count)? {
+                Some(config) => config,
+                None => return Ok(()), // Worktree conflict, user needs to choose
             }
-
-            worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
-
-            let root_agent = Agent::new(
-                root_title,
-                app.config.default_program.clone(),
-                branch.clone(),
-                worktree_path.clone(),
-                None, // Root doesn't get the planning preamble
-            );
-
-            let root_session = root_agent.tmux_session.clone();
-            let root_id = root_agent.id;
-
-            // Create the root's tmux session
-            self.session_manager.create(
-                &root_session,
-                &worktree_path,
-                Some(&app.config.default_program),
-            )?;
-
-            // Resize the session to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
-                let _ = self
-                    .session_manager
-                    .resize_window(&root_session, width, height);
-            }
-
-            app.storage.add(root_agent);
-            (root_session, worktree_path, branch, root_id)
         };
 
-        // Create child agents
-        // Reserve all window indices upfront to avoid O(n*count) lookups
-        let start_window_index = app.storage.reserve_window_indices(parent_agent_id);
-        let child_prompt: Option<String> = task.map(|t| {
-            if app.spawn.use_plan_prompt {
-                prompts::build_plan_prompt(t)
-            } else {
-                t.to_string()
-            }
-        });
-        for i in 0..count {
-            // Use pre-reserved window index (cast i to u32 for addition)
-            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
-
-            // Create child first to get its ID, then build the title with short ID
-            let child = Agent::new_child(
-                String::new(), // Placeholder, will be updated below
-                app.config.default_program.clone(),
-                branch.clone(),
-                worktree_path.clone(),
-                child_prompt.clone(),
-                ChildConfig {
-                    parent_id: parent_agent_id,
-                    tmux_session: root_session.clone(),
-                    window_index,
-                },
-            );
-
-            // Include short ID in title to distinguish agents with same base name
-            // Use descriptive names based on agent type
-            let child_title = if app.spawn.use_plan_prompt && task.is_some() {
-                format!("Planner {} ({})", i + 1, child.short_id())
-            } else {
-                format!("Agent {} ({})", i + 1, child.short_id())
-            };
-            let mut child = child;
-            child.title.clone_from(&child_title);
-
-            // Create window in the root's session with the prompt (if any)
-            let command = match &child_prompt {
-                Some(prompt) => {
-                    let escaped_prompt = prompt.replace('"', "\\\"").replace('`', "\\`");
-                    format!("{} \"{escaped_prompt}\"", app.config.default_program)
-                }
-                None => app.config.default_program.clone(),
-            };
-            let actual_index = self.session_manager.create_window(
-                &root_session,
-                &child_title,
-                &worktree_path,
-                Some(&command),
-            )?;
-
-            // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
-                let window_target = SessionManager::window_target(&root_session, actual_index);
-                let _ = self
-                    .session_manager
-                    .resize_window(&window_target, width, height);
-            }
-
-            // Update window index if it differs
-            child.window_index = Some(actual_index);
-
-            app.storage.add(child);
-        }
+        self.spawn_child_agents(app, &spawn_config, count, task)?;
 
         // Expand the parent to show children
-        if let Some(parent) = app.storage.get_mut(parent_agent_id) {
+        if let Some(parent) = app.storage.get_mut(spawn_config.parent_agent_id) {
             parent.collapsed = false;
         }
 
         app.storage.save()?;
-        info!(count, parent_id = %parent_agent_id, "Child agents spawned successfully");
+        info!(count, parent_id = %spawn_config.parent_agent_id, "Child agents spawned successfully");
         app.set_status(format!("Spawned {count} child agents"));
         Ok(())
+    }
+
+    /// Get spawn configuration from an existing parent agent
+    fn get_existing_parent_config(app: &App, pid: uuid::Uuid) -> Result<SpawnConfig> {
+        let root = app
+            .storage
+            .root_ancestor(pid)
+            .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
+        Ok(SpawnConfig {
+            root_session: root.tmux_session.clone(),
+            worktree_path: root.worktree_path.clone(),
+            branch: root.branch.clone(),
+            parent_agent_id: pid,
+        })
+    }
+
+    /// Create a new root agent for a swarm, returns None if worktree conflict
+    fn create_new_root_for_swarm(
+        self,
+        app: &mut App,
+        task: Option<&str>,
+        count: usize,
+    ) -> Result<Option<SpawnConfig>> {
+        let root_title = Self::generate_root_title(task);
+        let branch = app.config.generate_branch_name(&root_title);
+        let worktree_path = app.config.worktree_dir.join(&branch);
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo = git::open_repository(&repo_path)?;
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+
+        if worktree_mgr.exists(&branch) {
+            Self::setup_worktree_conflict(
+                app,
+                &worktree_mgr,
+                root_title,
+                task,
+                branch,
+                worktree_path,
+                count,
+            );
+            return Ok(None);
+        }
+
+        worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
+
+        let root_agent = Agent::new(
+            root_title,
+            app.config.default_program.clone(),
+            branch.clone(),
+            worktree_path.clone(),
+            None,
+        );
+
+        let root_session = root_agent.tmux_session.clone();
+        let root_id = root_agent.id;
+
+        self.session_manager.create(
+            &root_session,
+            &worktree_path,
+            Some(&app.config.default_program),
+        )?;
+
+        if let Some((width, height)) = app.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&root_session, width, height);
+        }
+
+        app.storage.add(root_agent);
+        Ok(Some(SpawnConfig {
+            root_session,
+            worktree_path,
+            branch,
+            parent_agent_id: root_id,
+        }))
+    }
+
+    /// Generate a title for a new root swarm agent
+    fn generate_root_title(task: Option<&str>) -> String {
+        match task {
+            Some(t) if t.len() > 30 => format!("{}...", &t[..27]),
+            Some(t) => t.to_string(),
+            None => {
+                let short_id = &uuid::Uuid::new_v4().to_string()[..8];
+                format!("Swarm ({short_id})")
+            }
+        }
+    }
+
+    /// Setup worktree conflict info for user to resolve
+    fn setup_worktree_conflict(
+        app: &mut App,
+        worktree_mgr: &WorktreeManager<'_>,
+        root_title: String,
+        task: Option<&str>,
+        branch: String,
+        worktree_path: PathBuf,
+        count: usize,
+    ) {
+        debug!(branch, "Worktree already exists for swarm, prompting user");
+
+        let (current_branch, current_commit) = worktree_mgr
+            .head_info()
+            .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+
+        let (existing_branch, existing_commit) = worktree_mgr
+            .worktree_head_info(&branch)
+            .map(|(b, c)| (Some(b), Some(c)))
+            .unwrap_or((None, None));
+
+        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: root_title,
+            prompt: task.map(String::from),
+            branch,
+            worktree_path,
+            existing_branch,
+            existing_commit,
+            current_branch,
+            current_commit,
+            swarm_child_count: Some(count),
+        });
+        app.enter_mode(Mode::Confirming(
+            crate::app::state::ConfirmAction::WorktreeConflict,
+        ));
+    }
+
+    /// Spawn the actual child agents
+    fn spawn_child_agents(
+        self,
+        app: &mut App,
+        config: &SpawnConfig,
+        count: usize,
+        task: Option<&str>,
+    ) -> Result<()> {
+        let start_window_index = app.storage.reserve_window_indices(config.parent_agent_id);
+        let child_prompt = task.map(|t| Self::build_child_prompt(t, app.spawn.use_plan_prompt));
+
+        for i in 0..count {
+            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
+            self.spawn_single_child(
+                app,
+                config,
+                i,
+                window_index,
+                child_prompt.as_deref(),
+                task.is_some(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Build the prompt for child agents
+    fn build_child_prompt(task: &str, use_plan_prompt: bool) -> String {
+        if use_plan_prompt {
+            prompts::build_plan_prompt(task)
+        } else {
+            task.to_string()
+        }
+    }
+
+    /// Spawn a single child agent
+    fn spawn_single_child(
+        self,
+        app: &mut App,
+        config: &SpawnConfig,
+        index: usize,
+        window_index: u32,
+        child_prompt: Option<&str>,
+        has_task: bool,
+    ) -> Result<()> {
+        let child = Agent::new_child(
+            String::new(),
+            app.config.default_program.clone(),
+            config.branch.clone(),
+            config.worktree_path.clone(),
+            child_prompt.map(String::from),
+            ChildConfig {
+                parent_id: config.parent_agent_id,
+                tmux_session: config.root_session.clone(),
+                window_index,
+            },
+        );
+
+        let child_title = if app.spawn.use_plan_prompt && has_task {
+            format!("Planner {} ({})", index + 1, child.short_id())
+        } else {
+            format!("Agent {} ({})", index + 1, child.short_id())
+        };
+        let mut child = child;
+        child.title.clone_from(&child_title);
+
+        let command = Self::build_child_command(&app.config.default_program, child_prompt);
+        let actual_index = self.session_manager.create_window(
+            &config.root_session,
+            &child_title,
+            &config.worktree_path,
+            Some(&command),
+        )?;
+
+        if let Some((width, height)) = app.ui.preview_dimensions {
+            let window_target = SessionManager::window_target(&config.root_session, actual_index);
+            let _ = self
+                .session_manager
+                .resize_window(&window_target, width, height);
+        }
+
+        child.window_index = Some(actual_index);
+        app.storage.add(child);
+
+        Ok(())
+    }
+
+    /// Build the command to run in a child window
+    fn build_child_command(default_program: &str, prompt: Option<&str>) -> String {
+        prompt.map_or_else(
+            || default_program.to_string(),
+            |p| {
+                let escaped = p.replace('"', "\\\"").replace('`', "\\`");
+                format!("{default_program} \"{escaped}\"")
+            },
+        )
     }
 
     /// Spawn child agents for an existing root agent
     ///
     /// This is a helper used by both `spawn_children` and `reconnect_to_worktree`
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Helper needs all context from caller"
-    )]
     pub(crate) fn spawn_children_for_root(
         self,
         app: &mut App,
-        root_session: &str,
-        worktree_path: &std::path::Path,
-        branch: &str,
-        parent_id: uuid::Uuid,
+        config: &SpawnConfig,
         count: usize,
         task: &str,
     ) -> Result<()> {
-        let start_window_index = app.storage.reserve_window_indices(parent_id);
-        let child_prompt = if app.spawn.use_plan_prompt {
-            prompts::build_plan_prompt(task)
-        } else {
-            task.to_string()
-        };
-
-        for i in 0..count {
-            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
-
-            let child = Agent::new_child(
-                String::new(),
-                app.config.default_program.clone(),
-                branch.to_string(),
-                worktree_path.to_path_buf(),
-                Some(child_prompt.clone()),
-                ChildConfig {
-                    parent_id,
-                    tmux_session: root_session.to_string(),
-                    window_index,
-                },
-            );
-
-            // Use descriptive names based on agent type
-            let child_title = if app.spawn.use_plan_prompt {
-                format!("Planner {} ({})", i + 1, child.short_id())
-            } else {
-                format!("Agent {} ({})", i + 1, child.short_id())
-            };
-            let mut child = child;
-            child.title.clone_from(&child_title);
-
-            // Escape both double quotes and backticks (backticks are command substitution in bash)
-            let escaped_prompt = child_prompt.replace('"', "\\\"").replace('`', "\\`");
-            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
-            let actual_index = self.session_manager.create_window(
-                root_session,
-                &child_title,
-                worktree_path,
-                Some(&command),
-            )?;
-
-            if let Some((width, height)) = app.ui.preview_dimensions {
-                let window_target = SessionManager::window_target(root_session, actual_index);
-                let _ = self
-                    .session_manager
-                    .resize_window(&window_target, width, height);
-            }
-
-            child.window_index = Some(actual_index);
-            app.storage.add(child);
-        }
+        self.spawn_child_agents(app, config, count, Some(task))?;
 
         // Expand the parent to show children
-        if let Some(parent) = app.storage.get_mut(parent_id) {
+        if let Some(parent) = app.storage.get_mut(config.parent_agent_id) {
             parent.collapsed = false;
         }
 
@@ -509,6 +525,7 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::agent::Storage;
+    use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -516,7 +533,10 @@ mod tests {
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((App::new(Config::default(), storage), temp_file))
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
     }
 
     #[test]
@@ -536,15 +556,13 @@ mod tests {
         app.storage.add(root);
 
         // Calling spawn_children_for_root should fail because the session doesn't exist
-        let result = handler.spawn_children_for_root(
-            &mut app,
-            "nonexistent-session",
-            &PathBuf::from("/tmp"),
-            "test-branch",
-            root_id,
-            2,
-            "test task",
-        );
+        let spawn_config = SpawnConfig {
+            root_session: "nonexistent-session".to_string(),
+            worktree_path: PathBuf::from("/tmp"),
+            branch: "test-branch".to_string(),
+            parent_agent_id: root_id,
+        };
+        let result = handler.spawn_children_for_root(&mut app, &spawn_config, 2, "test task");
 
         // This should error because the session doesn't exist
         assert!(result.is_err());

@@ -1,23 +1,22 @@
 //! Auto-connect to existing worktrees tests
 
-use crate::common::{TestFixture, assert_paths_eq, skip_if_no_tmux};
+use crate::common::{DirGuard, TestFixture, assert_paths_eq, skip_if_no_tmux};
 use tenex::app::{Actions, App};
 
 /// Test that `auto_connect_worktrees` picks up an existing worktree and creates an agent
 #[test]
-#[expect(clippy::expect_used, reason = "test assertions")]
 fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect")?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Verify no agents exist initially
@@ -44,7 +43,7 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
     );
 
     // Verify the agent has the correct properties
-    let agent = app.storage.iter().next().expect("Should have an agent");
+    let agent = app.storage.iter().next().ok_or("Should have an agent")?;
     assert_eq!(
         agent.branch, branch_name,
         "Agent branch should match the worktree branch"
@@ -59,10 +58,9 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
         "Agent worktree path should match",
     );
 
-    // Cleanup
+    // Cleanup (DirGuard will restore directory on drop)
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -74,13 +72,13 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_skip")?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Create a worktree manually
@@ -114,10 +112,9 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
         "Should not create duplicate agents"
     );
 
-    // Cleanup
+    // Cleanup (DirGuard will restore directory on drop)
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -129,13 +126,13 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_prefix")?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Create a worktree with a different prefix (not matching our config)
@@ -155,10 +152,9 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
         "Should not create agents for worktrees with different prefix"
     );
 
-    // Cleanup
+    // Cleanup (DirGuard will restore directory on drop)
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -170,13 +166,13 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_multi")?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config, storage);
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = Actions::new();
 
     // Create multiple worktrees manually
@@ -211,10 +207,9 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
     assert!(branches.contains(&branch2), "Should have agent for branch2");
     assert!(branches.contains(&branch3), "Should have agent for branch3");
 
-    // Cleanup
+    // Cleanup (DirGuard will restore directory on drop)
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -232,19 +227,25 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
 ///
 /// See: `src/git/worktree.rs:remove()` and `src/app/handlers/agent_lifecycle.rs:kill_agent()`
 #[test]
-#[expect(clippy::unwrap_used, reason = "test assertions")]
 fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_tmux() {
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
+    // Guard that restores the current directory when dropped (even on panic)
+    let _dir_guard = crate::common::DirGuard::new()?;
+
     let fixture = TestFixture::new("deleted_agent_restart")?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
     let storage = TestFixture::create_storage();
-    let mut app = App::new(config.clone(), storage);
+    let mut app = App::new(
+        config.clone(),
+        storage,
+        tenex::app::Settings::default(),
+        false,
+    );
     let handler = Actions::new();
 
     // Step 1: Create an agent
@@ -260,7 +261,12 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
 
     assert_eq!(app.storage.len(), 1, "Should have one agent after creation");
 
-    let branch_name = app.storage.iter().next().map(|a| a.branch.clone()).unwrap();
+    let branch_name = app
+        .storage
+        .iter()
+        .next()
+        .map(|a| a.branch.clone())
+        .ok_or("No agent found after creation")?;
 
     // Verify the worktree exists
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -294,7 +300,7 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     // Step 3: Simulate restart by calling auto_connect_worktrees
     // This is what happens on tenex startup
     let storage2 = TestFixture::create_storage(); // Fresh empty storage (simulating restart)
-    let mut app2 = App::new(config, storage2);
+    let mut app2 = App::new(config, storage2, tenex::app::Settings::default(), false);
 
     handler.auto_connect_worktrees(&mut app2)?;
 
@@ -305,10 +311,9 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
         "Deleted agent should NOT reappear after restart - worktree should have been cleaned up"
     );
 
-    // Cleanup
+    // Cleanup (DirGuard will restore directory on drop)
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }

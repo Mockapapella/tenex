@@ -73,7 +73,7 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -124,7 +124,7 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
     let original_dir = std::env::current_dir()?;
     let _ = std::env::set_current_dir(&fixture.repo_path);
 
-    let mut app = tenex::App::new(config, storage);
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
     // Create an agent

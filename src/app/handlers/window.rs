@@ -98,11 +98,17 @@ pub fn adjust_window_indices_after_deletion(
 mod tests {
     use super::*;
     use crate::agent::{Agent, ChildConfig, Storage};
+    use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
 
     fn create_test_app() -> App {
-        App::new(Config::default(), Storage::default())
+        App::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        )
     }
 
     #[test]
@@ -173,5 +179,168 @@ mod tests {
 
         // Should handle both root and child agents without panicking
         handler.resize_agent_windows(&app);
+    }
+
+    #[test]
+    fn test_adjust_window_indices_empty_deleted() {
+        let mut app = create_test_app();
+
+        // Add a root agent
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        app.storage.add(root);
+
+        // Call with empty deleted indices - should do nothing
+        adjust_window_indices_after_deletion(&mut app, root_id, uuid::Uuid::new_v4(), &[]);
+    }
+
+    #[test]
+    fn test_adjust_window_indices_single_deletion() {
+        let mut app = create_test_app();
+
+        // Add a root agent
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add child agents with window indices
+        let deleted_child = Agent::new_child(
+            "deleted".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session.clone(),
+                window_index: 2,
+            },
+        );
+        let deleted_id = deleted_child.id;
+        app.storage.add(deleted_child);
+
+        let surviving_child = Agent::new_child(
+            "surviving".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 4,
+            },
+        );
+        let surviving_id = surviving_child.id;
+        app.storage.add(surviving_child);
+
+        // Delete window index 2
+        adjust_window_indices_after_deletion(&mut app, root_id, deleted_id, &[2]);
+
+        // The surviving agent at index 4 should be decremented to 3
+        let surviving = app.storage.get(surviving_id);
+        assert!(surviving.is_some(), "Surviving agent should exist");
+        if let Some(agent) = surviving {
+            assert_eq!(agent.window_index, Some(3));
+        }
+    }
+
+    #[test]
+    fn test_adjust_window_indices_multiple_deletions() {
+        let mut app = create_test_app();
+
+        // Add a root agent
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add surviving child with window index 5
+        let surviving_child = Agent::new_child(
+            "surviving".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 5,
+            },
+        );
+        let surviving_id = surviving_child.id;
+        app.storage.add(surviving_child);
+
+        // Delete windows at indices 2 and 3
+        adjust_window_indices_after_deletion(&mut app, root_id, uuid::Uuid::new_v4(), &[2, 3]);
+
+        // The surviving agent at index 5 should be decremented by 2 (two indices below it deleted)
+        let surviving = app.storage.get(surviving_id);
+        assert!(surviving.is_some(), "Surviving agent should exist");
+        if let Some(agent) = surviving {
+            assert_eq!(agent.window_index, Some(3));
+        }
+    }
+
+    #[test]
+    fn test_adjust_window_indices_no_change_needed() {
+        let mut app = create_test_app();
+
+        // Add a root agent
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        let root_session = root.tmux_session.clone();
+        app.storage.add(root);
+
+        // Add child with window index 1
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                tmux_session: root_session,
+                window_index: 1,
+            },
+        );
+        let child_id = child.id;
+        app.storage.add(child);
+
+        // Delete window at index 5 (higher than child's index)
+        adjust_window_indices_after_deletion(&mut app, root_id, uuid::Uuid::new_v4(), &[5]);
+
+        // The child at index 1 should not change (deleted index was higher)
+        let child_agent = app.storage.get(child_id);
+        assert!(child_agent.is_some(), "Child agent should exist");
+        if let Some(agent) = child_agent {
+            assert_eq!(agent.window_index, Some(1));
+        }
     }
 }

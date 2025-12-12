@@ -128,3 +128,131 @@ fn handle_general_confirm_mode(
     }
     Ok(())
 }
+
+/// Handle key events in `KeyboardRemapPrompt` mode
+/// Asks user if they want to remap Ctrl+M to Ctrl+N due to terminal incompatibility
+pub fn handle_keyboard_remap_mode(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('y' | 'Y') => {
+            app.accept_keyboard_remap();
+        }
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+            app.decline_keyboard_remap();
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::KeyCode;
+    use tempfile::NamedTempFile;
+    use tenex::agent::Storage;
+    use tenex::app::{Mode, Settings};
+    use tenex::config::Config;
+
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
+    }
+
+    #[test]
+    fn test_handle_confirm_push_mode_no() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::ConfirmPush;
+        handle_confirm_push_mode(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_confirm_push_mode_esc() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::ConfirmPush;
+        handle_confirm_push_mode(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_confirm_push_for_pr_mode_no() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::ConfirmPushForPR;
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_confirm_push_for_pr_mode_esc() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::ConfirmPushForPR;
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_rename_branch_mode_esc() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::RenameBranch;
+        handle_rename_branch_mode(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_rename_branch_mode_char() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::RenameBranch;
+        handle_rename_branch_mode(&mut app, KeyCode::Char('a'));
+        assert_eq!(app.input.buffer, "a");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_rename_branch_mode_backspace() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::RenameBranch;
+        app.input.buffer = "test".to_string();
+        app.input.cursor = 4;
+        handle_rename_branch_mode(&mut app, KeyCode::Backspace);
+        assert_eq!(app.input.buffer, "tes");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_keyboard_remap_mode_yes() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::KeyboardRemapPrompt;
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('y'));
+        assert!(app.settings.merge_key_remapped);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_keyboard_remap_mode_no() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::KeyboardRemapPrompt;
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('n'));
+        assert!(!app.settings.merge_key_remapped);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_keyboard_remap_mode_esc() -> Result<(), std::io::Error> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::KeyboardRemapPrompt;
+        handle_keyboard_remap_mode(&mut app, KeyCode::Esc);
+        assert!(!app.settings.merge_key_remapped);
+        assert_eq!(app.mode, Mode::Normal);
+        Ok(())
+    }
+}

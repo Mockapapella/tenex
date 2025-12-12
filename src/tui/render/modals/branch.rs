@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::app::App;
+use tenex::app::{App, Mode};
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
@@ -17,9 +17,19 @@ use crate::tui::render::colors;
     reason = "Branch selector has many UI elements"
 )]
 pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
+    // Get current branch for context
+    let current_branch = &app.git_op.branch_name;
+
+    // Determine title based on mode
+    let title = match &app.mode {
+        Mode::RebaseBranchSelector => " Rebase onto Branch ",
+        Mode::MergeBranchSelector => " Merge Branch ",
+        _ => " Select Base Branch ",
+    };
+
     // Calculate how many branches we can display
     let max_visible_branches: usize = 10;
-    let header_lines: u16 = 5; // Title + search box + section headers
+    let header_lines: u16 = 7; // Title + instruction + search box + section headers
     let footer_lines: u16 = 3; // Instructions + border
     // Safe cast: max_visible_branches is a small constant (10)
     #[expect(
@@ -42,6 +52,47 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
 
     // Build list content with sections
     let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Show merge/rebase direction instruction
+    match &app.mode {
+        Mode::MergeBranchSelector => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Select branch to merge ",
+                    Style::default().fg(colors::TEXT_DIM),
+                ),
+                Span::styled(
+                    current_branch.clone(),
+                    Style::default()
+                        .fg(colors::ACCENT_POSITIVE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" into", Style::default().fg(colors::TEXT_DIM)),
+            ]));
+        }
+        Mode::RebaseBranchSelector => {
+            lines.push(Line::from(vec![
+                Span::styled("Rebase ", Style::default().fg(colors::TEXT_DIM)),
+                Span::styled(
+                    current_branch.clone(),
+                    Style::default()
+                        .fg(colors::ACCENT_POSITIVE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " onto selected branch",
+                    Style::default().fg(colors::TEXT_DIM),
+                ),
+            ]));
+        }
+        _ => {
+            lines.push(Line::from(Span::styled(
+                "Select base branch for review",
+                Style::default().fg(colors::TEXT_DIM),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
 
     // Search box
     lines.push(Line::from(vec![
@@ -157,7 +208,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(" Select Base Branch ")
+                .title(title)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::BORDER)),
         )

@@ -96,4 +96,32 @@ mod tests {
         assert!(matches!(cloned, Event::Tick));
         assert!(matches!(event, Event::Tick));
     }
+
+    #[test]
+    fn test_event_copy() {
+        let event = Event::Tick;
+        let copied: Event = event;
+        assert!(matches!(copied, Event::Tick));
+        // Original should still be valid since Event is Copy
+        assert!(matches!(event, Event::Tick));
+    }
+
+    #[test]
+    fn test_handler_debug() {
+        let handler = Handler::new(50);
+        assert!(!format!("{handler:?}").is_empty());
+    }
+
+    #[test]
+    fn test_handler_clone() {
+        let handler = Handler::new(75);
+        let cloned = handler;
+        assert_eq!(cloned.tick_rate(), Duration::from_millis(75));
+    }
+
+    #[test]
+    fn test_event_resize_variant() {
+        let resize = Event::Resize(120, 40);
+        assert!(matches!(resize, Event::Resize(120, 40)));
+    }
 }

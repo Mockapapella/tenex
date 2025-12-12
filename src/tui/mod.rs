@@ -8,9 +8,15 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
-        event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture},
+        event::{
+            self as crossterm_event, DisableMouseCapture, EnableMouseCapture,
+            KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        },
         execute,
-        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+        terminal::{
+            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+            supports_keyboard_enhancement,
+        },
     },
     layout::Rect,
 };
@@ -18,12 +24,40 @@ use std::io;
 use std::process::Command;
 use std::time::Duration;
 use tenex::app::{Actions, App, Event, Handler, Mode};
+use tracing::{info, warn};
 
 /// Run the TUI application
 pub fn run(mut app: App) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Enable Kitty keyboard protocol to disambiguate Ctrl+M from Enter
+    // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
+    let keyboard_enhancement_enabled = if supports_keyboard_enhancement().unwrap_or(false) {
+        info!("Terminal supports keyboard enhancement protocol - Ctrl+M will work");
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        )
+        .is_ok()
+    } else {
+        warn!("Terminal does not support keyboard enhancement protocol - Ctrl+M will act as Enter");
+        false
+    };
+
+    // Update the app with keyboard enhancement status
+    app.keyboard_enhancement_supported = keyboard_enhancement_enabled;
+
+    // Show keyboard remap prompt if terminal doesn't support enhancement
+    // and user hasn't been asked yet
+    if app.should_show_keyboard_remap_prompt() {
+        app.show_keyboard_remap_prompt();
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -31,6 +65,11 @@ pub fn run(mut app: App) -> Result<()> {
     let action_handler = Actions::new();
 
     let result = run_loop(&mut terminal, &mut app, &event_handler, action_handler);
+
+    // Pop keyboard enhancement before cleanup (only if we enabled it)
+    if keyboard_enhancement_enabled {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
 
     disable_raw_mode()?;
     execute!(
@@ -234,13 +273,26 @@ mod tests {
     }
 
     fn create_test_app() -> App {
-        App::new(create_test_config(), Storage::default())
+        App::new(
+            create_test_config(),
+            Storage::default(),
+            tenex::app::Settings::default(),
+            false,
+        )
     }
 
     fn create_test_app_with_cleanup() -> (App, TestCleanup) {
         let config = create_test_config();
         let cleanup = TestCleanup::new(&config.branch_prefix);
-        (App::new(config, Storage::default()), cleanup)
+        (
+            App::new(
+                config,
+                Storage::default(),
+                tenex::app::Settings::default(),
+                false,
+            ),
+            cleanup,
+        )
     }
 
     /// Test helper that wraps `input::handle_key_event` with an empty `batched_keys` vec

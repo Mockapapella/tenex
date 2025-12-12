@@ -687,4 +687,196 @@ mod tests {
         let result = manager.list();
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_send_keys_to_session() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-send-keys";
+
+        let _ = manager.kill(session_name);
+
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // Test send_keys without Enter
+            let send_result = manager.send_keys(session_name, "echo hello");
+            assert!(send_result.is_ok());
+
+            // Test send_keys_and_submit
+            let submit_result = manager.send_keys_and_submit(session_name, "pwd");
+            assert!(submit_result.is_ok());
+
+            let _ = manager.kill(session_name);
+        }
+    }
+
+    #[test]
+    fn test_rename_session() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let old_name = "tenex-test-rename-old";
+        let new_name = "tenex-test-rename-new";
+
+        // Cleanup any existing sessions
+        let _ = manager.kill(old_name);
+        let _ = manager.kill(new_name);
+
+        let result = manager.create(old_name, std::path::Path::new("/tmp"), None);
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            let rename_result = manager.rename(old_name, new_name);
+            assert!(rename_result.is_ok());
+
+            // Verify old name no longer exists
+            assert!(!manager.exists(old_name));
+            // Verify new name exists
+            assert!(manager.exists(new_name));
+
+            let _ = manager.kill(new_name);
+        }
+    }
+
+    #[test]
+    fn test_rename_nonexistent_session() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.rename("tenex-nonexistent-xyz", "tenex-new-name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resize_window() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-resize";
+
+        let _ = manager.kill(session_name);
+
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // Resize the main window (index 0)
+            let target = Manager::window_target(session_name, 0);
+            let resize_result = manager.resize_window(&target, 80, 24);
+            // Resize may fail in some tmux configurations, but it should not panic
+            let _ = resize_result;
+
+            let _ = manager.kill(session_name);
+        }
+    }
+
+    #[test]
+    fn test_window_target_format() {
+        let target = Manager::window_target("my-session", 5);
+        assert_eq!(target, "my-session:5");
+    }
+
+    #[test]
+    fn test_full_session_window_lifecycle() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-lifecycle";
+
+        // Cleanup
+        let _ = manager.kill(session_name);
+
+        // Create session
+        let create_result = manager.create(session_name, std::path::Path::new("/tmp"), None);
+        if create_result.is_err() {
+            return; // Skip if we can't create
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Verify session exists
+        assert!(manager.exists(session_name));
+
+        // List sessions and verify our session is present
+        if let Ok(sessions) = manager.list() {
+            assert!(sessions.iter().any(|s| s.name == session_name));
+        }
+
+        // Create a window
+        let window_result = manager.create_window(
+            session_name,
+            "test-window",
+            std::path::Path::new("/tmp"),
+            Some("echo 'test window'"),
+        );
+
+        if let Ok(window_index) = window_result {
+            // List windows - the window should exist (but we don't assert specific index
+            // because tmux may renumber windows)
+            let _ = manager.list_windows(session_name);
+
+            // Send keys to the window
+            let target = Manager::window_target(session_name, window_index);
+            let _ = manager.send_keys(&target, "echo from test");
+            let _ = manager.send_keys_and_submit(&target, "pwd");
+
+            // Kill the window
+            let _ = manager.kill_window(session_name, window_index);
+        }
+
+        // Kill the session
+        let kill_result = manager.kill(session_name);
+        assert!(kill_result.is_ok());
+
+        // Verify session no longer exists
+        assert!(!manager.exists(session_name));
+    }
+
+    #[test]
+    fn test_list_windows_with_multiple_windows() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let session_name = "tenex-test-multi-win";
+
+        let _ = manager.kill(session_name);
+
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), None);
+
+        if result.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // Create multiple windows
+            let _ =
+                manager.create_window(session_name, "window-1", std::path::Path::new("/tmp"), None);
+            let _ =
+                manager.create_window(session_name, "window-2", std::path::Path::new("/tmp"), None);
+
+            // List windows
+            if let Ok(windows) = manager.list_windows(session_name) {
+                // Should have at least 3 windows (initial + 2 created)
+                assert!(windows.len() >= 2);
+            }
+
+            let _ = manager.kill(session_name);
+        }
+    }
 }

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 use super::Actions;
+use super::swarm::SpawnConfig;
 use crate::app::state::{App, Mode, WorktreeConflictInfo};
 
 impl Actions {
@@ -156,15 +157,13 @@ impl Actions {
 
             // Now spawn the children
             let task = conflict.prompt.as_deref().unwrap_or("");
-            self.spawn_children_for_root(
-                app,
-                &root_session,
-                &conflict.worktree_path,
-                &conflict.branch,
-                root_id,
-                child_count,
-                task,
-            )?;
+            let spawn_config = SpawnConfig {
+                root_session,
+                worktree_path: conflict.worktree_path.clone(),
+                branch: conflict.branch.clone(),
+                parent_agent_id: root_id,
+            };
+            self.spawn_children_for_root(app, &spawn_config, child_count, task)?;
 
             info!(title = %conflict.title, branch = %conflict.branch, child_count, "Reconnected swarm to existing worktree");
             app.set_status(format!("Reconnected swarm: {}", conflict.title));
@@ -439,6 +438,7 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::agent::Storage;
+    use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -446,7 +446,10 @@ mod tests {
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((App::new(Config::default(), storage), temp_file))
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
     }
 
     #[test]

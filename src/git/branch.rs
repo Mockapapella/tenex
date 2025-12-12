@@ -205,19 +205,15 @@ impl<'a> Manager<'a> {
         for branch_result in branches {
             let (branch, _) = branch_result.context("Failed to read branch")?;
             if let Some(name) = branch.name().context("Branch name is not valid UTF-8")? {
-                #[expect(clippy::cast_sign_loss, reason = "Checked secs >= 0 before cast")]
                 let commit_time = branch
                     .get()
                     .peel_to_commit()
                     .ok()
                     .map(|c| c.time())
                     .and_then(|t| {
-                        let secs = t.seconds();
-                        if secs >= 0 {
-                            UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))
-                        } else {
-                            None
-                        }
+                        u64::try_from(t.seconds())
+                            .ok()
+                            .and_then(|secs| UNIX_EPOCH.checked_add(Duration::from_secs(secs)))
                     });
 
                 local_branches.push(BranchInfo {
@@ -252,19 +248,15 @@ impl<'a> Manager<'a> {
                     (None, full_name.to_string())
                 };
 
-                #[expect(clippy::cast_sign_loss, reason = "Checked secs >= 0 before cast")]
                 let commit_time = branch
                     .get()
                     .peel_to_commit()
                     .ok()
                     .map(|c| c.time())
                     .and_then(|t| {
-                        let secs = t.seconds();
-                        if secs >= 0 {
-                            UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))
-                        } else {
-                            None
-                        }
+                        u64::try_from(t.seconds())
+                            .ok()
+                            .and_then(|secs| UNIX_EPOCH.checked_add(Duration::from_secs(secs)))
                     });
 
                 remote_branches.push(BranchInfo {

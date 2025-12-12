@@ -55,7 +55,12 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
     );
 
     // Create app with the storage
-    let mut app = App::new(fixture.config(), storage);
+    let mut app = App::new(
+        fixture.config(),
+        storage,
+        tenex::app::Settings::default(),
+        false,
+    );
     assert_eq!(app.storage.len(), 3);
 
     // Sync agent status - should remove agents without sessions
@@ -166,7 +171,12 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(storage.len(), 21); // 1 root + 20 children
 
     // Create app and sync status
-    let mut app = App::new(fixture.config(), storage);
+    let mut app = App::new(
+        fixture.config(),
+        storage,
+        tenex::app::Settings::default(),
+        false,
+    );
     let handler = Actions::new();
 
     // Sync should complete quickly (single list call, not 21 exists calls)

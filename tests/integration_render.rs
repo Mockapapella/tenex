@@ -52,7 +52,7 @@ fn create_test_app_with_agents() -> App {
     storage.add(create_test_agent("agent-2", tenex::Status::Starting));
     storage.add(create_test_agent("agent-3", tenex::Status::Running));
 
-    App::new(config, storage)
+    App::new(config, storage, tenex::app::Settings::default(), false)
 }
 
 // =============================================================================
@@ -558,6 +558,110 @@ fn test_render_various_terminal_sizes() -> Result<(), Box<dyn std::error::Error>
         );
     }
 
+    Ok(())
+}
+
+// =============================================================================
+// Tests for confirmation modals
+// =============================================================================
+
+#[test]
+fn test_full_render_confirm_push_mode() -> Result<(), std::io::Error> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = create_test_app_with_agents();
+    app.mode = Mode::ConfirmPush;
+    app.git_op.agent_id = app.storage.iter().next().map(|a| a.id);
+    app.git_op.branch_name = "tenex/test".to_string();
+
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
+        frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_full_render_confirm_push_for_pr_mode() -> Result<(), std::io::Error> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = create_test_app_with_agents();
+    app.mode = Mode::ConfirmPushForPR;
+    app.git_op.agent_id = app.storage.iter().next().map(|a| a.id);
+    app.git_op.branch_name = "tenex/test".to_string();
+    app.git_op.base_branch = "main".to_string();
+
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
+        frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_full_render_confirm_reset_mode() -> Result<(), std::io::Error> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = create_test_app_with_agents();
+    app.mode = Mode::Confirming(ConfirmAction::Reset);
+
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
+        frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_full_render_confirm_kill_mode() -> Result<(), std::io::Error> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = create_test_app_with_agents();
+    app.mode = Mode::Confirming(ConfirmAction::Kill);
+
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
+        frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_full_render_keyboard_remap_mode() -> Result<(), std::io::Error> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = create_test_app_with_agents();
+    app.mode = Mode::KeyboardRemapPrompt;
+
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let agent_list = AgentListWidget::new(&app.storage.agents, app.selected);
+        frame.render_widget(agent_list.to_list(), Rect::new(0, 0, 30, area.height - 1));
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
     Ok(())
 }
 

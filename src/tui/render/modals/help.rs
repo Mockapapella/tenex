@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::config::Action;
+use tenex::config::{Action, get_display_description, get_display_keys};
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
@@ -70,7 +70,7 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
 }
 
 /// Render the help overlay
-pub fn render_help_overlay(frame: &mut Frame<'_>) {
+pub fn render_help_overlay(frame: &mut Frame<'_>, merge_key_remapped: bool) {
     // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
     // 5 sections with headers(5) + empty lines between(4) + 19 actions + footer(2) = 30 + 2 borders
     let area = centered_rect_absolute(50, 32, frame.area());
@@ -102,8 +102,9 @@ pub fn render_help_overlay(frame: &mut Frame<'_>) {
         }
 
         // Build help line with styled mnemonics
-        let key_str = action.keys();
-        let description = action.description();
+        // Use dynamic display functions for keyboard remap support
+        let key_str = get_display_keys(action, merge_key_remapped);
+        let description = get_display_description(action, merge_key_remapped);
 
         let mut spans = vec![Span::styled(
             format!("  {key_str:<10} "),

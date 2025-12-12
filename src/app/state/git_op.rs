@@ -1,6 +1,15 @@
-//! Git operation state: Push, Rename Branch, Open PR
+//! Git operation state: Push, Rename Branch, Open PR, Rebase, Merge
 
-/// State for git operations (push, rename, open PR)
+/// Type of git operation being performed (for rebase/merge)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitOperationType {
+    /// Rebase current branch onto target branch
+    Rebase,
+    /// Merge target branch into current branch
+    Merge,
+}
+
+/// State for git operations (push, rename, open PR, rebase, merge)
 #[derive(Debug, Default)]
 pub struct GitOpState {
     /// Agent ID for git operations (push, rename, PR)
@@ -20,6 +29,12 @@ pub struct GitOpState {
 
     /// Whether this rename is for a root agent (includes branch rename) or sub-agent (title only)
     pub is_root_rename: bool,
+
+    /// Target branch for rebase/merge operations
+    pub target_branch: String,
+
+    /// Type of git operation (rebase or merge)
+    pub operation_type: Option<GitOperationType>,
 }
 
 impl GitOpState {
@@ -33,6 +48,8 @@ impl GitOpState {
             base_branch: String::new(),
             has_unpushed: false,
             is_root_rename: false,
+            target_branch: String::new(),
+            operation_type: None,
         }
     }
 
@@ -80,6 +97,27 @@ impl GitOpState {
         self.base_branch.clear();
         self.has_unpushed = false;
         self.is_root_rename = false;
+        self.target_branch.clear();
+        self.operation_type = None;
+    }
+
+    /// Start the rebase flow
+    pub fn start_rebase(&mut self, agent_id: uuid::Uuid, current_branch: String) {
+        self.agent_id = Some(agent_id);
+        self.branch_name = current_branch;
+        self.operation_type = Some(GitOperationType::Rebase);
+    }
+
+    /// Start the merge flow
+    pub fn start_merge(&mut self, agent_id: uuid::Uuid, current_branch: String) {
+        self.agent_id = Some(agent_id);
+        self.branch_name = current_branch;
+        self.operation_type = Some(GitOperationType::Merge);
+    }
+
+    /// Set the target branch for rebase/merge
+    pub fn set_target_branch(&mut self, target: String) {
+        self.target_branch = target;
     }
 }
 
@@ -96,6 +134,8 @@ mod tests {
         assert!(state.base_branch.is_empty());
         assert!(!state.has_unpushed);
         assert!(!state.is_root_rename);
+        assert!(state.target_branch.is_empty());
+        assert!(state.operation_type.is_none());
     }
 
     #[test]
@@ -170,5 +210,38 @@ mod tests {
         assert!(state.base_branch.is_empty());
         assert!(!state.has_unpushed);
         assert!(!state.is_root_rename);
+        assert!(state.target_branch.is_empty());
+        assert!(state.operation_type.is_none());
+    }
+
+    #[test]
+    fn test_start_rebase() {
+        let mut state = GitOpState::new();
+        let agent_id = uuid::Uuid::new_v4();
+
+        state.start_rebase(agent_id, "feature-branch".to_string());
+
+        assert_eq!(state.agent_id, Some(agent_id));
+        assert_eq!(state.branch_name, "feature-branch");
+        assert_eq!(state.operation_type, Some(GitOperationType::Rebase));
+    }
+
+    #[test]
+    fn test_start_merge() {
+        let mut state = GitOpState::new();
+        let agent_id = uuid::Uuid::new_v4();
+
+        state.start_merge(agent_id, "feature-branch".to_string());
+
+        assert_eq!(state.agent_id, Some(agent_id));
+        assert_eq!(state.branch_name, "feature-branch");
+        assert_eq!(state.operation_type, Some(GitOperationType::Merge));
+    }
+
+    #[test]
+    fn test_set_target_branch() {
+        let mut state = GitOpState::new();
+        state.set_target_branch("main".to_string());
+        assert_eq!(state.target_branch, "main");
     }
 }

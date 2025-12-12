@@ -70,12 +70,28 @@ pub fn handle_key_event(
             confirm::handle_confirming_mode(app, action_handler, *action, code)?;
         }
 
-        // Help and error modes (dismiss on any key)
+        // Rebase/Merge branch selector modes
+        Mode::RebaseBranchSelector => {
+            picker::handle_rebase_branch_selector_mode(app, code);
+        }
+        Mode::MergeBranchSelector => {
+            picker::handle_merge_branch_selector_mode(app, code);
+        }
+
+        // Keyboard remap prompt
+        Mode::KeyboardRemapPrompt => {
+            confirm::handle_keyboard_remap_mode(app, code);
+        }
+
+        // Help, error, and success modes (dismiss on any key)
         Mode::Help => {
             app.exit_mode();
         }
         Mode::ErrorModal(_) => {
             app.dismiss_error();
+        }
+        Mode::SuccessModal(_) => {
+            picker::handle_success_modal_mode(app);
         }
 
         // Preview focused mode (forwards keys to tmux)
