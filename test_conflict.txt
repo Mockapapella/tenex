@@ -1,3 +1,0 @@
-# Test file for merge conflict
-Line 1: Original content
-Line 2: More content
