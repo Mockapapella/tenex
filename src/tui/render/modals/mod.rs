@@ -13,7 +13,7 @@ mod picker;
 pub use branch::render_branch_selector_overlay;
 pub use confirm::{
     render_confirm_overlay, render_confirm_push_for_pr_overlay, render_confirm_push_overlay,
-    render_keyboard_remap_overlay, render_worktree_conflict_overlay,
+    render_keyboard_remap_overlay, render_update_prompt_overlay, render_worktree_conflict_overlay,
 };
 pub use error::{render_error_modal, render_success_modal};
 pub use help::render_help_overlay;

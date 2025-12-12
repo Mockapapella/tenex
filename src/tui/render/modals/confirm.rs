@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use tenex::app::App;
+use tenex::update::UpdateInfo;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
@@ -349,6 +350,80 @@ pub fn render_keyboard_remap_overlay(frame: &mut Frame<'_>) {
                 .title(" Keyboard Settings ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::ACCENT_WARNING)),
+        )
+        .style(Style::default().bg(colors::MODAL_BG));
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the self-update prompt overlay.
+///
+/// Shows when a newer Tenex version is available on crates.io.
+pub fn render_update_prompt_overlay(frame: &mut Frame<'_>, info: &UpdateInfo) {
+    let lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            "Update Available",
+            Style::default()
+                .fg(colors::ACCENT_POSITIVE)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Current version: ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(
+                info.current_version.to_string(),
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Latest version:  ", Style::default().fg(colors::TEXT_DIM)),
+            Span::styled(
+                info.latest_version.to_string(),
+                Style::default().fg(colors::ACCENT_POSITIVE),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Would you like to update Tenex now?",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(colors::ACCENT_POSITIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "es - Install update and restart",
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "[N]",
+                Style::default()
+                    .fg(colors::ACCENT_NEGATIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "o  - Continue without updating",
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]),
+    ];
+
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+    let area = centered_rect_absolute(55, height, frame.area());
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Update Tenex ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors::ACCENT_POSITIVE)),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 

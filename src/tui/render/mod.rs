@@ -213,6 +213,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::ConfirmPushForPR => modals::render_confirm_push_for_pr_overlay(frame, app),
         Mode::SuccessModal(message) => modals::render_success_modal(frame, message),
         Mode::KeyboardRemapPrompt => modals::render_keyboard_remap_overlay(frame),
+        Mode::UpdatePrompt(info) => modals::render_update_prompt_overlay(frame, info),
         _ => {}
     }
 }

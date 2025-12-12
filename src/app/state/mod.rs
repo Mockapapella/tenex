@@ -17,6 +17,7 @@ pub use ui::UiState;
 
 use crate::agent::{Agent, Status, Storage};
 use crate::config::Config;
+use crate::update::UpdateInfo;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -823,6 +824,10 @@ pub enum Mode {
     SuccessModal(String),
     /// Prompting user to remap Ctrl+M due to terminal incompatibility
     KeyboardRemapPrompt,
+    /// Prompting user to update Tenex to a newer version
+    UpdatePrompt(UpdateInfo),
+    /// User accepted update; exit TUI to install and restart
+    UpdateRequested(UpdateInfo),
 }
 
 /// Actions that require confirmation

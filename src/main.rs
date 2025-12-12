@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
 use tenex::agent::Storage;
-use tenex::app::Settings;
+use tenex::app::{Mode, Settings};
 use tenex::config::Config;
 
 mod tui;
@@ -30,7 +30,9 @@ enum Commands {
 
 fn main() -> Result<()> {
     // Clear the log file on startup
-    let _ = std::fs::write("/tmp/tenex.log", "");
+    if let Err(e) = std::fs::write("/tmp/tenex.log", "") {
+        eprintln!("Warning: Failed to clear log file: {e}");
+    }
 
     // Log to /tmp/tenex.log - tail with: tail -f /tmp/tenex.log
     // Set DEBUG=0-3 to control verbosity (0=off, 1=warn, 2=info, 3=debug)
@@ -78,12 +80,24 @@ fn main() -> Result<()> {
         Some(Commands::Reset { force }) => cmd_reset(force),
         None => {
             // Ensure .tenex/ is excluded from git tracking
-            if let Ok(cwd) = std::env::current_dir() {
-                let _ = tenex::git::ensure_tenex_excluded(&cwd);
+            if let Ok(cwd) = std::env::current_dir()
+                && let Err(e) = tenex::git::ensure_tenex_excluded(&cwd)
+            {
+                eprintln!("Warning: Failed to exclude .tenex from git: {e}");
             }
 
             // keyboard_enhancement_supported will be set in tui::run after terminal setup
             let mut app = App::new(config, storage, settings, false);
+
+            match tenex::update::check_for_update() {
+                Ok(Some(info)) => {
+                    app.mode = Mode::UpdatePrompt(info);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Warning: Failed to check for updates: {e}");
+                }
+            }
 
             // Auto-connect to any existing worktrees
             let action_handler = tenex::app::Actions::new();
@@ -91,8 +105,65 @@ fn main() -> Result<()> {
                 eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
             }
 
-            tui::run(app)
+            if let Some(info) = tui::run(app)? {
+                println!(
+                    "Updating Tenex from {} to {}...",
+                    info.current_version, info.latest_version
+                );
+                tenex::update::install_latest()?;
+                restart_current_process()?;
+            }
+
+            Ok(())
         }
+    }
+}
+
+fn restart_current_process() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // After `cargo install --force`, spawning a new process and exiting can leave the
+    // restarted Tenex in the background (job control), causing terminal I/O errors.
+    // On Unix, prefer `exec` to replace the current process in-place.
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        use std::path::PathBuf;
+
+        fn find_installed_binary(name: &str) -> PathBuf {
+            // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
+            let candidates = [
+                std::env::var("CARGO_HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join("bin").join(name)),
+                dirs::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
+            ];
+
+            for candidate in candidates.into_iter().flatten() {
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+
+            PathBuf::from(name)
+        }
+
+        let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
+
+        // `exec` replaces the current process on success; on failure it returns an io::Error.
+        let err = std::process::Command::new(installed).args(&args).exec();
+        Err(anyhow::Error::new(err).context("Failed to restart Tenex"))
+    }
+
+    #[cfg(not(unix))]
+    {
+        use anyhow::Context;
+        // On non-Unix platforms, fall back to spawning via PATH.
+        std::process::Command::new(env!("CARGO_PKG_NAME"))
+            .args(&args)
+            .spawn()
+            .context("Failed to restart Tenex")?;
+        std::process::exit(0);
     }
 }
 
@@ -168,19 +239,33 @@ fn cmd_reset(force: bool) -> Result<()> {
     let branch_mgr = repo.as_ref().map(tenex::git::BranchManager::new);
 
     for agent in storage.iter() {
-        let _ = tmux.kill(&agent.tmux_session);
-        if let Some(ref mgr) = worktree_mgr {
-            let _ = mgr.remove(&agent.branch);
+        if let Err(e) = tmux.kill(&agent.tmux_session) {
+            eprintln!(
+                "Warning: Failed to kill tmux session {}: {e}",
+                agent.tmux_session
+            );
+        }
+        if let Some(ref mgr) = worktree_mgr
+            && let Err(e) = mgr.remove(&agent.branch)
+        {
+            eprintln!("Warning: Failed to remove worktree {}: {e}", agent.branch);
         }
         // Also try to delete branch directly in case worktree was already gone
-        if let Some(ref mgr) = branch_mgr {
-            let _ = mgr.delete(&agent.branch);
+        if let Some(ref mgr) = branch_mgr
+            && let Err(e) = mgr.delete(&agent.branch)
+        {
+            eprintln!("Warning: Failed to delete branch {}: {e}", agent.branch);
         }
     }
 
     // Kill orphaned sessions
     for session in &orphaned_sessions {
-        let _ = tmux.kill(&session.name);
+        if let Err(e) = tmux.kill(&session.name) {
+            eprintln!(
+                "Warning: Failed to kill orphaned tmux session {}: {e}",
+                session.name
+            );
+        }
     }
 
     // Clear storage

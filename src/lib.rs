@@ -10,6 +10,7 @@ pub mod git;
 pub mod prompts;
 pub mod tmux;
 pub mod ui;
+pub mod update;
 
 pub use agent::{Agent, Status};
 pub use app::{App, Mode, Tab};

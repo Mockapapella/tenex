@@ -24,10 +24,14 @@ use std::io;
 use std::process::Command;
 use std::time::Duration;
 use tenex::app::{Actions, App, Event, Handler, Mode};
+use tenex::update::UpdateInfo;
 use tracing::{info, warn};
 
 /// Run the TUI application
-pub fn run(mut app: App) -> Result<()> {
+///
+/// Returns `Ok(Some(UpdateInfo))` if the user accepted an update prompt and the
+/// binary should reinstall and restart. Otherwise returns `Ok(None)` on normal exit.
+pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -54,7 +58,7 @@ pub fn run(mut app: App) -> Result<()> {
 
     // Show keyboard remap prompt if terminal doesn't support enhancement
     // and user hasn't been asked yet
-    if app.should_show_keyboard_remap_prompt() {
+    if matches!(app.mode, Mode::Normal) && app.should_show_keyboard_remap_prompt() {
         app.show_keyboard_remap_prompt();
     }
 
@@ -67,8 +71,10 @@ pub fn run(mut app: App) -> Result<()> {
     let result = run_loop(&mut terminal, &mut app, &event_handler, action_handler);
 
     // Pop keyboard enhancement before cleanup (only if we enabled it)
-    if keyboard_enhancement_enabled {
-        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    if keyboard_enhancement_enabled
+        && let Err(e) = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)
+    {
+        warn!("Failed to pop keyboard enhancement flags: {e}");
     }
 
     disable_raw_mode()?;
@@ -87,7 +93,7 @@ fn run_loop(
     app: &mut App,
     event_handler: &Handler,
     action_handler: Actions,
-) -> Result<()> {
+) -> Result<Option<UpdateInfo>> {
     // Initialize preview dimensions before first draw
     if app.ui.preview_dimensions.is_none()
         && let Ok(size) = terminal.size()
@@ -104,6 +110,12 @@ fn run_loop(
     let mut needs_content_update = true;
 
     loop {
+        // If we returned to normal mode and still need to show the keyboard prompt,
+        // display it now (e.g., after dismissing another startup modal).
+        if matches!(app.mode, Mode::Normal) && app.should_show_keyboard_remap_prompt() {
+            app.show_keyboard_remap_prompt();
+        }
+
         // Drain all queued events first (without drawing)
         // This prevents lag when returning focus after being away,
         // since mouse events queue up while the app is unfocused
@@ -197,12 +209,16 @@ fn run_loop(
             let _ = action_handler.sync_agent_status(app);
         }
 
+        if let Mode::UpdateRequested(info) = &app.mode {
+            return Ok(Some(info.clone()));
+        }
+
         if app.should_quit {
             break;
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -235,13 +251,21 @@ mod tests {
                 // Remove worktrees with our prefix
                 if let Ok(worktrees) = repo.worktrees() {
                     for wt_name in worktrees.iter().flatten() {
-                        if wt_name.starts_with(&self.branch_prefix.replace('/', "-")) {
-                            let _ = repo.find_worktree(wt_name).map(|wt| {
-                                if let Some(path) = wt.path().to_str() {
-                                    let _ = std::fs::remove_dir_all(path);
-                                }
+                        if wt_name.starts_with(&self.branch_prefix.replace('/', "-"))
+                            && let Ok(wt) = repo.find_worktree(wt_name)
+                        {
+                            if let Some(path) = wt.path().to_str()
+                                && let Err(e) = std::fs::remove_dir_all(path)
+                            {
+                                eprintln!(
+                                    "Warning: Failed to remove test worktree dir {path}: {e}"
+                                );
+                            }
+                            if let Err(e) =
                                 wt.prune(Some(git2::WorktreePruneOptions::new().working_tree(true)))
-                            });
+                            {
+                                eprintln!("Warning: Failed to prune test worktree {wt_name}: {e}");
+                            }
                         }
                     }
                 }
@@ -253,7 +277,12 @@ mod tests {
                             && let Some(name) = branch.name().ok().flatten()
                             && name.starts_with(&self.branch_prefix)
                         {
-                            let _ = branch.delete();
+                            let branch_name = name.to_string();
+                            if let Err(e) = branch.delete() {
+                                eprintln!(
+                                    "Warning: Failed to delete test branch {branch_name}: {e}"
+                                );
+                            }
                         }
                     }
                 }
