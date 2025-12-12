@@ -9,25 +9,32 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 
 ## Features
 
-- **Parallel agents** — Run Claude, Aider, or any CLI tool simultaneously
-- **Git isolation** — Each agent works in its own worktree and branch
+- **Parallel agents** — Run multiple Claude agents simultaneously
+- **Git isolation** — Each root agent works in its own worktree and branch; child agents share the root's worktree
 - **Swarm workflows** — Spawn planning or review swarms with one keystroke
-- **Synthesis** — Aggregate outputs from child agents into a parent
-- **Live preview** — Watch agent output in real-time with vim-style navigation
-- **Git operations** — Push, rename branches, and open PRs from the TUI
-- **Persistent state** — Agents survive restarts; reconnect to existing sessions
+- **Synthesis** — Aggregate outputs from descendant agents into a parent (captures last ~5000 lines from each, writes to markdown, then sends to parent)
+- **Live preview** — Watch agent output in real-time with ANSI color support; auto-follows bottom unless you scroll
+- **Diff view** — See uncommitted changes (staged + unstaged + untracked) vs HEAD in the selected agent's worktree
+- **Git operations** — Push, rebase, merge, rename branches, and open PRs from the TUI
+- **Persistent state** — Agents survive restarts; auto-reconnects to existing worktrees on startup
+- **Auto-update** — Checks crates.io for updates on startup and prompts to install
 
 ## Requirements
 
-- **tmux** — Required for session management
+- **tmux** — Required for session management (recent version recommended)
 - **git** — Required for worktree isolation
+- **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
+- **Claude CLI** — Required (`claude` command must be available)
 - **Rust 1.91+** — For building from source
-- **An AI CLI** — Claude (`claude`), Aider (`aider`), or any command-line tool
+- **cargo** — Required for auto-update functionality
 
 ## Installation
 
 ```bash
-# Build from source
+# Install from crates.io
+cargo install tenex
+
+# Or build from source
 git clone https://github.com/Mockapapella/tenex
 cd tenex
 cargo install --path .
@@ -52,21 +59,21 @@ tenex
 
 | Key | Action |
 |-----|--------|
-| `a` | Add agent |
+| `a` | Add agent (no prompt) |
 | `A` | Add agent with prompt |
-| `d` | Delete agent and sub-agents |
-| `S` | Spawn swarm (root + children) |
-| `P` | Planning swarm (with research prompt) |
-| `R` | Review swarm (code review against base branch) |
+| `d` | Delete agent and all descendants |
+| `S` | Spawn swarm (new root + N children) |
+| `P` | Planning swarm (children get planning preamble) |
+| `R` | Review swarm (pick reviewer count, then base branch) |
 | `+` | Add children to selected agent |
-| `s` | Synthesize sub-agent outputs into parent |
-| `B` | Broadcast message to leaf sub-agents |
+| `s` | Synthesize descendant outputs into parent |
+| `B` | Broadcast message to leaf agents only (excludes terminals) |
 
 ### Terminals
 
 | Key | Action |
 |-----|--------|
-| `t` | Spawn terminal (plain shell) |
+| `t` | Spawn terminal (bash shell as child of selected root) |
 | `T` | Spawn terminal with startup command |
 
 ### Git
@@ -74,8 +81,11 @@ tenex
 | Key | Action |
 |-----|--------|
 | `Ctrl+p` | Push branch to remote |
-| `r` | Rename branch |
-| `Ctrl+o` | Open pull request |
+| `r` | Rename (root: branch + session + worktree; child: title + window only) |
+| `Ctrl+o` | Open pull request (via `gh pr create --web`) |
+| `Ctrl+r` | Rebase onto selected branch |
+| `Ctrl+m` | Merge selected branch into current |
+| `Ctrl+n` | Merge (fallback for terminals that can't distinguish Ctrl+m from Enter) |
 
 ### Navigation
 
@@ -84,8 +94,9 @@ tenex
 | `j` / `↓` | Next agent |
 | `k` / `↑` | Previous agent |
 | `Enter` | Focus preview (forward keystrokes to agent) |
-| `Ctrl+q` | Unfocus preview / Quit |
-| `Tab` | Switch between preview and diff tabs |
+| `Ctrl+q` | Unfocus preview / Quit (with confirm if agents running) |
+| `Esc` | Cancel current modal or flow |
+| `Tab` | Switch between Preview and Diff tabs |
 | `Space` | Collapse/expand agent tree |
 | `Ctrl+u` | Scroll up |
 | `Ctrl+d` | Scroll down |
@@ -93,27 +104,74 @@ tenex
 | `G` | Scroll to bottom |
 | `?` | Help |
 
-## Setting Your AI Agent
+## Configuration
+
+The default agent command is `claude --allow-dangerously-skip-permissions`. Currently, changing the agent command requires editing the source and rebuilding.
+
+### Data Storage
+
+| File | Location | Description |
+|------|----------|-------------|
+| State | `~/.local/share/tenex/state.json` | Agent list and hierarchy |
+| Settings | `~/.local/share/tenex/settings.json` | Tenex settings |
+| Logs | `/tmp/tenex.log` | Debug logs (when enabled) |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `DEBUG` | Log level: `0` off, `1` warn, `2` info, `3` debug |
+| `TENEX_STATE_PATH` | Override state file location |
+
+### CLI Commands
 
 ```bash
-tenex --set-agent claude
+tenex              # Launch the TUI
+tenex reset        # Clear all agents and state
+tenex reset --force # Force reset without confirmation
+tenex --help       # Show help
+tenex --version    # Show version
 ```
-
-Whatever you set is executed as a shell command. Claude and Codex have been tested; other AI CLIs may work but haven't been tested.
 
 ## Workflows
 
+### Spawn Swarm
+
+Press `S` to create a new root agent with N child agents. You'll be prompted for:
+1. Number of children
+2. Task prompt (sent to all children)
+
 ### Planning Swarm
 
-Use `P` to spawn a planning swarm. Child agents receive a research prompt and work independently. When they're done, press `s` to synthesize their findings into the parent agent.
+Press `P` for a planning-focused swarm. Children receive a planning preamble prompt and are titled "Planner N". Use `s` to synthesize their findings when done.
 
-### Code Review
+### Review Swarm
 
-Use `R` to spawn a review swarm against a base branch. Each child agent reviews the diff and provides feedback. Synthesize to aggregate the reviews.
+Press `R` to spawn code reviewers:
+1. Pick number of reviewers
+2. Select base branch (searchable list with j/k/up/down navigation)
+
+Reviewers get a strict review preamble with the chosen base branch. They're titled "Reviewer N".
+
+### Synthesis
+
+Press `s` to synthesize. This:
+1. Captures the last ~5000 lines from each descendant's tmux pane
+2. Writes combined output to `.tenex/<uuid>.md` in the parent's worktree
+3. Kills and removes all descendants
+4. Sends the parent a command to read the synthesized file
 
 ### Broadcasting
 
-Select an agent and press `B` to send a message to that agent and all its leaf descendants. Useful for giving the same instructions to all sub-agents in a swarm.
+Press `B` to send a message to all leaf agents (agents with no children). Terminals are excluded. Useful for giving the same instructions to all workers in a swarm.
+
+### Merge Conflicts
+
+When rebase or merge encounters conflicts, Tenex opens a terminal window titled "Merge Conflict" or "Rebase Conflict" in the worktree, runs `git status`, and leaves resolution to you.
+
+## Keyboard Compatibility
+
+On first launch, Tenex checks if your terminal supports the Kitty keyboard protocol (to distinguish `Ctrl+m` from Enter). If not supported, you'll be prompted to remap the merge key to `Ctrl+n`. This choice is saved to `settings.json`.
 
 ## License
 
