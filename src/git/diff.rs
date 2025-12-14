@@ -2,8 +2,9 @@
 
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Repository};
+use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Generator for git diffs
 pub struct Generator<'a> {
@@ -120,28 +121,33 @@ impl<'a> Generator<'a> {
     /// Parse a `git2::Diff` into our `FileDiff` structs
     fn parse_diff(diff: &git2::Diff<'_>) -> Result<Vec<FileChange>> {
         let mut files = Vec::new();
+        let mut file_indices: HashMap<PathBuf, usize> = HashMap::new();
 
         diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+            // Avoid O(n²) scanning by indexing file changes by path.
+            // Use a borrowed `&Path` for lookups to avoid per-line `PathBuf` allocations.
             let file_path = delta
                 .new_file()
                 .path()
                 .or_else(|| delta.old_file().path())
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_default();
+                .unwrap_or_else(|| Path::new(""));
 
-            let file_idx = files
-                .iter()
-                .position(|f: &FileChange| f.path == file_path)
-                .unwrap_or_else(|| {
+            let file_idx = file_indices.get(file_path).copied().map_or_else(
+                || {
+                    let file_path_buf = file_path.to_path_buf();
                     files.push(FileChange {
-                        path: file_path,
+                        path: file_path_buf.clone(),
                         status: delta_to_status(delta.status()),
                         lines: Vec::new(),
                         additions: 0,
                         deletions: 0,
                     });
-                    files.len() - 1
-                });
+                    let idx = files.len() - 1;
+                    file_indices.insert(file_path_buf, idx);
+                    idx
+                },
+                |file_idx| file_idx,
+            );
             let file = &mut files[file_idx];
 
             let content = String::from_utf8_lossy(line.content()).to_string();

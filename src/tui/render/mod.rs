@@ -423,15 +423,16 @@ mod tests {
         assert_eq!(app.active_tab, tenex::app::Tab::Diff);
 
         // Set diff content with various line types
-        app.ui.diff_content = r"diff --git a/file.txt b/file.txt
+        app.ui.set_diff_content(
+            r"diff --git a/file.txt b/file.txt
 --- a/file.txt
 +++ b/file.txt
 @@ -1,3 +1,4 @@
  unchanged
 -removed line
 +added line
- context"
-            .to_string();
+ context",
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -484,10 +485,12 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
-        app.ui.diff_content = (0..100)
-            .map(|i| format!("+Added line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.ui.set_diff_content(
+            (0..100)
+                .map(|i| format!("+Added line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.ui.diff_scroll = 50;
 
         terminal.draw(|frame| {

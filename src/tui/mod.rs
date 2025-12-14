@@ -22,8 +22,8 @@ use ratatui::{
 };
 use std::io;
 use std::process::Command;
-use std::time::Duration;
-use tenex::app::{Actions, App, Event, Handler, Mode};
+use std::time::{Duration, Instant};
+use tenex::app::{Actions, App, Event, Handler, Mode, Tab};
 use tenex::update::UpdateInfo;
 use tracing::{info, warn};
 
@@ -88,6 +88,29 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     result
 }
 
+fn send_batched_keys_to_tmux(app: &App, batched_keys: Vec<String>) {
+    if batched_keys.is_empty() {
+        return;
+    }
+
+    if let Some(agent) = app.selected_agent() {
+        let target = agent.window_index.map_or_else(
+            || agent.tmux_session.clone(),
+            |idx| format!("{}:{}", agent.tmux_session, idx),
+        );
+        let mut args = vec!["send-keys".to_string(), "-t".to_string(), target];
+        args.extend(batched_keys);
+        // Use synchronous call so tmux processes keys before we capture
+        let _ = Command::new("tmux")
+            .args(&args)
+            .env_remove("TMUX")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(); // .status() waits for completion
+    }
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -106,8 +129,13 @@ fn run_loop(
 
     // Track selection to detect changes
     let mut last_selected = app.selected;
+    // Track active tab so we can refresh content when switching tabs
+    let mut last_tab = app.active_tab;
     // Force initial preview/diff update
     let mut needs_content_update = true;
+    // Diff refresh is expensive; throttle tick-based updates.
+    let diff_refresh_interval = Duration::from_millis(1000);
+    let mut last_diff_update = Instant::now();
 
     loop {
         // If we returned to normal mode and still need to show the keyboard prompt,
@@ -155,24 +183,7 @@ fn run_loop(
 
         // Send batched keys to tmux in one command (much faster than per-keystroke)
         let sent_keys_in_preview = !batched_keys.is_empty() && app.mode == Mode::PreviewFocused;
-        if !batched_keys.is_empty()
-            && let Some(agent) = app.selected_agent()
-        {
-            let target = agent.window_index.map_or_else(
-                || agent.tmux_session.clone(),
-                |idx| format!("{}:{}", agent.tmux_session, idx),
-            );
-            let mut args = vec!["send-keys".to_string(), "-t".to_string(), target];
-            args.extend(batched_keys);
-            // Use synchronous call so tmux processes keys before we capture
-            let _ = Command::new("tmux")
-                .args(&args)
-                .env_remove("TMUX")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status(); // .status() waits for completion
-        }
+        send_batched_keys_to_tmux(app, batched_keys);
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
@@ -189,14 +200,24 @@ fn run_loop(
             last_selected = app.selected;
             needs_content_update = true;
         }
+        // Detect tab change
+        if app.active_tab != last_tab {
+            last_tab = app.active_tab;
+            needs_content_update = true;
+        }
 
         // Update preview/diff only on tick, selection change, or after sending keys
         // This avoids spawning tmux/git subprocesses every frame
         if needs_tick || needs_content_update || sent_keys_in_preview {
             let _ = action_handler.update_preview(app);
             // Only update diff on tick (it's slow and not needed while typing)
-            if needs_tick || needs_content_update {
-                let _ = action_handler.update_diff(app);
+            if (needs_tick || needs_content_update) && app.active_tab == Tab::Diff {
+                let should_update_diff =
+                    needs_content_update || last_diff_update.elapsed() >= diff_refresh_interval;
+                if should_update_diff {
+                    let _ = action_handler.update_diff(app);
+                    last_diff_update = Instant::now();
+                }
             }
             needs_content_update = false;
         }

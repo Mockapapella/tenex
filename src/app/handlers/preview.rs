@@ -72,15 +72,15 @@ impl Actions {
                         content = String::from("(No changes)");
                     }
 
-                    app.ui.diff_content = content;
+                    app.ui.set_diff_content(content);
                 } else {
-                    app.ui.diff_content = String::from("(Not a git repository)");
+                    app.ui.set_diff_content("(Not a git repository)");
                 }
             } else {
-                app.ui.diff_content = String::from("(Worktree not found)");
+                app.ui.set_diff_content("(Worktree not found)");
             }
         } else {
-            app.ui.diff_content = String::from("(No agent selected)");
+            app.ui.set_diff_content("(No agent selected)");
         }
         Ok(())
     }

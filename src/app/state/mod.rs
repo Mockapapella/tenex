@@ -195,7 +195,7 @@ impl App {
     /// This handles the case where scroll is set to `usize::MAX` for auto-bottom
     fn normalize_scroll(&mut self) {
         let preview_lines = self.ui.preview_content.lines().count();
-        let diff_lines = self.ui.diff_content.lines().count();
+        let diff_lines = self.ui.diff_line_ranges.len();
 
         // Use preview_dimensions if available, otherwise use a reasonable default
         let visible_height = self
@@ -1238,7 +1238,7 @@ mod tests {
     fn test_scroll_methods() {
         let mut app = App::default();
         app.ui.preview_content = "line1\nline2\nline3\nline4\nline5".to_string();
-        app.ui.diff_content = "diff1\ndiff2\ndiff3".to_string();
+        app.ui.set_diff_content("diff1\ndiff2\ndiff3");
         app.ui.preview_dimensions = Some((80, 2));
 
         // Test scroll_up in Preview mode

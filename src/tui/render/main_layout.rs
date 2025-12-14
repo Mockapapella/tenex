@@ -190,29 +190,29 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.ui.diff_content;
 
-    let lines: Vec<Line<'_>> = content
-        .lines()
-        .map(|line| {
-            let color = if line.starts_with('+') && !line.starts_with("+++") {
-                colors::DIFF_ADD
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                colors::DIFF_REMOVE
-            } else if line.starts_with("@@") {
-                colors::DIFF_HUNK
-            } else {
-                colors::TEXT_PRIMARY
-            };
-
-            Line::styled(line, Style::default().fg(color))
-        })
-        .collect();
-
     let visible_height = usize::from(area.height.saturating_sub(2));
+    let total_lines = app.ui.diff_line_ranges.len();
     let scroll = app
         .ui
         .diff_scroll
-        .min(lines.len().saturating_sub(visible_height));
-    let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
+        .min(total_lines.saturating_sub(visible_height));
+    let end_line = (scroll + visible_height).min(total_lines);
+
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
+    for &(start, end) in &app.ui.diff_line_ranges[scroll..end_line] {
+        let line = &content[start..end];
+        let color = if line.starts_with('+') && !line.starts_with("+++") {
+            colors::DIFF_ADD
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            colors::DIFF_REMOVE
+        } else if line.starts_with("@@") {
+            colors::DIFF_HUNK
+        } else {
+            colors::TEXT_PRIMARY
+        };
+
+        lines.push(Line::styled(line, Style::default().fg(color)));
+    }
 
     let paragraph = Paragraph::new(Text::from(lines))
         .block(
@@ -221,7 +221,6 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::BORDER)),
         )
-        .scroll((scroll_pos, 0))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);

@@ -19,6 +19,9 @@ pub struct UiState {
     /// Cached diff content
     pub diff_content: String,
 
+    /// Cached byte ranges for each diff line (matches `diff_content.lines()`)
+    pub diff_line_ranges: Vec<(usize, usize)>,
+
     /// Cached preview pane dimensions (width, height) for tmux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
@@ -39,10 +42,19 @@ impl UiState {
             preview_follow: true,
             preview_content: String::new(),
             diff_content: String::new(),
+            diff_line_ranges: Vec::new(),
             preview_dimensions: None,
             last_error: None,
             status_message: None,
         }
+    }
+
+    /// Set diff content and refresh cached line ranges
+    pub fn set_diff_content(&mut self, content: impl Into<String>) {
+        let content = content.into();
+        self.diff_line_ranges = compute_line_ranges(&content);
+        self.diff_content = content;
+        self.normalize_diff_scroll();
     }
 
     /// Reset scroll positions for both panes
@@ -107,7 +119,7 @@ impl UiState {
 
     /// Normalize diff scroll position to be within valid range
     fn normalize_diff_scroll(&mut self) {
-        let diff_lines = self.diff_content.lines().count();
+        let diff_lines = self.diff_line_ranges.len();
         let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
         let diff_max = diff_lines.saturating_sub(visible_height);
 
@@ -166,6 +178,35 @@ impl UiState {
     }
 }
 
+/// Compute per-line byte ranges for fast slicing.
+/// Treats both `\n` and `\r\n` as line endings (like `str::lines()`).
+fn compute_line_ranges(s: &str) -> Vec<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+
+    for (i, b) in bytes.iter().enumerate() {
+        if *b == b'\n' {
+            let mut end = i;
+            if end > start && bytes[end - 1] == b'\r' {
+                end = end.saturating_sub(1);
+            }
+            ranges.push((start, end));
+            start = i + 1;
+        }
+    }
+
+    if start < bytes.len() {
+        let mut end = bytes.len();
+        if end > start && bytes[end - 1] == b'\r' {
+            end = end.saturating_sub(1);
+        }
+        ranges.push((start, end));
+    }
+
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +219,7 @@ mod tests {
         assert!(ui.preview_follow);
         assert!(ui.preview_content.is_empty());
         assert!(ui.diff_content.is_empty());
+        assert!(ui.diff_line_ranges.is_empty());
         assert!(ui.preview_dimensions.is_none());
         assert!(ui.last_error.is_none());
         assert!(ui.status_message.is_none());
@@ -225,8 +267,8 @@ mod tests {
     fn test_scroll_diff_up() {
         let mut ui = UiState::new();
         ui.diff_scroll = 10;
-        ui.diff_content = "line1\nline2\nline3\nline4\nline5".to_string();
         ui.preview_dimensions = Some((80, 3));
+        ui.set_diff_content("line1\nline2\nline3\nline4\nline5");
 
         ui.scroll_diff_up(3);
         assert_eq!(ui.diff_scroll, 0);
@@ -236,8 +278,8 @@ mod tests {
     fn test_scroll_diff_down() {
         let mut ui = UiState::new();
         ui.diff_scroll = 0;
-        ui.diff_content = "line1\nline2\nline3\nline4\nline5".to_string();
         ui.preview_dimensions = Some((80, 3));
+        ui.set_diff_content("line1\nline2\nline3\nline4\nline5");
 
         ui.scroll_diff_down(5);
         // With 5 lines and height 3, max scroll is 2, but normalization happens on next scroll
@@ -314,5 +356,61 @@ mod tests {
 
         ui.clear_status();
         assert!(ui.status_message.is_none());
+    }
+
+    #[test]
+    fn test_compute_line_ranges_empty() {
+        let ranges = compute_line_ranges("");
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_compute_line_ranges_single_line() {
+        let s = "hello";
+        let ranges = compute_line_ranges(s);
+        assert_eq!(ranges, vec![(0, 5)]);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "hello");
+    }
+
+    #[test]
+    fn test_compute_line_ranges_multiple_lines() {
+        let s = "line1\nline2\nline3";
+        let ranges = compute_line_ranges(s);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "line1");
+        assert_eq!(&s[ranges[1].0..ranges[1].1], "line2");
+        assert_eq!(&s[ranges[2].0..ranges[2].1], "line3");
+    }
+
+    #[test]
+    fn test_compute_line_ranges_crlf() {
+        let s = "line1\r\nline2\r\nline3";
+        let ranges = compute_line_ranges(s);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "line1");
+        assert_eq!(&s[ranges[1].0..ranges[1].1], "line2");
+        assert_eq!(&s[ranges[2].0..ranges[2].1], "line3");
+    }
+
+    #[test]
+    fn test_compute_line_ranges_trailing_newline() {
+        let s = "line1\nline2\n";
+        let ranges = compute_line_ranges(s);
+        // Trailing newline creates an empty implicit line only if there's content after it
+        // Since there's no content after the final \n, we get 2 lines (matches str::lines())
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "line1");
+        assert_eq!(&s[ranges[1].0..ranges[1].1], "line2");
+    }
+
+    #[test]
+    fn test_set_diff_content_updates_line_ranges() {
+        let mut ui = UiState::new();
+        ui.set_diff_content("line1\nline2\nline3");
+        assert_eq!(ui.diff_line_ranges.len(), 3);
+        assert_eq!(
+            &ui.diff_content[ui.diff_line_ranges[0].0..ui.diff_line_ranges[0].1],
+            "line1"
+        );
     }
 }
