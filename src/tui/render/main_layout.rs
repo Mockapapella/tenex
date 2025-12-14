@@ -2,10 +2,13 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
+    },
 };
 use tenex::agent::Status;
 use tenex::app::{App, Mode, Tab};
@@ -160,10 +163,8 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let line_count = text.lines.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
-    let scroll = app
-        .ui
-        .preview_scroll
-        .min(line_count.saturating_sub(visible_height));
+    let max_scroll = line_count.saturating_sub(visible_height);
+    let scroll = app.ui.preview_scroll.min(max_scroll);
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     // Use highlighted border when focused, show exit hint in title
@@ -184,6 +185,28 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
+
+    if line_count > visible_height && area.width != 0 {
+        let scrollbar_area = area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .track_style(Style::default().fg(colors::TEXT_MUTED))
+                .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+                .position(scroll)
+                .viewport_content_length(visible_height);
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
 }
 
 /// Render the diff pane
@@ -192,10 +215,8 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let visible_height = usize::from(area.height.saturating_sub(2));
     let total_lines = app.ui.diff_line_ranges.len();
-    let scroll = app
-        .ui
-        .diff_scroll
-        .min(total_lines.saturating_sub(visible_height));
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll = app.ui.diff_scroll.min(max_scroll);
     let end_line = (scroll + visible_height).min(total_lines);
 
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
@@ -224,6 +245,28 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
+
+    if total_lines > visible_height && area.width != 0 {
+        let scrollbar_area = area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .track_style(Style::default().fg(colors::TEXT_MUTED))
+                .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+                .position(scroll)
+                .viewport_content_length(visible_height);
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
 }
 
 /// Render the status bar
