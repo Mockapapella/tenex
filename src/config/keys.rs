@@ -219,19 +219,9 @@ const BINDINGS: &[Binding] = &[
     },
     // Navigation
     Binding {
-        code: KeyCode::Char('j'),
-        modifiers: KeyModifiers::NONE,
-        action: Action::NextAgent,
-    },
-    Binding {
         code: KeyCode::Down,
         modifiers: KeyModifiers::NONE,
         action: Action::NextAgent,
-    },
-    Binding {
-        code: KeyCode::Char('k'),
-        modifiers: KeyModifiers::NONE,
-        action: Action::PrevAgent,
     },
     Binding {
         code: KeyCode::Up,
@@ -338,19 +328,19 @@ impl Action {
             Self::RenameBranch => "[r]ename branch",
             Self::OpenPR => "[Ctrl+o]pen pull request",
             Self::SwitchTab => "[Tab] switch preview/diff",
-            Self::NextAgent => "[j] / [↓] next agent",
-            Self::PrevAgent => "[k] / [↑] prev agent",
+            Self::NextAgent => "[↓] next agent",
+            Self::PrevAgent => "[↑] prev agent",
             Self::Help => "[?] help",
             Self::Quit => "[Ctrl+q]uit",
-            Self::ScrollUp => "[Ctrl+u] scroll up",
-            Self::ScrollDown => "[Ctrl+d] scroll down",
+            Self::ScrollUp => "[Ctrl+u] scroll preview/diff up",
+            Self::ScrollDown => "[Ctrl+d] scroll preview/diff down",
             Self::ScrollTop => "[g]o to top",
             Self::ScrollBottom => "[G]o to bottom",
             Self::Cancel => "Cancel",
             Self::Confirm => "Confirm",
             Self::SpawnChildren => "[S]pawn swarm",
             Self::PlanSwarm => "[P]lanning swarm",
-            Self::AddChildren => "[+] add agents",
+            Self::AddChildren => "[+] add sub-agents to selected agent",
             Self::Synthesize => "[s]ynthesize sub-agent outputs",
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to leaf sub-agents",
@@ -371,8 +361,8 @@ impl Action {
             Self::FocusPreview => "Enter",
             Self::Kill => "d",
             Self::SwitchTab => "Tab",
-            Self::NextAgent => "j/↓",
-            Self::PrevAgent => "k/↑",
+            Self::NextAgent => "↓",
+            Self::PrevAgent => "↑",
             Self::Help => "?",
             // Both use Ctrl+q: UnfocusPreview when in preview, Quit otherwise
             Self::UnfocusPreview | Self::Quit => "Ctrl+q",
@@ -603,7 +593,7 @@ mod tests {
     fn test_action_keys() {
         assert_eq!(Action::NewAgent.keys(), "a");
         assert_eq!(Action::SpawnChildren.keys(), "S");
-        assert_eq!(Action::NextAgent.keys(), "j/↓");
+        assert_eq!(Action::NextAgent.keys(), "↓");
     }
 
     #[test]

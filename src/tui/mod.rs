@@ -546,8 +546,6 @@ mod tests {
         let handler = Actions::new();
 
         // Navigation keys should work in normal mode
-        test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
 
@@ -628,9 +626,9 @@ mod tests {
         // Enter scrolling mode (happens when scroll keys are pressed)
         app.enter_mode(Mode::Scrolling);
 
-        // Should handle scroll keys in scrolling mode
-        test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        // Should handle navigation keys in scrolling mode
+        test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
         Ok(())
     }
 
@@ -978,14 +976,6 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
         assert_eq!(app.spawn.child_count, initial_count);
 
-        // 'k' should also increment
-        test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count + 1);
-
-        // 'j' should also decrement
-        test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count);
-
         Ok(())
     }
 
@@ -1116,14 +1106,6 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
         assert_eq!(app.spawn.child_count, initial_count);
 
-        // 'k' should also increment
-        test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count + 1);
-
-        // 'j' should also decrement
-        test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count);
-
         Ok(())
     }
 
@@ -1191,16 +1173,16 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
         assert_eq!(app.review.selected, 1);
 
-        // 'j' should also move down
-        test_key_event(&mut app, handler, KeyCode::Char('j'), KeyModifiers::NONE)?;
+        // Down should move to next
+        test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
         assert_eq!(app.review.selected, 2);
 
         // Up should move to previous
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
         assert_eq!(app.review.selected, 1);
 
-        // 'k' should also move up
-        test_key_event(&mut app, handler, KeyCode::Char('k'), KeyModifiers::NONE)?;
+        // Up should move to previous
+        test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
         assert_eq!(app.review.selected, 0);
 
         Ok(())

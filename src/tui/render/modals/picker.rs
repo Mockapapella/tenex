@@ -46,7 +46,7 @@ pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "↑/k to increase, ↓/j to decrease",
+            "↑ to increase, ↓ to decrease",
             Style::default().fg(colors::TEXT_MUTED),
         )),
         Line::from(Span::styled(
@@ -90,7 +90,7 @@ pub fn render_review_info_overlay(frame: &mut Frame<'_>) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Use j/k or ↑/↓ to navigate the agent list.",
+            "Use ↑/↓ to navigate the agent list.",
             Style::default().fg(colors::TEXT_MUTED),
         )),
         Line::from(Span::styled(
@@ -144,7 +144,7 @@ pub fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "↑/k to increase, ↓/j to decrease",
+            "↑ to increase, ↓ to decrease",
             Style::default().fg(colors::TEXT_MUTED),
         )),
         Line::from(Span::styled(

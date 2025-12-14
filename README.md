@@ -91,15 +91,15 @@ tenex
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Next agent |
-| `k` / `↑` | Previous agent |
+| `↓` | Next agent |
+| `↑` | Previous agent |
 | `Enter` | Attach terminal (forward keystrokes to agent) |
 | `Ctrl+q` | Detach terminal / Quit (with confirm if agents running) |
 | `Esc` | Cancel current modal or flow |
 | `Tab` | Switch between Preview and Diff tabs |
 | `Space` | Collapse/expand agent tree |
-| `Ctrl+u` | Scroll up |
-| `Ctrl+d` | Scroll down |
+| `Ctrl+u` | Scroll preview/diff up |
+| `Ctrl+d` | Scroll preview/diff down |
 | `g` | Scroll to top |
 | `G` | Scroll to bottom |
 | `?` | Help |
@@ -149,7 +149,7 @@ Press `P` for a planning-focused swarm. Children receive a planning preamble pro
 
 Press `R` to spawn code reviewers:
 1. Pick number of reviewers
-2. Select base branch (searchable list with j/k/up/down navigation)
+2. Select base branch (searchable list with ↑/↓ navigation)
 
 Reviewers get a strict review preamble with the chosen base branch. They're titled "Reviewer N".
 

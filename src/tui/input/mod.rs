@@ -97,10 +97,10 @@ pub fn handle_key_event(
             app.ui.help_scroll = app.ui.help_scroll.min(max_scroll);
             match (code, modifiers) {
                 // Scroll help content (does not close help)
-                (KeyCode::Up | KeyCode::Char('k'), _) => {
+                (KeyCode::Up, _) => {
                     app.ui.help_scroll = app.ui.help_scroll.saturating_sub(1).min(max_scroll);
                 }
-                (KeyCode::Down | KeyCode::Char('j'), _) => {
+                (KeyCode::Down, _) => {
                     app.ui.help_scroll = app.ui.help_scroll.saturating_add(1).min(max_scroll);
                 }
                 (KeyCode::PageUp, _) => {
@@ -893,48 +893,6 @@ mod tests {
         assert_eq!(app.mode, Mode::Help);
         let max_scroll = help_max_scroll(&app);
         assert_eq!(app.ui.help_scroll, max_scroll);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_key_event_help_mode_j_scrolls() -> anyhow::Result<()> {
-        let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
-        let mut batched_keys = Vec::new();
-
-        handle_key_event(
-            &mut app,
-            action_handler,
-            KeyCode::Char('j'),
-            KeyModifiers::NONE,
-            &mut batched_keys,
-        )?;
-
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_key_event_help_mode_k_scrolls() -> anyhow::Result<()> {
-        let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 5;
-        let action_handler = Actions::new();
-        let mut batched_keys = Vec::new();
-
-        handle_key_event(
-            &mut app,
-            action_handler,
-            KeyCode::Char('k'),
-            KeyModifiers::NONE,
-            &mut batched_keys,
-        )?;
-
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 4);
         Ok(())
     }
 

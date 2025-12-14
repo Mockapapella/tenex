@@ -14,8 +14,8 @@ pub fn handle_child_count_mode(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Enter => app.proceed_to_child_prompt(),
         KeyCode::Esc => app.exit_mode(),
-        KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
-        KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
+        KeyCode::Up => app.increment_child_count(),
+        KeyCode::Down => app.decrement_child_count(),
         _ => {}
     }
 }
@@ -25,8 +25,8 @@ pub fn handle_review_child_count_mode(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Enter => app.proceed_to_branch_selector(),
         KeyCode::Esc => app.exit_mode(),
-        KeyCode::Up | KeyCode::Char('k') => app.increment_child_count(),
-        KeyCode::Down | KeyCode::Char('j') => app.decrement_child_count(),
+        KeyCode::Up => app.increment_child_count(),
+        KeyCode::Down => app.decrement_child_count(),
         _ => {}
     }
 }
@@ -51,8 +51,8 @@ pub fn handle_branch_selector_mode(app: &mut App, action_handler: Actions, code:
             app.clear_review_state();
             app.exit_mode();
         }
-        KeyCode::Up | KeyCode::Char('k') => app.select_prev_branch(),
-        KeyCode::Down | KeyCode::Char('j') => app.select_next_branch(),
+        KeyCode::Up => app.select_prev_branch(),
+        KeyCode::Down => app.select_next_branch(),
         KeyCode::Char(c) => app.handle_branch_filter_char(c),
         KeyCode::Backspace => app.handle_branch_filter_backspace(),
         _ => {}
@@ -74,8 +74,8 @@ pub fn handle_rebase_branch_selector_mode(app: &mut App, code: KeyCode) {
             app.clear_review_state();
             app.exit_mode();
         }
-        KeyCode::Up | KeyCode::Char('k') => app.select_prev_branch(),
-        KeyCode::Down | KeyCode::Char('j') => app.select_next_branch(),
+        KeyCode::Up => app.select_prev_branch(),
+        KeyCode::Down => app.select_next_branch(),
         KeyCode::Char(c) => app.handle_branch_filter_char(c),
         KeyCode::Backspace => app.handle_branch_filter_backspace(),
         _ => {}
@@ -97,8 +97,8 @@ pub fn handle_merge_branch_selector_mode(app: &mut App, code: KeyCode) {
             app.clear_review_state();
             app.exit_mode();
         }
-        KeyCode::Up | KeyCode::Char('k') => app.select_prev_branch(),
-        KeyCode::Down | KeyCode::Char('j') => app.select_next_branch(),
+        KeyCode::Up => app.select_prev_branch(),
+        KeyCode::Down => app.select_next_branch(),
         KeyCode::Char(c) => app.handle_branch_filter_char(c),
         KeyCode::Backspace => app.handle_branch_filter_backspace(),
         _ => {}
@@ -169,24 +169,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_child_count_mode_k() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 1;
-        handle_child_count_mode(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.spawn.child_count, 2);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_child_count_mode_j() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 2;
-        handle_child_count_mode(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.spawn.child_count, 1);
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_child_count_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.mode = Mode::ChildCount;
@@ -233,24 +215,6 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
         app.spawn.child_count = 2;
         handle_review_child_count_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.spawn.child_count, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_review_child_count_mode_k() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 1;
-        handle_review_child_count_mode(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.spawn.child_count, 2);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_review_child_count_mode_j() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 2;
-        handle_review_child_count_mode(&mut app, KeyCode::Char('j'));
         assert_eq!(app.spawn.child_count, 1);
         Ok(())
     }
@@ -339,34 +303,12 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_navigation_k() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Char('k'));
-        assert_eq!(app.review.selected, 0);
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.review.branches = test_branches();
         app.review.selected = 0;
         let action_handler = Actions::new();
         handle_branch_selector_mode(&mut app, action_handler, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_branch_selector_mode_navigation_j() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Char('j'));
         assert_eq!(app.review.selected, 1);
         Ok(())
     }
@@ -414,31 +356,11 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_navigation_k() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.review.selected, 0);
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_rebase_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.review.branches = test_branches();
         app.review.selected = 0;
         handle_rebase_branch_selector_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_rebase_branch_selector_mode_navigation_j() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Char('j'));
         assert_eq!(app.review.selected, 1);
         Ok(())
     }
@@ -485,31 +407,11 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_navigation_k() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.review.selected, 0);
-        Ok(())
-    }
-
-    #[test]
     fn test_handle_merge_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.review.branches = test_branches();
         app.review.selected = 0;
         handle_merge_branch_selector_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_handle_merge_branch_selector_mode_navigation_j() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Char('j'));
         assert_eq!(app.review.selected, 1);
         Ok(())
     }
