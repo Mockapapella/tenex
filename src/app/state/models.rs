@@ -2,7 +2,7 @@
 
 use crate::app::AgentProgram;
 
-/// State for the `/models` selector modal
+/// State for the `/agents` selector modal
 #[derive(Debug, Default)]
 pub struct ModelSelectorState {
     /// Current filter text for model search

@@ -1,4 +1,4 @@
-//! Model selector modal rendering (`/models`)
+//! Model selector modal rendering (`/agents`)
 
 use ratatui::{
     Frame,

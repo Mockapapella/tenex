@@ -40,7 +40,7 @@ pub struct SlashCommand {
 /// All available slash commands (shown in the command palette)
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
-        name: "/models",
+        name: "/agents",
         description: "Select default agent model/program",
     },
     SlashCommand {
@@ -85,7 +85,7 @@ pub struct App {
     /// Slash command palette state (`/`)
     pub command_palette: CommandPaletteState,
 
-    /// Model selector state (`/models`)
+    /// Model selector state (`/agents`)
     pub model_selector: ModelSelectorState,
 
     /// Spawn state (child agent spawning)
@@ -386,7 +386,7 @@ impl App {
     /// Execute a resolved slash command.
     pub fn run_slash_command(&mut self, cmd: SlashCommand) {
         match cmd.name {
-            "/models" => {
+            "/agents" => {
                 self.input.clear();
                 self.start_model_selector();
             }
@@ -447,7 +447,7 @@ impl App {
         }
     }
 
-    /// Enter the `/models` selector modal.
+    /// Enter the `/agents` selector modal.
     pub fn start_model_selector(&mut self) {
         self.model_selector.start(self.settings.agent_program);
         self.enter_mode(Mode::ModelSelector);
@@ -469,23 +469,23 @@ impl App {
         self.model_selector.select_prev();
     }
 
-    /// Handle typing in the `/models` filter.
+    /// Handle typing in the `/agents` filter.
     pub fn handle_model_filter_char(&mut self, c: char) {
         self.model_selector.handle_filter_char(c);
     }
 
-    /// Handle backspace in the `/models` filter.
+    /// Handle backspace in the `/agents` filter.
     pub fn handle_model_filter_backspace(&mut self) {
         self.model_selector.handle_filter_backspace();
     }
 
-    /// Get the currently highlighted model/program (in `/models`).
+    /// Get the currently highlighted model/program (in `/agents`).
     #[must_use]
     pub fn selected_model_program(&self) -> Option<AgentProgram> {
         self.model_selector.selected_program()
     }
 
-    /// Confirm the current `/models` selection.
+    /// Confirm the current `/agents` selection.
     pub fn confirm_model_program_selection(&mut self) {
         let Some(program) = self.selected_model_program() else {
             self.exit_mode();
@@ -1732,18 +1732,18 @@ mod tests {
         let commands = app.filtered_slash_commands();
 
         assert_eq!(commands.len(), 2);
-        assert_eq!(commands[0].name, "/models");
+        assert_eq!(commands[0].name, "/agents");
         assert_eq!(commands[1].name, "/help");
     }
 
     #[test]
     fn test_filtered_slash_commands_with_filter() {
         let mut app = App::default();
-        app.input.buffer = "/mod".to_string();
+        app.input.buffer = "/age".to_string();
 
         let commands = app.filtered_slash_commands();
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].name, "/models");
+        assert_eq!(commands[0].name, "/agents");
     }
 
     #[test]
@@ -1795,7 +1795,7 @@ mod tests {
         let cmd = app.selected_slash_command();
         assert!(cmd.is_some());
         if let Some(c) = cmd {
-            assert_eq!(c.name, "/models");
+            assert_eq!(c.name, "/agents");
         }
 
         app.command_palette.selected = 1;
@@ -1807,10 +1807,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_slash_command_models() {
+    fn test_run_slash_command_agents() {
         let mut app = App::default();
         app.run_slash_command(SlashCommand {
-            name: "/models",
+            name: "/agents",
             description: "test",
         });
         assert_eq!(app.mode, Mode::ModelSelector);

@@ -133,7 +133,7 @@ mod tests {
     fn test_command_palette_cursor_movement() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.start_command_palette();
-        app.input.buffer = "/models".to_string();
+        app.input.buffer = "/agents".to_string();
         app.input.cursor = 7;
 
         handle_command_palette_mode(&mut app, KeyCode::Home);
