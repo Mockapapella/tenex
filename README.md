@@ -63,9 +63,9 @@ tenex
 | `A` | Add agent with prompt |
 | `d` | Delete agent and all descendants |
 | `S` | Spawn swarm (new root + N children) |
-| `P` | Planning swarm (children get planning preamble) |
-| `R` | Review swarm (pick reviewer count, then base branch) |
-| `+` | Add children to selected agent |
+| `P` | Planning swarm (spawn N planners for selected agent) |
+| `R` | Review swarm (spawn N reviewers for selected agent, then pick base branch) |
+| `+` | Spawn N sub-agents for selected agent |
 | `s` | Synthesize descendant outputs into parent |
 | `B` | Broadcast message to leaf agents only (excludes terminals) |
 

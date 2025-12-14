@@ -479,9 +479,14 @@ impl App {
         self.enter_mode(Mode::ChildCount);
     }
 
-    /// Start spawning a new root agent with children (with planning pre-prompt)
+    /// Start spawning a planning swarm under the selected agent
     pub fn start_planning_swarm(&mut self) {
-        self.spawn.spawning_under = None;
+        let Some(agent) = self.selected_agent() else {
+            self.set_status("Select an agent first (press 'a')");
+            return;
+        };
+
+        self.spawn.spawning_under = Some(agent.id);
         self.spawn.child_count = 3; // Reset to default
         self.spawn.use_plan_prompt = true;
         self.enter_mode(Mode::ChildCount);
@@ -1282,11 +1287,23 @@ mod tests {
     #[test]
     fn test_start_planning_swarm() {
         let mut app = App::default();
+        let agent = create_test_agent("test");
+        let agent_id = agent.id;
+        app.storage.add(agent);
         app.start_planning_swarm();
-        assert!(app.spawn.spawning_under.is_none());
+        assert_eq!(app.spawn.spawning_under, Some(agent_id));
         assert_eq!(app.spawn.child_count, 3);
         assert!(app.spawn.use_plan_prompt);
         assert_eq!(app.mode, Mode::ChildCount);
+    }
+
+    #[test]
+    fn test_start_planning_swarm_no_agent() {
+        let mut app = App::default();
+        app.start_planning_swarm();
+        // Should remain in Normal mode, not enter ChildCount
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.spawn.spawning_under.is_none());
     }
 
     #[test]

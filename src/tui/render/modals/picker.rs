@@ -17,9 +17,9 @@ pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect_absolute(40, 12, frame.area());
 
     let context = if app.spawn.spawning_under.is_some() {
-        "Add children to selected agent"
+        "Spawn sub-agents for selected agent"
     } else {
-        "Create new agent with children"
+        "Spawn new root + sub-agents"
     };
 
     let text = vec![
@@ -81,11 +81,11 @@ pub fn render_review_info_overlay(frame: &mut Frame<'_>) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "To spawn review agents, you must first",
+            "Review swarm works like P/+:",
             Style::default().fg(colors::TEXT_DIM),
         )),
         Line::from(Span::styled(
-            "select an agent that has a worktree.",
+            "it spawns reviewers for selected agent.",
             Style::default().fg(colors::TEXT_DIM),
         )),
         Line::from(""),
@@ -119,7 +119,7 @@ pub fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
 
     let text = vec![
         Line::from(Span::styled(
-            "Spawn review agents for selected worktree",
+            "Spawn reviewers for selected agent",
             Style::default().fg(colors::TEXT_DIM),
         )),
         Line::from(""),

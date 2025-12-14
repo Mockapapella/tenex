@@ -45,7 +45,7 @@ pub enum Action {
     Confirm,
     /// Spawn new root with children (no pre-prompt)
     SpawnChildren,
-    /// Plan: spawn new root with children (with planning pre-prompt)
+    /// Plan: spawn planners under selected agent (with planning pre-prompt)
     PlanSwarm,
     /// Add children to selected agent
     AddChildren,
@@ -55,7 +55,7 @@ pub enum Action {
     ToggleCollapse,
     /// Broadcast message to agent and all descendants
     Broadcast,
-    /// Review changes against a base branch
+    /// Review: spawn reviewers under selected agent against a base branch
     ReviewSwarm,
     /// Spawn a new terminal (not a Claude agent)
     SpawnTerminal,
@@ -339,12 +339,12 @@ impl Action {
             Self::Cancel => "Cancel",
             Self::Confirm => "Confirm",
             Self::SpawnChildren => "[S]pawn swarm",
-            Self::PlanSwarm => "[P]lanning swarm",
-            Self::AddChildren => "[+] add sub-agents to selected agent",
+            Self::PlanSwarm => "[P] spawn planners for selected agent",
+            Self::AddChildren => "[+] spawn sub-agents for selected agent",
             Self::Synthesize => "[s]ynthesize sub-agent outputs",
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to leaf sub-agents",
-            Self::ReviewSwarm => "[R]eview swarm",
+            Self::ReviewSwarm => "[R] spawn reviewers for selected agent",
             Self::SpawnTerminal => "[t]erminal",
             Self::SpawnTerminalPrompted => "[T]erminal with command",
             Self::Rebase => "[Ctrl+r]ebase onto branch",
@@ -606,6 +606,9 @@ mod tests {
     fn test_action_description() {
         assert_eq!(Action::NewAgent.description(), "[a]dd agent");
         assert_eq!(Action::SpawnChildren.description(), "[S]pawn swarm");
-        assert_eq!(Action::PlanSwarm.description(), "[P]lanning swarm");
+        assert_eq!(
+            Action::PlanSwarm.description(),
+            "[P] spawn planners for selected agent"
+        );
     }
 }
