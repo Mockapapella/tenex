@@ -215,17 +215,31 @@ fn test_tmux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
     let session_name = fixture.session_name("submit");
 
     // Create a session
-    let _ = manager.kill(&session_name);
+    if manager.exists(&session_name) {
+        manager.kill(&session_name)?;
+    }
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Send keys with submit
-    let result = manager.send_keys_and_submit(&session_name, "pwd");
+    let token = format!("__tenex_submit_test_{session_name}__");
+    let result = manager.send_keys_and_submit(&session_name, &format!("echo {token}"));
     assert!(result.is_ok());
 
+    // Give the shell time to execute the command and print output.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify the command actually ran (i.e. submit sent Enter).
+    let capture = tenex::tmux::OutputCapture::new();
+    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    assert!(
+        output.contains(&token),
+        "Expected submitted command output to contain token {token}, got: {output:?}"
+    );
+
     // Cleanup
-    let _ = manager.kill(&session_name);
+    manager.kill(&session_name)?;
 
     Ok(())
 }
@@ -406,6 +420,107 @@ fn test_tmux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
 
     // Cleanup
     let _ = manager.kill(&new_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("paste_submit")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("paste");
+
+    // Create a session
+    if manager.exists(&session_name) {
+        manager.kill(&session_name)?;
+    }
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Send keys with bracketed paste and submit
+    let token = format!("__tenex_paste_test_{session_name}__");
+    let result = manager.paste_keys_and_submit(&session_name, &format!("echo {token}"));
+    assert!(result.is_ok());
+
+    // Give the shell time to execute the command and print output.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify the command actually ran (i.e. submit sent C-m).
+    let capture = tenex::tmux::OutputCapture::new();
+    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    assert!(
+        output.contains(&token),
+        "Expected submitted command output to contain token {token}, got: {output:?}"
+    );
+
+    // Cleanup
+    manager.kill(&session_name)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_tmux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("program_submit")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("progsub");
+
+    // Create a session
+    if manager.exists(&session_name) {
+        manager.kill(&session_name)?;
+    }
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Test with "claude" program (uses send_keys path)
+    let token_claude = format!("__tenex_claude_test_{session_name}__");
+    let result = manager.send_keys_and_submit_for_program(
+        &session_name,
+        "claude",
+        &format!("echo {token_claude}"),
+    );
+    assert!(result.is_ok());
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify the command actually ran
+    let capture = tenex::tmux::OutputCapture::new();
+    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    assert!(
+        output.contains(&token_claude),
+        "Expected submitted command output to contain token {token_claude}, got: {output:?}"
+    );
+
+    // Test with "codex" program (uses paste_keys path)
+    let token_codex = format!("__tenex_codex_test_{session_name}__");
+    let result = manager.send_keys_and_submit_for_program(
+        &session_name,
+        "codex",
+        &format!("echo {token_codex}"),
+    );
+    assert!(result.is_ok());
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify the command actually ran
+    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    assert!(
+        output.contains(&token_codex),
+        "Expected submitted command output to contain token {token_codex}, got: {output:?}"
+    );
+
+    // Cleanup
+    manager.kill(&session_name)?;
 
     Ok(())
 }

@@ -48,10 +48,10 @@ impl Actions {
                     target_agent.tmux_session.clone()
                 };
 
-                // Send the message and submit it
+                // Send the message and submit it (program-specific)
                 if self
                     .session_manager
-                    .send_keys_and_submit(&tmux_target, message)
+                    .send_keys_and_submit_for_program(&tmux_target, &target_agent.program, message)
                     .is_ok()
                 {
                     sent_count += 1;

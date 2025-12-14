@@ -427,6 +427,7 @@ impl Actions {
         let parent_id = agent.id;
         let parent_session = agent.tmux_session.clone();
         let parent_title = agent.title.clone();
+        let parent_program = agent.program.clone();
         let worktree_path = agent.worktree_path.clone();
         // Determine the correct tmux target for the parent
         // If the parent has a window_index, it's a child agent running in a window
@@ -494,8 +495,15 @@ impl Actions {
 
         for (descendant_id, window_idx) in descendant_info {
             // Kill the window if it has one
-            if let Some(idx) = window_idx {
-                let _ = self.session_manager.kill_window(&parent_session, idx);
+            if let Some(idx) = window_idx
+                && let Err(e) = self.session_manager.kill_window(&parent_session, idx)
+            {
+                warn!(
+                    session = %parent_session,
+                    window_index = idx,
+                    error = %e,
+                    "Failed to kill descendant tmux window during synthesis cleanup"
+                );
             }
             // Remove from storage (remove_with_descendants handles nested removal)
             app.storage.remove(descendant_id);
@@ -510,8 +518,11 @@ impl Actions {
         let read_command = format!(
             "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
         );
-        self.session_manager
-            .send_keys_and_submit(&parent_tmux_target, &read_command)?;
+        self.session_manager.send_keys_and_submit_for_program(
+            &parent_tmux_target,
+            &parent_program,
+            &read_command,
+        )?;
 
         app.validate_selection();
         app.storage.save()?;

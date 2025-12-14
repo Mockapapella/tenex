@@ -3,7 +3,8 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 /// Manager for tmux sessions
 #[derive(Debug, Clone, Copy, Default)]
@@ -150,7 +151,7 @@ impl Manager {
         Ok(())
     }
 
-    /// Send keys to a session and press Enter to submit
+    /// Send keys to a session and submit (normal typing)
     ///
     /// # Errors
     ///
@@ -170,10 +171,112 @@ impl Manager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to send Enter to session '{name}': {stderr}");
+            bail!("Failed to submit input to session '{name}': {stderr}");
         }
 
         Ok(())
+    }
+
+    /// Paste keys to a session and submit (bracketed paste when supported)
+    ///
+    /// Some TUIs (notably Codex) treat fast `send-keys` input as a "paste" and can ignore an
+    /// immediate Enter/Return submission. Using `paste-buffer -p` avoids that debounce and makes the
+    /// subsequent submit reliable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if keys cannot be pasted/submitted.
+    pub fn paste_keys_and_submit(&self, name: &str, keys: &str) -> Result<()> {
+        let buffer_name = format!("tenex-send-{}", Uuid::new_v4());
+
+        let output = Command::new("tmux")
+            .arg("set-buffer")
+            .arg("-b")
+            .arg(&buffer_name)
+            .arg("--")
+            .arg(keys)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to set tmux buffer '{buffer_name}': {stderr}");
+        }
+
+        let output = Command::new("tmux")
+            .arg("paste-buffer")
+            .arg("-d") // Delete the buffer after successful paste
+            .arg("-p") // Use bracketed paste codes when requested by the application
+            .arg("-r") // Preserve LFs (for multiline input)
+            .arg("-b")
+            .arg(&buffer_name)
+            .arg("-t")
+            .arg(name)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Best-effort cleanup: `-d` only runs on success.
+            let cleanup = Command::new("tmux")
+                .arg("delete-buffer")
+                .arg("-b")
+                .arg(&buffer_name)
+                .output()
+                .context("Failed to execute tmux")?;
+
+            if !cleanup.status.success() {
+                let cleanup_stderr = String::from_utf8_lossy(&cleanup.stderr);
+                warn!(
+                    %buffer_name,
+                    %cleanup_stderr,
+                    "Failed to cleanup tmux buffer after paste-buffer failure"
+                );
+            }
+
+            bail!("Failed to paste buffer to target '{name}': {stderr}");
+        }
+
+        // Submit (carriage return)
+        let output = Command::new("tmux")
+            .arg("send-keys")
+            .arg("-t")
+            .arg(name)
+            .arg("C-m")
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to submit input to session '{name}': {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Send input to an agent program, using a program-specific strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if input cannot be sent/submitted.
+    pub fn send_keys_and_submit_for_program(
+        &self,
+        target: &str,
+        program: &str,
+        keys: &str,
+    ) -> Result<()> {
+        let exe = program
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next();
+        if matches!(exe, Some("codex")) {
+            return self.paste_keys_and_submit(target, keys);
+        }
+
+        self.send_keys_and_submit(target, keys)
     }
 
     /// Rename a session
@@ -878,5 +981,43 @@ mod tests {
 
             let _ = manager.kill(session_name);
         }
+    }
+
+    #[test]
+    fn test_paste_keys_and_submit_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+        let result = manager.paste_keys_and_submit("tenex-nonexistent-xyz", "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_keys_and_submit_for_program_nonexistent() {
+        if skip_if_no_tmux() {
+            return;
+        }
+
+        let manager = Manager::new();
+
+        // Test with "claude" (should use send_keys_and_submit)
+        let result =
+            manager.send_keys_and_submit_for_program("tenex-nonexistent-xyz", "claude", "test");
+        assert!(result.is_err());
+
+        // Test with "codex" (should use paste_keys_and_submit)
+        let result =
+            manager.send_keys_and_submit_for_program("tenex-nonexistent-xyz", "codex", "test");
+        assert!(result.is_err());
+
+        // Test with full path "/usr/bin/codex" (should use paste_keys_and_submit)
+        let result = manager.send_keys_and_submit_for_program(
+            "tenex-nonexistent-xyz",
+            "/usr/bin/codex",
+            "test",
+        );
+        assert!(result.is_err());
     }
 }
