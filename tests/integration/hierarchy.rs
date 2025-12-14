@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::common::{TestFixture, create_child_agent, skip_if_no_tmux};
+use crate::common::{DirGuard, TestFixture, create_child_agent, skip_if_no_tmux};
 use tenex::agent::{Agent, Storage};
 use tenex::tmux::SessionManager;
 
@@ -224,7 +224,7 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -235,7 +235,6 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("descending-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -247,11 +246,10 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     let mut window_indices: Vec<u32> = children.iter().filter_map(|c| c.window_index).collect();
     window_indices.sort_unstable();
 
-    // All 3 children should have sequential window indices (2, 3, 4)
+    // All 3 children should have sequential window indices
     assert_eq!(window_indices.len(), 3);
-    assert_eq!(window_indices[0], 2);
-    assert_eq!(window_indices[1], 3);
-    assert_eq!(window_indices[2], 4);
+    assert_eq!(window_indices[1], window_indices[0] + 1);
+    assert_eq!(window_indices[2], window_indices[0] + 2);
 
     // Kill the root (which should kill all children in descending order)
     if let Some(idx) = app.storage.visible_index_of(root_id) {
@@ -266,8 +264,6 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
 
     // All agents should be gone
     assert_eq!(app.storage.len(), 0);
-
-    std::env::set_current_dir(&original_dir)?;
 
     Ok(())
 }

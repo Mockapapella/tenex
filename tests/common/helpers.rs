@@ -49,6 +49,11 @@ impl DirGuard {
 
 impl Drop for DirGuard {
     fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.original_dir);
+        if let Err(e) = std::env::set_current_dir(&self.original_dir) {
+            eprintln!(
+                "Warning: failed to restore working directory to {}: {e}",
+                self.original_dir.display()
+            );
+        }
     }
 }
