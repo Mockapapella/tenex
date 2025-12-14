@@ -36,6 +36,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 
     match &app.mode {
         Mode::Help => modals::render_help_overlay(frame, app),
+        Mode::CommandPalette => modals::render_command_palette_overlay(frame, app),
         Mode::Creating => {
             modals::render_input_overlay(
                 frame,
@@ -91,6 +92,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             frame,
             "New Terminal",
             "Enter startup command (or leave empty):",
+            &app.input.buffer,
+            app.input.cursor,
+        ),
+        Mode::CustomAgentCommand => modals::render_input_overlay(
+            frame,
+            "Custom Agent Command",
+            "Enter the command to run for new agents:",
             &app.input.buffer,
             app.input.cursor,
         ),
@@ -208,6 +216,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::BranchSelector | Mode::RebaseBranchSelector | Mode::MergeBranchSelector => {
             modals::render_branch_selector_overlay(frame, app);
         }
+        Mode::ModelSelector => modals::render_model_selector_overlay(frame, app),
         Mode::ConfirmPush => modals::render_confirm_push_overlay(frame, app),
         Mode::RenameBranch => modals::render_rename_overlay(frame, app),
         Mode::ConfirmPushForPR => modals::render_confirm_push_for_pr_overlay(frame, app),
@@ -1123,6 +1132,117 @@ mod tests {
         app.git_op.base_branch = "main".to_string();
         app.git_op.has_unpushed = true;
         app.enter_mode(Mode::ConfirmPushForPR);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_command_palette_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_command_palette();
+        assert_eq!(app.mode, Mode::CommandPalette);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_command_palette_with_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_command_palette();
+        app.handle_char('m');
+        app.handle_char('o');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_command_palette_empty_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_command_palette();
+        app.input.buffer = "/xyz".to_string();
+        app.reset_slash_command_selection();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_model_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_model_selector();
+        assert_eq!(app.mode, Mode::ModelSelector);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_model_selector_with_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_model_selector();
+        app.handle_model_filter_char('c');
+        app.handle_model_filter_char('l');
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_model_selector_empty_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_model_selector();
+        app.model_selector.filter = "xyz".to_string();
 
         terminal.draw(|frame| {
             render(frame, &app);

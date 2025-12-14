@@ -47,6 +47,11 @@ pub fn handle_text_input_mode(
 fn handle_enter(app: &mut App, action_handler: Actions) {
     let input = app.input.buffer.clone();
 
+    if matches!(app.mode, Mode::CustomAgentCommand) && input.trim().is_empty() {
+        app.set_status("Custom agent command cannot be empty");
+        return;
+    }
+
     // Some modes allow empty input, others don't
     if !input.is_empty()
         || matches!(
@@ -92,6 +97,11 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
                     Some(input.as_str())
                 };
                 action_handler.spawn_terminal(app, command)
+            }
+            Mode::CustomAgentCommand => {
+                let command = input.trim().to_string();
+                app.set_custom_agent_command_and_save(command);
+                Ok(())
             }
             _ => Ok(()),
         };

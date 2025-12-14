@@ -80,6 +80,7 @@ impl Actions {
 
         let worktree_mgr = WorktreeManager::new(&repo);
         let worktrees = worktree_mgr.list()?;
+        let program = app.agent_spawn_command();
 
         debug!(count = worktrees.len(), "Found worktrees for auto-connect");
 
@@ -112,14 +113,14 @@ impl Actions {
             // Create an agent for this worktree
             let agent = Agent::new(
                 branch_name.clone(), // Use branch name as title
-                app.config.default_program.clone(),
+                program.clone(),
                 branch_name.clone(),
                 wt.path.clone(),
                 None, // No initial prompt
             );
 
             // Create tmux session and start the agent program
-            let command = app.config.default_program.clone();
+            let command = program.clone();
             self.session_manager
                 .create(&agent.tmux_session, &wt.path, Some(&command))?;
 

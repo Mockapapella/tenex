@@ -104,9 +104,10 @@ impl Actions {
 
         worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
+        let program = app.agent_spawn_command();
         let root_agent = Agent::new(
             root_title,
-            app.config.default_program.clone(),
+            program.clone(),
             branch.clone(),
             worktree_path.clone(),
             None,
@@ -115,11 +116,8 @@ impl Actions {
         let root_session = root_agent.tmux_session.clone();
         let root_id = root_agent.id;
 
-        self.session_manager.create(
-            &root_session,
-            &worktree_path,
-            Some(&app.config.default_program),
-        )?;
+        self.session_manager
+            .create(&root_session, &worktree_path, Some(&program))?;
 
         if let Some((width, height)) = app.ui.preview_dimensions {
             let _ = self
@@ -194,6 +192,7 @@ impl Actions {
         task: Option<&str>,
     ) -> Result<()> {
         let start_window_index = app.storage.reserve_window_indices(config.parent_agent_id);
+        let program = app.agent_spawn_command();
         let child_prompt = task.map(|t| Self::build_child_prompt(t, app.spawn.use_plan_prompt));
 
         for i in 0..count {
@@ -203,8 +202,8 @@ impl Actions {
                 config,
                 i,
                 window_index,
+                &program,
                 child_prompt.as_deref(),
-                task.is_some(),
             )?;
         }
 
@@ -227,12 +226,12 @@ impl Actions {
         config: &SpawnConfig,
         index: usize,
         window_index: u32,
+        program: &str,
         child_prompt: Option<&str>,
-        has_task: bool,
     ) -> Result<()> {
         let child = Agent::new_child(
             String::new(),
-            app.config.default_program.clone(),
+            program.to_string(),
             config.branch.clone(),
             config.worktree_path.clone(),
             child_prompt.map(String::from),
@@ -243,7 +242,7 @@ impl Actions {
             },
         );
 
-        let child_title = if app.spawn.use_plan_prompt && has_task {
+        let child_title = if app.spawn.use_plan_prompt && child_prompt.is_some() {
             format!("Planner {} ({})", index + 1, child.short_id())
         } else {
             format!("Agent {} ({})", index + 1, child.short_id())
@@ -251,7 +250,7 @@ impl Actions {
         let mut child = child;
         child.title.clone_from(&child_title);
 
-        let command = Self::build_child_command(&app.config.default_program, child_prompt);
+        let command = Self::build_child_command(program, child_prompt);
         let actual_index = self.session_manager.create_window(
             &config.root_session,
             &child_title,
@@ -342,6 +341,7 @@ impl Actions {
 
         // Reserve window indices
         let start_window_index = app.storage.reserve_window_indices(parent_id);
+        let program = app.agent_spawn_command();
 
         // Create review child agents
         for i in 0..count {
@@ -349,7 +349,7 @@ impl Actions {
 
             let child = Agent::new_child(
                 String::new(), // Placeholder
-                app.config.default_program.clone(),
+                program.clone(),
                 branch.clone(),
                 worktree_path.clone(),
                 Some(review_prompt.clone()),
@@ -367,7 +367,7 @@ impl Actions {
             // Create window in the root's session with the prompt
             // Escape both double quotes and backticks (backticks are command substitution in bash)
             let escaped_prompt = review_prompt.replace('"', "\\\"").replace('`', "\\`");
-            let command = format!("{} \"{escaped_prompt}\"", app.config.default_program);
+            let command = format!("{} \"{escaped_prompt}\"", &program);
             let actual_index = self.session_manager.create_window(
                 &root_session,
                 &child_title,

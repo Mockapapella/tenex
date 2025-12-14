@@ -3,6 +3,7 @@
 //! This module provides a unified way to handle keyboard input based on the current mode.
 //! Each mode has its own handler that implements the `ModeKeyHandler` trait.
 
+mod command;
 mod confirm;
 mod normal;
 mod picker;
@@ -35,7 +36,8 @@ pub fn handle_key_event(
         | Mode::ChildPrompt
         | Mode::Broadcasting
         | Mode::ReconnectPrompt
-        | Mode::TerminalPrompt => {
+        | Mode::TerminalPrompt
+        | Mode::CustomAgentCommand => {
             text_input::handle_text_input_mode(app, action_handler, code, modifiers);
         }
 
@@ -131,6 +133,16 @@ pub fn handle_key_event(
         }
         Mode::SuccessModal(_) => {
             picker::handle_success_modal_mode(app);
+        }
+
+        // Slash commands
+        Mode::CommandPalette => {
+            command::handle_command_palette_mode(app, code);
+        }
+
+        // Slash command modal/pickers
+        Mode::ModelSelector => {
+            command::handle_model_selector_mode(app, code);
         }
 
         // Preview focused mode (forwards keys to tmux)

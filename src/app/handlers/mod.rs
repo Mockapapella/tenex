@@ -51,6 +51,7 @@ impl Actions {
                 app.ui.help_scroll = 0;
                 app.enter_mode(Mode::Help);
             }
+            Action::CommandPalette => app.start_command_palette(),
             Action::Cancel => app.exit_mode(),
             Action::Confirm => self.handle_confirm(app)?,
 

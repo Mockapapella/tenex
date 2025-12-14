@@ -65,6 +65,8 @@ pub enum Action {
     Rebase,
     /// Merge selected branch into current branch
     Merge,
+    /// Open slash command palette
+    CommandPalette,
 }
 
 /// Categories for grouping actions in help display
@@ -269,6 +271,16 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::Help,
     },
+    Binding {
+        code: KeyCode::Char('/'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::CommandPalette,
+    },
+    Binding {
+        code: KeyCode::Char('/'),
+        modifiers: KeyModifiers::SHIFT,
+        action: Action::CommandPalette,
+    },
     // Git operations (all use Ctrl modifier, requires Kitty keyboard protocol)
     Binding {
         code: KeyCode::Char('p'),
@@ -349,6 +361,7 @@ impl Action {
             Self::SpawnTerminalPrompted => "[T]erminal with command",
             Self::Rebase => "[Ctrl+r]ebase onto branch",
             Self::Merge => "[Ctrl+m]erge branch",
+            Self::CommandPalette => "[/] commands",
         }
     }
 
@@ -386,6 +399,7 @@ impl Action {
             Self::SpawnTerminalPrompted => "T",
             Self::Rebase => "Ctrl+r",
             Self::Merge => "Ctrl+m",
+            Self::CommandPalette => "/",
         }
     }
 
@@ -416,7 +430,7 @@ impl Action {
             | Self::ScrollDown
             | Self::ScrollTop
             | Self::ScrollBottom => ActionGroup::Navigation,
-            Self::Help | Self::Quit => ActionGroup::Other,
+            Self::Help | Self::Quit | Self::CommandPalette => ActionGroup::Other,
             Self::Cancel | Self::Confirm => ActionGroup::Hidden,
         }
     }
@@ -455,6 +469,7 @@ impl Action {
         Self::ScrollBottom,
         // Other
         Self::Help,
+        Self::CommandPalette,
     ];
 }
 
@@ -494,7 +509,7 @@ pub fn get_display_description(action: Action, merge_key_remapped: bool) -> &'st
 /// Generate status bar hint text
 #[must_use]
 pub fn status_hints() -> String {
-    "[?]help".to_string()
+    "[?]help  [/]commands".to_string()
 }
 
 #[cfg(test)]
@@ -599,7 +614,7 @@ mod tests {
     #[test]
     fn test_status_hints() {
         let hints = status_hints();
-        assert_eq!(hints, "[?]help");
+        assert_eq!(hints, "[?]help  [/]commands");
     }
 
     #[test]

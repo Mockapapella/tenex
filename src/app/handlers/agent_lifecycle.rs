@@ -79,15 +79,16 @@ impl Actions {
 
         worktree_mgr.create_with_new_branch(worktree_path, branch)?;
 
+        let program = app.agent_spawn_command();
         let agent = Agent::new(
             title.to_string(),
-            app.config.default_program.clone(),
+            program.clone(),
             branch.to_string(),
             worktree_path.to_path_buf(),
             prompt.map(String::from),
         );
 
-        let mut command = app.config.default_program.clone();
+        let mut command = program;
         if let Some(p) = prompt {
             // Pass prompt as positional argument (works for codex, claude, etc.)
             command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
@@ -125,12 +126,14 @@ impl Actions {
 
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Reconnecting to existing worktree");
 
+        let program = app.agent_spawn_command();
+
         // Check if this is a swarm creation (has child count)
         if let Some(child_count) = conflict.swarm_child_count {
             // Create root agent for swarm
             let root_agent = Agent::new(
                 conflict.title.clone(),
-                app.config.default_program.clone(),
+                program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
                 None, // Root doesn't get the prompt
@@ -140,11 +143,8 @@ impl Actions {
             let root_id = root_agent.id;
 
             // Create the root's tmux session
-            self.session_manager.create(
-                &root_session,
-                &conflict.worktree_path,
-                Some(&app.config.default_program),
-            )?;
+            self.session_manager
+                .create(&root_session, &conflict.worktree_path, Some(&program))?;
 
             // Resize the session to match preview dimensions
             if let Some((width, height)) = app.ui.preview_dimensions {
@@ -171,13 +171,13 @@ impl Actions {
             // Single agent reconnect
             let agent = Agent::new(
                 conflict.title.clone(),
-                app.config.default_program.clone(),
+                program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
                 conflict.prompt.clone(),
             );
 
-            let mut command = app.config.default_program.clone();
+            let mut command = program;
             if let Some(ref p) = conflict.prompt {
                 command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
             }

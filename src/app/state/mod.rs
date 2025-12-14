@@ -3,14 +3,18 @@
 //! This module contains the main `App` struct and its sub-states,
 //! organized into focused modules by domain.
 
+mod command_palette;
 mod git_op;
 mod input;
+mod models;
 mod review;
 mod spawn;
 mod ui;
 
+pub use command_palette::CommandPaletteState;
 pub use git_op::GitOpState;
 pub use input::InputState;
+pub use models::ModelSelectorState;
 pub use review::ReviewState;
 pub use spawn::SpawnState;
 pub use ui::UiState;
@@ -21,10 +25,29 @@ use crate::update::UpdateInfo;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use super::Settings;
+use super::{AgentProgram, Settings};
 
 // Re-export BranchInfo so it's available from app module
 pub use crate::git::BranchInfo;
+
+/// Slash command definition (for the `/` command palette)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlashCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+/// All available slash commands (shown in the command palette)
+pub const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "/models",
+        description: "Select default agent model/program",
+    },
+    SlashCommand {
+        name: "/help",
+        description: "Show help",
+    },
+];
 
 /// Main application state
 #[derive(Debug)]
@@ -59,6 +82,12 @@ pub struct App {
     /// Review state (branch selection)
     pub review: ReviewState,
 
+    /// Slash command palette state (`/`)
+    pub command_palette: CommandPaletteState,
+
+    /// Model selector state (`/models`)
+    pub model_selector: ModelSelectorState,
+
     /// Spawn state (child agent spawning)
     pub spawn: SpawnState,
 
@@ -89,6 +118,8 @@ impl App {
             ui: UiState::new(),
             git_op: GitOpState::new(),
             review: ReviewState::new(),
+            command_palette: CommandPaletteState::new(),
+            model_selector: ModelSelectorState::new(),
             spawn: SpawnState::new(),
             settings,
             keyboard_enhancement_supported,
@@ -246,15 +277,281 @@ impl App {
             Mode::Creating
                 | Mode::Prompting
                 | Mode::Confirming(_)
+                | Mode::CommandPalette
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::TerminalPrompt
+                | Mode::CustomAgentCommand
         );
         self.mode = mode;
         if should_clear {
             self.input.buffer.clear();
             self.input.cursor = 0;
             self.input.scroll = 0;
+        }
+    }
+
+    /// Enter slash command palette mode and pre-fill the leading `/`
+    pub fn start_command_palette(&mut self) {
+        self.enter_mode(Mode::CommandPalette);
+        self.command_palette.reset();
+        self.input.buffer = "/".to_string();
+        self.input.cursor = 1;
+        self.input.scroll = 0;
+    }
+
+    /// Return the list of slash commands filtered by the current palette input.
+    #[must_use]
+    pub fn filtered_slash_commands(&self) -> Vec<SlashCommand> {
+        let raw = self.input.buffer.trim();
+        let query = raw
+            .strip_prefix('/')
+            .unwrap_or(raw)
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        SLASH_COMMANDS
+            .iter()
+            .copied()
+            .filter(|cmd| {
+                query.is_empty()
+                    || cmd
+                        .name
+                        .trim_start_matches('/')
+                        .to_ascii_lowercase()
+                        .starts_with(&query)
+            })
+            .collect()
+    }
+
+    /// Execute the currently-typed slash command (called when user presses Enter).
+    pub fn submit_slash_command_palette(&mut self) {
+        let typed = self
+            .input
+            .buffer
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        if typed.is_empty() || typed == "/" {
+            self.exit_mode();
+            return;
+        }
+
+        let normalized = if typed.starts_with('/') {
+            typed.to_ascii_lowercase()
+        } else {
+            format!("/{typed}").to_ascii_lowercase()
+        };
+
+        if let Some(cmd) = SLASH_COMMANDS
+            .iter()
+            .copied()
+            .find(|c| c.name.eq_ignore_ascii_case(&normalized))
+        {
+            self.run_slash_command(cmd);
+            return;
+        }
+
+        let query = normalized.trim_start_matches('/').to_string();
+        let matches: Vec<SlashCommand> = SLASH_COMMANDS
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.name
+                    .trim_start_matches('/')
+                    .to_ascii_lowercase()
+                    .starts_with(&query)
+            })
+            .collect();
+
+        match matches.as_slice() {
+            [] => {
+                self.set_status(format!("Unknown command: {typed}"));
+                self.exit_mode();
+            }
+            [single] => self.run_slash_command(*single),
+            _ => {
+                self.set_status(format!("Ambiguous command: {typed}"));
+                self.exit_mode();
+            }
+        }
+    }
+
+    /// Execute a resolved slash command.
+    pub fn run_slash_command(&mut self, cmd: SlashCommand) {
+        match cmd.name {
+            "/models" => {
+                self.input.clear();
+                self.start_model_selector();
+            }
+            "/help" => {
+                self.ui.help_scroll = 0;
+                self.enter_mode(Mode::Help);
+            }
+            _ => {
+                self.set_status(format!("Unknown command: {}", cmd.name));
+                self.exit_mode();
+            }
+        }
+    }
+
+    /// Select the next slash command in the filtered list.
+    pub fn select_next_slash_command(&mut self) {
+        let count = self.filtered_slash_commands().len();
+        if count > 0 {
+            self.command_palette.selected = (self.command_palette.selected + 1) % count;
+        } else {
+            self.command_palette.selected = 0;
+        }
+    }
+
+    /// Select the previous slash command in the filtered list.
+    pub fn select_prev_slash_command(&mut self) {
+        let count = self.filtered_slash_commands().len();
+        if count > 0 {
+            self.command_palette.selected = self
+                .command_palette
+                .selected
+                .checked_sub(1)
+                .unwrap_or(count - 1);
+        } else {
+            self.command_palette.selected = 0;
+        }
+    }
+
+    /// Reset the slash command selection back to the first entry.
+    pub const fn reset_slash_command_selection(&mut self) {
+        self.command_palette.selected = 0;
+    }
+
+    /// Get the currently selected slash command (based on filter + selection index).
+    #[must_use]
+    pub fn selected_slash_command(&self) -> Option<SlashCommand> {
+        self.filtered_slash_commands()
+            .get(self.command_palette.selected)
+            .copied()
+    }
+
+    /// Run the currently highlighted command in the palette (fallbacks to parsing the input).
+    pub fn confirm_slash_command_selection(&mut self) {
+        if let Some(cmd) = self.selected_slash_command() {
+            self.run_slash_command(cmd);
+        } else {
+            self.submit_slash_command_palette();
+        }
+    }
+
+    /// Enter the `/models` selector modal.
+    pub fn start_model_selector(&mut self) {
+        self.model_selector.start(self.settings.agent_program);
+        self.enter_mode(Mode::ModelSelector);
+    }
+
+    /// Return the filtered model/program list for the selector UI.
+    #[must_use]
+    pub fn filtered_model_programs(&self) -> Vec<AgentProgram> {
+        self.model_selector.filtered_programs()
+    }
+
+    /// Select next model/program in filtered list.
+    pub fn select_next_model_program(&mut self) {
+        self.model_selector.select_next();
+    }
+
+    /// Select previous model/program in filtered list.
+    pub fn select_prev_model_program(&mut self) {
+        self.model_selector.select_prev();
+    }
+
+    /// Handle typing in the `/models` filter.
+    pub fn handle_model_filter_char(&mut self, c: char) {
+        self.model_selector.handle_filter_char(c);
+    }
+
+    /// Handle backspace in the `/models` filter.
+    pub fn handle_model_filter_backspace(&mut self) {
+        self.model_selector.handle_filter_backspace();
+    }
+
+    /// Get the currently highlighted model/program (in `/models`).
+    #[must_use]
+    pub fn selected_model_program(&self) -> Option<AgentProgram> {
+        self.model_selector.selected_program()
+    }
+
+    /// Confirm the current `/models` selection.
+    pub fn confirm_model_program_selection(&mut self) {
+        let Some(program) = self.selected_model_program() else {
+            self.exit_mode();
+            return;
+        };
+
+        match program {
+            AgentProgram::Custom if self.settings.custom_agent_command.trim().is_empty() => {
+                self.start_custom_agent_command_prompt();
+            }
+            AgentProgram::Custom => {
+                self.set_agent_program_and_save(AgentProgram::Custom);
+                if !matches!(self.mode, Mode::ErrorModal(_)) {
+                    self.exit_mode();
+                }
+            }
+            other => {
+                self.set_agent_program_and_save(other);
+                if !matches!(self.mode, Mode::ErrorModal(_)) {
+                    self.exit_mode();
+                }
+            }
+        }
+    }
+
+    /// Open the custom agent command prompt (used when selecting `custom`).
+    pub fn start_custom_agent_command_prompt(&mut self) {
+        self.enter_mode(Mode::CustomAgentCommand);
+        self.input.set(self.settings.custom_agent_command.clone());
+    }
+
+    /// Set the agent program and persist settings to disk.
+    pub fn set_agent_program_and_save(&mut self, program: AgentProgram) {
+        self.settings.agent_program = program;
+        if let Err(e) = self.settings.save() {
+            self.set_error(format!("Failed to save settings: {e}"));
+            return;
+        }
+
+        self.set_status(format!("Model set to {}", program.label()));
+    }
+
+    /// Update the custom agent command, select `custom`, and persist settings.
+    pub fn set_custom_agent_command_and_save(&mut self, command: String) {
+        self.settings.custom_agent_command = command;
+        self.settings.agent_program = AgentProgram::Custom;
+        if let Err(e) = self.settings.save() {
+            self.set_error(format!("Failed to save settings: {e}"));
+            return;
+        }
+
+        self.set_status("Model set to custom");
+    }
+
+    /// The base command used when spawning new agents (based on user settings).
+    #[must_use]
+    pub fn agent_spawn_command(&self) -> String {
+        match self.settings.agent_program {
+            AgentProgram::Codex => "codex".to_string(),
+            AgentProgram::Claude => self.config.default_program.clone(),
+            AgentProgram::Custom => {
+                let custom = self.settings.custom_agent_command.trim();
+                if custom.is_empty() {
+                    self.config.default_program.clone()
+                } else {
+                    custom.to_string()
+                }
+            }
         }
     }
 
@@ -323,11 +620,13 @@ impl App {
             self.mode,
             Mode::Creating
                 | Mode::Prompting
+                | Mode::CommandPalette
                 | Mode::ChildPrompt
                 | Mode::Broadcasting
                 | Mode::RenameBranch
                 | Mode::ReconnectPrompt
                 | Mode::TerminalPrompt
+                | Mode::CustomAgentCommand
         ) || matches!(self.mode, Mode::Confirming(_))
     }
 
@@ -793,6 +1092,10 @@ pub enum Mode {
     Confirming(ConfirmAction),
     /// Showing help overlay
     Help,
+    /// Slash command palette (type `/...`)
+    CommandPalette,
+    /// Selecting which model/program to run for new agents
+    ModelSelector,
     /// Scrolling through preview/diff
     Scrolling,
     /// Preview pane is focused - keystrokes are forwarded to tmux
@@ -821,6 +1124,8 @@ pub enum Mode {
     ConfirmPushForPR,
     /// Typing a startup command for a new terminal - triggered by 'T' key
     TerminalPrompt,
+    /// Typing a custom command to run for new agents
+    CustomAgentCommand,
     /// Selecting branch to rebase onto - triggered by Alt+r
     RebaseBranchSelector,
     /// Selecting branch to merge from - triggered by Alt+m
@@ -1372,5 +1677,302 @@ mod tests {
         app.input.buffer = "  new-branch  ".to_string();
         assert!(app.confirm_rename_branch());
         assert_eq!(app.git_op.branch_name, "new-branch");
+    }
+
+    // ========== Command palette tests ==========
+
+    #[test]
+    fn test_start_command_palette() {
+        let mut app = App::default();
+        app.start_command_palette();
+
+        assert_eq!(app.mode, Mode::CommandPalette);
+        assert_eq!(app.input.buffer, "/");
+        assert_eq!(app.input.cursor, 1);
+        assert_eq!(app.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn test_filtered_slash_commands_no_filter() {
+        let app = App::default();
+        let commands = app.filtered_slash_commands();
+
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].name, "/models");
+        assert_eq!(commands[1].name, "/help");
+    }
+
+    #[test]
+    fn test_filtered_slash_commands_with_filter() {
+        let mut app = App::default();
+        app.input.buffer = "/mod".to_string();
+
+        let commands = app.filtered_slash_commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "/models");
+    }
+
+    #[test]
+    fn test_filtered_slash_commands_no_match() {
+        let mut app = App::default();
+        app.input.buffer = "/xyz".to_string();
+
+        let commands = app.filtered_slash_commands();
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn test_select_next_slash_command() {
+        let mut app = App::default();
+        app.start_command_palette();
+
+        assert_eq!(app.command_palette.selected, 0);
+        app.select_next_slash_command();
+        assert_eq!(app.command_palette.selected, 1);
+        app.select_next_slash_command();
+        assert_eq!(app.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn test_select_prev_slash_command() {
+        let mut app = App::default();
+        app.start_command_palette();
+
+        assert_eq!(app.command_palette.selected, 0);
+        app.select_prev_slash_command();
+        assert_eq!(app.command_palette.selected, 1);
+        app.select_prev_slash_command();
+        assert_eq!(app.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn test_reset_slash_command_selection() {
+        let mut app = App::default();
+        app.command_palette.selected = 5;
+        app.reset_slash_command_selection();
+        assert_eq!(app.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn test_selected_slash_command() {
+        let mut app = App::default();
+        app.start_command_palette();
+
+        let cmd = app.selected_slash_command();
+        assert!(cmd.is_some());
+        if let Some(c) = cmd {
+            assert_eq!(c.name, "/models");
+        }
+
+        app.command_palette.selected = 1;
+        let cmd = app.selected_slash_command();
+        assert!(cmd.is_some());
+        if let Some(c) = cmd {
+            assert_eq!(c.name, "/help");
+        }
+    }
+
+    #[test]
+    fn test_run_slash_command_models() {
+        let mut app = App::default();
+        app.run_slash_command(SlashCommand {
+            name: "/models",
+            description: "test",
+        });
+        assert_eq!(app.mode, Mode::ModelSelector);
+    }
+
+    #[test]
+    fn test_run_slash_command_help() {
+        let mut app = App::default();
+        app.run_slash_command(SlashCommand {
+            name: "/help",
+            description: "test",
+        });
+        assert_eq!(app.mode, Mode::Help);
+    }
+
+    #[test]
+    fn test_run_slash_command_unknown() {
+        let mut app = App::default();
+        app.enter_mode(Mode::CommandPalette);
+        app.run_slash_command(SlashCommand {
+            name: "/unknown",
+            description: "test",
+        });
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.ui.status_message.is_some());
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_empty() {
+        let mut app = App::default();
+        app.start_command_palette();
+        app.input.buffer = "/".to_string();
+        app.submit_slash_command_palette();
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_exact_match() {
+        let mut app = App::default();
+        app.start_command_palette();
+        app.input.buffer = "/help".to_string();
+        app.submit_slash_command_palette();
+        assert_eq!(app.mode, Mode::Help);
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_prefix_match() {
+        let mut app = App::default();
+        app.start_command_palette();
+        app.input.buffer = "/hel".to_string();
+        app.submit_slash_command_palette();
+        assert_eq!(app.mode, Mode::Help);
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_unknown() {
+        let mut app = App::default();
+        app.start_command_palette();
+        app.input.buffer = "/xyz".to_string();
+        app.submit_slash_command_palette();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.ui.status_message.is_some());
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection() {
+        let mut app = App::default();
+        app.start_command_palette();
+        app.command_palette.selected = 1;
+        app.confirm_slash_command_selection();
+        assert_eq!(app.mode, Mode::Help);
+    }
+
+    // ========== Model selector tests ==========
+
+    #[test]
+    fn test_start_model_selector() {
+        let mut app = App::default();
+        app.start_model_selector();
+
+        assert_eq!(app.mode, Mode::ModelSelector);
+    }
+
+    #[test]
+    fn test_filtered_model_programs() {
+        let mut app = App::default();
+        app.start_model_selector();
+
+        let programs = app.filtered_model_programs();
+        assert_eq!(programs.len(), 3);
+    }
+
+    #[test]
+    fn test_select_next_model_program() {
+        let mut app = App::default();
+        app.start_model_selector();
+        let initial = app.model_selector.selected;
+
+        app.select_next_model_program();
+        assert_eq!(app.model_selector.selected, (initial + 1) % 3);
+    }
+
+    #[test]
+    fn test_select_prev_model_program() {
+        let mut app = App::default();
+        app.start_model_selector();
+        app.model_selector.selected = 0;
+
+        app.select_prev_model_program();
+        assert_eq!(app.model_selector.selected, 2);
+    }
+
+    #[test]
+    fn test_handle_model_filter_char() {
+        let mut app = App::default();
+        app.start_model_selector();
+
+        app.handle_model_filter_char('c');
+        assert_eq!(app.model_selector.filter, "c");
+    }
+
+    #[test]
+    fn test_handle_model_filter_backspace() {
+        let mut app = App::default();
+        app.start_model_selector();
+        app.model_selector.filter = "abc".to_string();
+
+        app.handle_model_filter_backspace();
+        assert_eq!(app.model_selector.filter, "ab");
+    }
+
+    #[test]
+    fn test_selected_model_program() {
+        let mut app = App::default();
+        app.start_model_selector();
+
+        let program = app.selected_model_program();
+        assert!(program.is_some());
+    }
+
+    #[test]
+    fn test_agent_spawn_command_claude() {
+        let mut app = App::default();
+        app.settings.agent_program = AgentProgram::Claude;
+
+        let cmd = app.agent_spawn_command();
+        assert_eq!(cmd, app.config.default_program);
+    }
+
+    #[test]
+    fn test_agent_spawn_command_codex() {
+        let mut app = App::default();
+        app.settings.agent_program = AgentProgram::Codex;
+
+        let cmd = app.agent_spawn_command();
+        assert_eq!(cmd, "codex");
+    }
+
+    #[test]
+    fn test_agent_spawn_command_custom() {
+        let mut app = App::default();
+        app.settings.agent_program = AgentProgram::Custom;
+        app.settings.custom_agent_command = "my-agent --flag".to_string();
+
+        let cmd = app.agent_spawn_command();
+        assert_eq!(cmd, "my-agent --flag");
+    }
+
+    #[test]
+    fn test_agent_spawn_command_custom_empty() {
+        let mut app = App::default();
+        app.settings.agent_program = AgentProgram::Custom;
+        app.settings.custom_agent_command = "   ".to_string();
+
+        let cmd = app.agent_spawn_command();
+        assert_eq!(cmd, app.config.default_program);
+    }
+
+    #[test]
+    fn test_start_custom_agent_command_prompt() {
+        let mut app = App::default();
+        app.settings.custom_agent_command = "my-agent".to_string();
+
+        app.start_custom_agent_command_prompt();
+        assert_eq!(app.mode, Mode::CustomAgentCommand);
+        assert_eq!(app.input.buffer, "my-agent");
+    }
+
+    #[test]
+    fn test_confirm_model_program_selection_codex() {
+        let mut app = App::default();
+        app.start_model_selector();
+        app.model_selector.selected = 0;
+
+        app.confirm_model_program_selection();
+        // Should return to normal mode (may have error due to no file system)
+        assert!(matches!(app.mode, Mode::Normal | Mode::ErrorModal(_)));
     }
 }

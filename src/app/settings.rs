@@ -7,8 +7,36 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
+/// Which model/program Tenex should run when spawning new agents.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProgram {
+    /// Use the `codex` CLI when spawning new agents.
+    Codex,
+    /// Use the `claude` CLI (Tenex default) when spawning new agents.
+    #[default]
+    Claude,
+    /// Use a user-provided command when spawning new agents.
+    Custom,
+}
+
+impl AgentProgram {
+    /// All supported programs, in display order.
+    pub const ALL: &'static [Self] = &[Self::Codex, Self::Claude, Self::Custom];
+
+    /// Lowercase label shown in the UI.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// Persistent user settings
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     /// Whether to use Ctrl+N instead of Ctrl+M for merge (for incompatible terminals)
     #[serde(default)]
@@ -17,6 +45,14 @@ pub struct Settings {
     /// Whether the user has been asked about keyboard remapping
     #[serde(default)]
     pub keyboard_remap_asked: bool,
+
+    /// Which model/program to use for new agents
+    #[serde(default)]
+    pub agent_program: AgentProgram,
+
+    /// Custom agent command (used when `agent_program == Custom`)
+    #[serde(default)]
+    pub custom_agent_command: String,
 }
 
 impl Settings {
@@ -109,6 +145,8 @@ mod tests {
         let settings = Settings::default();
         assert!(!settings.merge_key_remapped);
         assert!(!settings.keyboard_remap_asked);
+        assert_eq!(settings.agent_program, AgentProgram::Claude);
+        assert!(settings.custom_agent_command.is_empty());
     }
 
     #[test]
@@ -119,6 +157,8 @@ mod tests {
         let settings = Settings {
             merge_key_remapped: true,
             keyboard_remap_asked: true,
+            agent_program: AgentProgram::Codex,
+            custom_agent_command: "echo hello".to_string(),
         };
 
         // Save manually to temp location
@@ -154,8 +194,12 @@ mod tests {
         let settings = Settings {
             merge_key_remapped: true,
             keyboard_remap_asked: false,
+            agent_program: AgentProgram::Claude,
+            custom_agent_command: String::new(),
         };
-        let cloned = settings;
+        let cloned = settings.clone();
+        // Verify both original and clone have correct values
+        assert!(settings.merge_key_remapped);
         assert!(cloned.merge_key_remapped);
         assert!(!cloned.keyboard_remap_asked);
     }
@@ -173,11 +217,15 @@ mod tests {
         let original = Settings {
             merge_key_remapped: true,
             keyboard_remap_asked: true,
+            agent_program: AgentProgram::Custom,
+            custom_agent_command: "my-agent --flag".to_string(),
         };
         let json = serde_json::to_string(&original)?;
         let parsed: Settings = serde_json::from_str(&json)?;
         assert_eq!(original.merge_key_remapped, parsed.merge_key_remapped);
         assert_eq!(original.keyboard_remap_asked, parsed.keyboard_remap_asked);
+        assert_eq!(original.agent_program, parsed.agent_program);
+        assert_eq!(original.custom_agent_command, parsed.custom_agent_command);
         Ok(())
     }
 
@@ -188,6 +236,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(json)?;
         assert!(!settings.merge_key_remapped);
         assert!(!settings.keyboard_remap_asked);
+        assert_eq!(settings.agent_program, AgentProgram::Claude);
+        assert!(settings.custom_agent_command.is_empty());
         Ok(())
     }
 }

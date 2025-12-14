@@ -4,13 +4,16 @@
 //! duplication across the various overlay rendering functions.
 
 mod branch;
+mod command_palette;
 mod confirm;
 mod error;
 mod help;
 mod input;
+mod models;
 mod picker;
 
 pub use branch::render_branch_selector_overlay;
+pub use command_palette::render_command_palette_overlay;
 pub use confirm::{
     render_confirm_overlay, render_confirm_push_for_pr_overlay, render_confirm_push_overlay,
     render_keyboard_remap_overlay, render_update_prompt_overlay, render_worktree_conflict_overlay,
@@ -18,6 +21,7 @@ pub use confirm::{
 pub use error::{render_error_modal, render_success_modal};
 pub use help::render_help_overlay;
 pub use input::{render_input_overlay, render_rename_overlay};
+pub use models::render_model_selector_overlay;
 pub use picker::{
     render_count_picker_overlay, render_review_count_picker_overlay, render_review_info_overlay,
 };
