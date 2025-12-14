@@ -125,6 +125,7 @@ fn run_loop(
         let (width, height) = render::calculate_preview_dimensions(area);
         app.set_preview_dimensions(width, height);
         action_handler.resize_agent_windows(app);
+        app.ensure_agent_list_scroll();
     }
 
     // Track selection to detect changes
@@ -192,6 +193,7 @@ fn run_loop(
             if app.ui.preview_dimensions != Some((preview_width, preview_height)) {
                 app.set_preview_dimensions(preview_width, preview_height);
                 action_handler.resize_agent_windows(app);
+                app.ensure_agent_list_scroll();
             }
         }
 

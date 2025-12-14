@@ -6,8 +6,8 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Wrap,
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
     },
 };
 use tenex::agent::Status;
@@ -30,6 +30,10 @@ pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Use optimized method that pre-computes child info in O(n) instead of O(n²)
     let visible = app.storage.visible_agents_with_info();
+    let total_items = visible.len();
+    let visible_height = usize::from(area.height.saturating_sub(2));
+    let max_scroll = total_items.saturating_sub(visible_height);
+    let scroll = app.ui.agent_list_scroll.min(max_scroll);
 
     let items: Vec<ListItem<'_>> = visible
         .iter()
@@ -103,7 +107,30 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    frame.render_widget(list, area);
+    let mut state = ListState::default().with_offset(scroll);
+    frame.render_stateful_widget(list, area, &mut state);
+
+    if total_items > visible_height && area.width != 0 {
+        let scrollbar_area = area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .track_style(Style::default().fg(colors::TEXT_MUTED))
+                .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+                .position(scroll)
+                .viewport_content_length(visible_height);
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
 }
 
 /// Render the content pane (tabs + preview/diff)

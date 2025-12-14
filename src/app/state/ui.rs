@@ -3,6 +3,9 @@
 /// UI-related state for the application
 #[derive(Debug, Default)]
 pub struct UiState {
+    /// Scroll offset for the agent list (index of first visible agent)
+    pub agent_list_scroll: usize,
+
     /// Scroll position in preview pane
     pub preview_scroll: usize,
 
@@ -40,6 +43,7 @@ impl UiState {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            agent_list_scroll: 0,
             preview_scroll: 0,
             diff_scroll: 0,
             help_scroll: 0,
@@ -218,6 +222,7 @@ mod tests {
     #[test]
     fn test_ui_state_new() {
         let ui = UiState::new();
+        assert_eq!(ui.agent_list_scroll, 0);
         assert_eq!(ui.preview_scroll, 0);
         assert_eq!(ui.diff_scroll, 0);
         assert_eq!(ui.help_scroll, 0);
