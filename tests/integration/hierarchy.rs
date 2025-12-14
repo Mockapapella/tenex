@@ -16,7 +16,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -27,7 +27,6 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("test-swarm"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(()); // Skip if creation fails
     }
 
@@ -42,13 +41,13 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
         .ok_or("No root agent")?;
     let root_id = root.id;
 
-    // Find first-level Child 2 to add grandchildren under
+    // Find first-level Agent 2 to add grandchildren under
     let child2 = app
         .storage
         .children(root_id)
         .into_iter()
-        .find(|a| a.title.starts_with("Child 2"))
-        .ok_or("No Child 2 found")?;
+        .find(|a| a.title.starts_with("Agent 2"))
+        .ok_or("No Agent 2 found")?;
     let child2_id = child2.id;
 
     // Expand root to see children
@@ -56,11 +55,11 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
         root.collapsed = false;
     }
 
-    // Add 3 grandchildren under Child 2
+    // Add 3 grandchildren under Agent 2
     app.spawn.child_count = 3;
     app.spawn.spawning_under = Some(child2_id);
 
-    // Expand Child 2 to see grandchildren
+    // Expand Agent 2 to see grandchildren
     if let Some(c2) = app.storage.get_mut(child2_id) {
         c2.collapsed = false;
     }
@@ -73,7 +72,6 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -84,7 +82,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let grandchildren: Vec<_> = app.storage.children(child2_id);
     assert_eq!(grandchildren.len(), 3);
 
-    // Find grandchild with highest window index (should be "Child 3" grandchild)
+    // Find grandchild with highest window index (should be "Agent 3" grandchild)
     let grandchild3 = grandchildren
         .iter()
         .max_by_key(|a| a.window_index)
@@ -92,11 +90,11 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let grandchild3_id = grandchild3.id;
     let grandchild3_initial_window = grandchild3.window_index;
 
-    // Find the middle grandchild ("Child 2" grandchild) to delete
+    // Find the middle grandchild ("Agent 2" grandchild) to delete
     let grandchild2 = grandchildren
         .iter()
-        .find(|a| a.title.starts_with("Child 2"))
-        .ok_or("No grandchild Child 2 found")?;
+        .find(|a| a.title.starts_with("Agent 2"))
+        .ok_or("No grandchild Agent 2 found")?;
     let grandchild2_id = grandchild2.id;
     let grandchild2_window = grandchild2.window_index;
 
@@ -127,16 +125,16 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
          Initial: {grandchild3_initial_window:?}, New: {grandchild3_new_window:?}",
     );
 
-    // Verify first-level Child 3's window index was NOT changed
+    // Verify first-level Agent 3's window index was NOT changed
     // (its window index should be less than the deleted grandchild's)
     let child3 = app
         .storage
         .children(root_id)
         .into_iter()
-        .find(|a| a.title.starts_with("Child 3"))
-        .ok_or("No Child 3 found")?;
+        .find(|a| a.title.starts_with("Agent 3"))
+        .ok_or("No Agent 3 found")?;
 
-    // Child 3's window should still be at its original index (4)
+    // Agent 3's window should still be at its original index (4)
     // since only windows with higher indices get renumbered
     assert!(
         child3.window_index < grandchild2_window,
@@ -148,8 +146,6 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
-
-    std::env::set_current_dir(&original_dir)?;
 
     Ok(())
 }
@@ -164,7 +160,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -175,7 +171,6 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("id-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -208,8 +203,6 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
-
-    std::env::set_current_dir(&original_dir)?;
 
     Ok(())
 }
@@ -290,7 +283,7 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     config.default_program = "sleep 300".to_string();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -301,7 +294,6 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("original-swarm"));
     if let Err(e) = result {
-        std::env::set_current_dir(&original_dir)?;
         return Err(format!("Swarm creation failed: {e:#}").into());
     }
 
@@ -368,7 +360,6 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
         // Cleanup and skip - tmux rename didn't work, can't test the children bug
         let manager = SessionManager::new();
         let _ = manager.kill(&original_session);
-        std::env::set_current_dir(&original_dir)?;
         eprintln!("SKIPPING: Tmux session rename didn't happen (session still {original_session})");
         return Ok(());
     }
@@ -436,8 +427,6 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     // Also try to kill the old session name if it still exists (shouldn't)
     let _ = manager.kill(&original_session);
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -466,7 +455,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     config.default_program = "sleep 300".to_string();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -477,7 +466,6 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("worktree-rename-test"));
     if let Err(e) = result {
-        std::env::set_current_dir(&original_dir)?;
         return Err(format!("Swarm creation failed: {e:#}").into());
     }
 
@@ -657,8 +645,6 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let manager = SessionManager::new();
     let _ = manager.kill(&new_session);
     let _ = manager.kill(&original_session);
-
-    std::env::set_current_dir(&original_dir)?;
 
     Ok(())
 }

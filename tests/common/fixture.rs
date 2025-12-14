@@ -73,7 +73,11 @@ impl TestFixture {
             .unwrap_or_else(|_| self.worktree_dir.path().to_path_buf());
 
         Config {
-            default_program: "echo".to_string(), // Use echo instead of claude for testing
+            // Use a long-running command instead of `claude` for testing.
+            // Important: many integration tests assume tmux sessions/windows stay alive long enough
+            // for follow-up operations (spawn children, synthesize, etc). A short-lived command like
+            // `echo` can exit immediately and cause flakiness across platforms.
+            default_program: "sh -c 'sleep 3600'".to_string(),
             branch_prefix: format!("{}/", self.session_prefix),
             worktree_dir,
             auto_yes: false,

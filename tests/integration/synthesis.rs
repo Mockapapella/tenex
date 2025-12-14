@@ -1,6 +1,6 @@
 //! Tests for synthesis functionality
 
-use crate::common::{TestFixture, skip_if_no_tmux};
+use crate::common::{DirGuard, TestFixture, skip_if_no_tmux};
 use tenex::tmux::SessionManager;
 
 #[test]
@@ -13,7 +13,7 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -22,7 +22,6 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     // Create a single agent (no children)
     let result = handler.create_agent(&mut app, "solo-agent", None);
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -41,8 +40,6 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
         let _ = manager.kill(&agent.tmux_session);
     }
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -56,7 +53,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -67,7 +64,6 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-confirm-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -88,8 +84,6 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
         let _ = manager.kill(&agent.tmux_session);
     }
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -103,7 +97,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -114,7 +108,6 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-desc-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -134,8 +127,8 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
         .storage
         .children(root_id)
         .into_iter()
-        .find(|a| a.title.starts_with("Child 2"))
-        .ok_or("No Child 2")?;
+        .find(|a| a.title.starts_with("Agent 2"))
+        .ok_or("No Agent 2")?;
     let child2_id = child2.id;
 
     // Add 2 grandchildren under Child 2
@@ -154,7 +147,6 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -192,8 +184,6 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
         let _ = manager.kill(&agent.tmux_session);
     }
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -207,7 +197,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -218,7 +208,6 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-term-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -234,7 +223,6 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -294,8 +282,6 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
         let _ = manager.kill(&agent.tmux_session);
     }
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -309,7 +295,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -318,7 +304,6 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     // Create a single agent (root)
     let result = handler.create_agent(&mut app, "term-only-root", None);
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -332,7 +317,6 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -343,7 +327,6 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -393,8 +376,6 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
         let _ = manager.kill(&agent.tmux_session);
     }
 
-    std::env::set_current_dir(&original_dir)?;
-
     Ok(())
 }
 
@@ -408,7 +389,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
@@ -419,7 +400,6 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("synth-gc-test"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -435,11 +415,11 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
         .storage
         .children(root_id)
         .into_iter()
-        .find(|a| a.title.starts_with("Child 1"))
-        .ok_or("No Child 1")?;
+        .find(|a| a.title.starts_with("Agent 1"))
+        .ok_or("No Agent 1")?;
     let child1_id = child1.id;
 
-    // Add 2 grandchildren under Child 1
+    // Add 2 grandchildren under Agent 1
     app.spawn.child_count = 2;
     app.spawn.spawning_under = Some(child1_id);
 
@@ -454,14 +434,13 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
         for agent in app.storage.iter() {
             let _ = manager.kill(&agent.tmux_session);
         }
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
     // Should have 5 agents (root + 2 children + 2 grandchildren)
     assert_eq!(app.storage.len(), 5);
 
-    // Select Child 1 (which has grandchildren) and synthesize just its children
+    // Select Agent 1 (which has grandchildren) and synthesize just its children
     if let Some(idx) = app.storage.visible_index_of(child1_id) {
         app.selected = idx;
     }
@@ -473,14 +452,14 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
-    // Should have 3 agents remaining (root + Child 1 + Child 2)
-    // The 2 grandchildren under Child 1 should be removed
+    // Should have 3 agents remaining (root + Agent 1 + Agent 2)
+    // The 2 grandchildren under Agent 1 should be removed
     assert_eq!(app.storage.len(), 3);
 
     // Root should still have 2 children
     assert_eq!(app.storage.children(root_id).len(), 2);
 
-    // Child 1 should have no children now
+    // Agent 1 should have no children now
     assert_eq!(app.storage.children(child1_id).len(), 0);
 
     // Cleanup
@@ -488,8 +467,6 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     for agent in app.storage.iter() {
         let _ = manager.kill(&agent.tmux_session);
     }
-
-    std::env::set_current_dir(&original_dir)?;
 
     Ok(())
 }
