@@ -16,7 +16,7 @@ use crate::git::{self, WorktreeManager};
 use crate::tmux::{OutputCapture, SessionManager};
 use anyhow::{Context, Result};
 
-use super::state::{App, ConfirmAction, Mode};
+use super::state::{App, ConfirmAction, Mode, Tab};
 
 /// Handler for application actions
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +47,10 @@ impl Actions {
             // Mode entry actions
             Action::NewAgent => app.enter_mode(Mode::Creating),
             Action::NewAgentWithPrompt => app.enter_mode(Mode::Prompting),
-            Action::Help => app.enter_mode(Mode::Help),
+            Action::Help => {
+                app.ui.help_scroll = 0;
+                app.enter_mode(Mode::Help);
+            }
             Action::Cancel => app.exit_mode(),
             Action::Confirm => self.handle_confirm(app)?,
 
@@ -93,6 +96,7 @@ impl Actions {
 
     fn handle_focus_preview(app: &mut App) {
         if app.selected_agent().is_some() {
+            app.active_tab = Tab::Preview;
             app.enter_mode(Mode::PreviewFocused);
         }
     }

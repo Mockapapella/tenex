@@ -12,6 +12,7 @@ mod text_input;
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use tenex::app::{Actions, App, Mode};
+use tenex::config::{Action as KeyAction, ActionGroup};
 
 // Re-export for tests and internal use
 #[cfg(test)]
@@ -89,9 +90,41 @@ pub fn handle_key_event(
         // Update requested - ignore input while exiting
         Mode::UpdateRequested(_) => {}
 
-        // Help, error, and success modes (dismiss on any key)
+        // Help, error, and success modes
         Mode::Help => {
-            app.exit_mode();
+            let max_scroll = help_max_scroll(app);
+            // Clamp any out-of-range scroll immediately (fixes "dead zone" when scroll is usize::MAX).
+            app.ui.help_scroll = app.ui.help_scroll.min(max_scroll);
+            match (code, modifiers) {
+                // Scroll help content (does not close help)
+                (KeyCode::Up | KeyCode::Char('k'), _) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(1).min(max_scroll);
+                }
+                (KeyCode::Down | KeyCode::Char('j'), _) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(1).min(max_scroll);
+                }
+                (KeyCode::PageUp, _) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(10).min(max_scroll);
+                }
+                (KeyCode::PageDown, _) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(10).min(max_scroll);
+                }
+                (KeyCode::Char('u'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(5).min(max_scroll);
+                }
+                (KeyCode::Char('d'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(5).min(max_scroll);
+                }
+                (KeyCode::Char('g') | KeyCode::Home, _) => {
+                    app.ui.help_scroll = 0;
+                }
+                (KeyCode::Char('G') | KeyCode::End, _) => {
+                    app.ui.help_scroll = max_scroll;
+                }
+
+                // Any non-scroll key (Esc, q, ?, Enter, etc.) closes help
+                _ => app.exit_mode(),
+            }
         }
         Mode::ErrorModal(_) => {
             app.dismiss_error();
@@ -111,6 +144,46 @@ pub fn handle_key_event(
         }
     }
     Ok(())
+}
+
+/// Compute the total number of lines in the help overlay content.
+///
+/// This is used for scroll normalization in Help mode.
+fn help_total_lines() -> usize {
+    let mut group_count = 0usize;
+    let mut last_group: Option<ActionGroup> = None;
+    for &action in KeyAction::ALL_FOR_HELP {
+        let group = action.group();
+        if Some(group) != last_group {
+            group_count = group_count.saturating_add(1);
+            last_group = Some(group);
+        }
+    }
+
+    // Content structure:
+    // - Header: 2 lines ("Keybindings" + blank)
+    // - Groups: each group adds a header line, and each transition adds an extra blank line
+    // - Actions: 1 line per action
+    // - Footer: blank line + 2 footer lines
+    KeyAction::ALL_FOR_HELP
+        .len()
+        .saturating_add(group_count.saturating_mul(2))
+        .saturating_add(4)
+}
+
+/// Compute the maximum scroll offset for the help overlay based on terminal height.
+fn help_max_scroll(app: &App) -> usize {
+    let total_lines = help_total_lines();
+
+    // The help overlay uses `frame.area().height.saturating_sub(4)` as its max height.
+    // `preview_dimensions` stores the preview inner height, which is also `frame_height - 4`.
+    let max_height = usize::from(app.ui.preview_dimensions.map_or(20, |(_, h)| h));
+    let min_height = 12usize.min(max_height);
+    let desired_height = total_lines.saturating_add(2);
+    let height = desired_height.min(max_height).max(min_height);
+
+    let visible_height = height.saturating_sub(2);
+    total_lines.saturating_sub(visible_height)
 }
 
 #[cfg(test)]
@@ -604,6 +677,284 @@ mod tests {
         )?;
 
         assert_eq!(app.mode, Mode::Help);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_scroll_does_not_exit() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_scroll_up_from_bottom_is_immediate() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = usize::MAX;
+
+        let max_scroll = help_max_scroll(&app);
+        assert_ne!(max_scroll, 0, "help should be scrollable for this test");
+
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Up,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, max_scroll.saturating_sub(1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_page_down() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::PageDown,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert!(app.ui.help_scroll > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_page_up() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 10;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_ctrl_d() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert!(app.ui.help_scroll > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_ctrl_u() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 10;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_go_to_top() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 10;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_go_to_bottom() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('G'),
+            KeyModifiers::SHIFT,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        let max_scroll = help_max_scroll(&app);
+        assert_eq!(app.ui.help_scroll, max_scroll);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_home_key() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 10;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Home,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_end_key() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::End,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        let max_scroll = help_max_scroll(&app);
+        assert_eq!(app.ui.help_scroll, max_scroll);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_j_scrolls() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_k_scrolls() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 5;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.ui.help_scroll, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_help_mode_any_other_key_exits() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = Mode::Help;
+        app.ui.help_scroll = 0;
+        let action_handler = Actions::new();
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            action_handler,
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, Mode::Normal);
         Ok(())
     }
 }

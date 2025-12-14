@@ -35,7 +35,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     main_layout::render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
-        Mode::Help => modals::render_help_overlay(frame, app.is_merge_key_remapped()),
+        Mode::Help => modals::render_help_overlay(frame, app),
         Mode::Creating => {
             modals::render_input_overlay(
                 frame,

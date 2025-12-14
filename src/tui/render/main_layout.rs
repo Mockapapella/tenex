@@ -2,7 +2,7 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
@@ -169,9 +169,12 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     // Use highlighted border when focused, show exit hint in title
     let (border_color, title) = if is_focused {
-        (colors::SELECTED, " Terminal Output [Ctrl+q to exit] ")
+        (
+            colors::SELECTED,
+            " Terminal Output (ATTACHED) [Ctrl+q detach] ",
+        )
     } else {
-        (colors::BORDER, " Terminal Output ")
+        (colors::BORDER, " Terminal Output (read-only) ")
     };
 
     let paragraph = Paragraph::new(text)
@@ -274,7 +277,7 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Don't show error in status bar when error modal is displayed
     let showing_error_modal = matches!(app.mode, Mode::ErrorModal(_));
 
-    let content = match (
+    let left_content = match (
         &app.ui.last_error,
         &app.ui.status_message,
         showing_error_modal,
@@ -299,8 +302,35 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
     };
 
-    let paragraph = Paragraph::new(Line::from(content)).style(Style::default().bg(colors::SURFACE));
-    frame.render_widget(paragraph, area);
+    let key_routing = if app.mode == Mode::PreviewFocused {
+        "Keys → Agent (Ctrl+q detach)"
+    } else {
+        "Keys → Tenex"
+    };
+    let key_routing_style = if app.mode == Mode::PreviewFocused {
+        Style::default()
+            .fg(colors::TEXT_PRIMARY)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::TEXT_DIM)
+    };
+    let key_routing_span = Span::styled(format!(" {key_routing} "), key_routing_style);
+
+    let key_routing_width = u16::try_from(key_routing.chars().count().saturating_add(2))
+        .unwrap_or(0)
+        .min(area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(key_routing_width)])
+        .split(area);
+
+    let left = Paragraph::new(Line::from(left_content)).style(Style::default().bg(colors::SURFACE));
+    frame.render_widget(left, chunks[0]);
+
+    let right = Paragraph::new(Line::from(key_routing_span))
+        .style(Style::default().bg(colors::SURFACE))
+        .alignment(Alignment::Right);
+    frame.render_widget(right, chunks[1]);
 }
 
 /// Calculate the inner dimensions of the preview pane (content area without borders)

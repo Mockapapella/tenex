@@ -9,6 +9,9 @@ pub struct UiState {
     /// Scroll position in diff pane
     pub diff_scroll: usize,
 
+    /// Scroll position in help overlay
+    pub help_scroll: usize,
+
     /// Whether preview should auto-scroll to bottom on content updates
     /// Set to false when user manually scrolls up, true when they scroll to bottom
     pub preview_follow: bool,
@@ -39,6 +42,7 @@ impl UiState {
         Self {
             preview_scroll: 0,
             diff_scroll: 0,
+            help_scroll: 0,
             preview_follow: true,
             preview_content: String::new(),
             diff_content: String::new(),
@@ -216,6 +220,7 @@ mod tests {
         let ui = UiState::new();
         assert_eq!(ui.preview_scroll, 0);
         assert_eq!(ui.diff_scroll, 0);
+        assert_eq!(ui.help_scroll, 0);
         assert!(ui.preview_follow);
         assert!(ui.preview_content.is_empty());
         assert!(ui.diff_content.is_empty());
@@ -231,12 +236,14 @@ mod tests {
         ui.preview_scroll = 100;
         ui.diff_scroll = 50;
         ui.preview_follow = false;
+        ui.help_scroll = 25;
 
         ui.reset_scroll();
 
         assert_eq!(ui.preview_scroll, usize::MAX);
         assert!(ui.preview_follow);
         assert_eq!(ui.diff_scroll, 0);
+        assert_eq!(ui.help_scroll, 25);
     }
 
     #[test]

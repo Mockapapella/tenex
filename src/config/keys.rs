@@ -9,9 +9,9 @@ pub enum Action {
     NewAgent,
     /// Create a new agent with a prompt
     NewAgentWithPrompt,
-    /// Focus the preview pane (keystrokes forwarded to agent)
+    /// Attach to the selected agent terminal (keystrokes forwarded)
     FocusPreview,
-    /// Unfocus the preview pane (return to agent list)
+    /// Detach from the agent terminal (return to Tenex controls)
     UnfocusPreview,
     /// Kill selected agent
     Kill,
@@ -331,8 +331,8 @@ impl Action {
         match self {
             Self::NewAgent => "[a]dd agent",
             Self::NewAgentWithPrompt => "[A]dd agent with prompt",
-            Self::FocusPreview => "[Enter] focus preview",
-            Self::UnfocusPreview => "[Ctrl+q]uit preview / app",
+            Self::FocusPreview => "[Enter] attach terminal",
+            Self::UnfocusPreview => "[Ctrl+q] detach terminal / quit app",
             Self::Kill => "[d]elete agent and sub-agents",
             Self::Push => "[Ctrl+p]ush branch to remote",
             Self::RenameBranch => "[r]ename branch",

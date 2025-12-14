@@ -1,11 +1,13 @@
 //! Help overlay rendering
 
+use ratatui::layout::Margin;
 use ratatui::{
     Frame,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use tenex::app::App;
 use tenex::config::{Action, get_display_description, get_display_keys};
 
 use super::centered_rect_absolute;
@@ -70,10 +72,8 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
 }
 
 /// Render the help overlay
-pub fn render_help_overlay(frame: &mut Frame<'_>, merge_key_remapped: bool) {
-    // Calculate height: header(2) + sections with actions + footer(2) + borders(2)
-    // 5 sections with headers(5) + empty lines between(4) + 19 actions + footer(2) = 30 + 2 borders
-    let area = centered_rect_absolute(50, 32, frame.area());
+pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
+    let merge_key_remapped = app.is_merge_key_remapped();
 
     let mut help_text = vec![
         Line::from(Span::styled(
@@ -117,11 +117,33 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, merge_key_remapped: bool) {
 
     help_text.push(Line::from(""));
     help_text.push(Line::from(Span::styled(
-        "Press any key to close",
+        "Scroll: ↑/↓, PgUp/PgDn, Ctrl+u/d, g/G",
+        Style::default().fg(colors::TEXT_MUTED),
+    )));
+    help_text.push(Line::from(Span::styled(
+        "Any other key closes",
         Style::default().fg(colors::TEXT_MUTED),
     )));
 
+    let total_lines = help_text.len();
+
+    // Size the modal to fit content when possible; otherwise take as much height as we can.
+    let max_height = frame.area().height.saturating_sub(4);
+    let min_height = 12u16.min(max_height);
+    let desired_height = u16::try_from(total_lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let height = desired_height.min(max_height).max(min_height);
+
+    let area = centered_rect_absolute(50, height, frame.area());
+
+    let visible_height = usize::from(area.height.saturating_sub(2));
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll = app.ui.help_scroll.min(max_scroll);
+    let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
+
     let paragraph = Paragraph::new(help_text)
+        .scroll((scroll_pos, 0))
         .block(
             Block::default()
                 .title(" Help ")
@@ -132,4 +154,26 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, merge_key_remapped: bool) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
+
+    if total_lines > visible_height && area.width != 0 {
+        let scrollbar_area = area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .track_style(Style::default().fg(colors::TEXT_MUTED))
+                .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+                .position(scroll)
+                .viewport_content_length(visible_height);
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
 }

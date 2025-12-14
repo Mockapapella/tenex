@@ -93,8 +93,8 @@ tenex
 |-----|--------|
 | `j` / `↓` | Next agent |
 | `k` / `↑` | Previous agent |
-| `Enter` | Focus preview (forward keystrokes to agent) |
-| `Ctrl+q` | Unfocus preview / Quit (with confirm if agents running) |
+| `Enter` | Attach terminal (forward keystrokes to agent) |
+| `Ctrl+q` | Detach terminal / Quit (with confirm if agents running) |
 | `Esc` | Cancel current modal or flow |
 | `Tab` | Switch between Preview and Diff tabs |
 | `Space` | Collapse/expand agent tree |
