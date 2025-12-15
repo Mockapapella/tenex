@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.2] - 2025-12-15
+
+### Added
+
+- **Slash command palette** (`/`): Open a command palette to run slash commands like `/agents` and `/help`.
+- **Agent program selection** (`/agents`): Choose the default agent program for new agents (`claude`, `codex`, or `custom`) and persist it in settings.
+- **Scrollbars**: Agent list, preview, diff, and the help overlay now show scrollbar indicators when content overflows.
+
+### Changed
+
+- **Planning swarm** (`P`): Now spawns planners under the selected agent (consistent with review swarms and `+`).
+- **Navigation keys**: Removed `j/k` navigation; use arrow keys (`↑/↓`) for list navigation.
+- **Diff view performance**: Optimized diff rendering and refresh cadence to reduce CPU usage.
+- **Terminal attach UX**: Clearer attached/read-only affordances when entering/leaving terminal mode.
+
+### Fixed
+
+- **Codex input submission**: Improved reliability when using the `codex` CLI by using a paste-and-submit path for bracketed paste-aware apps.
+
 ## [1.0.1] - 2025-12-12
 
 ### Added

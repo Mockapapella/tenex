@@ -3,19 +3,21 @@
 **Terminal multiplexer for AI coding agents**
 
 [![CI](https://github.com/Mockapapella/tenex/actions/workflows/ci.yml/badge.svg)](https://github.com/Mockapapella/tenex/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/tenex.svg)](https://crates.io/crates/tenex)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Tenex lets you run multiple AI coding agents in parallel, each in an isolated git worktree with its own branch. Spawn agent swarms for research, planning, or code review—then synthesize their findings back together.
 
 ## Features
 
-- **Parallel agents** — Run multiple Claude agents simultaneously
+- **Parallel agents** — Run multiple AI coding agents simultaneously (Claude CLI by default; also supports Codex or a custom command)
 - **Git isolation** — Each root agent works in its own worktree and branch; child agents share the root's worktree
 - **Swarm workflows** — Spawn planning or review swarms with one keystroke
 - **Synthesis** — Aggregate outputs from descendant agents into a parent (captures last ~5000 lines from each, writes to markdown, then sends to parent)
 - **Live preview** — Watch agent output in real-time with ANSI color support; auto-follows bottom unless you scroll
 - **Diff view** — See uncommitted changes (staged + unstaged + untracked) vs HEAD in the selected agent's worktree
 - **Git operations** — Push, rebase, merge, rename branches, and open PRs from the TUI
+- **Command palette** — Run slash commands like `/agents` and `/help`
 - **Persistent state** — Agents survive restarts; auto-reconnects to existing worktrees on startup
 - **Auto-update** — Checks crates.io for updates on startup and prompts to install
 
@@ -24,16 +26,13 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 - **tmux** — Required for session management (recent version recommended)
 - **git** — Required for worktree isolation
 - **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
-- **Claude CLI** — Required (`claude` command must be available)
+- **An agent CLI** — `claude` (default) or `codex` (or configure a custom command)
 - **Rust 1.91+** — For building from source
 - **cargo** — Required for auto-update functionality
 
 ## Installation
 
 ```bash
-# Install from crates.io
-cargo install tenex
-
 # Or build from source
 git clone https://github.com/Mockapapella/tenex
 cd tenex
@@ -103,10 +102,11 @@ tenex
 | `g` | Scroll to top |
 | `G` | Scroll to bottom |
 | `?` | Help |
+| `/` | Command palette (`/agents`, `/help`) |
 
 ## Configuration
 
-The default agent command is `claude --allow-dangerously-skip-permissions`. Currently, changing the agent command requires editing the source and rebuilding.
+The default agent command is `claude --allow-dangerously-skip-permissions`. Press `/` to open the command palette, run `/agents`, and choose the default program for new agents (`claude`, `codex`, or `custom` — which will prompt for a command and save it to `settings.json`).
 
 ### Data Storage
 
