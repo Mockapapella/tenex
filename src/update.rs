@@ -8,6 +8,7 @@ use semver::Version;
 use serde::Deserialize;
 use std::process::Command;
 use std::time::Duration;
+use ureq::Agent;
 
 /// Information about an available update.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,29 +46,27 @@ pub fn check_for_update() -> Result<Option<UpdateInfo>> {
 
 /// Internal implementation that allows injecting the URL and current version for testing.
 fn check_for_update_impl(url: &str, current_version: &Version) -> Result<Option<UpdateInfo>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(3))
+    let agent: Agent = Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(3)))
         .build()
-        .context("Failed to build HTTP client")?;
+        .into();
+    let user_agent = format!("tenex/{current_version}");
 
-    let response = client
-        .get(url)
-        .header(
-            reqwest::header::USER_AGENT,
-            format!("tenex/{current_version}"),
-        )
-        .send()
-        .context("Failed to query crates.io for Tenex updates")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "crates.io update check failed with status {status}"
-        ));
-    }
+    let response = match agent.get(url).header("User-Agent", user_agent).call() {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(status)) => {
+            return Err(anyhow!(
+                "crates.io update check failed with status {status}"
+            ));
+        }
+        Err(err) => {
+            return Err(anyhow!(err)).context("Failed to query crates.io for Tenex updates");
+        }
+    };
 
     let body: CratesIoResponse = response
-        .json()
+        .into_body()
+        .read_json()
         .context("Failed to deserialize crates.io response")?;
 
     let latest_version = Version::parse(&body.krate.max_version)

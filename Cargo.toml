@@ -16,7 +16,6 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 clap = { version = "4.5", default-features = false, features = ["derive", "std", "help"] }
-tokio = { version = "1.48", default-features = false, features = ["full"] }
 git2 = { version = "0.19", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
@@ -27,9 +26,8 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 tracing-appender = { version = "0.2", default-features = false }
 uuid = { version = "1.19", default-features = false, features = ["v4", "serde", "std"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
-dirs = { version = "6.0", default-features = false }
 ansi-to-tui = { version = "7.0", default-features = false }
-reqwest = { version = "0.12.25", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+ureq = { version = "3.1.4", default-features = false, features = ["json", "rustls"] }
 semver = { version = "1.0.27", default-features = false, features = ["std"] }
 
 [dev-dependencies]

@@ -3,6 +3,7 @@
 //! Stores user preferences that persist across sessions, such as
 //! keyboard remapping choices.
 
+use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
@@ -59,7 +60,7 @@ impl Settings {
     /// Get the settings file path
     #[must_use]
     pub fn path() -> PathBuf {
-        dirs::data_local_dir()
+        paths::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("tenex")
             .join("settings.json")

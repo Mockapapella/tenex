@@ -129,6 +129,7 @@ fn restart_current_process() -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
         use std::path::PathBuf;
+        use tenex::paths;
 
         fn find_installed_binary(name: &str) -> PathBuf {
             // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
@@ -136,7 +137,7 @@ fn restart_current_process() -> Result<()> {
                 std::env::var("CARGO_HOME")
                     .ok()
                     .map(|h| PathBuf::from(h).join("bin").join(name)),
-                dirs::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
+                paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
             ];
 
             for candidate in candidates.into_iter().flatten() {
