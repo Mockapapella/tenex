@@ -12,6 +12,43 @@ use tenex::app::App;
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
 
+/// Wrap input text at the given width, returning wrapped lines and cursor line index.
+pub fn wrap_input_with_cursor(text: &str, max_width: usize) -> (Vec<String>, usize) {
+    let width = max_width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0_usize;
+    let mut cursor_line = 0_usize;
+    let mut line_index = 0_usize;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            lines.push(current);
+            current = String::new();
+            current_len = 0;
+            line_index = line_index.saturating_add(1);
+            continue;
+        }
+
+        if current_len >= width {
+            lines.push(current);
+            current = String::new();
+            current_len = 0;
+            line_index = line_index.saturating_add(1);
+        }
+
+        current.push(ch);
+        current_len = current_len.saturating_add(1);
+
+        if ch == '│' {
+            cursor_line = line_index;
+        }
+    }
+
+    lines.push(current);
+    (lines, cursor_line)
+}
+
 /// Render a text input overlay
 #[expect(
     clippy::too_many_lines,
@@ -34,24 +71,24 @@ pub fn render_input_overlay(
         format!("{before}│{after}")
     };
 
-    // Split into lines
-    let input_lines: Vec<String> = if text_with_cursor.is_empty() {
-        vec!["│".to_string()]
-    } else {
-        text_with_cursor.lines().map(String::from).collect()
-    };
-
-    let num_input_lines = input_lines.len();
-
     // Expandable height: min 3 lines for input, max 20, then scroll
     let min_input_height = 3_usize;
     let max_input_height = 20_usize;
-    let input_area_height = num_input_lines.clamp(min_input_height, max_input_height);
+    let modal_width = centered_rect_absolute(60, 1, frame.area()).width;
+    let mut inner_width = modal_width.saturating_sub(2).max(1);
+    let (mut input_lines, mut cursor_line) =
+        wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width));
+    let mut input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
+    let mut needs_scrollbar = input_lines.len() > input_area_height;
 
-    // Find which line has the cursor for auto-scroll
-    let cursor_line = text_with_cursor[..text_with_cursor.find('│').unwrap_or(0)]
-        .matches('\n')
-        .count();
+    if needs_scrollbar {
+        inner_width = modal_width.saturating_sub(3).max(1);
+        let wrapped = wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width));
+        input_lines = wrapped.0;
+        cursor_line = wrapped.1;
+        input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
+        needs_scrollbar = input_lines.len() > input_area_height;
+    }
 
     // Calculate scroll to keep cursor visible
     let scroll_offset = if cursor_line >= input_area_height {
@@ -64,17 +101,16 @@ pub fn render_input_overlay(
     let total_height = (6 + input_area_height) as u16;
     let area = centered_rect_absolute(60, total_height, frame.area());
 
-    // Check if scrolling is needed
-    let needs_scrollbar = num_input_lines > input_area_height;
-
     // Calculate inner area for the input box (after removing borders and prompt)
     // Reserve 1 column for scrollbar if needed
+    let inner_area_width = area
+        .width
+        .saturating_sub(if needs_scrollbar { 3 } else { 2 })
+        .max(1);
     let inner_area = Rect {
         x: area.x + 1,
         y: area.y + 3, // After border + prompt + empty line
-        width: area
-            .width
-            .saturating_sub(if needs_scrollbar { 3 } else { 2 }),
+        width: inner_area_width,
         height: input_area_height as u16,
     };
 
@@ -140,7 +176,7 @@ pub fn render_input_overlay(
         };
 
         // Calculate thumb position and size
-        let total_lines = num_input_lines;
+        let total_lines = input_lines.len();
         let visible_height = input_area_height;
         let thumb_height = ((visible_height * visible_height) / total_lines).max(1);
         let max_scroll = total_lines - visible_height;
