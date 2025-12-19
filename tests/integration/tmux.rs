@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for tmux session operations and capture functions
 
 use crate::common::{TestFixture, skip_if_no_tmux};
@@ -18,7 +20,8 @@ fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!manager.exists(&session_name));
 
     // Create session with a command that stays alive
-    let result = manager.create(&session_name, &fixture.worktree_path(), Some("sleep 10"));
+    let command = vec!["sleep".to_string(), "10".to_string()];
+    let result = manager.create(&session_name, &fixture.worktree_path(), Some(&command));
     assert!(result.is_ok());
 
     // Give tmux time to start
@@ -77,7 +80,8 @@ fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -111,7 +115,8 @@ fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -145,7 +150,8 @@ fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -260,11 +266,12 @@ fn test_tmux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Create a window
+    let window_command = vec!["sleep".to_string(), "60".to_string()];
     let window_result = manager.create_window(
         &session_name,
         "test-window",
         &fixture.worktree_path(),
-        Some("echo hello"),
+        Some(&window_command),
     );
     assert!(window_result.is_ok());
 
@@ -295,7 +302,8 @@ fn test_tmux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session with output
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Capture tail
@@ -378,7 +386,8 @@ fn test_tmux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session with a specific command
     let _ = manager.kill(&session_name);
-    manager.create(&session_name, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Get current command

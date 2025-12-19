@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for [R] review agent functionality
 
 use crate::common::{TestFixture, skip_if_no_tmux};

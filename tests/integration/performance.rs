@@ -1,8 +1,10 @@
+#![cfg(not(windows))]
+
 //! Performance optimization tests
 
 use std::path::PathBuf;
 
-use crate::common::{TestFixture, create_child_agent};
+use crate::common::{TestFixture, create_child_agent, skip_if_no_tmux};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, App};
 use tenex::tmux::SessionManager;
@@ -11,6 +13,10 @@ use tenex::tmux::SessionManager;
 /// using the batched session list approach (single tmux list-sessions call)
 #[test]
 fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
     let fixture = TestFixture::new("sync_batched")?;
     let manager = SessionManager::new();
 
@@ -45,7 +51,8 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
     storage.add(agent3);
 
     // Only create a real tmux session for agent1
-    manager.create(&agent1_session, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&agent1_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Verify the session was created
@@ -134,6 +141,10 @@ fn test_reserve_window_indices_consecutive() {
 /// Stress test: verify `sync_agent_status` handles many agents efficiently
 #[test]
 fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_tmux() {
+        return Ok(());
+    }
+
     let fixture = TestFixture::new("large_swarm")?;
     let manager = SessionManager::new();
 
@@ -151,7 +162,8 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
     storage.add(root.clone());
 
     // Create the root's tmux session with a long-running command
-    manager.create(&root_session, &fixture.worktree_path(), Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&root_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Verify session was created

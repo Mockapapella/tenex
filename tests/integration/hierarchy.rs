@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for nested agent hierarchy and window index tracking
 
 use std::path::PathBuf;

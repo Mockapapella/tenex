@@ -2,9 +2,11 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
-use std::process::Command;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+const LIST_SESSIONS_FORMAT: &str = "#S:0:0";
+const LIST_WINDOWS_FORMAT: &str = "#I:#W";
 
 /// Manager for tmux sessions
 #[derive(Debug, Clone, Copy, Default)]
@@ -22,15 +24,15 @@ impl Manager {
     /// # Errors
     ///
     /// Returns an error if the session cannot be created
-    pub fn create(&self, name: &str, working_dir: &Path, command: Option<&str>) -> Result<()> {
-        debug!(name, ?working_dir, command, "Creating tmux session");
+    pub fn create(&self, name: &str, working_dir: &Path, command: Option<&[String]>) -> Result<()> {
+        debug!(name, ?working_dir, ?command, "Creating tmux session");
 
         if self.exists(name) {
             error!(name, "Session already exists");
             bail!("Session '{name}' already exists");
         }
 
-        let mut cmd = Command::new("tmux");
+        let mut cmd = super::tmux_command();
         cmd.arg("new-session")
             .arg("-d")
             .arg("-s")
@@ -38,9 +40,11 @@ impl Manager {
             .arg("-c")
             .arg(working_dir);
 
-        if let Some(shell_cmd) = command {
-            // Wrap in shell to properly handle commands with arguments
-            cmd.args(["sh", "-c", shell_cmd]);
+        if let Some(argv) = command {
+            if argv.is_empty() {
+                bail!("Cannot create session '{name}': empty argv");
+            }
+            cmd.args(argv);
         }
 
         let output = cmd.output().context("Failed to execute tmux")?;
@@ -63,7 +67,7 @@ impl Manager {
     pub fn kill(&self, name: &str) -> Result<()> {
         debug!(name, "Killing tmux session");
 
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("kill-session")
             .arg("-t")
             .arg(name)
@@ -83,7 +87,7 @@ impl Manager {
     /// Check if a session exists
     #[must_use]
     pub fn exists(&self, name: &str) -> bool {
-        Command::new("tmux")
+        super::tmux_command()
             .arg("has-session")
             .arg("-t")
             .arg(name)
@@ -98,10 +102,10 @@ impl Manager {
     ///
     /// Returns an error if sessions cannot be listed
     pub fn list(&self) -> Result<Vec<Session>> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("list-sessions")
             .arg("-F")
-            .arg("#{session_name}:#{session_created}:#{session_attached}")
+            .arg(LIST_SESSIONS_FORMAT)
             .output()
             .context("Failed to execute tmux")?;
 
@@ -111,14 +115,31 @@ impl Manager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let sessions = stdout
-            .lines()
+            .split(['\n', '\r'])
+            .filter(|line| !line.is_empty())
             .filter_map(|line| {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() >= 3 {
+                    let name = parts[0]
+                        .trim()
+                        .trim_start_matches('\u{feff}')
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect::<String>();
+                    let created_digits = parts[1]
+                        .trim()
+                        .chars()
+                        .filter(char::is_ascii_digit)
+                        .collect::<String>();
+                    let attached_digits = parts[2]
+                        .trim()
+                        .chars()
+                        .filter(char::is_ascii_digit)
+                        .collect::<String>();
                     Some(Session {
-                        name: parts[0].to_string(),
-                        created: parts[1].parse().unwrap_or(0),
-                        attached: parts[2] == "1",
+                        name,
+                        created: created_digits.parse().unwrap_or(0),
+                        attached: attached_digits == "1",
                     })
                 } else {
                     None
@@ -135,7 +156,7 @@ impl Manager {
     ///
     /// Returns an error if keys cannot be sent
     pub fn send_keys(&self, name: &str, keys: &str) -> Result<()> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("send-keys")
             .arg("-t")
             .arg(name)
@@ -161,7 +182,7 @@ impl Manager {
         self.send_keys(name, keys)?;
 
         // Send Enter to submit
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("send-keys")
             .arg("-t")
             .arg(name)
@@ -189,7 +210,7 @@ impl Manager {
     pub fn paste_keys_and_submit(&self, name: &str, keys: &str) -> Result<()> {
         let buffer_name = format!("tenex-send-{}", Uuid::new_v4());
 
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("set-buffer")
             .arg("-b")
             .arg(&buffer_name)
@@ -203,7 +224,7 @@ impl Manager {
             bail!("Failed to set tmux buffer '{buffer_name}': {stderr}");
         }
 
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("paste-buffer")
             .arg("-d") // Delete the buffer after successful paste
             .arg("-p") // Use bracketed paste codes when requested by the application
@@ -219,7 +240,7 @@ impl Manager {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Best-effort cleanup: `-d` only runs on success.
-            let cleanup = Command::new("tmux")
+            let cleanup = super::tmux_command()
                 .arg("delete-buffer")
                 .arg("-b")
                 .arg(&buffer_name)
@@ -239,7 +260,7 @@ impl Manager {
         }
 
         // Submit (carriage return)
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("send-keys")
             .arg("-t")
             .arg(name)
@@ -266,13 +287,12 @@ impl Manager {
         program: &str,
         keys: &str,
     ) -> Result<()> {
-        let exe = program
+        let exe_stem = program
             .split_whitespace()
             .next()
-            .unwrap_or("")
-            .rsplit('/')
-            .next();
-        if matches!(exe, Some("codex")) {
+            .and_then(|p| std::path::Path::new(p).file_stem())
+            .and_then(|s| s.to_str());
+        if exe_stem == Some("codex") {
             return self.paste_keys_and_submit(target, keys);
         }
 
@@ -285,7 +305,7 @@ impl Manager {
     ///
     /// Returns an error if the session cannot be renamed
     pub fn rename(&self, old_name: &str, new_name: &str) -> Result<()> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("rename-session")
             .arg("-t")
             .arg(old_name)
@@ -304,24 +324,49 @@ impl Manager {
     /// Get the attach command for a session
     #[must_use]
     pub fn attach_command(name: &str) -> String {
-        format!("tmux attach-session -t {name}")
+        format!(
+            "{} attach-session -t {name}",
+            super::tmux_bin().to_string_lossy()
+        )
     }
 
     /// Attach to a session (this will replace the current process)
     ///
     /// # Errors
     ///
-    /// Returns an error if exec fails
+    /// Returns an error if exec fails or if called on Windows
+    #[cfg(unix)]
     pub fn attach(&self, name: &str) -> Result<()> {
         use std::os::unix::process::CommandExt;
 
-        let err = Command::new("tmux")
+        let err = super::tmux_command()
             .arg("attach-session")
             .arg("-t")
             .arg(name)
             .exec();
 
         Err(err).context("Failed to attach to tmux session")
+    }
+
+    /// Attach to a session (not supported on Windows)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tmux command fails on non-Unix platforms.
+    #[cfg(not(unix))]
+    pub fn attach(&self, name: &str) -> Result<()> {
+        let status = super::tmux_command()
+            .arg("attach-session")
+            .arg("-t")
+            .arg(name)
+            .status()
+            .context("Failed to execute tmux")?;
+
+        if !status.success() {
+            anyhow::bail!("tmux attach-session failed: {status:?}");
+        }
+
+        Ok(())
     }
 
     /// Create a new window in an existing session
@@ -334,11 +379,11 @@ impl Manager {
         session: &str,
         window_name: &str,
         working_dir: &Path,
-        command: Option<&str>,
+        command: Option<&[String]>,
     ) -> Result<u32> {
         debug!(session, window_name, ?working_dir, "Creating tmux window");
 
-        let mut cmd = Command::new("tmux");
+        let mut cmd = super::tmux_command();
         cmd.arg("new-window")
             .arg("-d") // Don't switch to the new window
             .arg("-t")
@@ -349,10 +394,13 @@ impl Manager {
             .arg(working_dir)
             .arg("-P") // Print window info
             .arg("-F")
-            .arg(concat!("#", "{window_index}"));
+            .arg("#I");
 
-        if let Some(shell_cmd) = command {
-            cmd.args(["sh", "-c", shell_cmd]);
+        if let Some(argv) = command {
+            if argv.is_empty() {
+                bail!("Cannot create window in '{session}': empty argv");
+            }
+            cmd.args(argv);
         }
 
         let output = cmd.output().context("Failed to execute tmux")?;
@@ -383,7 +431,7 @@ impl Manager {
         let target = format!("{session}:{window_index}");
         debug!(%target, "Killing tmux window");
 
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("kill-window")
             .arg("-t")
             .arg(&target)
@@ -412,12 +460,12 @@ impl Manager {
     ///
     /// Returns an error if the windows cannot be listed
     pub fn list_windows(&self, session: &str) -> Result<Vec<Window>> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("list-windows")
             .arg("-t")
             .arg(session)
             .arg("-F")
-            .arg("#{window_index}:#{window_name}")
+            .arg(LIST_WINDOWS_FORMAT)
             .output()
             .context("Failed to execute tmux")?;
 
@@ -427,13 +475,26 @@ impl Manager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let windows = stdout
-            .lines()
+            .split(['\n', '\r'])
+            .filter(|line| !line.is_empty())
             .filter_map(|line| {
                 let parts: Vec<&str> = line.splitn(2, ':').collect();
                 if parts.len() >= 2 {
+                    let index_str = parts[0].trim().trim_start_matches('\u{feff}');
+                    let index_digits = index_str
+                        .chars()
+                        .filter(char::is_ascii_digit)
+                        .collect::<String>();
+                    if index_digits.is_empty() {
+                        return None;
+                    }
                     Some(Window {
-                        index: parts[0].parse().ok()?,
-                        name: parts[1].to_string(),
+                        index: index_digits.parse().ok()?,
+                        name: parts[1]
+                            .trim()
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .collect(),
                     })
                 } else {
                     None
@@ -444,13 +505,42 @@ impl Manager {
         Ok(windows)
     }
 
+    /// List pane PIDs for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if panes cannot be listed or PIDs cannot be parsed.
+    pub fn list_pane_pids(&self, session: &str) -> Result<Vec<u32>> {
+        let output = super::tmux_command()
+            .arg("list-panes")
+            .arg("-s")
+            .arg("-t")
+            .arg(session)
+            .arg("-F")
+            .arg("#{pane_pid}")
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to list pane PIDs for session '{session}': {stderr}");
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .split(['\n', '\r'])
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .filter(|pid| *pid != 0)
+            .collect())
+    }
+
     /// Resize a tmux window to specific dimensions
     ///
     /// # Errors
     ///
     /// Returns an error if the window cannot be resized
     pub fn resize_window(&self, target: &str, width: u16, height: u16) -> Result<()> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("resize-window")
             .arg("-t")
             .arg(target)
@@ -464,6 +554,57 @@ impl Manager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("Failed to resize window '{target}': {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Rename a window in a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window cannot be renamed.
+    pub fn rename_window(&self, session: &str, window_index: u32, new_name: &str) -> Result<()> {
+        let target = Self::window_target(session, window_index);
+        let output = super::tmux_command()
+            .arg("rename-window")
+            .arg("-t")
+            .arg(&target)
+            .arg(new_name)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to rename window '{target}' to '{new_name}': {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Send a batch of tmux key tokens to a target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tmux command fails.
+    pub fn send_keys_batch(&self, target: &str, keys: &[String]) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let mut cmd = super::tmux_command();
+        cmd.arg("send-keys").arg("-t").arg(target).args(keys);
+
+        let status = cmd
+            .env_remove("TMUX")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to execute tmux")?;
+
+        if !status.success() {
+            bail!("tmux send-keys failed: {status:?}");
         }
 
         Ok(())
@@ -738,11 +879,8 @@ mod tests {
 
         let _ = manager.kill(session_name);
 
-        let result = manager.create(
-            session_name,
-            std::path::Path::new("/tmp"),
-            Some("echo hello"),
-        );
+        let command = vec!["echo".to_string(), "hello".to_string()];
+        let result = manager.create(session_name, std::path::Path::new("/tmp"), Some(&command));
 
         if result.is_ok() {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -766,11 +904,12 @@ mod tests {
         if result.is_ok() {
             std::thread::sleep(std::time::Duration::from_millis(100));
 
+            let window_command = vec!["echo".to_string(), "hello".to_string()];
             let win_result = manager.create_window(
                 session_name,
                 "test-win",
                 std::path::Path::new("/tmp"),
-                Some("echo hello"),
+                Some(&window_command),
             );
 
             if let Ok(window_index) = win_result {
@@ -918,7 +1057,32 @@ mod tests {
 
         // List sessions and verify our session is present
         if let Ok(sessions) = manager.list() {
-            assert!(sessions.iter().any(|s| s.name == session_name));
+            let contains_session = sessions.iter().any(|s| s.name == session_name);
+            if !contains_session {
+                match super::super::tmux_command()
+                    .arg("list-sessions")
+                    .arg("-F")
+                    .arg(LIST_SESSIONS_FORMAT)
+                    .output()
+                {
+                    Ok(raw) => {
+                        eprintln!("tmux list-sessions status: {:?}", raw.status);
+                        eprintln!(
+                            "tmux list-sessions stdout: {:?}",
+                            String::from_utf8_lossy(&raw.stdout)
+                        );
+                        eprintln!(
+                            "tmux list-sessions stderr: {:?}",
+                            String::from_utf8_lossy(&raw.stderr)
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("tmux list-sessions debug call failed: {err:?}");
+                    }
+                }
+                eprintln!("parsed sessions: {sessions:?}");
+            }
+            assert!(contains_session);
         }
 
         // Create a window
@@ -926,7 +1090,7 @@ mod tests {
             session_name,
             "test-window",
             std::path::Path::new("/tmp"),
-            Some("echo 'test window'"),
+            Some(&["echo".to_string(), "test window".to_string()]),
         );
 
         if let Ok(window_index) = window_result {
@@ -976,6 +1140,32 @@ mod tests {
             // List windows
             if let Ok(windows) = manager.list_windows(session_name) {
                 // Should have at least 3 windows (initial + 2 created)
+                if windows.len() < 2 {
+                    match super::super::tmux_command()
+                        .arg("list-windows")
+                        .arg("-t")
+                        .arg(session_name)
+                        .arg("-F")
+                        .arg(LIST_WINDOWS_FORMAT)
+                        .output()
+                    {
+                        Ok(raw) => {
+                            eprintln!("tmux list-windows status: {:?}", raw.status);
+                            eprintln!(
+                                "tmux list-windows stdout: {:?}",
+                                String::from_utf8_lossy(&raw.stdout)
+                            );
+                            eprintln!(
+                                "tmux list-windows stderr: {:?}",
+                                String::from_utf8_lossy(&raw.stderr)
+                            );
+                        }
+                        Err(err) => {
+                            eprintln!("tmux list-windows debug call failed: {err:?}");
+                        }
+                    }
+                    eprintln!("parsed windows: {windows:?}");
+                }
                 assert!(windows.len() >= 2);
             }
 

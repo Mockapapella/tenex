@@ -9,7 +9,7 @@ use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
         event::{
-            self as crossterm_event, DisableMouseCapture, EnableMouseCapture,
+            self as crossterm_event, DisableMouseCapture, EnableMouseCapture, KeyEventKind,
             KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
@@ -21,7 +21,6 @@ use ratatui::{
     layout::Rect,
 };
 use std::io;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use tenex::app::{Actions, App, Event, Handler, Mode, Tab};
 use tenex::update::UpdateInfo;
@@ -88,7 +87,7 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     result
 }
 
-fn send_batched_keys_to_tmux(app: &App, batched_keys: Vec<String>) {
+fn send_batched_keys_to_tmux(app: &App, batched_keys: &[String]) {
     if batched_keys.is_empty() {
         return;
     }
@@ -98,16 +97,8 @@ fn send_batched_keys_to_tmux(app: &App, batched_keys: Vec<String>) {
             || agent.tmux_session.clone(),
             |idx| format!("{}:{}", agent.tmux_session, idx),
         );
-        let mut args = vec!["send-keys".to_string(), "-t".to_string(), target];
-        args.extend(batched_keys);
-        // Use synchronous call so tmux processes keys before we capture
-        let _ = Command::new("tmux")
-            .args(&args)
-            .env_remove("TMUX")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status(); // .status() waits for completion
+        // Use synchronous call so tmux processes keys before we capture.
+        let _ = tenex::tmux::SessionManager::new().send_keys_batch(&target, batched_keys);
     }
 }
 
@@ -160,13 +151,15 @@ fn run_loop(
                     break; // Timeout - exit inner loop
                 }
                 Event::Key(key) => {
-                    input::handle_key_event(
-                        app,
-                        action_handler,
-                        key.code,
-                        key.modifiers,
-                        &mut batched_keys,
-                    )?;
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                        input::handle_key_event(
+                            app,
+                            action_handler,
+                            key.code,
+                            key.modifiers,
+                            &mut batched_keys,
+                        )?;
+                    }
                 }
                 Event::Mouse(_) => {
                     // Ignore mouse events (we don't use them)
@@ -184,7 +177,7 @@ fn run_loop(
 
         // Send batched keys to tmux in one command (much faster than per-keystroke)
         let sent_keys_in_preview = !batched_keys.is_empty() && app.mode == Mode::PreviewFocused;
-        send_batched_keys_to_tmux(app, batched_keys);
+        send_batched_keys_to_tmux(app, &batched_keys);
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
@@ -267,6 +260,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     impl Drop for TestCleanup {
         fn drop(&mut self) {
             // Clean up any worktrees/branches created by this test
@@ -310,6 +304,13 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for TestCleanup {
+        fn drop(&mut self) {
+            self.branch_prefix.shrink_to_fit();
         }
     }
 

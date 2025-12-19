@@ -116,8 +116,9 @@ impl Actions {
         let root_session = root_agent.tmux_session.clone();
         let root_id = root_agent.id;
 
+        let command = crate::command::build_command_argv(&program, None)?;
         self.session_manager
-            .create(&root_session, &worktree_path, Some(&program))?;
+            .create(&root_session, &worktree_path, Some(&command))?;
 
         if let Some((width, height)) = app.ui.preview_dimensions {
             let _ = self
@@ -250,7 +251,7 @@ impl Actions {
         let mut child = child;
         child.title.clone_from(&child_title);
 
-        let command = Self::build_child_command(program, child_prompt);
+        let command = crate::command::build_command_argv(program, child_prompt)?;
         let actual_index = self.session_manager.create_window(
             &config.root_session,
             &child_title,
@@ -269,17 +270,6 @@ impl Actions {
         app.storage.add(child);
 
         Ok(())
-    }
-
-    /// Build the command to run in a child window
-    fn build_child_command(default_program: &str, prompt: Option<&str>) -> String {
-        prompt.map_or_else(
-            || default_program.to_string(),
-            |p| {
-                let escaped = p.replace('"', "\\\"").replace('`', "\\`");
-                format!("{default_program} \"{escaped}\"")
-            },
-        )
     }
 
     /// Spawn child agents for an existing root agent
@@ -364,10 +354,8 @@ impl Actions {
             let mut child = child;
             child.title.clone_from(&child_title);
 
-            // Create window in the root's session with the prompt
-            // Escape both double quotes and backticks (backticks are command substitution in bash)
-            let escaped_prompt = review_prompt.replace('"', "\\\"").replace('`', "\\`");
-            let command = format!("{} \"{escaped_prompt}\"", &program);
+            let command =
+                crate::command::build_command_argv(&program, Some(review_prompt.as_str()))?;
             let actual_index = self.session_manager.create_window(
                 &root_session,
                 &child_title,

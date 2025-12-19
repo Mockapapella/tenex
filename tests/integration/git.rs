@@ -1,6 +1,8 @@
+#![cfg(not(windows))]
+
 //! Tests for git worktree operations
 
-use crate::common::{DirGuard, TestFixture};
+use crate::common::{DirGuard, TestFixture, git_command};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, Settings};
 use tenex::config::Action;
@@ -157,11 +159,11 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
 
     // Make a commit on the feature branch
     std::fs::write(worktree_path.join("test.txt"), "test content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "test.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Test commit"])
         .current_dir(&worktree_path)
         .output()?;
@@ -215,11 +217,11 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
 
     // Make a commit on the feature branch
     std::fs::write(worktree_path.join("feature.txt"), "feature content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "feature.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Feature commit"])
         .current_dir(&worktree_path)
         .output()?;
@@ -551,22 +553,22 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
 
     // Create a file on the feature branch
     std::fs::write(worktree_path.join("conflict.txt"), "feature content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "conflict.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Feature commit"])
         .current_dir(&worktree_path)
         .output()?;
 
     // Now create a conflicting commit on master
     std::fs::write(fixture.repo_path.join("conflict.txt"), "master content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "conflict.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Master commit"])
         .current_dir(&fixture.repo_path)
         .output()?;
@@ -623,11 +625,11 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
 
     // First, create a commit on master with a file that will conflict
     std::fs::write(fixture.repo_path.join("shared.txt"), "initial")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "shared.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Initial shared file"])
         .current_dir(&fixture.repo_path)
         .output()?;
@@ -641,22 +643,22 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
 
     // Modify the file on the feature branch
     std::fs::write(worktree_path.join("shared.txt"), "feature content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "shared.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Feature changes to shared"])
         .current_dir(&worktree_path)
         .output()?;
 
     // Now create a conflicting modification on master
     std::fs::write(fixture.repo_path.join("shared.txt"), "master content")?;
-    std::process::Command::new("git")
+    git_command()
         .args(["add", "shared.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    std::process::Command::new("git")
+    git_command()
         .args(["commit", "-m", "Master changes to shared"])
         .current_dir(&fixture.repo_path)
         .output()?;

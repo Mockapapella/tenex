@@ -101,7 +101,7 @@ impl Actions {
         let candidates = ["main", "master", "develop"];
 
         for candidate in &candidates {
-            let output = std::process::Command::new("git")
+            let output = crate::git::git_command()
                 .args(["merge-base", candidate, branch_name])
                 .current_dir(worktree_path)
                 .output();
@@ -114,7 +114,7 @@ impl Actions {
         }
 
         // Fallback: try to detect from the reflog
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["reflog", "show", "--no-abbrev", branch_name])
             .current_dir(worktree_path)
             .output()
@@ -144,7 +144,7 @@ impl Actions {
     ) -> Result<bool> {
         // Check if remote tracking branch exists
         let remote_branch = format!("origin/{branch_name}");
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["rev-parse", "--verify", &remote_branch])
             .current_dir(worktree_path)
             .output()
@@ -156,7 +156,7 @@ impl Actions {
         }
 
         // Compare local and remote
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args([
                 "rev-list",
                 "--count",
@@ -180,7 +180,7 @@ impl Actions {
         branch_name: &str,
     ) -> Result<bool> {
         let remote_branch = format!("origin/{branch_name}");
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["rev-parse", "--verify", &remote_branch])
             .current_dir(worktree_path)
             .output()
@@ -211,7 +211,7 @@ impl Actions {
         debug!(branch = %branch_name, "Executing push");
 
         // Push to remote with upstream tracking
-        let push_output = std::process::Command::new("git")
+        let push_output = crate::git::git_command()
             .args(["push", "-u", "origin", &branch_name])
             .current_dir(&worktree_path)
             .output()
@@ -305,7 +305,7 @@ impl Actions {
         let remote_exists = Self::check_remote_branch_exists(&worktree_path, &old_branch)?;
 
         // Rename local branch
-        let rename_output = std::process::Command::new("git")
+        let rename_output = crate::git::git_command()
             .args(["branch", "-m", &old_branch, &new_branch])
             .current_dir(&worktree_path)
             .output()
@@ -369,6 +369,15 @@ impl Actions {
         // Update git worktree metadata
         let gitdir_file = new_path.join(".git");
         if gitdir_file.exists() {
+            let git_path_string = |path: &std::path::Path| -> String {
+                let raw = path.to_string_lossy().to_string();
+                if cfg!(windows) {
+                    raw.strip_prefix(r"\\?\").unwrap_or(&raw).replace('\\', "/")
+                } else {
+                    raw
+                }
+            };
+
             let old_worktree_name = old_branch.replace('/', "-");
             let repo_path = std::env::current_dir()?;
             let worktree_meta_dir = repo_path
@@ -380,7 +389,8 @@ impl Actions {
                 // Update the gitdir file to point to new location
                 let gitdir_path = worktree_meta_dir.join("gitdir");
                 if gitdir_path.exists() {
-                    let new_gitdir_content = format!("{}\n", new_path.join(".git").display());
+                    let new_gitdir_content =
+                        format!("{}\n", git_path_string(&new_path.join(".git")));
                     if let Err(e) = std::fs::write(&gitdir_path, new_gitdir_content) {
                         warn!(error = %e, "Failed to update worktree gitdir");
                     }
@@ -399,7 +409,7 @@ impl Actions {
                         // Update the worktree's .git file to point to the renamed metadata directory
                         // Without this, git worktree remove will fail with "is not a .git file" error
                         let new_gitdir_pointer =
-                            format!("gitdir: {}\n", new_worktree_meta_dir.display());
+                            format!("gitdir: {}\n", git_path_string(&new_worktree_meta_dir));
                         if let Err(e) = std::fs::write(&gitdir_file, new_gitdir_pointer) {
                             warn!(error = %e, "Failed to update worktree .git file");
                         }
@@ -499,13 +509,13 @@ impl Actions {
         }
 
         // Delete old remote branch
-        let _ = std::process::Command::new("git")
+        let _ = crate::git::git_command()
             .args(["push", "origin", "--delete", old_branch])
             .current_dir(worktree_path)
             .output();
 
         // Push new branch to remote
-        let push_output = std::process::Command::new("git")
+        let push_output = crate::git::git_command()
             .args(["push", "-u", "origin", new_branch])
             .current_dir(worktree_path)
             .output()
@@ -545,19 +555,10 @@ impl Actions {
         app.storage.save()?;
 
         // Rename tmux window if agent has a window index
-        if let Some(idx) = window_index {
-            let rename_output = std::process::Command::new("tmux")
-                .args([
-                    "rename-window",
-                    "-t",
-                    &format!("{tmux_session}:{idx}"),
-                    new_name,
-                ])
-                .output();
-
-            if let Err(e) = rename_output {
-                warn!(error = %e, "Failed to rename tmux window");
-            }
+        if let Some(idx) = window_index
+            && let Err(e) = SessionManager::new().rename_window(&tmux_session, idx, new_name)
+        {
+            warn!(error = %e, "Failed to rename tmux window");
         }
 
         info!(
@@ -592,7 +593,7 @@ impl Actions {
         debug!(branch = %branch_name, "Executing push before opening PR");
 
         // Push to remote
-        let push_output = std::process::Command::new("git")
+        let push_output = crate::git::git_command()
             .args(["push", "-u", "origin", &branch_name])
             .current_dir(&worktree_path)
             .output()
@@ -731,7 +732,7 @@ impl Actions {
         );
 
         // Execute git rebase
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["rebase", &target_branch])
             .current_dir(&worktree_path)
             .output()
@@ -819,7 +820,7 @@ impl Actions {
 
     /// Find the worktree path for a branch, if one exists
     fn find_worktree_for_branch(branch: &str) -> Result<Option<std::path::PathBuf>> {
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["worktree", "list", "--porcelain"])
             .output()
             .context("Failed to list worktrees")?;
@@ -856,7 +857,7 @@ impl Actions {
         );
 
         // Merge directly in the worktree
-        let merge_output = std::process::Command::new("git")
+        let merge_output = crate::git::git_command()
             .args([
                 "merge",
                 source_branch,
@@ -1067,7 +1068,7 @@ impl Actions {
 
     /// Stash any uncommitted changes
     fn git_stash_push(repo_path: &std::path::Path) -> Result<bool> {
-        let stash_output = std::process::Command::new("git")
+        let stash_output = crate::git::git_command()
             .args(["stash", "push", "-m", "tenex-merge-temp"])
             .current_dir(repo_path)
             .output()
@@ -1078,7 +1079,7 @@ impl Actions {
 
     /// Get current branch name
     fn git_get_current_branch(repo_path: &std::path::Path) -> Result<String> {
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(repo_path)
             .output()
@@ -1089,7 +1090,7 @@ impl Actions {
 
     /// Checkout a branch, returns success status
     fn git_checkout(repo_path: &std::path::Path, branch: &str) -> Result<bool> {
-        let output = std::process::Command::new("git")
+        let output = crate::git::git_command()
             .args(["checkout", branch])
             .current_dir(repo_path)
             .output()
@@ -1101,7 +1102,7 @@ impl Actions {
     /// Restore git state (checkout original branch and pop stash)
     fn restore_git_state(repo_path: &std::path::Path, did_stash: bool) {
         if did_stash {
-            let _ = std::process::Command::new("git")
+            let _ = crate::git::git_command()
                 .args(["stash", "pop"])
                 .current_dir(repo_path)
                 .output();
@@ -1116,7 +1117,7 @@ impl Actions {
         original_branch: &str,
         did_stash: bool,
     ) -> MergeResult {
-        let merge_output = match std::process::Command::new("git")
+        let merge_output = match crate::git::git_command()
             .args([
                 "merge",
                 source_branch,
@@ -1132,7 +1133,7 @@ impl Actions {
 
         if merge_output.status.success() {
             // Go back to original branch after successful merge
-            let _ = std::process::Command::new("git")
+            let _ = crate::git::git_command()
                 .args(["checkout", original_branch])
                 .current_dir(repo_path)
                 .output();
@@ -1147,12 +1148,12 @@ impl Actions {
             MergeResult::Conflict
         } else {
             // Restore state before returning error
-            let _ = std::process::Command::new("git")
+            let _ = crate::git::git_command()
                 .args(["checkout", original_branch])
                 .current_dir(repo_path)
                 .output();
             if did_stash {
-                let _ = std::process::Command::new("git")
+                let _ = crate::git::git_command()
                     .args(["stash", "pop"])
                     .current_dir(repo_path)
                     .output();
@@ -1882,12 +1883,13 @@ mod tests {
     fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
+        let temp_dir = TempDir::new()?;
 
         let agent = Agent::new(
             "test-agent".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
-            PathBuf::from("/tmp"),
+            temp_dir.path().to_path_buf(),
             None,
         );
         let agent_id = agent.id;

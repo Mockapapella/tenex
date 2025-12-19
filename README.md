@@ -33,10 +33,35 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 ## Installation
 
 ```bash
+# Install from crates.io
+cargo install tenex --locked
+
 # Or build from source
 git clone https://github.com/Mockapapella/tenex
 cd tenex
 cargo install --path .
+```
+
+### Windows (native)
+
+Tenex builds cleanly with the Rust GNU toolchain. You still need MSYS2 for `tmux`, and it also
+provides `dlltool` for the GNU linker. Quick path:
+
+```powershell
+winget install --id MSYS2.MSYS2 -e
+C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux mingw-w64-x86_64-toolchain"
+setx TENEX_TMUX_BIN C:\msys64\usr\bin\tmux.exe
+rustup default stable-x86_64-pc-windows-gnu
+cargo install tenex --locked
+```
+
+### CI artifacts (no local build)
+
+Every CI run uploads `tenex` binaries for Linux/macOS/Windows. Download with `gh`:
+
+```bash
+gh run list -w CI -b <branch>
+gh run download <run-id> -n tenex-windows-latest
 ```
 
 ## Quick Start
@@ -114,7 +139,7 @@ The default agent command is `claude --allow-dangerously-skip-permissions`. Pres
 |------|----------|-------------|
 | State | `~/.local/share/tenex/state.json` | Agent list and hierarchy |
 | Settings | `~/.local/share/tenex/settings.json` | Tenex settings |
-| Logs | `/tmp/tenex.log` | Debug logs (when enabled) |
+| Logs | OS temp dir (e.g. `/tmp/tenex.log`) | Debug logs (when enabled) |
 
 ### Environment Variables
 

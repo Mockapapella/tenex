@@ -6,6 +6,7 @@ pub use keys::{
     Action, ActionGroup, get_action, get_display_description, get_display_keys, status_hints,
 };
 
+use crate::paths;
 use std::path::PathBuf;
 
 /// Application configuration (uses hardcoded defaults)
@@ -34,7 +35,7 @@ impl Default for Config {
             branch_prefix: "tenex/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
-            worktree_dir: dirs::home_dir()
+            worktree_dir: paths::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".tenex")
                 .join("worktrees"),
@@ -52,7 +53,7 @@ impl Config {
         if let Ok(path) = std::env::var("TENEX_STATE_PATH") {
             return PathBuf::from(path);
         }
-        dirs::data_local_dir()
+        paths::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("tenex")
             .join("state.json")

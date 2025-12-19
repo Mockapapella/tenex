@@ -1,6 +1,30 @@
 //! Helper functions for test setup and common operations
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Create a `git` command with hook-related environment variables removed.
+///
+/// Git hooks can set variables like `GIT_DIR` which override repository discovery and ignore
+/// `current_dir`. This ensures `git` operations in tests use the temporary repositories created
+/// by the fixtures.
+#[must_use]
+pub fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_PREFIX",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
 
 /// Check if tmux is available on the system
 pub fn tmux_available() -> bool {

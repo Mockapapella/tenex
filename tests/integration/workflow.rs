@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for full CLI workflow, agent creation, and kill success paths
 
 use crate::common::{TestFixture, skip_if_no_tmux};
@@ -27,7 +29,8 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
     // Create tmux session with a command that stays alive
-    manager.create(&session_name, &worktree_path, Some("sleep 10"))?;
+    let command = vec!["sleep".to_string(), "10".to_string()];
+    manager.create(&session_name, &worktree_path, Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -182,7 +185,8 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
-    manager.create(&session_name, &worktree_path, Some("sleep 60"))?;
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &worktree_path, Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
