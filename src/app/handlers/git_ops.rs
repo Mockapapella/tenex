@@ -300,6 +300,7 @@ impl Actions {
 
         // Generate new branch name from new title
         let new_branch = app.config.generate_branch_name(new_name);
+        let new_worktree_path = app.config.worktree_dir.join(&new_branch);
 
         // Check if remote branch exists before we start
         let remote_exists = Self::check_remote_branch_exists(&worktree_path, &old_branch)?;
@@ -317,30 +318,35 @@ impl Actions {
             return Ok(());
         }
 
-        // Generate new worktree path based on new branch name
-        let new_worktree_path = app.config.worktree_dir.join(&new_branch);
-
         // Move the worktree directory and update metadata
-        if worktree_path != new_worktree_path
-            && let Err(e) = Self::move_worktree_directory(
+        let mut effective_worktree_path = worktree_path.clone();
+        if worktree_path != new_worktree_path {
+            if Self::move_worktree_directory(
                 &worktree_path,
                 &new_worktree_path,
                 &old_branch,
                 &new_branch,
-            )
-        {
-            app.set_error(format!("Failed to move worktree: {e}"));
-            return Ok(());
+            )? {
+                effective_worktree_path.clone_from(&new_worktree_path);
+            } else {
+                effective_worktree_path.clone_from(&worktree_path);
+            }
         }
 
         // Update agent records and tmux session
-        Self::update_agent_records(app, agent_id, new_name, &new_branch, &new_worktree_path)?;
+        Self::update_agent_records(
+            app,
+            agent_id,
+            new_name,
+            &new_branch,
+            &effective_worktree_path,
+        )?;
         Self::rename_tmux_session_for_agent(app, agent_id, &tmux_session, new_name)?;
 
         // Handle remote branch rename if needed
         Self::handle_remote_branch_rename(
             app,
-            &new_worktree_path,
+            &effective_worktree_path,
             &old_branch,
             &new_branch,
             old_name,
@@ -357,14 +363,27 @@ impl Actions {
         new_path: &std::path::Path,
         old_branch: &str,
         new_branch: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // Ensure parent directory exists
         if let Some(parent) = new_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent)
+                .context("Failed to create worktree parent directory")?;
         }
 
         // Move the worktree directory
-        std::fs::rename(old_path, new_path).context("Failed to move worktree directory")?;
+        if let Err(e) = std::fs::rename(old_path, new_path) {
+            let is_in_use = cfg!(windows)
+                && (e.kind() == std::io::ErrorKind::PermissionDenied
+                    || matches!(e.raw_os_error(), Some(5 | 32)));
+            if is_in_use {
+                warn!(
+                    error = %e,
+                    "Worktree directory appears in use; keeping existing path"
+                );
+                return Ok(false);
+            }
+            return Err(e).context("Failed to move worktree directory");
+        }
 
         // Update git worktree metadata
         let gitdir_file = new_path.join(".git");
@@ -418,7 +437,7 @@ impl Actions {
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Update agent records after rename
