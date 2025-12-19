@@ -44,16 +44,33 @@ cargo install --path .
 
 ### Windows (native)
 
-Tenex builds cleanly with the Rust GNU toolchain. You still need MSYS2 for `tmux`, and it also
-provides `dlltool` for the GNU linker. Quick path:
+Tenex builds cleanly with the **MSVC** toolchain. You still need MSYS2 for `tmux`.
 
 ```powershell
+# Install MSVC Build Tools
+winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+
+# Make link.exe available in every terminal (persistent PATH update)
+$vs = & "$env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$vc = Join-Path $vs "VC\Tools\MSVC"
+$ver = Get-ChildItem $vc | Sort-Object Name -Descending | Select-Object -First 1
+$bin = Join-Path $ver.FullName "bin\Hostx64\x64"
+setx PATH "$bin;$env:PATH"
+
+# Use MSVC toolchain
+rustup toolchain install stable-x86_64-pc-windows-msvc
+rustup default stable-x86_64-pc-windows-msvc
+
+# Install MSYS2 + tmux
 winget install --id MSYS2.MSYS2 -e
-C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux mingw-w64-x86_64-toolchain"
+C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux"
 setx TENEX_TMUX_BIN C:\msys64\usr\bin\tmux.exe
-rustup default stable-x86_64-pc-windows-gnu
+
+# Install Tenex (open a new terminal after setx)
 cargo install tenex --locked
 ```
+
+If you prefer the GNU toolchain, you must also install MinGW binutils (`dlltool.exe`) and point Rust at it.
 
 ### CI artifacts (no local build)
 
