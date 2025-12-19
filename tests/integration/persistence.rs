@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for storage persistence
 
 use crate::common::TestFixture;

@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for agent operations: listing, finding, status transitions
 
 use crate::common::TestFixture;

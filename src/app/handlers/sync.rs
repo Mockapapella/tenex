@@ -120,7 +120,7 @@ impl Actions {
             );
 
             // Create tmux session and start the agent program
-            let command = program.clone();
+            let command = crate::command::build_command_argv(&program, None)?;
             self.session_manager
                 .create(&agent.tmux_session, &wt.path, Some(&command))?;
 

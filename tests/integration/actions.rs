@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for Actions handler with real operations
 
 use crate::common::{TestFixture, skip_if_no_tmux};

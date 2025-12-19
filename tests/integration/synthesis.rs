@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Tests for synthesis functionality
 
 use crate::common::{DirGuard, TestFixture, skip_if_no_tmux};

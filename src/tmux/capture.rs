@@ -1,7 +1,6 @@
 //! Tmux output capture
 
 use anyhow::{Context, Result, bail};
-use std::process::Command;
 
 /// Capture output from tmux sessions
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,7 +19,7 @@ impl Capture {
     ///
     /// Returns an error if capture fails
     pub fn capture_pane(&self, session: &str) -> Result<String> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("capture-pane")
             .arg("-t")
             .arg(session)
@@ -45,7 +44,7 @@ impl Capture {
     pub fn capture_pane_with_history(&self, session: &str, lines: u32) -> Result<String> {
         let start = format!("-{lines}");
 
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("capture-pane")
             .arg("-t")
             .arg(session)
@@ -70,7 +69,7 @@ impl Capture {
     ///
     /// Returns an error if capture fails
     pub fn capture_full_history(&self, session: &str) -> Result<String> {
-        let output = Command::new("tmux")
+        let output = super::tmux_command()
             .arg("capture-pane")
             .arg("-t")
             .arg(session)
@@ -95,7 +94,25 @@ impl Capture {
     ///
     /// Returns an error if the size cannot be retrieved
     pub fn pane_size(&self, session: &str) -> Result<(u16, u16)> {
-        let output = Command::new("tmux")
+        let parse_size = |raw: &str| -> Option<(u16, u16)> {
+            let (width, height) = raw.trim().split_once('x')?;
+            let width_digits = width
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>();
+            let height_digits = height
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>();
+            if width_digits.is_empty() || height_digits.is_empty() {
+                return None;
+            }
+            let width = width_digits.parse().ok()?;
+            let height = height_digits.parse().ok()?;
+            Some((width, height))
+        };
+
+        let output = super::tmux_command()
             .arg("display-message")
             .arg("-t")
             .arg(session)
@@ -104,22 +121,51 @@ impl Capture {
             .output()
             .context("Failed to execute tmux")?;
 
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(size) = parse_size(&stdout) {
+                return Ok(size);
+            }
+        }
+
+        let output = super::tmux_command()
+            .arg("list-panes")
+            .arg("-t")
+            .arg(session)
+            .output()
+            .context("Failed to execute tmux")?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("Failed to get pane size for session '{session}': {stderr}");
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = stdout.trim().split('x').collect();
+        let parse_bracketed_size = |line: &str| -> Option<(u16, u16)> {
+            let mut remainder = line;
+            while let Some(start) = remainder.find('[') {
+                remainder = &remainder[start + 1..];
+                let end = remainder.find(']')?;
+                let candidate = &remainder[..end];
+                if let Some(size) = parse_size(candidate) {
+                    return Some(size);
+                }
+                remainder = &remainder[end + 1..];
+            }
+            None
+        };
 
-        if parts.len() != 2 {
-            bail!("Invalid pane size format: {stdout}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines = stdout.lines().map(str::trim).filter(|l| !l.is_empty());
+        if let Some(size) = lines
+            .clone()
+            .find(|l| l.contains("(active)"))
+            .and_then(parse_bracketed_size)
+            .or_else(|| lines.clone().find_map(parse_bracketed_size))
+        {
+            return Ok(size);
         }
 
-        let width: u16 = parts[0].parse().context("Invalid width")?;
-        let height: u16 = parts[1].parse().context("Invalid height")?;
-
-        Ok((width, height))
+        bail!("Invalid pane size format: {stdout}");
     }
 
     /// Get the cursor position in the pane
@@ -128,7 +174,18 @@ impl Capture {
     ///
     /// Returns an error if the position cannot be retrieved
     pub fn cursor_position(&self, session: &str) -> Result<(u16, u16)> {
-        let output = Command::new("tmux")
+        let status = super::tmux_command()
+            .arg("has-session")
+            .arg("-t")
+            .arg(session)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !status.status.success() {
+            bail!("Failed to get cursor position for session '{session}': session not found");
+        }
+
+        let output = super::tmux_command()
             .arg("display-message")
             .arg("-t")
             .arg(session)
@@ -143,14 +200,16 @@ impl Capture {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = stdout.trim().split(',').collect();
+        let (x, y) = stdout
+            .trim()
+            .split_once(',')
+            .map_or(("", ""), |(x, y)| (x.trim(), y.trim()));
 
-        if parts.len() != 2 {
-            bail!("Invalid cursor position format: {stdout}");
-        }
+        let x_digits = x.chars().filter(char::is_ascii_digit).collect::<String>();
+        let y_digits = y.chars().filter(char::is_ascii_digit).collect::<String>();
 
-        let x: u16 = parts[0].parse().context("Invalid x position")?;
-        let y: u16 = parts[1].parse().context("Invalid y position")?;
+        let x = x_digits.parse().unwrap_or(0);
+        let y = y_digits.parse().unwrap_or(0);
 
         Ok((x, y))
     }
@@ -161,7 +220,18 @@ impl Capture {
     ///
     /// Returns an error if the status cannot be retrieved
     pub fn pane_current_command(&self, session: &str) -> Result<String> {
-        let output = Command::new("tmux")
+        let status = super::tmux_command()
+            .arg("has-session")
+            .arg("-t")
+            .arg(session)
+            .output()
+            .context("Failed to execute tmux")?;
+
+        if !status.status.success() {
+            bail!("Failed to get current command for session '{session}': session not found");
+        }
+
+        let output = super::tmux_command()
             .arg("display-message")
             .arg("-t")
             .arg(session)

@@ -6,6 +6,80 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
+#[cfg(windows)]
+#[expect(
+    clippy::permissions_set_readonly_false,
+    reason = "Windows worktree cleanup needs to clear the read-only attribute"
+)]
+fn clear_readonly_recursive(root: &Path) {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        if let Ok(metadata) = fs::metadata(&path) {
+            let mut permissions = metadata.permissions();
+            if permissions.readonly() {
+                permissions.set_readonly(false);
+                let _ = fs::set_permissions(&path, permissions);
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let child = entry.path();
+                if child.is_dir() {
+                    stack.push(child);
+                } else if let Ok(metadata) = entry.metadata() {
+                    let mut permissions = metadata.permissions();
+                    if permissions.readonly() {
+                        permissions.set_readonly(false);
+                        let _ = fs::set_permissions(&child, permissions);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut last_err = None;
+    for attempt in 0u64..10 {
+        match fs::remove_dir_all(path) {
+            Ok(()) => {
+                last_err = None;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                last_err = None;
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                #[cfg(windows)]
+                clear_readonly_recursive(path);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
+
+        if !path.exists() {
+            last_err = None;
+            break;
+        }
+    }
+
+    if path.exists() {
+        let Some(e) = last_err else {
+            bail!("Failed to remove directory at {}", path.display());
+        };
+        bail!("Failed to remove directory at {}: {e}", path.display());
+    }
+
+    Ok(())
+}
+
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
@@ -166,11 +240,14 @@ impl<'a> Manager<'a> {
                 }
             }
 
-            // Always try to remove the directory even if prune failed
-            if wt_path.exists()
-                && let Err(e) = fs::remove_dir_all(&wt_path)
-            {
+            // Ensure libgit2 doesn't keep the worktree alive on platforms with strict file locking.
+            drop(worktree);
+
+            // Always try to remove the directory even if prune failed (may take time for processes
+            // to release handles, especially on Windows).
+            if let Err(e) = remove_dir_all_with_retries(&wt_path) {
                 warn!(name, path = ?wt_path, error = %e, "Failed to remove worktree directory");
+                return Err(e);
             }
 
             // Verify the worktree is actually gone from git's perspective

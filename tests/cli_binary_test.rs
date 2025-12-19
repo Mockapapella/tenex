@@ -68,15 +68,17 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
-    use std::path::Path;
 
-    let log_path = Path::new("/tmp/tenex.log");
+    let log_path = tenex::paths::log_path();
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
     // Write some content to the log file to simulate previous session logs
-    fs::write(log_path, "previous session log content\nmore log lines\n")?;
+    fs::write(&log_path, "previous session log content\nmore log lines\n")?;
 
     // Verify the file has content
-    let content_before = fs::read_to_string(log_path)?;
+    let content_before = fs::read_to_string(&log_path)?;
     assert!(
         !content_before.is_empty(),
         "Log file should have content before test"
@@ -87,7 +89,7 @@ fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> 
     assert!(output.status.success());
 
     // Verify the log file was cleared
-    let content_after = fs::read_to_string(log_path)?;
+    let content_after = fs::read_to_string(&log_path)?;
     assert!(
         content_after.is_empty(),
         "Log file should be empty after tenex startup, but contained: {content_after}"

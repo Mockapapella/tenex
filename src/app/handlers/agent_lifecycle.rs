@@ -88,12 +88,7 @@ impl Actions {
             prompt.map(String::from),
         );
 
-        let mut command = program;
-        if let Some(p) = prompt {
-            // Pass prompt as positional argument (works for codex, claude, etc.)
-            command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
-        }
-
+        let command = crate::command::build_command_argv(&program, prompt)?;
         self.session_manager
             .create(&agent.tmux_session, worktree_path, Some(&command))?;
 
@@ -143,8 +138,9 @@ impl Actions {
             let root_id = root_agent.id;
 
             // Create the root's tmux session
+            let command = crate::command::build_command_argv(&program, None)?;
             self.session_manager
-                .create(&root_session, &conflict.worktree_path, Some(&program))?;
+                .create(&root_session, &conflict.worktree_path, Some(&command))?;
 
             // Resize the session to match preview dimensions
             if let Some((width, height)) = app.ui.preview_dimensions {
@@ -177,10 +173,7 @@ impl Actions {
                 conflict.prompt.clone(),
             );
 
-            let mut command = program;
-            if let Some(ref p) = conflict.prompt {
-                command = format!("{} \"{}\"", command, p.replace('"', "\\\""));
-            }
+            let command = crate::command::build_command_argv(&program, conflict.prompt.as_deref())?;
 
             self.session_manager.create(
                 &agent.tmux_session,
@@ -265,6 +258,11 @@ impl Actions {
 
             if is_root {
                 // Root agent: kill entire session and worktree
+                let pane_pids = self
+                    .session_manager
+                    .list_pane_pids(&session)
+                    .unwrap_or_default();
+
                 // First kill all descendant windows in descending order
                 // (in case any are in other sessions, and to handle renumbering)
                 let descendants = app.storage.descendants(agent_id);
@@ -279,6 +277,34 @@ impl Actions {
 
                 // Kill the session
                 let _ = self.session_manager.kill(&session);
+
+                // Ensure any remaining pane processes are terminated so the worktree directory can
+                // be removed on platforms with strict file locking (like Windows).
+                for pid in pane_pids {
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .arg("/PID")
+                            .arg(pid.to_string())
+                            .arg("/T")
+                            .arg("/F")
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+                    }
+
+                    #[cfg(unix)]
+                    {
+                        let _ = std::process::Command::new("kill")
+                            .arg("-TERM")
+                            .arg(pid.to_string())
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+                    }
+                }
 
                 // Brief delay to allow tmux processes to terminate
                 // tmux kill-session sends SIGTERM and returns immediately,

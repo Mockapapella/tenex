@@ -29,12 +29,25 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Clear the log file on startup
-    if let Err(e) = std::fs::write("/tmp/tenex.log", "") {
-        eprintln!("Warning: Failed to clear log file: {e}");
+    let log_path = tenex::paths::log_path();
+    if let Some(parent) = log_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "Warning: Failed to create log directory {}: {e}",
+            parent.display()
+        );
     }
 
-    // Log to /tmp/tenex.log - tail with: tail -f /tmp/tenex.log
+    // Clear the log file on startup
+    if let Err(e) = std::fs::write(&log_path, "") {
+        eprintln!(
+            "Warning: Failed to clear log file {}: {e}",
+            log_path.display()
+        );
+    }
+
+    // Log to tenex.log in the OS temp directory
     // Set DEBUG=0-3 to control verbosity (0=off, 1=warn, 2=info, 3=debug)
     let debug_level = std::env::var("DEBUG")
         .ok()
@@ -48,7 +61,11 @@ fn main() -> Result<()> {
             _ => tracing::Level::DEBUG,
         };
 
-        let file_appender = tracing_appender::rolling::never("/tmp", "tenex.log");
+        let log_dir = log_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        let file_appender = tracing_appender::rolling::never(log_dir, "tenex.log");
         tracing_subscriber::fmt()
             .with_writer(file_appender)
             .with_max_level(level)
@@ -129,6 +146,7 @@ fn restart_current_process() -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
         use std::path::PathBuf;
+        use tenex::paths;
 
         fn find_installed_binary(name: &str) -> PathBuf {
             // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
@@ -136,7 +154,7 @@ fn restart_current_process() -> Result<()> {
                 std::env::var("CARGO_HOME")
                     .ok()
                     .map(|h| PathBuf::from(h).join("bin").join(name)),
-                dirs::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
+                paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
             ];
 
             for candidate in candidates.into_iter().flatten() {

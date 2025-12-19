@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 //! Auto-connect to existing worktrees tests
 
 use crate::common::{DirGuard, TestFixture, assert_paths_eq, skip_if_no_tmux};

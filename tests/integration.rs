@@ -1,3 +1,6 @@
+#![cfg_attr(windows, allow(missing_docs))]
+#![cfg(not(windows))]
+
 //! Integration tests for CLI commands
 //!
 //! These tests require:
