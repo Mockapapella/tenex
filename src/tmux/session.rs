@@ -37,8 +37,36 @@ impl Manager {
             .arg("-d")
             .arg("-s")
             .arg(name)
-            .arg("-c")
-            .arg(working_dir);
+            .arg("-c");
+
+        #[cfg(windows)]
+        let working_dir_arg = {
+            let tmux_path = super::tmux_bin();
+            let tmux_lower = tmux_path.to_string_lossy().to_ascii_lowercase();
+            let is_msys2 = tmux_lower.contains("\\msys64\\")
+                || tmux_lower.contains("\\msys32\\")
+                || tmux_lower.contains("/msys64/")
+                || tmux_lower.contains("/msys32/");
+            if is_msys2 {
+                let raw = working_dir.to_string_lossy();
+                if raw.starts_with("\\\\") {
+                    std::ffi::OsString::from(raw.into_owned())
+                } else if raw.len() > 1 && raw.as_bytes()[1] == b':' {
+                    let drive = raw.chars().next().unwrap().to_ascii_lowercase();
+                    let rest = raw[2..].trim_start_matches(['\\', '/']);
+                    std::ffi::OsString::from(format!("/{drive}/{}", rest.replace('\\', "/")))
+                } else {
+                    std::ffi::OsString::from(raw.replace('\\', "/"))
+                }
+            } else {
+                working_dir.as_os_str().to_os_string()
+            }
+        };
+
+        #[cfg(not(windows))]
+        let working_dir_arg = working_dir.as_os_str().to_os_string();
+
+        cmd.arg(working_dir_arg);
 
         if let Some(argv) = command {
             if argv.is_empty() {

@@ -41,6 +41,15 @@ fn tmux_command() -> Command {
 
     let tmux = tmux_bin();
     let mut cmd = Command::new(&tmux);
+    let tmux_lower = tmux.to_string_lossy().to_ascii_lowercase();
+    let is_msys2 = tmux_lower.contains("\\msys64\\")
+        || tmux_lower.contains("\\msys32\\")
+        || tmux_lower.contains("/msys64/")
+        || tmux_lower.contains("/msys32/");
+
+    if is_msys2 {
+        cmd.env("MSYS2_ARG_CONV_EXCL", "*");
+    }
 
     // Users commonly install tmux via MSYS2. If Tenex is invoking tmux via an
     // absolute path, prepend tmux's directory to PATH so tmux can spawn sibling
