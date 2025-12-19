@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.3] - 2025-12-18
+
+### Added
+
+- **Windows support**: Tenex now runs on Windows with MSYS2 tmux, including native TLS for update checks. Support should be considered functional but experimental. Expect bugs.
+
 ## [1.0.2] - 2025-12-15
 
 ### Added
