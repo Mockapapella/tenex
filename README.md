@@ -50,12 +50,18 @@ Tenex builds cleanly with the **MSVC** toolchain. You still need MSYS2 for `tmux
 # Install MSVC Build Tools
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
+$ErrorActionPreference = "Stop"
+
+# Install Rust (required for cargo/rustup)
+winget install -e --id Rustlang.Rustup
+
 # Make link.exe available in every terminal (persistent PATH update)
-$vs = & "$env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 $vc = Join-Path $vs "VC\Tools\MSVC"
 $ver = Get-ChildItem $vc | Sort-Object Name -Descending | Select-Object -First 1
 $bin = Join-Path $ver.FullName "bin\Hostx64\x64"
-setx PATH "$bin;$env:PATH"
+[Environment]::SetEnvironmentVariable("PATH", "$bin;$env:PATH", "User")
 
 # Use MSVC toolchain
 rustup toolchain install stable-x86_64-pc-windows-msvc
@@ -63,6 +69,7 @@ rustup default stable-x86_64-pc-windows-msvc
 
 # Install MSYS2 + tmux
 winget install --id MSYS2.MSYS2 -e
+C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
 C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux"
 setx TENEX_TMUX_BIN C:\msys64\usr\bin\tmux.exe
 
