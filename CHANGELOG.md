@@ -4,13 +4,7 @@
 
 ### Added
 
-- **Windows support**: Tenex now runs on Windows with MSYS2 tmux, including native TLS for update checks.
-
-### Fixed
-
-- **Windows agent launch**: `.cmd`/`.bat` shims now launch reliably under MSYS2 tmux.
-- **Windows worktrees**: Agent worktrees open in the correct repo/worktree directory instead of `~`.
-- **Rename robustness**: Root agent rename no longer fails if the worktree directory is in use on Windows.
+- **Windows support**: Tenex now runs on Windows with MSYS2 tmux, including native TLS for update checks. Support should be considered functional but experimental. Expect bugs.
 
 ## [1.0.2] - 2025-12-15
 
