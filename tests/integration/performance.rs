@@ -4,16 +4,16 @@
 
 use std::path::PathBuf;
 
-use crate::common::{TestFixture, create_child_agent, skip_if_no_tmux};
+use crate::common::{TestFixture, create_child_agent, skip_if_no_mux};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, App};
-use tenex::tmux::SessionManager;
+use tenex::mux::SessionManager;
 
 /// Test that `sync_agent_status` correctly removes agents whose sessions don't exist
-/// using the batched session list approach (single tmux list-sessions call)
+/// using the batched session list approach (single list-sessions call)
 #[test]
 fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -45,12 +45,12 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
         None,
     );
 
-    let agent1_session = agent1.tmux_session.clone();
+    let agent1_session = agent1.mux_session.clone();
     storage.add(agent1);
     storage.add(agent2);
     storage.add(agent3);
 
-    // Only create a real tmux session for agent1
+    // Only create a real mux session for agent1
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&agent1_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -141,7 +141,7 @@ fn test_reserve_window_indices_consecutive() {
 /// Stress test: verify `sync_agent_status` handles many agents efficiently
 #[test]
 fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -157,11 +157,11 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
         fixture.worktree_path(),
         None,
     );
-    let root_session = root.tmux_session.clone();
+    let root_session = root.mux_session.clone();
     let root_id = root.id;
     storage.add(root.clone());
 
-    // Create the root's tmux session with a long-running command
+    // Create the root's mux session with a long-running command
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&root_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));

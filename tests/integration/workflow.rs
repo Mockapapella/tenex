@@ -2,13 +2,13 @@
 
 //! Tests for full CLI workflow, agent creation, and kill success paths
 
-use crate::common::{TestFixture, skip_if_no_tmux};
+use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::agent::Agent;
-use tenex::tmux::SessionManager;
+use tenex::mux::SessionManager;
 
 #[test]
 fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -28,7 +28,7 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
-    // Create tmux session with a command that stays alive
+    // Create mux session with a command that stays alive
     let command = vec!["sleep".to_string(), "10".to_string()];
     manager.create(&session_name, &worktree_path, Some(&command))?;
 
@@ -65,7 +65,7 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -89,7 +89,7 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     // Get agent info for kill command
     let agent = app.storage.iter().next().ok_or("No agent found")?;
     let agent_id = agent.id;
-    let session = agent.tmux_session.clone();
+    let session = agent.mux_session.clone();
     let branch = agent.branch.clone();
 
     // Save storage so cmd_kill can load it
@@ -116,7 +116,7 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -151,7 +151,7 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
     // Kill the session to simulate it stopping
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -166,7 +166,7 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 

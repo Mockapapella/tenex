@@ -2,7 +2,7 @@
 
 use crate::agent::{Agent, ChildConfig};
 use crate::git::{self, WorktreeManager};
-use crate::tmux::SessionManager;
+use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
@@ -90,13 +90,13 @@ impl Actions {
 
         let command = crate::command::build_command_argv(&program, prompt)?;
         self.session_manager
-            .create(&agent.tmux_session, worktree_path, Some(&command))?;
+            .create(&agent.mux_session, worktree_path, Some(&command))?;
 
         // Resize the new session to match preview dimensions
         if let Some((width, height)) = app.ui.preview_dimensions {
             let _ = self
                 .session_manager
-                .resize_window(&agent.tmux_session, width, height);
+                .resize_window(&agent.mux_session, width, height);
         }
 
         app.storage.add(agent);
@@ -111,7 +111,7 @@ impl Actions {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tmux session cannot be created or storage fails
+    /// Returns an error if the mux session cannot be created or storage fails
     pub fn reconnect_to_worktree(self, app: &mut App) -> Result<()> {
         let conflict = app
             .spawn
@@ -134,10 +134,10 @@ impl Actions {
                 None, // Root doesn't get the prompt
             );
 
-            let root_session = root_agent.tmux_session.clone();
+            let root_session = root_agent.mux_session.clone();
             let root_id = root_agent.id;
 
-            // Create the root's tmux session
+            // Create the root's mux session
             let command = crate::command::build_command_argv(&program, None)?;
             self.session_manager
                 .create(&root_session, &conflict.worktree_path, Some(&command))?;
@@ -176,7 +176,7 @@ impl Actions {
             let command = crate::command::build_command_argv(&program, conflict.prompt.as_deref())?;
 
             self.session_manager.create(
-                &agent.tmux_session,
+                &agent.mux_session,
                 &conflict.worktree_path,
                 Some(&command),
             )?;
@@ -185,7 +185,7 @@ impl Actions {
             if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
-                    .resize_window(&agent.tmux_session, width, height);
+                    .resize_window(&agent.mux_session, width, height);
             }
 
             app.storage.add(agent);
@@ -243,7 +243,7 @@ impl Actions {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
             let is_root = agent.is_root();
-            let session = agent.tmux_session.clone();
+            let session = agent.mux_session.clone();
             let worktree_name = agent.branch.clone();
             let window_index = agent.window_index;
             let title = agent.title.clone();
@@ -306,8 +306,8 @@ impl Actions {
                     }
                 }
 
-                // Brief delay to allow tmux processes to terminate
-                // tmux kill-session sends SIGTERM and returns immediately,
+                // Brief delay to allow mux-managed processes to terminate
+                // mux kill-session sends SIGTERM and returns immediately,
                 // but processes may still be running and have files open
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -324,7 +324,7 @@ impl Actions {
                 // Child agent: kill just this window and its descendants
                 // Get the root's session for killing windows
                 let root = app.storage.root_ancestor(agent_id);
-                let root_session = root.map_or_else(|| session.clone(), |r| r.tmux_session.clone());
+                let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
                 let root_id = root.map(|r| r.id);
 
                 // Collect all window indices being deleted
@@ -342,14 +342,14 @@ impl Actions {
                 }
 
                 // Sort in descending order and kill windows from highest to lowest
-                // This prevents tmux renumbering from affecting indices we haven't killed yet
+                // This prevents window renumbering from affecting indices we haven't killed yet
                 deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
                 for idx in &deleted_indices {
                     let _ = self.session_manager.kill_window(&root_session, *idx);
                 }
 
                 // Update window indices for remaining agents under the same root
-                // When tmux has renumber-windows on, indices shift down
+                // When the mux renumbers windows, indices shift down
                 if let Some(rid) = root_id {
                     super::window::adjust_window_indices_after_deletion(
                         app,
@@ -389,14 +389,14 @@ impl Actions {
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
-        // Get the root ancestor to use its tmux session
+        // Get the root ancestor to use its mux session
         let selected_id = selected.id;
         let root = app
             .storage
             .root_ancestor(selected_id)
             .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
 
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
         let root_id = root.id;
@@ -410,13 +410,13 @@ impl Actions {
         // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
             title.clone(),
-            "bash".to_string(),
+            "terminal".to_string(),
             branch,
             worktree_path.clone(),
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session.clone(),
+                mux_session: root_session.clone(),
                 window_index,
             },
         );
@@ -558,7 +558,7 @@ mod tests {
         );
         root.collapsed = false;
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add a child agent
@@ -570,7 +570,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 2,
             },
         );
@@ -600,7 +600,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add children
@@ -613,7 +613,7 @@ mod tests {
                 None,
                 ChildConfig {
                     parent_id: root_id,
-                    tmux_session: root_session.clone(),
+                    mux_session: root_session.clone(),
                     window_index: i + 2,
                 },
             ));
@@ -640,7 +640,7 @@ mod tests {
         );
         root.collapsed = false;
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add a child agent
@@ -652,7 +652,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 2,
             },
         );
@@ -663,10 +663,10 @@ mod tests {
         app.select_next();
         assert_eq!(app.selected_agent().map(|a| a.id), Some(child_id));
 
-        // Spawn terminal - should fail because tmux session doesn't exist
+        // Spawn terminal - should fail because mux session doesn't exist
         let result = handler.spawn_terminal(&mut app, None);
 
-        // Should fail because tmux session doesn't exist
+        // Should fail because mux session doesn't exist
         assert!(result.is_err());
         Ok(())
     }

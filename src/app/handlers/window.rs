@@ -6,7 +6,7 @@ use super::Actions;
 use crate::app::state::App;
 
 impl Actions {
-    /// Resize all agent tmux windows to match the preview pane dimensions
+    /// Resize all agent mux windows to match the preview pane dimensions
     ///
     /// This ensures the terminal output renders correctly in the preview pane.
     pub fn resize_agent_windows(&self, app: &App) {
@@ -17,19 +17,19 @@ impl Actions {
         for agent in app.storage.iter() {
             if agent.is_root() {
                 // Root agent: resize the session
-                if self.session_manager.exists(&agent.tmux_session) {
+                if self.session_manager.exists(&agent.mux_session) {
                     let _ = self
                         .session_manager
-                        .resize_window(&agent.tmux_session, width, height);
+                        .resize_window(&agent.mux_session, width, height);
                 }
             } else if let Some(window_idx) = agent.window_index {
                 // Child agent: resize the specific window
                 let root = app.storage.root_ancestor(agent.id);
                 if let Some(root_agent) = root
-                    && self.session_manager.exists(&root_agent.tmux_session)
+                    && self.session_manager.exists(&root_agent.mux_session)
                 {
-                    let window_target = crate::tmux::SessionManager::window_target(
-                        &root_agent.tmux_session,
+                    let window_target = crate::mux::SessionManager::window_target(
+                        &root_agent.mux_session,
                         window_idx,
                     );
                     let _ = self
@@ -43,7 +43,7 @@ impl Actions {
 
 /// Adjust window indices for all agents under a root after windows are deleted
 ///
-/// This handles the case where tmux has `renumber-windows on` and
+/// This handles the case where the mux renumbers windows and
 /// window indices shift after windows are deleted. We compute the new
 /// indices mathematically rather than relying on window names.
 pub fn adjust_window_indices_after_deletion(
@@ -160,7 +160,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add a child agent
@@ -172,7 +172,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 2,
             },
         ));
@@ -213,7 +213,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add child agents with window indices
@@ -225,7 +225,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session.clone(),
+                mux_session: root_session.clone(),
                 window_index: 2,
             },
         );
@@ -240,7 +240,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 4,
             },
         );
@@ -271,7 +271,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add surviving child with window index 5
@@ -283,7 +283,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 5,
             },
         );
@@ -314,7 +314,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add child with window index 1
@@ -326,7 +326,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 1,
             },
         );

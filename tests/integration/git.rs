@@ -488,7 +488,7 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let root_id = root.id;
-    let root_session = root.tmux_session.clone();
+    let root_session = root.mux_session.clone();
     app.storage.add(root);
 
     // Create a child agent
@@ -500,7 +500,7 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
         None,
         tenex::agent::ChildConfig {
             parent_id: root_id,
-            tmux_session: root_session,
+            mux_session: root_session,
             window_index: 2,
         },
     );
@@ -594,14 +594,14 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
     // Count agents before
     let agents_before = app.storage.iter().count();
 
-    // Execute rebase - in real tmux environment, this spawns a conflict terminal
-    // In test environment (no tmux), it may error when trying to create window
+    // Execute rebase - in a real environment, this spawns a conflict terminal
+    // In test environment (no active session), it may error when trying to create a window
     let result = Actions::execute_rebase(&mut app);
 
     // The rebase should handle the situation gracefully.
-    // Multiple outcomes are valid depending on git state and tmux availability:
+    // Multiple outcomes are valid depending on git state and session availability:
     // 1. Conflict detected -> terminal spawned (new agent added)
-    // 2. Conflict detected -> tmux error (result.is_err())
+    // 2. Conflict detected -> error (result.is_err())
     // 3. No conflict -> success modal shown
     // 4. Error -> error message set
     // The key is that the function handles it without panicking.
@@ -611,7 +611,7 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
 
     assert!(
         conflict_terminal_spawned || has_error || is_success,
-        "Rebase should detect conflict (either spawn terminal or return tmux error)"
+        "Rebase should detect conflict (either spawn terminal or return an error)"
     );
 
     Ok(())
@@ -688,16 +688,16 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
     // Count agents before
     let agents_before = app.storage.iter().count();
 
-    // Execute merge - in real tmux environment, this spawns a conflict terminal
-    // In test environment (no tmux), it may error when trying to create window
+    // Execute merge - in real mux environment, this spawns a conflict terminal
+    // In test environment (no mux), it may error when trying to create window
     let result = Actions::execute_merge(&mut app);
 
     // DirGuard will restore directory on drop
 
     // The merge should handle the situation gracefully.
-    // Multiple outcomes are valid depending on git state and tmux availability:
+    // Multiple outcomes are valid depending on git state and mux availability:
     // 1. Conflict detected -> terminal spawned (new agent added)
-    // 2. Conflict detected -> tmux error (result.is_err())
+    // 2. Conflict detected -> mux error (result.is_err())
     // 3. Error -> error message set
     // 4. No conflict -> success modal shown
     // The key is that the function handles it without panicking.
@@ -913,7 +913,7 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
         None,
     );
     let root_id = root.id;
-    let root_session = root.tmux_session.clone();
+    let root_session = root.mux_session.clone();
     app.storage.add(root);
 
     // Add child agents
@@ -926,7 +926,7 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
             None,
             tenex::agent::ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session.clone(),
+                mux_session: root_session.clone(),
                 window_index: i + 2,
             },
         );

@@ -669,7 +669,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: parent.id,
-                tmux_session: parent.tmux_session.clone(),
+                mux_session: parent.mux_session.clone(),
                 window_index,
             },
         )
@@ -750,7 +750,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: child.id,
-                tmux_session: root.tmux_session.clone(),
+                mux_session: root.mux_session.clone(),
                 window_index: 3,
             },
         );
@@ -796,7 +796,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: child1.id,
-                tmux_session: root.tmux_session.clone(),
+                mux_session: root.mux_session.clone(),
                 window_index: 4,
             },
         );
@@ -825,7 +825,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: child.id,
-                tmux_session: root.tmux_session.clone(),
+                mux_session: root.mux_session.clone(),
                 window_index: 3,
             },
         );
@@ -926,7 +926,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: child1.id,
-                tmux_session: root.tmux_session.clone(),
+                mux_session: root.mux_session.clone(),
                 window_index: 4,
             },
         );

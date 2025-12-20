@@ -12,7 +12,7 @@ pub fn create_child_agent(parent: &Agent, title: &str, window_index: u32) -> Age
         None,
         ChildConfig {
             parent_id: parent.id,
-            tmux_session: parent.tmux_session.clone(),
+            mux_session: parent.mux_session.clone(),
             window_index,
         },
     )

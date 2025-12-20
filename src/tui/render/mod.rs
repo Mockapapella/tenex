@@ -137,7 +137,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             Line::from(vec![
                                 Span::styled("  Session: ", Style::default().fg(colors::TEXT_DIM)),
                                 Span::styled(
-                                    &agent.tmux_session,
+                                    &agent.mux_session,
                                     Style::default().fg(colors::TEXT_PRIMARY),
                                 ),
                             ]),

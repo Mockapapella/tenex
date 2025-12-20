@@ -2,10 +2,10 @@
 
 //! Tests for [R] review agent functionality
 
-use crate::common::{TestFixture, skip_if_no_tmux};
+use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::app::Mode;
 use tenex::config::Action;
-use tenex::tmux::SessionManager;
+use tenex::mux::SessionManager;
 
 #[test]
 fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,7 @@ fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::
 #[test]
 fn test_review_action_with_agent_selected_shows_count_picker()
 -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -83,7 +83,7 @@ fn test_review_action_with_agent_selected_shows_count_picker()
     std::env::set_current_dir(&original_dir)?;
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -252,7 +252,7 @@ fn test_review_branch_selection_confirmation() -> Result<(), Box<dyn std::error:
 
 #[test]
 fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -266,7 +266,7 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
 
-    // Create a root agent with children (swarm) to get a proper tmux session
+    // Create a root agent with children (swarm) to get a proper mux session
     app.spawn.child_count = 1;
     app.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app, Some("test-swarm"));
@@ -296,12 +296,12 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     // Cleanup first
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
     std::env::set_current_dir(&original_dir)?;
 
     if result.is_err() {
-        // Skip if review spawn fails (tmux issues)
+        // Skip if review spawn fails (mux issues)
         return Ok(());
     }
 

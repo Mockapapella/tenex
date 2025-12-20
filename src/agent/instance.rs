@@ -30,8 +30,9 @@ pub struct Agent {
     /// Initial prompt sent to the agent (if any)
     pub initial_prompt: Option<String>,
 
-    /// Tmux session name
-    pub tmux_session: String,
+    /// Mux session name
+    #[serde(alias = "tmux_session")]
+    pub mux_session: String,
 
     /// When the agent was created
     pub created_at: DateTime<Utc>,
@@ -43,7 +44,7 @@ pub struct Agent {
     #[serde(default)]
     pub parent_id: Option<Uuid>,
 
-    /// Tmux window index within the root ancestor's session (None for root agents)
+    /// Window index within the root ancestor's session (None for root agents)
     #[serde(default)]
     pub window_index: Option<u32>,
 
@@ -66,8 +67,8 @@ const fn default_collapsed() -> bool {
 pub struct ChildConfig {
     /// Parent agent ID
     pub parent_id: Uuid,
-    /// Tmux session name (from root ancestor)
-    pub tmux_session: String,
+    /// Mux session name (from root ancestor)
+    pub mux_session: String,
     /// Window index in the session
     pub window_index: u32,
 }
@@ -84,7 +85,7 @@ impl Agent {
     ) -> Self {
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let tmux_session = format!("tenex-{}", &id.to_string()[..8]);
+        let mux_session = format!("tenex-{}", &id.to_string()[..8]);
 
         Self {
             id,
@@ -94,7 +95,7 @@ impl Agent {
             branch,
             worktree_path,
             initial_prompt,
-            tmux_session,
+            mux_session,
             created_at: now,
             updated_at: now,
             parent_id: None,
@@ -125,7 +126,7 @@ impl Agent {
             branch,
             worktree_path,
             initial_prompt,
-            tmux_session: config.tmux_session,
+            mux_session: config.mux_session,
             created_at: now,
             updated_at: now,
             parent_id: Some(config.parent_id),
@@ -212,7 +213,7 @@ mod tests {
         assert_eq!(agent.program, "claude");
         assert_eq!(agent.status, Status::Starting);
         assert_eq!(agent.branch, "tenex/test-agent");
-        assert!(agent.tmux_session.starts_with("tenex-"));
+        assert!(agent.mux_session.starts_with("tenex-"));
         assert!(agent.initial_prompt.is_none());
     }
 
@@ -292,7 +293,7 @@ mod tests {
         let agent2 = create_test_agent();
 
         assert_ne!(agent1.id, agent2.id);
-        assert_ne!(agent1.tmux_session, agent2.tmux_session);
+        assert_ne!(agent1.mux_session, agent2.mux_session);
     }
 
     #[test]
@@ -316,7 +317,7 @@ mod tests {
             Some("Research task".to_string()),
             ChildConfig {
                 parent_id: parent.id,
-                tmux_session: parent.tmux_session.clone(),
+                mux_session: parent.mux_session.clone(),
                 window_index: 2,
             },
         );
@@ -325,7 +326,7 @@ mod tests {
         assert!(child.is_child());
         assert_eq!(child.parent_id, Some(parent.id));
         assert_eq!(child.window_index, Some(2));
-        assert_eq!(child.tmux_session, parent.tmux_session);
+        assert_eq!(child.mux_session, parent.mux_session);
         assert!(child.collapsed);
     }
 
@@ -340,7 +341,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: parent.id,
-                tmux_session: parent.tmux_session,
+                mux_session: parent.mux_session,
                 window_index: 2,
             },
         );

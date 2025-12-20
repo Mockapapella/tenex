@@ -1,6 +1,6 @@
 //! Broadcast operations: send messages to leaf agents
 
-use crate::tmux::SessionManager;
+use crate::mux::SessionManager;
 use anyhow::Result;
 use tracing::{info, warn};
 
@@ -34,24 +34,24 @@ impl Actions {
                 && let Some(target_agent) = app.storage.get(target_id)
                 && !target_agent.is_terminal
             {
-                // Determine the tmux target (session or window)
-                let tmux_target = if let Some(window_idx) = target_agent.window_index {
+                // Determine the mux target (session or window)
+                let target = if let Some(window_idx) = target_agent.window_index {
                     // Child agent: use window target within root's session
                     let root = app.storage.root_ancestor(target_id);
                     let root_session = root.map_or_else(
-                        || target_agent.tmux_session.clone(),
-                        |r| r.tmux_session.clone(),
+                        || target_agent.mux_session.clone(),
+                        |r| r.mux_session.clone(),
                     );
                     SessionManager::window_target(&root_session, window_idx)
                 } else {
                     // Root agent: use session directly
-                    target_agent.tmux_session.clone()
+                    target_agent.mux_session.clone()
                 };
 
                 // Send the message and submit it (program-specific)
                 if self
                     .session_manager
-                    .send_keys_and_submit_for_program(&tmux_target, &target_agent.program, message)
+                    .send_keys_and_submit_for_program(&target, &target_agent.program, message)
                     .is_ok()
                 {
                     sent_count += 1;
@@ -137,7 +137,7 @@ mod tests {
         );
         root.collapsed = false;
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add children (leaves)
@@ -150,7 +150,7 @@ mod tests {
                 None,
                 ChildConfig {
                     parent_id: root_id,
-                    tmux_session: root_session.clone(),
+                    mux_session: root_session.clone(),
                     window_index: i + 2,
                 },
             ));

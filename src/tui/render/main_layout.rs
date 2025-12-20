@@ -211,10 +211,13 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .scroll((scroll_pos, 0))
-        .wrap(Wrap { trim: false });
+        .scroll((scroll_pos, 0));
 
     frame.render_widget(paragraph, area);
+
+    if is_focused {
+        render_preview_cursor(frame, app, area, scroll, line_count, visible_height);
+    }
 
     if line_count > visible_height && area.width != 0 {
         let scrollbar_area = area.inner(Margin {
@@ -237,6 +240,63 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
         }
     }
+}
+
+fn render_preview_cursor(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    scroll: usize,
+    line_count: usize,
+    visible_height: usize,
+) {
+    let Some((cursor_x, cursor_y, cursor_hidden)) = app.ui.preview_cursor_position else {
+        return;
+    };
+    if cursor_hidden {
+        return;
+    }
+    let Some((_cols, pane_rows)) = app.ui.preview_pane_size else {
+        return;
+    };
+
+    let pane_rows = usize::from(pane_rows);
+    if pane_rows == 0 || visible_height == 0 {
+        return;
+    }
+
+    let cursor_row = usize::from(cursor_y);
+    let cursor_line_index = if line_count >= pane_rows {
+        line_count
+            .saturating_sub(pane_rows)
+            .saturating_add(cursor_row)
+    } else {
+        cursor_row
+    };
+
+    let visible_row = cursor_line_index.saturating_sub(scroll);
+    if visible_row >= visible_height {
+        return;
+    }
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let max_x = inner.width.saturating_sub(1);
+    let cursor_x = cursor_x.min(max_x);
+    let cursor_y = u16::try_from(visible_row)
+        .unwrap_or(0)
+        .min(inner.height.saturating_sub(1));
+
+    frame.set_cursor_position((
+        inner.x.saturating_add(cursor_x),
+        inner.y.saturating_add(cursor_y),
+    ));
 }
 
 /// Render the diff pane
@@ -362,7 +422,7 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Calculate the inner dimensions of the preview pane (content area without borders)
 ///
-/// This is used to resize tmux windows to match the preview pane size.
+/// This is used to resize mux windows to match the preview pane size.
 #[must_use]
 pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
     // Main layout: Vertical split with status bar at bottom (1 line)

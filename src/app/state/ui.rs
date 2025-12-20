@@ -22,13 +22,19 @@ pub struct UiState {
     /// Cached preview content
     pub preview_content: String,
 
+    /// Cached cursor position in the selected pane (x, y), 0-based, and whether it is hidden.
+    pub preview_cursor_position: Option<(u16, u16, bool)>,
+
+    /// Cached pane size for the selected pane (cols, rows).
+    pub preview_pane_size: Option<(u16, u16)>,
+
     /// Cached diff content
     pub diff_content: String,
 
     /// Cached byte ranges for each diff line (matches `diff_content.lines()`)
     pub diff_line_ranges: Vec<(usize, usize)>,
 
-    /// Cached preview pane dimensions (width, height) for tmux window sizing
+    /// Cached preview pane dimensions (width, height) for mux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
     /// Last error message (if any)
@@ -49,6 +55,8 @@ impl UiState {
             help_scroll: 0,
             preview_follow: true,
             preview_content: String::new(),
+            preview_cursor_position: None,
+            preview_pane_size: None,
             diff_content: String::new(),
             diff_line_ranges: Vec::new(),
             preview_dimensions: None,
@@ -158,7 +166,7 @@ impl UiState {
         self.diff_scroll = content_lines.saturating_sub(visible_lines);
     }
 
-    /// Set the preview pane dimensions for tmux window sizing
+    /// Set the preview pane dimensions for mux window sizing
     pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
         self.preview_dimensions = Some((width, height));
     }

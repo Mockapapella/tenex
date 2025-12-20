@@ -23,17 +23,18 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 
 ## Requirements
 
-- **tmux** — Required for session management (recent version recommended)
+- **Built-in PTY backend** — No external multiplexer required
 - **git** — Required for worktree isolation
 - **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
 - **An agent CLI** — `claude` (default) or `codex` (or configure a custom command)
 - **Rust 1.91+** — For building from source
 - **cargo** — Required for auto-update functionality
 
-## Installation
+## Linux/Mac Installation
 
 ```bash
 # Install from crates.io
+curl https://sh.rustup.rs -sSf | sh
 cargo install tenex --locked
 
 # Or build from source
@@ -42,50 +43,14 @@ cd tenex
 cargo install --path .
 ```
 
-### Windows (native)
+### Windows Installation
 
-Tenex builds cleanly with the **MSVC** toolchain. You still need MSYS2 for `tmux`.
+To install via Cargo, you need Rust plus the MSVC C++ build tools.
 
 ```powershell
-# Install MSVC Build Tools
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-
-$ErrorActionPreference = "Stop"
-
-# Install Rust (required for cargo/rustup)
 winget install -e --id Rustlang.Rustup
-
-# Make link.exe available in every terminal (persistent PATH update)
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-$vc = Join-Path $vs "VC\Tools\MSVC"
-$ver = Get-ChildItem $vc | Sort-Object Name -Descending | Select-Object -First 1
-$bin = Join-Path $ver.FullName "bin\Hostx64\x64"
-[Environment]::SetEnvironmentVariable("PATH", "$bin;$env:PATH", "User")
-
-# Use MSVC toolchain
-rustup toolchain install stable-x86_64-pc-windows-msvc
-rustup default stable-x86_64-pc-windows-msvc
-
-# Install MSYS2 + tmux
-winget install --id MSYS2.MSYS2 -e
-C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
-C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux"
-setx TENEX_TMUX_BIN C:\msys64\usr\bin\tmux.exe
-
-# Install Tenex (open a new terminal after setx)
 cargo install tenex --locked
-```
-
-If you prefer the GNU toolchain, you must also install MinGW binutils (`dlltool.exe`) and point Rust at it.
-
-### CI artifacts (no local build)
-
-Every CI run uploads `tenex` binaries for Linux/macOS/Windows. Download with `gh`:
-
-```bash
-gh run list -w CI -b <branch>
-gh run download <run-id> -n tenex-windows-latest
 ```
 
 ## Quick Start
@@ -121,7 +86,7 @@ tenex
 
 | Key | Action |
 |-----|--------|
-| `t` | Spawn terminal (bash shell as child of selected root) |
+| `t` | Spawn terminal (shell as child of selected root) |
 | `T` | Spawn terminal with startup command |
 
 ### Git
@@ -170,6 +135,7 @@ The default agent command is `claude --allow-dangerously-skip-permissions`. Pres
 | Variable | Description |
 |----------|-------------|
 | `DEBUG` | Log level: `0` off, `1` warn, `2` info, `3` debug |
+| `TENEX_MUX_SOCKET` | Override mux daemon socket name/path |
 | `TENEX_STATE_PATH` | Override state file location |
 
 ### CLI Commands
@@ -205,7 +171,7 @@ Reviewers get a strict review preamble with the chosen base branch. They're titl
 ### Synthesis
 
 Press `s` to synthesize. This:
-1. Captures the last ~5000 lines from each descendant's tmux pane
+1. Captures the last ~5000 lines from each descendant's terminal buffer
 2. Writes combined output to `.tenex/<uuid>.md` in the parent's worktree
 3. Kills and removes all descendants
 4. Sends the parent a command to read the synthesized file
@@ -221,6 +187,16 @@ When rebase or merge encounters conflicts, Tenex opens a terminal window titled 
 ## Keyboard Compatibility
 
 On first launch, Tenex checks if your terminal supports the Kitty keyboard protocol (to distinguish `Ctrl+m` from Enter). If not supported, you'll be prompted to remap the merge key to `Ctrl+n`. This choice is saved to `settings.json`.
+
+## Troubleshooting
+
+### Agents Disappear Immediately
+
+If a newly-created agent flashes into existence and vanishes a few seconds later, it usually means the underlying agent process exited during startup (Tenex then prunes the agent because its mux session is gone).
+
+- Enable logs with `DEBUG=3 tenex` and inspect the log at `/tmp/tenex.log`.
+- Tenex isolates mux daemons per build by default, so stale daemons from older installs shouldn’t interfere after an upgrade.
+- To isolate mux state, start Tenex with an explicit socket: `TENEX_MUX_SOCKET=/tmp/tenex-mux.sock tenex`.
 
 ## License
 

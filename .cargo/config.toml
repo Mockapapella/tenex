@@ -6,5 +6,5 @@ cov = "llvm-cov --workspace --all-features --profile coverage --fail-under-lines
 ci = ["check", "--all-targets", "--all-features", "--workspace"]
 
 [env]
-# Run tests single-threaded to avoid race conditions with tmux sessions
+# Run tests single-threaded to avoid race conditions with mux sessions
 RUST_TEST_THREADS = "1"

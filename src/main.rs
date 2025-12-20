@@ -26,6 +26,9 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Run the mux daemon (internal).
+    #[command(hide = true)]
+    Muxd,
 }
 
 fn main() -> Result<()> {
@@ -95,6 +98,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Reset { force }) => cmd_reset(force),
+        Some(Commands::Muxd) => tenex::mux::run_mux_daemon(),
         None => {
             // Ensure .tenex/ is excluded from git tracking
             if let Ok(cwd) = std::env::current_dir()
@@ -189,21 +193,21 @@ fn cmd_reset(force: bool) -> Result<()> {
     use std::collections::HashSet;
     use std::io::{self, Write};
     use tenex::git::WorktreeManager;
-    use tenex::tmux::SessionManager;
+    use tenex::mux::SessionManager;
 
     let storage = Storage::load().unwrap_or_default();
-    let tmux = SessionManager::new();
+    let mux = SessionManager::new();
 
     // Skip orphan detection when using isolated state (TENEX_STATE_PATH set).
     // Otherwise we'd kill real tenex sessions that aren't in the isolated state.
     let using_isolated_state = std::env::var("TENEX_STATE_PATH").is_ok();
 
-    // Find orphaned muster tmux sessions (not in storage)
-    let storage_sessions: HashSet<_> = storage.iter().map(|a| a.tmux_session.clone()).collect();
+    // Find orphaned Tenex mux sessions (not in storage)
+    let storage_sessions: HashSet<_> = storage.iter().map(|a| a.mux_session.clone()).collect();
     let orphaned_sessions: Vec<_> = if using_isolated_state {
         Vec::new() // Don't scan for orphans when using isolated state
     } else {
-        tmux.list()
+        mux.list()
             .unwrap_or_default()
             .into_iter()
             .filter(|s| s.name.starts_with("tenex-") && !storage_sessions.contains(&s.name))
@@ -230,7 +234,7 @@ fn cmd_reset(force: bool) -> Result<()> {
     }
 
     if !orphaned_sessions.is_empty() {
-        println!("Orphaned tmux sessions to kill:\n");
+        println!("Orphaned mux sessions to kill:\n");
         for session in &orphaned_sessions {
             println!("  - {}", session.name);
         }
@@ -250,17 +254,17 @@ fn cmd_reset(force: bool) -> Result<()> {
         }
     }
 
-    // Kill tmux sessions and remove worktrees/branches
+    // Kill mux sessions and remove worktrees/branches
     let repo_path = std::env::current_dir()?;
     let repo = tenex::git::open_repository(&repo_path).ok();
     let worktree_mgr = repo.as_ref().map(WorktreeManager::new);
     let branch_mgr = repo.as_ref().map(tenex::git::BranchManager::new);
 
     for agent in storage.iter() {
-        if let Err(e) = tmux.kill(&agent.tmux_session) {
+        if let Err(e) = mux.kill(&agent.mux_session) {
             eprintln!(
-                "Warning: Failed to kill tmux session {}: {e}",
-                agent.tmux_session
+                "Warning: Failed to kill mux session {}: {e}",
+                agent.mux_session
             );
         }
         if let Some(ref mgr) = worktree_mgr
@@ -278,9 +282,9 @@ fn cmd_reset(force: bool) -> Result<()> {
 
     // Kill orphaned sessions
     for session in &orphaned_sessions {
-        if let Err(e) = tmux.kill(&session.name) {
+        if let Err(e) = mux.kill(&session.name) {
             eprintln!(
-                "Warning: Failed to kill orphaned tmux session {}: {e}",
+                "Warning: Failed to kill orphaned mux session {}: {e}",
                 session.name
             );
         }
@@ -315,6 +319,15 @@ mod tests {
             _ => return Err("Expected Reset command".into()),
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_cli_muxd_command() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = Cli::parse_from(["tenex", "muxd"]);
+        match cli.command {
+            Some(Commands::Muxd) => Ok(()),
+            _ => Err("Expected Muxd command".into()),
+        }
     }
 
     // Note: test_cmd_reset_force moved to tests/cli_binary_test.rs

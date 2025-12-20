@@ -40,15 +40,9 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Start persistent tmux server
-        run: |
-          # Create a dummy session to keep the server running
-          tmux new-session -d -s keepalive 'sleep 3600'
       - name: Run coverage
         env:
-          TENEX_STATE_PATH: /tmp/tenex-ci-state.json
+          TENEX_STATE_PATH: ${{ runner.temp }}/tenex-ci-state.json
         run: cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
 
   test:
@@ -73,15 +67,9 @@ jobs:
         uses: dtolnay/rust-toolchain@1.91.0
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Install tmux (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Start persistent tmux server
-        if: runner.os == 'Linux'
-        run: |
-          # Create a dummy session to keep the server running
-          tmux new-session -d -s keepalive 'sleep 3600'
       - name: Run tests
+        env:
+          TENEX_STATE_PATH: ${{ runner.temp }}/tenex-ci-state.json
         run: cargo test --all-targets --all-features -- --test-threads=1
       - name: Build tenex (release)
         if: runner.os == 'Linux' && github.event_name == 'push'

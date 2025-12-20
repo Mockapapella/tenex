@@ -2,12 +2,12 @@
 
 //! Tests for Actions handler with real operations
 
-use crate::common::{TestFixture, skip_if_no_tmux};
-use tenex::tmux::SessionManager;
+use crate::common::{TestFixture, skip_if_no_mux};
+use tenex::mux::SessionManager;
 
 #[test]
 fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -28,7 +28,7 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
     // Cleanup first
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     // Restore original directory
@@ -42,7 +42,7 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
 
 #[test]
 fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -67,7 +67,7 @@ fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -75,7 +75,7 @@ fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std
 
 #[test]
 fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -112,7 +112,7 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -144,7 +144,7 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -152,7 +152,7 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -181,7 +181,7 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -189,7 +189,7 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
 
 #[test]
 fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -224,7 +224,7 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -232,7 +232,7 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
 
 #[test]
 fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -266,7 +266,7 @@ fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -286,7 +286,7 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
     // Early cleanup if creation failed
     if create_result.is_err() {
         let _ = std::env::set_current_dir(&original_dir);
-        // Skip test if agent creation fails (e.g., git/tmux issues)
+        // Skip test if agent creation fails (e.g., git/mux issues)
         return Ok(());
     }
 
@@ -298,7 +298,7 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     let _ = std::env::set_current_dir(&original_dir);

@@ -1,13 +1,13 @@
 #![cfg(not(windows))]
 
-//! Tests for tmux session operations and capture functions
+//! Tests for mux session operations and capture functions
 
-use crate::common::{TestFixture, skip_if_no_tmux};
-use tenex::tmux::SessionManager;
+use crate::common::{TestFixture, skip_if_no_mux};
+use tenex::mux::SessionManager;
 
 #[test]
-fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -24,7 +24,7 @@ fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     let result = manager.create(&session_name, &fixture.worktree_path(), Some(&command));
     assert!(result.is_ok());
 
-    // Give tmux time to start
+    // Give the mux a moment to start
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Verify session exists
@@ -42,8 +42,8 @@ fn test_tmux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_session_list() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_session_list() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -69,8 +69,8 @@ fn test_tmux_session_list() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -92,7 +92,7 @@ fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Capture the pane
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.capture_pane(&session_name);
 
     // Cleanup
@@ -104,8 +104,8 @@ fn test_tmux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -127,7 +127,7 @@ fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error
     );
 
     // Capture with history
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.capture_pane_with_history(&session_name, 100);
 
     // Cleanup
@@ -139,8 +139,8 @@ fn test_tmux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -162,7 +162,7 @@ fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Capture full history
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.capture_full_history(&session_name);
 
     // Cleanup
@@ -174,19 +174,19 @@ fn test_tmux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_capture_nonexistent_session() {
-    if skip_if_no_tmux() {
+fn test_mux_capture_nonexistent_session() {
+    if skip_if_no_mux() {
         return;
     }
 
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.capture_pane("nonexistent-session-xyz");
     assert!(result.is_err());
 }
 
 #[test]
-fn test_tmux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -211,8 +211,8 @@ fn test_tmux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -237,7 +237,7 @@ fn test_tmux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Verify the command actually ran (i.e. submit sent Enter).
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let output = capture.capture_pane_with_history(&session_name, 200)?;
     assert!(
         output.contains(&token),
@@ -251,8 +251,8 @@ fn test_tmux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -291,8 +291,8 @@ fn test_tmux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -307,7 +307,7 @@ fn test_tmux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Capture tail
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.tail(&session_name, 10);
     assert!(result.is_ok());
 
@@ -318,8 +318,8 @@ fn test_tmux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -333,7 +333,7 @@ fn test_tmux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Get pane size
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.pane_size(&session_name);
     assert!(result.is_ok());
 
@@ -349,8 +349,8 @@ fn test_tmux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -364,7 +364,7 @@ fn test_tmux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Get cursor position
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.cursor_position(&session_name);
     assert!(result.is_ok());
 
@@ -375,8 +375,8 @@ fn test_tmux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -391,7 +391,7 @@ fn test_tmux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Get current command
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let result = capture.pane_current_command(&session_name);
     // Should succeed (though command may vary)
     assert!(result.is_ok());
@@ -403,8 +403,8 @@ fn test_tmux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -434,8 +434,8 @@ fn test_tmux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -460,7 +460,7 @@ fn test_tmux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Verify the command actually ran (i.e. submit sent C-m).
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let output = capture.capture_pane_with_history(&session_name, 200)?;
     assert!(
         output.contains(&token),
@@ -474,8 +474,8 @@ fn test_tmux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_tmux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -503,7 +503,7 @@ fn test_tmux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Verify the command actually ran
-    let capture = tenex::tmux::OutputCapture::new();
+    let capture = tenex::mux::OutputCapture::new();
     let output = capture.capture_pane_with_history(&session_name, 200)?;
     assert!(
         output.contains(&token_claude),
@@ -530,6 +530,68 @@ fn test_tmux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error
 
     // Cleanup
     manager.kill(&session_name)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_mux_responds_to_terminal_queries() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("terminal_queries")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("termq");
+
+    let _ = manager.kill(&session_name);
+
+    let script = concat!(
+        "stty raw -echo min 0 time 10; ",
+        "printf 'DA:'; ",
+        "printf '\\033[c\\n'; ",
+        "dd bs=1 count=32 2>/dev/null | od -An -tx1; ",
+        "printf '\\n'; ",
+        "printf 'CPR:'; ",
+        "printf '\\033[6n\\n'; ",
+        "dd bs=1 count=32 2>/dev/null | od -An -tx1; ",
+        "printf '\\n'; ",
+        "stty sane",
+    );
+    let command = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let output = capture.capture_full_history(&session_name)?;
+
+    manager.kill(&session_name)?;
+
+    assert!(
+        output.contains("DA:"),
+        "Expected DA marker, got: {output:?}"
+    );
+    assert!(
+        output.contains("CPR:"),
+        "Expected CPR marker, got: {output:?}"
+    );
+
+    let normalized_output = output.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // Primary device attributes response: ESC [ ? 1 ; 0 c
+    assert!(
+        normalized_output.contains("1b 5b 3f 31 3b 30 63"),
+        "Expected primary device attributes response bytes, got: {output:?}"
+    );
+
+    // Cursor position report response: ESC [ <row> ; <col> R
+    let cpr_section = normalized_output.split("CPR:").nth(1).unwrap_or_default();
+    assert!(
+        cpr_section.contains("1b 5b") && cpr_section.contains("3b") && cpr_section.contains("52"),
+        "Expected cursor position report bytes after CPR marker, got: {output:?}"
+    );
 
     Ok(())
 }
