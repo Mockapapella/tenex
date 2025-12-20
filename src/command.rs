@@ -164,6 +164,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_command_line_comment_is_empty() {
+        let result = parse_command_line("# comment only");
+        assert!(result.is_err());
+        if let Err(error) = result {
+            let message = format!("{error}");
+            assert!(message.contains("Command line produced no argv items"));
+        }
+    }
+
+    #[test]
     fn test_build_command_argv_appends_prompt() -> Result<(), Box<dyn std::error::Error>> {
         let argv = build_command_argv("echo hello", Some("prompt"))?;
         assert_eq!(
