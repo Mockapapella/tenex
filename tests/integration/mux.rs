@@ -578,14 +578,16 @@ fn test_mux_responds_to_terminal_queries() -> Result<(), Box<dyn std::error::Err
         "Expected CPR marker, got: {output:?}"
     );
 
+    let normalized_output = output.split_whitespace().collect::<Vec<_>>().join(" ");
+
     // Primary device attributes response: ESC [ ? 1 ; 0 c
     assert!(
-        output.contains("1b 5b 3f 31 3b 30 63"),
+        normalized_output.contains("1b 5b 3f 31 3b 30 63"),
         "Expected primary device attributes response bytes, got: {output:?}"
     );
 
     // Cursor position report response: ESC [ <row> ; <col> R
-    let cpr_section = output.split("CPR:").nth(1).unwrap_or_default();
+    let cpr_section = normalized_output.split("CPR:").nth(1).unwrap_or_default();
     assert!(
         cpr_section.contains("1b 5b") && cpr_section.contains("3b") && cpr_section.contains("52"),
         "Expected cursor position report bytes after CPR marker, got: {output:?}"
