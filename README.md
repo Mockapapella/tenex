@@ -49,10 +49,8 @@ To install via Cargo, you need Rust plus the MSVC C++ build tools.
 ```powershell
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install -e --id Rustlang.Rustup
-```
 cargo install tenex --locked
 ```
-
 
 ## Quick Start
 
