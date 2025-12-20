@@ -1,21 +1,5 @@
 # Changelog
 
-## [1.0.4] - 2025-12-20
-
-### Changed
-
-- **Session backend**: Removed the tmux dependency and replaced it with a built-in PTY mux (no external multiplexer required).
-- **Windows installation**: Simplified installation flow; no MSYS2/tmux required (uses MSVC build tools + rustup).
-
-### Added
-
-- **Mux socket override**: `TENEX_MUX_SOCKET` environment variable to override the mux daemon socket name/path.
-
-### Fixed
-
-- **Terminal preview rendering**: Fixed cursor rendering in the terminal preview.
-- **Input modals**: Long input text now wraps correctly.
-
 ## [1.0.3] - 2025-12-18
 
 ### Added
