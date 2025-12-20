@@ -141,3 +141,39 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_command_line_rejects_empty() {
+        let result = parse_command_line("   ");
+        assert!(result.is_err());
+        if let Err(error) = result {
+            let message = format!("{error}");
+            assert!(message.contains("Command line is empty"));
+        }
+    }
+
+    #[test]
+    fn test_parse_command_line_splits_args() -> Result<(), Box<dyn std::error::Error>> {
+        let argv = parse_command_line(r#"echo "hello world""#)?;
+        assert_eq!(argv, vec!["echo".to_string(), "hello world".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_command_argv_appends_prompt() -> Result<(), Box<dyn std::error::Error>> {
+        let argv = build_command_argv("echo hello", Some("prompt"))?;
+        assert_eq!(
+            argv,
+            vec![
+                "echo".to_string(),
+                "hello".to_string(),
+                "prompt".to_string()
+            ]
+        );
+        Ok(())
+    }
+}
