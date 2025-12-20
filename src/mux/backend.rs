@@ -318,11 +318,34 @@ fn respond_to_terminal_queries(
     osc10: usize,
     osc11: usize,
 ) -> Result<()> {
+    let outbound = build_terminal_query_responses(window.parser.screen(), cpr, da, osc10, osc11);
+    if outbound.is_empty() {
+        return Ok(());
+    }
+
+    window
+        .writer
+        .write_all(&outbound)
+        .context("Failed to write terminal query response")?;
+    window
+        .writer
+        .flush()
+        .context("Failed to flush terminal query response")?;
+    Ok(())
+}
+
+fn build_terminal_query_responses(
+    screen: &vt100::Screen,
+    cpr: usize,
+    da: usize,
+    osc10: usize,
+    osc11: usize,
+) -> Vec<u8> {
     let mut outbound = Vec::new();
 
     if cpr > 0 {
         // vt100 reports 0-based positions, but terminals respond 1-based.
-        let (row, col) = window.parser.screen().cursor_position();
+        let (row, col) = screen.cursor_position();
         let row = row.saturating_add(1);
         let col = col.saturating_add(1);
         let response = format!("\x1b[{row};{col}R");
@@ -350,19 +373,7 @@ fn respond_to_terminal_queries(
         }
     }
 
-    if outbound.is_empty() {
-        return Ok(());
-    }
-
-    window
-        .writer
-        .write_all(&outbound)
-        .context("Failed to write terminal query response")?;
-    window
-        .writer
-        .flush()
-        .context("Failed to flush terminal query response")?;
-    Ok(())
+    outbound
 }
 
 fn build_command_builder(command: Option<&[String]>) -> Result<(CommandBuilder, Vec<String>)> {
@@ -468,7 +479,7 @@ mod tests {
         assert!(unix_timestamp() >= 0);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), target_os = "linux"))]
     #[test]
     fn test_terminal_query_responses_end_to_end() -> Result<()> {
         let session_name = format!("tenex-test-backend-{}", uuid::Uuid::new_v4());
@@ -506,5 +517,30 @@ mod tests {
         assert!(output.contains("1b 5d 31 31"), "full output: {output:?}");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_build_terminal_query_responses_da() {
+        let parser = vt100::Parser::new(2, 3, 0);
+        let bytes = build_terminal_query_responses(parser.screen(), 0, 1, 0, 0);
+        assert_eq!(bytes, b"\x1b[?1;0c");
+    }
+
+    #[test]
+    fn test_build_terminal_query_responses_cpr_uses_one_based_coords() {
+        let mut parser = vt100::Parser::new(2, 3, 0);
+        parser.process(b"A");
+        let bytes = build_terminal_query_responses(parser.screen(), 1, 0, 0, 0);
+        assert_eq!(bytes, b"\x1b[1;2R");
+    }
+
+    #[test]
+    fn test_build_terminal_query_responses_osc10_and_osc11() {
+        let parser = vt100::Parser::new(2, 3, 0);
+        let bytes = build_terminal_query_responses(parser.screen(), 0, 0, 1, 1);
+        assert_eq!(
+            bytes,
+            b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\\x1b]11;rgb:0000/0000/0000\x1b\\"
+        );
     }
 }

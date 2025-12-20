@@ -104,15 +104,31 @@ fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> {
     let looks_like_path = display.contains('/') || display.contains('\\');
 
     if looks_like_path {
-        let socket_path = PathBuf::from(&display);
-        return Ok(SocketEndpoint {
-            name: socket_path
-                .as_path()
-                .to_fs_name::<GenericFilePath>()?
-                .into_owned(),
-            cleanup_path: Some(socket_path),
-            display,
-        });
+        #[cfg(windows)]
+        {
+            let pipe_path = windows_pipe_path(&display);
+            return Ok(SocketEndpoint {
+                name: PathBuf::from(&pipe_path)
+                    .as_path()
+                    .to_fs_name::<GenericFilePath>()?
+                    .into_owned(),
+                cleanup_path: None,
+                display: pipe_path,
+            });
+        }
+
+        #[cfg(not(windows))]
+        {
+            let socket_path = PathBuf::from(&display);
+            return Ok(SocketEndpoint {
+                name: socket_path
+                    .as_path()
+                    .to_fs_name::<GenericFilePath>()?
+                    .into_owned(),
+                cleanup_path: Some(socket_path),
+                display,
+            });
+        }
     }
 
     if GenericNamespaced::is_supported() {
@@ -151,6 +167,31 @@ fn default_socket_name() -> String {
             format!("{DEFAULT_SOCKET_PREFIX}-{fingerprint}")
         })
         .clone()
+}
+
+#[cfg(windows)]
+fn windows_pipe_path(value: &str) -> String {
+    if is_named_pipe_path(value) {
+        return value.to_string();
+    }
+
+    let file_name = std::path::Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(DEFAULT_SOCKET_PREFIX);
+
+    format!(r"\\.\pipe\{file_name}")
+}
+
+#[cfg(windows)]
+fn is_named_pipe_path(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with(r"\\.\pipe\")
+        || lower.starts_with(r"\\?\pipe\")
+        || lower.starts_with(r"//./pipe/")
+        || lower.starts_with(r"//?/pipe/")
 }
 
 fn socket_fingerprint() -> Option<String> {
@@ -205,7 +246,11 @@ mod tests {
     fn test_socket_endpoint_from_value_path_like() -> Result<()> {
         let tmp_path = std::env::temp_dir().join("tenex-mux-test.sock");
         let endpoint = socket_endpoint_from_value(&tmp_path.to_string_lossy())?;
-        assert!(endpoint.cleanup_path.is_some());
+        if cfg!(windows) {
+            assert!(endpoint.cleanup_path.is_none());
+        } else {
+            assert!(endpoint.cleanup_path.is_some());
+        }
         assert!(!endpoint.display.is_empty());
         Ok(())
     }
