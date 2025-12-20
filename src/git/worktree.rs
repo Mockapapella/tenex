@@ -577,6 +577,33 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_dir_all_with_retries_noop_when_missing() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let missing = temp_dir.path().join("missing-dir");
+
+        remove_dir_all_with_retries(&missing)?;
+
+        assert!(!missing.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_dir_all_with_retries_removes_existing_dir()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let target = temp_dir.path().join("to-remove");
+        let nested = target.join("nested");
+        fs::create_dir_all(&nested)?;
+        fs::write(nested.join("file.txt"), "payload")?;
+
+        remove_dir_all_with_retries(&target)?;
+
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
     fn test_list_worktrees() -> Result<(), Box<dyn std::error::Error>> {
         let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
