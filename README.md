@@ -30,7 +30,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 - **Rust 1.91+** — For building from source
 - **cargo** — Required for auto-update functionality
 
-## Installation
+## Linux/Mac Installation
 
 ```bash
 # Install from crates.io
@@ -42,45 +42,17 @@ cd tenex
 cargo install --path .
 ```
 
-### Windows (native)
+### Windows Installation
 
-Tenex builds cleanly with the **MSVC** toolchain. No external multiplexer is required.
+To install via Cargo, you need Rust plus the MSVC C++ build tools.
 
 ```powershell
-# Install MSVC Build Tools
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-
-$ErrorActionPreference = "Stop"
-
-# Install Rust (required for cargo/rustup)
 winget install -e --id Rustlang.Rustup
-
-# Make link.exe available in every terminal (persistent PATH update)
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-$vc = Join-Path $vs "VC\Tools\MSVC"
-$ver = Get-ChildItem $vc | Sort-Object Name -Descending | Select-Object -First 1
-$bin = Join-Path $ver.FullName "bin\Hostx64\x64"
-[Environment]::SetEnvironmentVariable("PATH", "$bin;$env:PATH", "User")
-
-# Use MSVC toolchain
-rustup toolchain install stable-x86_64-pc-windows-msvc
-rustup default stable-x86_64-pc-windows-msvc
-
-# Install Tenex
+```
 cargo install tenex --locked
 ```
 
-If you prefer the GNU toolchain, you must also install MinGW binutils (`dlltool.exe`) and point Rust at it.
-
-### CI artifacts (no local build)
-
-Every CI run uploads `tenex` binaries for Linux/macOS/Windows. Download with `gh`:
-
-```bash
-gh run list -w CI -b <branch>
-gh run download <run-id> -n tenex-windows-latest
-```
 
 ## Quick Start
 
