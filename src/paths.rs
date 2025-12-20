@@ -61,3 +61,26 @@ pub fn data_local_dir() -> Option<PathBuf> {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_path_suffix() {
+        let path = log_path();
+        assert!(path.ends_with("tenex.log"));
+    }
+
+    #[test]
+    fn test_data_local_dir_returns_when_env_present() {
+        let has_env = std::env::var_os("XDG_DATA_HOME").is_some()
+            || std::env::var_os("HOME").is_some()
+            || std::env::var_os("LOCALAPPDATA").is_some()
+            || std::env::var_os("APPDATA").is_some();
+        let resolved = data_local_dir();
+        if has_env {
+            assert!(resolved.is_some());
+        }
+    }
+}

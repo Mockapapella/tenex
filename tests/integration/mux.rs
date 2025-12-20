@@ -595,3 +595,87 @@ fn test_mux_responds_to_terminal_queries() -> Result<(), Box<dyn std::error::Err
 
     Ok(())
 }
+
+#[test]
+fn test_mux_additional_session_ops() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("extra_ops")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("extra");
+
+    if manager.exists(&session_name)
+        && let Err(err) = manager.kill(&session_name)
+    {
+        eprintln!("Warning: failed to kill existing session {session_name}: {err}");
+    }
+
+    let command = vec!["sleep".to_string(), "60".to_string()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let pids = manager.list_pane_pids(&session_name)?;
+    assert!(
+        !pids.is_empty(),
+        "Expected at least one pane PID for session {session_name}"
+    );
+
+    let window_idx = manager.create_window(
+        &session_name,
+        "extra-window",
+        &fixture.worktree_path(),
+        Some(&command),
+    )?;
+    manager.rename_window(&session_name, window_idx, "renamed-window")?;
+
+    let windows = manager.list_windows(&session_name)?;
+    assert!(
+        windows.iter().any(|w| w.name == "renamed-window"),
+        "Expected renamed window to be listed"
+    );
+
+    let target = SessionManager::window_target(&session_name, 0);
+    manager.resize_window(&target, 120, 40)?;
+
+    let keys = vec!["echo ".to_string(), "tenex".to_string()];
+    manager.send_keys_batch(&session_name, &keys)?;
+
+    if let Err(err) = manager.kill_window(&session_name, window_idx) {
+        eprintln!("Warning: failed to kill window {session_name}:{window_idx}: {err}");
+    }
+    if let Err(err) = manager.kill(&session_name) {
+        eprintln!("Warning: failed to kill session {session_name}: {err}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_mux_error_paths_for_missing_session() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("missing_session")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("missing");
+    let capture = tenex::mux::OutputCapture::new();
+
+    assert!(manager.list_windows(&session_name).is_err());
+    assert!(manager.list_pane_pids(&session_name).is_err());
+    assert!(manager.rename_window(&session_name, 0, "new-name").is_err());
+    assert!(manager.kill_window(&session_name, 0).is_err());
+
+    let target = SessionManager::window_target(&session_name, 0);
+    assert!(manager.resize_window(&target, 80, 24).is_err());
+    assert!(manager.send_keys(&session_name, "echo nope").is_err());
+
+    assert!(capture.pane_size(&session_name).is_err());
+    assert!(capture.cursor_position(&session_name).is_err());
+    assert!(capture.pane_current_command(&session_name).is_err());
+    assert!(capture.tail(&session_name, 10).is_err());
+
+    Ok(())
+}

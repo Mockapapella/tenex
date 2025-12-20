@@ -77,4 +77,16 @@ mod tests {
         assert!(version.starts_with("tenex-mux/"));
         Ok(())
     }
+
+    #[test]
+    fn test_is_server_running_false_with_override() {
+        let name = format!("tenex-mux-test-{}", std::process::id());
+        if let Err(err) = set_socket_override(&name) {
+            assert!(
+                err.to_string().contains("already set"),
+                "Unexpected set_socket_override error: {err}"
+            );
+        }
+        assert!(!is_server_running());
+    }
 }

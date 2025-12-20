@@ -562,6 +562,44 @@ mod tests {
     }
 
     #[test]
+    fn test_list_for_selector_includes_remote_branches() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let remote_dir = TempDir::new()?;
+        Repository::init_bare(remote_dir.path())?;
+
+        let remote_path = remote_dir
+            .path()
+            .to_str()
+            .ok_or("Remote path is not valid UTF-8")?;
+        repo.remote("origin", remote_path)?;
+
+        let current = manager.current()?;
+        let push_ref = format!("refs/heads/{current}:refs/heads/{current}");
+        {
+            let mut remote = repo.find_remote("origin")?;
+            remote.push(&[push_ref.as_str()], None)?;
+        }
+
+        let fetch_ref = format!("refs/heads/{current}:refs/remotes/origin/{current}");
+        {
+            let mut remote = repo.find_remote("origin")?;
+            remote.fetch(&[fetch_ref.as_str()], None, None)?;
+        }
+
+        let branches = manager.list_for_selector()?;
+        let remote_branch = branches
+            .iter()
+            .find(|branch| branch.is_remote && branch.name == current)
+            .ok_or("Expected remote branch")?;
+        assert_eq!(remote_branch.remote.as_deref(), Some("origin"));
+        assert!(remote_branch.full_name.starts_with("refs/remotes/origin/"));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_branch_info_debug() {
         let info = BranchInfo {
             name: "test".to_string(),

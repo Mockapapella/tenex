@@ -154,3 +154,68 @@ fn resolve_tenex_executable() -> Result<PathBuf> {
 
     Ok(exe)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_tenex_executable_returns_existing_path() -> Result<()> {
+        let exe = resolve_tenex_executable()?;
+        assert!(exe.exists());
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_mux_client_reconnects_after_failed_request() -> Result<()> {
+        use interprocess::local_socket::traits::ListenerExt;
+        use interprocess::local_socket::{GenericFilePath, ListenerOptions, prelude::*};
+
+        let temp_dir = tempfile::tempdir()?;
+        let socket_path = temp_dir.path().join("mux-client.sock");
+        let name = socket_path
+            .as_path()
+            .to_fs_name::<GenericFilePath>()?
+            .into_owned();
+
+        let endpoint = SocketEndpoint {
+            name: name.clone(),
+            cleanup_path: Some(socket_path.clone()),
+            display: socket_path.to_string_lossy().into_owned(),
+        };
+
+        let listener = ListenerOptions::new().name(name).create_sync()?;
+        let handle = std::thread::spawn(move || -> Result<()> {
+            let mut incoming = listener.incoming();
+
+            let mut stream = incoming
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("Missing initial connection"))??;
+            let _: MuxRequest = ipc::read_json(&mut stream)?;
+            drop(stream);
+
+            let mut stream = incoming
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("Missing reconnect connection"))??;
+            let _: MuxRequest = ipc::read_json(&mut stream)?;
+            ipc::write_json(
+                &mut stream,
+                &MuxResponse::Pong {
+                    version: "test".to_string(),
+                },
+            )?;
+            Ok(())
+        });
+
+        let mut client = MuxClient::new(endpoint);
+        let response = client.request(&MuxRequest::Ping)?;
+        assert!(matches!(response, MuxResponse::Pong { .. }));
+
+        match handle.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(anyhow::anyhow!("Server thread panicked")),
+        }
+    }
+}

@@ -261,4 +261,34 @@ mod tests {
         assert!(!endpoint.display.is_empty());
         Ok(())
     }
+
+    #[test]
+    fn test_set_socket_override_rejects_empty() -> Result<(), Box<dyn std::error::Error>> {
+        match set_socket_override("   ") {
+            Ok(()) => Err("Expected empty override to fail".into()),
+            Err(err) => {
+                assert!(err.to_string().contains("cannot be empty"));
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_socket_override_already_set() -> Result<(), Box<dyn std::error::Error>> {
+        let name = format!("tenex-mux-test-{}", std::process::id());
+        if let Err(err) = set_socket_override(&name) {
+            if err.to_string().contains("already set") {
+                return Ok(());
+            }
+            return Err(err.into());
+        }
+
+        match set_socket_override("tenex-mux-test-other") {
+            Ok(()) => Err("Expected override already set".into()),
+            Err(err) => {
+                assert!(err.to_string().contains("already set"));
+                Ok(())
+            }
+        }
+    }
 }
