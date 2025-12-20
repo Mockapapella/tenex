@@ -34,6 +34,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 
 ```bash
 # Install from crates.io
+curl https://sh.rustup.rs -sSf | sh
 cargo install tenex --locked
 
 # Or build from source
