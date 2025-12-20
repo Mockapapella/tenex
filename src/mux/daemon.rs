@@ -256,8 +256,8 @@ fn handle_pane_size(target: &str) -> Result<MuxResponse> {
 }
 
 fn handle_cursor_position(target: &str) -> Result<MuxResponse> {
-    let (x, y) = super::server::OutputCapture::cursor_position(target)?;
-    Ok(MuxResponse::Position { x, y })
+    let (x, y, hidden) = super::server::OutputCapture::cursor_position(target)?;
+    Ok(MuxResponse::Position { x, y, hidden })
 }
 
 fn handle_pane_current_command(target: &str) -> Result<MuxResponse> {

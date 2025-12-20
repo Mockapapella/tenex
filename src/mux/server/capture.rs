@@ -70,13 +70,16 @@ impl Capture {
     /// # Errors
     ///
     /// Returns an error if the position cannot be retrieved.
-    pub fn cursor_position(session: &str) -> Result<(u16, u16)> {
+    pub fn cursor_position(session: &str) -> Result<(u16, u16, bool)> {
         let window = super::super::backend::resolve_window(session)?;
-        let (row, col) = {
+        let (row, col, hidden) = {
             let guard = window.lock();
-            guard.parser.screen().cursor_position()
+            let (row, col) = guard.parser.screen().cursor_position();
+            let hidden = guard.parser.screen().hide_cursor();
+            drop(guard);
+            (row, col, hidden)
         };
-        Ok((col, row))
+        Ok((col, row, hidden))
     }
 
     /// Check if the pane is running a program.

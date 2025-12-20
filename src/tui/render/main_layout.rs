@@ -211,8 +211,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .scroll((scroll_pos, 0))
-        .wrap(Wrap { trim: false });
+        .scroll((scroll_pos, 0));
 
     frame.render_widget(paragraph, area);
 
@@ -251,9 +250,12 @@ fn render_preview_cursor(
     line_count: usize,
     visible_height: usize,
 ) {
-    let Some((cursor_x, cursor_y)) = app.ui.preview_cursor_position else {
+    let Some((cursor_x, cursor_y, cursor_hidden)) = app.ui.preview_cursor_position else {
         return;
     };
+    if cursor_hidden {
+        return;
+    }
     let Some((_cols, pane_rows)) = app.ui.preview_pane_size else {
         return;
     };

@@ -22,8 +22,8 @@ pub struct UiState {
     /// Cached preview content
     pub preview_content: String,
 
-    /// Cached cursor position in the selected pane (x, y), 0-based.
-    pub preview_cursor_position: Option<(u16, u16)>,
+    /// Cached cursor position in the selected pane (x, y), 0-based, and whether it is hidden.
+    pub preview_cursor_position: Option<(u16, u16, bool)>,
 
     /// Cached pane size for the selected pane (cols, rows).
     pub preview_pane_size: Option<(u16, u16)>,

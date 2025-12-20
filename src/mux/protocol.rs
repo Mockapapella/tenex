@@ -214,6 +214,9 @@ pub enum MuxResponse {
         x: u16,
         /// Cursor y (row).
         y: u16,
+        /// Whether the cursor should be hidden.
+        #[serde(default)]
+        hidden: bool,
     },
     /// Process IDs payload.
     Pids {

@@ -61,11 +61,11 @@ impl Capture {
     /// # Errors
     ///
     /// Returns an error if the position cannot be retrieved.
-    pub fn cursor_position(&self, target: &str) -> Result<(u16, u16)> {
+    pub fn cursor_position(&self, target: &str) -> Result<(u16, u16, bool)> {
         match super::client::request(&MuxRequest::CursorPosition {
             target: target.to_string(),
         })? {
-            MuxResponse::Position { x, y } => Ok((x, y)),
+            MuxResponse::Position { x, y, hidden } => Ok((x, y, hidden)),
             MuxResponse::Err { message } => bail!("{message}"),
             other => bail!("Unexpected response: {other:?}"),
         }
