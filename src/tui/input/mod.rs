@@ -17,7 +17,7 @@ use tenex::config::{Action as KeyAction, ActionGroup};
 
 // Re-export for tests and internal use
 #[cfg(test)]
-pub use preview_focused::keycode_to_tmux_keys;
+pub use preview_focused::keycode_to_input_sequence;
 
 /// Handle a key event based on the current mode
 ///
@@ -145,7 +145,7 @@ pub fn handle_key_event(
             command::handle_model_selector_mode(app, code);
         }
 
-        // Preview focused mode (forwards keys to tmux)
+        // Preview focused mode (forwards keys to the mux backend)
         Mode::PreviewFocused => {
             preview_focused::handle_preview_focused_mode(app, code, modifiers, batched_keys);
         }

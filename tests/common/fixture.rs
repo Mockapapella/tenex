@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use tenex::agent::Storage;
 use tenex::config::Config;
 use tenex::git::WorktreeManager;
-use tenex::tmux::SessionManager;
+use tenex::mux::SessionManager;
 
 /// Test fixture that sets up a temporary git repository
 pub struct TestFixture {
@@ -74,7 +74,7 @@ impl TestFixture {
 
         Config {
             // Use a long-running command instead of `claude` for testing.
-            // Important: many integration tests assume tmux sessions/windows stay alive long enough
+            // Important: many integration tests assume mux sessions/windows stay alive long enough
             // for follow-up operations (spawn children, synthesize, etc). A short-lived command like
             // `echo` can exit immediately and cause flakiness across platforms.
             default_program: "sh -c 'sleep 3600'".to_string(),
@@ -106,7 +106,7 @@ impl TestFixture {
         format!("{}-{}", self.session_prefix, suffix)
     }
 
-    /// Clean up any tmux sessions created by this test
+    /// Clean up any mux sessions created by this test
     pub fn cleanup_sessions(&self) {
         let manager = SessionManager::new();
         if let Ok(sessions) = manager.list() {

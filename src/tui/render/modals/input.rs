@@ -212,12 +212,9 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
     let is_root = app.git_op.is_root_rename;
 
     let (title, description) = if is_root {
-        (
-            "Rename Agent",
-            "Renames agent title, branch, and tmux session:",
-        )
+        ("Rename Agent", "Renames agent title, branch, and session:")
     } else {
-        ("Rename Agent", "Renames agent title and tmux window:")
+        ("Rename Agent", "Renames agent title and window:")
     };
 
     // 7 lines of content + 2 for borders = 9 lines

@@ -13,7 +13,7 @@ mod window;
 
 use crate::config::Action;
 use crate::git::{self, WorktreeManager};
-use crate::tmux::{OutputCapture, SessionManager};
+use crate::mux::{OutputCapture, SessionManager};
 use anyhow::{Context, Result};
 
 use super::state::{App, ConfirmAction, Mode, Tab};
@@ -21,7 +21,7 @@ use super::state::{App, ConfirmAction, Mode, Tab};
 /// Handler for application actions
 #[derive(Debug, Clone, Copy)]
 pub struct Actions {
-    /// Tmux session manager
+    /// Mux session manager
     pub(crate) session_manager: SessionManager,
     /// Output capture
     pub(crate) output_capture: OutputCapture,
@@ -239,7 +239,7 @@ impl Actions {
         let repo = git::open_repository(&repo_path).ok();
 
         for agent in app.storage.iter() {
-            let _ = self.session_manager.kill(&agent.tmux_session);
+            let _ = self.session_manager.kill(&agent.mux_session);
 
             if let Some(ref repo) = repo {
                 let worktree_mgr = WorktreeManager::new(repo);
@@ -955,20 +955,20 @@ mod tests {
         // Create a terminal child
         let mut terminal = Agent::new_child(
             "Terminal 1".to_string(),
-            "bash".to_string(),
+            "terminal".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
             None,
             ChildConfig {
                 parent_id: uuid::Uuid::new_v4(),
-                tmux_session: "test-session".to_string(),
+                mux_session: "test-session".to_string(),
                 window_index: 2,
             },
         );
         terminal.is_terminal = true;
 
         assert!(terminal.is_terminal);
-        assert_eq!(terminal.program, "bash");
+        assert_eq!(terminal.program, "terminal");
     }
 
     #[test]

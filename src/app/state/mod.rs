@@ -855,7 +855,7 @@ impl App {
             .is_some_and(|a| self.storage.has_children(a.id))
     }
 
-    /// Set the preview pane dimensions for tmux window sizing
+    /// Set the preview pane dimensions for mux window sizing
     pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
         self.ui.preview_dimensions = Some((width, height));
     }
@@ -967,8 +967,8 @@ impl App {
 
     /// Start the rename flow
     ///
-    /// For root agents (`is_root=true`): Renames branch + agent title + tmux session
-    /// For sub-agents (`is_root=false`): Renames agent title + tmux window only
+    /// For root agents (`is_root=true`): Renames branch + agent title + session
+    /// For sub-agents (`is_root=false`): Renames agent title + window only
     pub fn start_rename(&mut self, agent_id: uuid::Uuid, current_name: String, is_root: bool) {
         self.git_op.agent_id = Some(agent_id);
         self.git_op.original_branch = current_name.clone();
@@ -1132,7 +1132,7 @@ pub enum Mode {
     ModelSelector,
     /// Scrolling through preview/diff
     Scrolling,
-    /// Preview pane is focused - keystrokes are forwarded to tmux
+    /// Preview pane is focused - keystrokes are forwarded to the mux backend
     PreviewFocused,
     /// Selecting number of child agents to spawn
     ChildCount,

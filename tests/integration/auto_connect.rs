@@ -2,13 +2,13 @@
 
 //! Auto-connect to existing worktrees tests
 
-use crate::common::{DirGuard, TestFixture, assert_paths_eq, skip_if_no_tmux};
+use crate::common::{DirGuard, TestFixture, assert_paths_eq, skip_if_no_mux};
 use tenex::app::{Actions, App};
 
 /// Test that `auto_connect_worktrees` picks up an existing worktree and creates an agent
 #[test]
 fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -70,7 +70,7 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
 /// Test that `auto_connect_worktrees` skips worktrees that already have agents
 #[test]
 fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -124,7 +124,7 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
 /// Test that `auto_connect_worktrees` skips worktrees with different branch prefix
 #[test]
 fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -164,7 +164,7 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
 /// Test that `auto_connect_worktrees` handles multiple existing worktrees
 #[test]
 fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -230,7 +230,7 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
 /// See: `src/git/worktree.rs:remove()` and `src/app/handlers/agent_lifecycle.rs:kill_agent()`
 #[test]
 fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 

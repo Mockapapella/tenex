@@ -2,7 +2,7 @@
 
 use crate::agent::{Agent, ChildConfig};
 use crate::git;
-use crate::tmux::SessionManager;
+use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
@@ -36,8 +36,8 @@ impl Actions {
 
     /// Rename the selected agent (r key)
     ///
-    /// For root agents: Renames branch (local + remote if exists) + agent title + tmux session
-    /// For sub-agents: Renames agent title + tmux window only
+    /// For root agents: Renames branch (local + remote if exists) + agent title + mux session
+    /// For sub-agents: Renames agent title + mux window only
     pub(crate) fn rename_agent(app: &mut App) -> Result<()> {
         let agent = app
             .selected_agent()
@@ -234,8 +234,8 @@ impl Actions {
 
     /// Execute rename operation
     ///
-    /// For root agents: Renames branch (local + remote if exists) + agent title + tmux session
-    /// For sub-agents: Renames agent title + tmux window only
+    /// For root agents: Renames branch (local + remote if exists) + agent title + mux session
+    /// For sub-agents: Renames agent title + mux window only
     ///
     /// # Errors
     ///
@@ -270,10 +270,10 @@ impl Actions {
         );
 
         if is_root {
-            // Root agent: rename branch + agent + tmux session
+            // Root agent: rename branch + agent + mux session
             Self::execute_root_rename(app, agent_id, &old_name, &new_name)?;
         } else {
-            // Sub-agent: rename agent title + tmux window only
+            // Sub-agent: rename agent title + mux window only
             Self::execute_subagent_rename(app, agent_id, &new_name)?;
         }
 
@@ -282,7 +282,7 @@ impl Actions {
         Ok(())
     }
 
-    /// Execute rename for a root agent (branch + agent + tmux session + worktree path)
+    /// Execute rename for a root agent (branch + agent + mux session + worktree path)
     fn execute_root_rename(
         app: &mut App,
         agent_id: uuid::Uuid,
@@ -296,7 +296,7 @@ impl Actions {
 
         let worktree_path = agent.worktree_path.clone();
         let old_branch = agent.branch.clone();
-        let tmux_session = agent.tmux_session.clone();
+        let mux_session = agent.mux_session.clone();
 
         // Generate new branch name from new title
         let new_branch = app.config.generate_branch_name(new_name);
@@ -333,7 +333,7 @@ impl Actions {
             }
         }
 
-        // Update agent records and tmux session
+        // Update agent records and mux session
         Self::update_agent_records(
             app,
             agent_id,
@@ -341,7 +341,7 @@ impl Actions {
             &new_branch,
             &effective_worktree_path,
         )?;
-        Self::rename_tmux_session_for_agent(app, agent_id, &tmux_session, new_name)?;
+        Self::rename_mux_session_for_agent(app, agent_id, &mux_session, new_name)?;
 
         // Handle remote branch rename if needed
         Self::handle_remote_branch_rename(
@@ -471,8 +471,8 @@ impl Actions {
         app.storage.save()
     }
 
-    /// Rename tmux session and update agent records
-    fn rename_tmux_session_for_agent(
+    /// Rename mux session and update agent records
+    fn rename_mux_session_for_agent(
         app: &mut App,
         agent_id: uuid::Uuid,
         old_session: &str,
@@ -482,16 +482,16 @@ impl Actions {
         let new_session_name = format!("tenex-{new_name}");
 
         if let Err(e) = session_manager.rename(old_session, &new_session_name) {
-            warn!(error = %e, "Failed to rename tmux session");
+            warn!(error = %e, "Failed to rename mux session");
             return Ok(());
         }
 
-        // Update root agent's tmux_session
+        // Update root agent's mux_session
         if let Some(agent) = app.storage.get_mut(agent_id) {
-            agent.tmux_session.clone_from(&new_session_name);
+            agent.mux_session.clone_from(&new_session_name);
         }
 
-        // Update all descendants' tmux_session
+        // Update all descendants' mux_session
         let descendant_ids: Vec<uuid::Uuid> = app
             .storage
             .descendants(agent_id)
@@ -500,7 +500,7 @@ impl Actions {
             .collect();
         for desc_id in descendant_ids {
             if let Some(desc) = app.storage.get_mut(desc_id) {
-                desc.tmux_session.clone_from(&new_session_name);
+                desc.mux_session.clone_from(&new_session_name);
             }
         }
 
@@ -556,7 +556,7 @@ impl Actions {
         Ok(())
     }
 
-    /// Execute rename for a sub-agent (title + tmux window only)
+    /// Execute rename for a sub-agent (title + mux window only)
     fn execute_subagent_rename(app: &mut App, agent_id: uuid::Uuid, new_name: &str) -> Result<()> {
         let agent = app
             .storage
@@ -564,7 +564,7 @@ impl Actions {
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let old_name = agent.title.clone();
-        let tmux_session = agent.tmux_session.clone();
+        let mux_session = agent.mux_session.clone();
         let window_index = agent.window_index;
 
         // Update the agent's title
@@ -573,11 +573,11 @@ impl Actions {
         }
         app.storage.save()?;
 
-        // Rename tmux window if agent has a window index
+        // Rename mux window if agent has a window index
         if let Some(idx) = window_index
-            && let Err(e) = SessionManager::new().rename_window(&tmux_session, idx, new_name)
+            && let Err(e) = SessionManager::new().rename_window(&mux_session, idx, new_name)
         {
-            warn!(error = %e, "Failed to rename tmux window");
+            warn!(error = %e, "Failed to rename mux window");
         }
 
         info!(
@@ -956,7 +956,7 @@ impl Actions {
                 .get(root_id)
                 .ok_or_else(|| anyhow::anyhow!("Root agent not found"))?;
 
-            let root_session = root.tmux_session.clone();
+            let root_session = root.mux_session.clone();
             let branch = root.branch.clone();
 
             let title = format!("Merge Conflict: {source_branch} -> {target_branch}");
@@ -967,13 +967,13 @@ impl Actions {
             // Create child agent marked as terminal
             let mut terminal = Agent::new_child(
                 title.clone(),
-                "bash".to_string(),
+                "terminal".to_string(),
                 branch,
                 worktree_path.to_path_buf(),
                 None,
                 ChildConfig {
                     parent_id: root_id,
-                    tmux_session: root_session.clone(),
+                    mux_session: root_session.clone(),
                     window_index,
                 },
             );
@@ -1201,13 +1201,13 @@ impl Actions {
             anyhow::bail!("Agent not found");
         }
 
-        // Get the root ancestor to use its tmux session
+        // Get the root ancestor to use its mux session
         let root = app
             .storage
             .root_ancestor(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
 
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
         let root_id = root.id;
@@ -1220,13 +1220,13 @@ impl Actions {
         // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
             title.to_string(),
-            "bash".to_string(),
+            "terminal".to_string(),
             branch,
             worktree_path.clone(),
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session.clone(),
+                mux_session: root_session.clone(),
                 window_index,
             },
         );
@@ -1585,7 +1585,7 @@ mod tests {
             None,
             crate::agent::ChildConfig {
                 parent_id: root.id,
-                tmux_session: root.tmux_session,
+                mux_session: root.mux_session,
                 window_index: 1,
             },
         );
@@ -1785,7 +1785,7 @@ mod tests {
             None,
             crate::agent::ChildConfig {
                 parent_id: root_id,
-                tmux_session: root.tmux_session,
+                mux_session: root.mux_session,
                 window_index: 1,
             },
         );

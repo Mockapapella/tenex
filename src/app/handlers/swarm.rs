@@ -2,8 +2,8 @@
 
 use crate::agent::{Agent, ChildConfig};
 use crate::git::{self, WorktreeManager};
+use crate::mux::SessionManager;
 use crate::prompts;
-use crate::tmux::SessionManager;
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::Write;
@@ -67,7 +67,7 @@ impl Actions {
             .root_ancestor(pid)
             .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
         Ok(SpawnConfig {
-            root_session: root.tmux_session.clone(),
+            root_session: root.mux_session.clone(),
             worktree_path: root.worktree_path.clone(),
             branch: root.branch.clone(),
             parent_agent_id: pid,
@@ -113,7 +113,7 @@ impl Actions {
             None,
         );
 
-        let root_session = root_agent.tmux_session.clone();
+        let root_session = root_agent.mux_session.clone();
         let root_id = root_agent.id;
 
         let command = crate::command::build_command_argv(&program, None)?;
@@ -238,7 +238,7 @@ impl Actions {
             child_prompt.map(String::from),
             ChildConfig {
                 parent_id: config.parent_agent_id,
-                tmux_session: config.root_session.clone(),
+                mux_session: config.root_session.clone(),
                 window_index,
             },
         );
@@ -322,7 +322,7 @@ impl Actions {
             .root_ancestor(parent_id)
             .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
 
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
 
@@ -335,7 +335,8 @@ impl Actions {
 
         // Create review child agents
         for i in 0..count {
-            let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
+            let offset = u32::try_from(i).map_or(u32::MAX, |value| value);
+            let window_index = start_window_index.saturating_add(offset);
 
             let child = Agent::new_child(
                 String::new(), // Placeholder
@@ -345,7 +346,7 @@ impl Actions {
                 Some(review_prompt.clone()),
                 ChildConfig {
                     parent_id,
-                    tmux_session: root_session.clone(),
+                    mux_session: root_session.clone(),
                     window_index,
                 },
             );
@@ -413,13 +414,13 @@ impl Actions {
         }
 
         let parent_id = agent.id;
-        let parent_session = agent.tmux_session.clone();
+        let parent_session = agent.mux_session.clone();
         let parent_title = agent.title.clone();
         let parent_program = agent.program.clone();
         let worktree_path = agent.worktree_path.clone();
-        // Determine the correct tmux target for the parent
+        // Determine the correct target for the parent
         // If the parent has a window_index, it's a child agent running in a window
-        let parent_tmux_target = agent.window_index.map_or_else(
+        let parent_target = agent.window_index.map_or_else(
             || parent_session.clone(),
             |window_idx| SessionManager::window_target(&parent_session, window_idx),
         );
@@ -446,7 +447,7 @@ impl Actions {
         for descendant in &descendants {
             // Capture terminal output from descendant's window
             let target = descendant.window_index.map_or_else(
-                || descendant.tmux_session.clone(),
+                || descendant.mux_session.clone(),
                 |window_idx| SessionManager::window_target(&parent_session, window_idx),
             );
 
@@ -490,7 +491,7 @@ impl Actions {
                     session = %parent_session,
                     window_index = idx,
                     error = %e,
-                    "Failed to kill descendant tmux window during synthesis cleanup"
+                    "Failed to kill descendant mux window during synthesis cleanup"
                 );
             }
             // Remove from storage (remove_with_descendants handles nested removal)
@@ -507,7 +508,7 @@ impl Actions {
             "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
         );
         self.session_manager.send_keys_and_submit_for_program(
-            &parent_tmux_target,
+            &parent_target,
             &parent_program,
             &read_command,
         )?;
@@ -659,7 +660,7 @@ mod tests {
         );
         root.collapsed = false;
         let root_id = root.id;
-        let root_session = root.tmux_session.clone();
+        let root_session = root.mux_session.clone();
         app.storage.add(root);
 
         // Add a regular child agent
@@ -671,7 +672,7 @@ mod tests {
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session.clone(),
+                mux_session: root_session.clone(),
                 window_index: 2,
             },
         );
@@ -680,13 +681,13 @@ mod tests {
         // Add a terminal child (is_terminal = true)
         let mut terminal = Agent::new_child(
             "Terminal 1".to_string(),
-            "bash".to_string(),
+            "terminal".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
             None,
             ChildConfig {
                 parent_id: root_id,
-                tmux_session: root_session,
+                mux_session: root_session,
                 window_index: 3,
             },
         );
@@ -694,7 +695,7 @@ mod tests {
         app.storage.add(terminal);
 
         // Broadcast should only target the non-terminal child (1 agent)
-        // Since tmux sessions don't exist, it will fail but we can check
+        // Since mux sessions don't exist, it will fail but we can check
         // it attempts to send to the right number of agents
         let result = handler.broadcast_to_leaves(&mut app, "test");
 
@@ -703,7 +704,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Check status message mentions 0 or shows error about no agents
-        // (since the tmux sessions don't actually exist)
+        // (since the mux sessions don't actually exist)
         Ok(())
     }
 }

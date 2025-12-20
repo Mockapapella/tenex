@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Windows support**: Tenex now runs on Windows with MSYS2 tmux, including native TLS for update checks. Support should be considered functional but experimental. Expect bugs.
+- **Windows support**: Tenex now runs on Windows with the built-in mux daemon (no external multiplexer dependency), including native TLS for update checks. Support should be considered functional but experimental. Expect bugs.
 
 ## [1.0.2] - 2025-12-15
 
@@ -34,7 +34,7 @@
 - **Merge flow** (`Ctrl+m`): New merge operation with branch selector. If the target branch has a worktree, merges there. On conflicts, spawns a terminal for resolution. Shows success modal on completion.
 - **Kitty keyboard protocol support**: Enables Kitty keyboard enhancement when supported so `Ctrl+m` is distinguishable from Enter. If not supported, Tenex prompts once at startup to remap merge to `Ctrl+n`, persists choice in settings.json.
 - **State path override**: `TENEX_STATE_PATH` environment variable can override where Tenex reads/writes its persistent state.
-- **Shift+Tab in preview mode**: Now correctly forwarded to tmux (as BTab).
+- **Shift+Tab in preview mode**: Now correctly forwarded to the agent terminal (as BTab).
 
 ### Changed
 
@@ -48,7 +48,7 @@
 
 - **Deleted agents reappearing**: Fixed bug where deleted agents would reappear after restart due to orphaned worktrees. Worktree cleanup on delete is now retried with backoff and verified.
 - **Worktree cleanup on rename**: Renaming a root agent now correctly moves/renames its worktree directory and git worktree metadata, and updates descendant worktree paths.
-- **Reset cleanup warnings**: `tenex reset` and startup git-exclude/log clearing now print warnings instead of silently ignoring tmux/worktree/branch cleanup errors.
+- **Reset cleanup warnings**: `tenex reset` and startup git-exclude/log clearing now print warnings instead of silently ignoring mux/worktree/branch cleanup errors.
 
 ## [1.0.0] - 2025-12-09
 

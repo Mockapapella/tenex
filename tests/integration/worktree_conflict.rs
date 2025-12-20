@@ -4,14 +4,14 @@
 
 use std::fs;
 
-use crate::common::{TestFixture, skip_if_no_tmux};
+use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::app::{Actions, App};
 
 /// Test that creating an agent detects existing worktree and enters conflict mode
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
 fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -70,7 +70,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
 fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -128,7 +128,7 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
 fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -195,7 +195,7 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
 fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -258,7 +258,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "test assertions")]
 fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
 -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -365,7 +365,7 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
 /// Test recreating worktree for swarm
 #[test]
 fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -438,7 +438,7 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
 #[test]
 #[expect(clippy::unwrap_used, reason = "test assertions")]
 fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 

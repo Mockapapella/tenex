@@ -9,7 +9,7 @@ use super::Actions;
 use crate::app::state::App;
 
 impl Actions {
-    /// Check and update agent statuses based on tmux sessions
+    /// Check and update agent statuses based on mux sessions
     ///
     /// # Errors
     ///
@@ -17,30 +17,24 @@ impl Actions {
     pub fn sync_agent_status(self, app: &mut App) -> Result<()> {
         let mut changed = false;
 
-        // Fetch all sessions once instead of calling exists() per agent
-        // This reduces subprocess calls from O(n) to O(1)
-        let active_sessions: std::collections::HashSet<String> = self
-            .session_manager
-            .list()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| s.name)
-            .collect();
+        // Fetch all sessions once instead of calling exists() per agent.
+        let active_sessions: std::collections::HashSet<String> = match self.session_manager.list() {
+            Ok(sessions) => sessions.into_iter().map(|s| s.name).collect(),
+            Err(err) => {
+                debug!(error = %err, "Failed to list mux sessions");
+                std::collections::HashSet::new()
+            }
+        };
 
-        // Collect IDs of dead agents to remove
-        let dead_agents: Vec<uuid::Uuid> = app
-            .storage
-            .iter()
-            .filter(|agent| !active_sessions.contains(&agent.tmux_session))
-            .map(|agent| {
-                debug!(title = %agent.title, "Removing dead agent (session not found)");
-                agent.id
-            })
-            .collect();
+        // Remove stored agents whose sessions no longer exist.
+        let roots: Vec<Agent> = app.storage.root_agents().into_iter().cloned().collect();
+        for root in roots {
+            if active_sessions.contains(&root.mux_session) {
+                continue;
+            }
 
-        // Remove dead agents
-        for id in dead_agents {
-            app.storage.remove(id);
+            debug!(title = %root.title, session = %root.mux_session, "Removing agent with missing mux session");
+            app.storage.remove_with_descendants(root.id);
             changed = true;
         }
 
@@ -119,16 +113,16 @@ impl Actions {
                 None, // No initial prompt
             );
 
-            // Create tmux session and start the agent program
+            // Create mux session and start the agent program
             let command = crate::command::build_command_argv(&program, None)?;
             self.session_manager
-                .create(&agent.tmux_session, &wt.path, Some(&command))?;
+                .create(&agent.mux_session, &wt.path, Some(&command))?;
 
             // Resize the session to match preview dimensions if available
             if let Some((width, height)) = app.ui.preview_dimensions {
                 let _ = self
                     .session_manager
-                    .resize_window(&agent.tmux_session, width, height);
+                    .resize_window(&agent.mux_session, width, height);
             }
 
             app.storage.add(agent);

@@ -4,7 +4,7 @@
 //! Integration tests for CLI commands
 //!
 //! These tests require:
-//! - tmux to be installed and running
+//! - the Tenex mux daemon (auto-started)
 //! - git to be available
 //! - A writable temp directory
 //!
@@ -19,11 +19,11 @@ mod integration {
     pub mod auto_connect;
     pub mod git;
     pub mod hierarchy;
+    pub mod mux;
     pub mod performance;
     pub mod persistence;
     pub mod review;
     pub mod synthesis;
-    pub mod tmux;
     pub mod workflow;
     pub mod worktree_conflict;
 }

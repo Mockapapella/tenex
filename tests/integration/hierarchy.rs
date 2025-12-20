@@ -4,13 +4,13 @@
 
 use std::path::PathBuf;
 
-use crate::common::{DirGuard, TestFixture, create_child_agent, skip_if_no_tmux};
+use crate::common::{DirGuard, TestFixture, create_child_agent, skip_if_no_mux};
 use tenex::agent::{Agent, Storage};
-use tenex::tmux::SessionManager;
+use tenex::mux::SessionManager;
 
 #[test]
 fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -72,7 +72,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
         // Cleanup and skip
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -115,7 +115,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     assert_eq!(app.storage.len(), 6);
 
     // Verify grandchild3's window index was decremented
-    // (because tmux renumbers windows when one is deleted)
+    // (because the mux renumbers windows when one is deleted)
     let grandchild3_updated = app.storage.get(grandchild3_id).ok_or("Grandchild3 gone")?;
     let grandchild3_new_window = grandchild3_updated.window_index;
 
@@ -146,7 +146,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -154,7 +154,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -203,7 +203,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -211,7 +211,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
 
 #[test]
 fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -263,19 +263,19 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-/// Test that renaming a root agent also updates children's `tmux_session` fields
+/// Test that renaming a root agent also updates children's `mux_session` fields
 ///
 /// When a root agent is renamed:
-/// 1. The root's `tmux_session` gets updated to the new session name
-/// 2. All descendant agents must also have their `tmux_session` updated
+/// 1. The root's `mux_session` gets updated to the new session name
+/// 2. All descendant agents must also have their `mux_session` updated
 /// 3. The children should NOT be removed when `sync_agent_status` runs
 #[test]
 #[expect(
     clippy::too_many_lines,
     reason = "integration test requires setup, action, and verification"
 )]
-fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -309,15 +309,15 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
         .find(|a| a.is_root())
         .ok_or("No root agent")?;
     let root_id = root.id;
-    let original_session = root.tmux_session.clone();
+    let original_session = root.mux_session.clone();
 
     // Find children and verify they have the same session name as root
     let children: Vec<_> = app.storage.children(root_id);
     assert_eq!(children.len(), 3);
     for child in &children {
         assert_eq!(
-            child.tmux_session, original_session,
-            "Child should have same tmux_session as root before rename"
+            child.mux_session, original_session,
+            "Child should have same mux_session as root before rename"
         );
     }
 
@@ -354,15 +354,15 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
 
     // Get the new session name from root
     let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
-    let new_session = root_after.tmux_session.clone();
+    let new_session = root_after.mux_session.clone();
 
     // Verify root's session was renamed (should be "tenex-renamed-swarm")
-    // If this fails, it means the tmux rename itself failed (a separate issue)
+    // If this fails, it means the mux rename itself failed (a separate issue)
     if new_session == original_session {
-        // Cleanup and skip - tmux rename didn't work, can't test the children bug
+        // Cleanup and skip - session rename didn't work, can't test the children bug
         let manager = SessionManager::new();
         let _ = manager.kill(&original_session);
-        eprintln!("SKIPPING: Tmux session rename didn't happen (session still {original_session})");
+        eprintln!("SKIPPING: Session rename didn't happen (session still {original_session})");
         return Ok(());
     }
 
@@ -372,14 +372,14 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     );
 
     // ========================================================================
-    // Verify that children's tmux_session fields were updated along with root
+    // Verify that children's mux_session fields were updated along with root
     // ========================================================================
 
     // Verify children have the NEW session name (the fix)
     let children_before_sync: Vec<_> = app.storage.children(root_id);
     for child in &children_before_sync {
         assert_eq!(
-            child.tmux_session, new_session,
+            child.mux_session, new_session,
             "Child should have NEW session name after root rename"
         );
     }
@@ -415,15 +415,15 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
 
         if let Some(child) = child {
             assert_eq!(
-                child.tmux_session, new_session,
-                "Child {} should have updated tmux_session '{}' but has '{}'. \
-                 This indicates children's tmux_session fields were not updated during root rename.",
-                child.title, new_session, child.tmux_session
+                child.mux_session, new_session,
+                "Child {} should have updated mux_session '{}' but has '{}'. \
+                 This indicates children's mux_session fields were not updated during root rename.",
+                child.title, new_session, child.mux_session
             );
         }
     }
 
-    // Cleanup: kill the tmux session (which kills all windows)
+    // Cleanup: kill the session (which kills all windows)
     let manager = SessionManager::new();
     let _ = manager.kill(&new_session);
     // Also try to kill the old session name if it still exists (shouldn't)
@@ -447,7 +447,7 @@ fn test_rename_root_updates_children_tmux_session() -> Result<(), Box<dyn std::e
     reason = "integration test requires setup, action, and verification"
 )]
 fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -483,7 +483,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let root_id = root.id;
     let original_worktree_path = root.worktree_path.clone();
     let original_branch = root.branch.clone();
-    let original_session = root.tmux_session.clone();
+    let original_session = root.mux_session.clone();
 
     // Verify the worktree directory exists
     assert!(
@@ -531,7 +531,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
     let new_worktree_path = root_after.worktree_path.clone();
     let new_branch = root_after.branch.clone();
-    let new_session = root_after.tmux_session.clone();
+    let new_session = root_after.mux_session.clone();
 
     // Verify branch was renamed
     assert_ne!(

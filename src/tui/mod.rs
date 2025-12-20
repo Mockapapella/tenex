@@ -87,18 +87,18 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     result
 }
 
-fn send_batched_keys_to_tmux(app: &App, batched_keys: &[String]) {
+fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
     if batched_keys.is_empty() {
         return;
     }
 
     if let Some(agent) = app.selected_agent() {
         let target = agent.window_index.map_or_else(
-            || agent.tmux_session.clone(),
-            |idx| format!("{}:{}", agent.tmux_session, idx),
+            || agent.mux_session.clone(),
+            |idx| format!("{}:{}", agent.mux_session, idx),
         );
-        // Use synchronous call so tmux processes keys before we capture.
-        let _ = tenex::tmux::SessionManager::new().send_keys_batch(&target, batched_keys);
+        // Use synchronous call so the mux processes keys before we capture.
+        let _ = tenex::mux::SessionManager::new().send_keys_batch(&target, batched_keys);
     }
 }
 
@@ -175,9 +175,9 @@ fn run_loop(
             }
         }
 
-        // Send batched keys to tmux in one command (much faster than per-keystroke)
+        // Send batched keys to the mux in one command (much faster than per-keystroke)
         let sent_keys_in_preview = !batched_keys.is_empty() && app.mode == Mode::PreviewFocused;
-        send_batched_keys_to_tmux(app, &batched_keys);
+        send_batched_keys_to_mux(app, &batched_keys);
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
@@ -202,7 +202,7 @@ fn run_loop(
         }
 
         // Update preview/diff only on tick, selection change, or after sending keys
-        // This avoids spawning tmux/git subprocesses every frame
+        // This avoids spawning mux/git subprocesses every frame
         if needs_tick || needs_content_update || sent_keys_in_preview {
             let _ = action_handler.update_preview(app);
             // Only update diff on tick (it's slow and not needed while typing)
@@ -240,7 +240,7 @@ fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use input::keycode_to_tmux_keys;
+    use input::keycode_to_input_sequence;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
     use tenex::agent::Storage;
@@ -1498,153 +1498,157 @@ mod tests {
         Ok(())
     }
 
-    // === keycode_to_tmux_keys Tests ===
+    // === keycode_to_input_sequence Tests ===
 
     #[test]
-    fn test_keycode_to_tmux_keys_char() {
+    fn test_keycode_to_input_sequence_char() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Char('a'), KeyModifiers::NONE),
+            keycode_to_input_sequence(KeyCode::Char('a'), KeyModifiers::NONE),
             Some("a".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Char('Z'), KeyModifiers::NONE),
+            keycode_to_input_sequence(KeyCode::Char('Z'), KeyModifiers::NONE),
             Some("Z".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_ctrl_char() {
+    fn test_keycode_to_input_sequence_ctrl_char() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Some("C-c".to_string())
+            keycode_to_input_sequence(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Some("\u{3}".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Char('x'), KeyModifiers::CONTROL),
-            Some("C-x".to_string())
-        );
-    }
-
-    #[test]
-    fn test_keycode_to_tmux_keys_alt_char() {
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Char('a'), KeyModifiers::ALT),
-            Some("M-a".to_string())
+            keycode_to_input_sequence(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            Some("\u{18}".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_special_keys() {
+    fn test_keycode_to_input_sequence_alt_char() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Enter, KeyModifiers::NONE),
-            Some("Enter".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Esc, KeyModifiers::NONE),
-            Some("Escape".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Backspace, KeyModifiers::NONE),
-            Some("BSpace".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Tab, KeyModifiers::NONE),
-            Some("Tab".to_string())
+            keycode_to_input_sequence(KeyCode::Char('a'), KeyModifiers::ALT),
+            Some("\u{1b}a".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_arrows() {
+    fn test_keycode_to_input_sequence_special_keys() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Up, KeyModifiers::NONE),
-            Some("Up".to_string())
+            keycode_to_input_sequence(KeyCode::Enter, KeyModifiers::NONE),
+            Some("\r".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Down, KeyModifiers::NONE),
-            Some("Down".to_string())
+            keycode_to_input_sequence(KeyCode::Enter, KeyModifiers::ALT),
+            Some("\u{1b}\r".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Left, KeyModifiers::NONE),
-            Some("Left".to_string())
+            keycode_to_input_sequence(KeyCode::Esc, KeyModifiers::NONE),
+            Some("\u{1b}".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Right, KeyModifiers::NONE),
-            Some("Right".to_string())
-        );
-    }
-
-    #[test]
-    fn test_keycode_to_tmux_keys_navigation() {
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Home, KeyModifiers::NONE),
-            Some("Home".to_string())
+            keycode_to_input_sequence(KeyCode::Backspace, KeyModifiers::NONE),
+            Some("\u{7f}".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::End, KeyModifiers::NONE),
-            Some("End".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::PageUp, KeyModifiers::NONE),
-            Some("PageUp".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::PageDown, KeyModifiers::NONE),
-            Some("PageDown".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Delete, KeyModifiers::NONE),
-            Some("DC".to_string())
-        );
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Insert, KeyModifiers::NONE),
-            Some("IC".to_string())
+            keycode_to_input_sequence(KeyCode::Tab, KeyModifiers::NONE),
+            Some("\t".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_function_keys() {
+    fn test_keycode_to_input_sequence_arrows() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::F(1), KeyModifiers::NONE),
-            Some("F1".to_string())
+            keycode_to_input_sequence(KeyCode::Up, KeyModifiers::NONE),
+            Some("\u{1b}[A".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::F(12), KeyModifiers::NONE),
-            Some("F12".to_string())
-        );
-    }
-
-    #[test]
-    fn test_keycode_to_tmux_keys_ctrl_special() {
-        assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Up, KeyModifiers::CONTROL),
-            Some("C-Up".to_string())
+            keycode_to_input_sequence(KeyCode::Down, KeyModifiers::NONE),
+            Some("\u{1b}[B".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Home, KeyModifiers::CONTROL),
-            Some("C-Home".to_string())
+            keycode_to_input_sequence(KeyCode::Left, KeyModifiers::NONE),
+            Some("\u{1b}[D".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Right, KeyModifiers::NONE),
+            Some("\u{1b}[C".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_alt_special() {
+    fn test_keycode_to_input_sequence_navigation() {
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::Down, KeyModifiers::ALT),
-            Some("M-Down".to_string())
+            keycode_to_input_sequence(KeyCode::Home, KeyModifiers::NONE),
+            Some("\u{1b}[H".to_string())
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::End, KeyModifiers::ALT),
-            Some("M-End".to_string())
+            keycode_to_input_sequence(KeyCode::End, KeyModifiers::NONE),
+            Some("\u{1b}[F".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::PageUp, KeyModifiers::NONE),
+            Some("\u{1b}[5~".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::PageDown, KeyModifiers::NONE),
+            Some("\u{1b}[6~".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Delete, KeyModifiers::NONE),
+            Some("\u{1b}[3~".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Insert, KeyModifiers::NONE),
+            Some("\u{1b}[2~".to_string())
         );
     }
 
     #[test]
-    fn test_keycode_to_tmux_keys_unsupported() {
+    fn test_keycode_to_input_sequence_function_keys() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(1), KeyModifiers::NONE),
+            Some("\u{1b}OP".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(12), KeyModifiers::NONE),
+            Some("\u{1b}[24~".to_string())
+        );
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_ctrl_special() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Up, KeyModifiers::CONTROL),
+            Some("\u{1b}[1;5A".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Home, KeyModifiers::CONTROL),
+            Some("\u{1b}[1;5H".to_string())
+        );
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_alt_special() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Down, KeyModifiers::ALT),
+            Some("\u{1b}[1;3B".to_string())
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::End, KeyModifiers::ALT),
+            Some("\u{1b}[1;3F".to_string())
+        );
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_unsupported() {
         // CapsLock and other unsupported keys return None
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::CapsLock, KeyModifiers::NONE),
+            keycode_to_input_sequence(KeyCode::CapsLock, KeyModifiers::NONE),
             None
         );
         assert_eq!(
-            keycode_to_tmux_keys(KeyCode::NumLock, KeyModifiers::NONE),
+            keycode_to_input_sequence(KeyCode::NumLock, KeyModifiers::NONE),
             None
         );
     }
@@ -1694,7 +1698,7 @@ mod tests {
             KeyModifiers::NONE,
             &mut keys,
         )?;
-        assert_eq!(keys, vec!["a".to_string(), "Enter".to_string()]);
+        assert_eq!(keys, vec!["a".to_string(), "\r".to_string()]);
         Ok(())
     }
 

@@ -23,7 +23,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 
 ## Requirements
 
-- **tmux** — Required for session management (recent version recommended)
+- **Built-in PTY backend** — No external multiplexer required
 - **git** — Required for worktree isolation
 - **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
 - **An agent CLI** — `claude` (default) or `codex` (or configure a custom command)
@@ -44,7 +44,7 @@ cargo install --path .
 
 ### Windows (native)
 
-Tenex builds cleanly with the **MSVC** toolchain. You still need MSYS2 for `tmux`.
+Tenex builds cleanly with the **MSVC** toolchain. No external multiplexer is required.
 
 ```powershell
 # Install MSVC Build Tools
@@ -67,13 +67,7 @@ $bin = Join-Path $ver.FullName "bin\Hostx64\x64"
 rustup toolchain install stable-x86_64-pc-windows-msvc
 rustup default stable-x86_64-pc-windows-msvc
 
-# Install MSYS2 + tmux
-winget install --id MSYS2.MSYS2 -e
-C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
-C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed tmux"
-setx TENEX_TMUX_BIN C:\msys64\usr\bin\tmux.exe
-
-# Install Tenex (open a new terminal after setx)
+# Install Tenex
 cargo install tenex --locked
 ```
 
@@ -121,7 +115,7 @@ tenex
 
 | Key | Action |
 |-----|--------|
-| `t` | Spawn terminal (bash shell as child of selected root) |
+| `t` | Spawn terminal (shell as child of selected root) |
 | `T` | Spawn terminal with startup command |
 
 ### Git
@@ -170,6 +164,7 @@ The default agent command is `claude --allow-dangerously-skip-permissions`. Pres
 | Variable | Description |
 |----------|-------------|
 | `DEBUG` | Log level: `0` off, `1` warn, `2` info, `3` debug |
+| `TENEX_MUX_SOCKET` | Override mux daemon socket name/path |
 | `TENEX_STATE_PATH` | Override state file location |
 
 ### CLI Commands
@@ -205,7 +200,7 @@ Reviewers get a strict review preamble with the chosen base branch. They're titl
 ### Synthesis
 
 Press `s` to synthesize. This:
-1. Captures the last ~5000 lines from each descendant's tmux pane
+1. Captures the last ~5000 lines from each descendant's terminal buffer
 2. Writes combined output to `.tenex/<uuid>.md` in the parent's worktree
 3. Kills and removes all descendants
 4. Sends the parent a command to read the synthesized file
@@ -221,6 +216,16 @@ When rebase or merge encounters conflicts, Tenex opens a terminal window titled 
 ## Keyboard Compatibility
 
 On first launch, Tenex checks if your terminal supports the Kitty keyboard protocol (to distinguish `Ctrl+m` from Enter). If not supported, you'll be prompted to remap the merge key to `Ctrl+n`. This choice is saved to `settings.json`.
+
+## Troubleshooting
+
+### Agents Disappear Immediately
+
+If a newly-created agent flashes into existence and vanishes a few seconds later, it usually means the underlying agent process exited during startup (Tenex then prunes the agent because its mux session is gone).
+
+- Enable logs with `DEBUG=3 tenex` and inspect the log at `/tmp/tenex.log`.
+- Tenex isolates mux daemons per build by default, so stale daemons from older installs shouldn’t interfere after an upgrade.
+- To isolate mux state, start Tenex with an explicit socket: `TENEX_MUX_SOCKET=/tmp/tenex-mux.sock tenex`.
 
 ## License
 

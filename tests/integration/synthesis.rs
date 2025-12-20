@@ -2,12 +2,12 @@
 
 //! Tests for synthesis functionality
 
-use crate::common::{DirGuard, TestFixture, skip_if_no_tmux};
-use tenex::tmux::SessionManager;
+use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+use tenex::mux::SessionManager;
 
 #[test]
 fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -39,7 +39,7 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -47,7 +47,7 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
 
 #[test]
 fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -83,7 +83,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -91,7 +91,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
 
 #[test]
 fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -147,7 +147,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -183,7 +183,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -191,7 +191,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -223,7 +223,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -281,7 +281,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -289,7 +289,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
 
 #[test]
 fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -317,7 +317,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -327,7 +327,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -375,7 +375,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())
@@ -383,7 +383,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
 
 #[test]
 fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::Error>> {
-    if skip_if_no_tmux() {
+    if skip_if_no_mux() {
         return Ok(());
     }
 
@@ -434,7 +434,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     if result.is_err() {
         let manager = SessionManager::new();
         for agent in app.storage.iter() {
-            let _ = manager.kill(&agent.tmux_session);
+            let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
@@ -467,7 +467,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.storage.iter() {
-        let _ = manager.kill(&agent.tmux_session);
+        let _ = manager.kill(&agent.mux_session);
     }
 
     Ok(())

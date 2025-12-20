@@ -28,6 +28,10 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 ansi-to-tui = { version = "7.0", default-features = false }
 semver = { version = "1.0.27", default-features = false, features = ["std"] }
 shell-words = { version = "1.1.1", default-features = false, features = ["std"] }
+portable-pty = { version = "0.9", default-features = false }
+vt100 = { version = "0.15", default-features = false }
+parking_lot = { version = "0.12", default-features = false }
+interprocess = { version = "2.2.3", default-features = false }
 
 [target.'cfg(not(windows))'.dependencies]
 git2 = { version = "0.19", default-features = false }

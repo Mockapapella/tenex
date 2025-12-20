@@ -61,8 +61,8 @@ impl GitOpState {
 
     /// Start the rename flow
     ///
-    /// For root agents (`is_root=true`): Renames branch + agent title + tmux session
-    /// For sub-agents (`is_root=false`): Renames agent title + tmux window only
+    /// For root agents (`is_root=true`): Renames branch + agent title + session
+    /// For sub-agents (`is_root=false`): Renames agent title + window only
     pub fn start_rename(&mut self, agent_id: uuid::Uuid, current_name: String, is_root: bool) {
         self.agent_id = Some(agent_id);
         self.original_branch.clone_from(&current_name);

@@ -1,7 +1,8 @@
 //! Preview operations: update preview and diff content
 
+use crate::app::Mode;
 use crate::git::{self, DiffGenerator};
-use crate::tmux::SessionManager;
+use crate::mux::SessionManager;
 use anyhow::Result;
 
 use super::Actions;
@@ -15,30 +16,41 @@ impl Actions {
     /// Returns an error if preview update fails
     pub fn update_preview(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
-            // Determine the tmux target (session or specific window)
-            let tmux_target = if let Some(window_idx) = agent.window_index {
+            // Determine the target (session or specific window)
+            let target = if let Some(window_idx) = agent.window_index {
                 // Child agent: target specific window within root's session
                 let agent_id = agent.id;
                 let root = app.storage.root_ancestor(agent_id);
                 let root_session =
-                    root.map_or_else(|| agent.tmux_session.clone(), |r| r.tmux_session.clone());
+                    root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
                 SessionManager::window_target(&root_session, window_idx)
             } else {
                 // Root agent: use session directly
-                agent.tmux_session.clone()
+                agent.mux_session.clone()
             };
 
-            if self.session_manager.exists(&agent.tmux_session) {
-                let content = self
-                    .output_capture
-                    .capture_pane_with_history(&tmux_target, 1000)
-                    .unwrap_or_default();
+            if self.session_manager.exists(&agent.mux_session) {
+                let content = if app.mode == Mode::PreviewFocused {
+                    self.output_capture
+                        .capture_pane(&target)
+                        .unwrap_or_default()
+                } else {
+                    self.output_capture
+                        .capture_pane_with_history(&target, 1000)
+                        .unwrap_or_default()
+                };
                 app.ui.preview_content = content;
+                app.ui.preview_cursor_position = self.output_capture.cursor_position(&target).ok();
+                app.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
             } else {
                 app.ui.preview_content = String::from("(Session not running)");
+                app.ui.preview_cursor_position = None;
+                app.ui.preview_pane_size = None;
             }
         } else {
             app.ui.preview_content = String::from("(No agent selected)");
+            app.ui.preview_cursor_position = None;
+            app.ui.preview_pane_size = None;
         }
 
         // Auto-scroll to bottom only if follow mode is enabled
