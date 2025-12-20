@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.4] - 2025-12-20
+
+### Changed
+
+- **PTY mux**: Removed the tmux dependency by replacing it with the built-in PTY mux.
+- **Input modal**: Long input text now wraps in the modal.
+
+### Fixed
+
+- **Paste handling**: Limit the Codex paste path to Codex panes to avoid affecting other panes.
+- **Terminal preview cursor**: Correct cursor rendering in the terminal preview.
+
+### Documentation
+
+- **Windows setup**: Clarified install steps, including rustup and MSVC guidance.
+
 ## [1.0.3] - 2025-12-18
 
 ### Added
