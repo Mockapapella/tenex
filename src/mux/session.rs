@@ -379,4 +379,16 @@ mod tests {
         };
         assert!(!format!("{session:?}").is_empty());
     }
+
+    #[test]
+    fn test_attach_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+        let manager = Manager::new();
+        match manager.attach("test-session") {
+            Ok(()) => Err("Expected attach to fail".into()),
+            Err(err) => {
+                assert!(err.to_string().contains("Attach is not supported"));
+                Ok(())
+            }
+        }
+    }
 }

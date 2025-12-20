@@ -263,6 +263,13 @@ mod tests {
     }
 
     #[test]
+    fn test_socket_endpoint_default() -> Result<()> {
+        let endpoint = socket_endpoint()?;
+        assert!(!endpoint.display.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn test_set_socket_override_rejects_empty() -> Result<(), Box<dyn std::error::Error>> {
         match set_socket_override("   ") {
             Ok(()) => Err("Expected empty override to fail".into()),

@@ -65,6 +65,7 @@ pub fn data_local_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_log_path_suffix() {
@@ -81,6 +82,14 @@ mod tests {
         let resolved = data_local_dir();
         if has_env {
             assert!(resolved.is_some());
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_home_dir_matches_home_env() {
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(home_dir(), Some(PathBuf::from(home)));
         }
     }
 }
