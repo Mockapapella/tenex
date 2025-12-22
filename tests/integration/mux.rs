@@ -139,6 +139,56 @@ fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn test_mux_capture_pane_with_history_includes_full_output_tail() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("capture_history_tail")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("histtail");
+
+    let _ = manager.kill(&session_name);
+
+    let start_marker = format!("__tenex_hist_start_{session_name}__");
+    let end_marker = format!("__tenex_hist_end_{session_name}__");
+    let script = format!(
+        "echo {start_marker}; \
+         i=0; \
+         while [ $i -lt 120 ]; do echo LINE_$i; i=$((i+1)); done; \
+         echo {end_marker}; \
+         sleep 60"
+    );
+    let command = vec!["sh".to_string(), "-c".to_string(), script];
+
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let output = capture.capture_pane_with_history(&session_name, 1000)?;
+
+    manager.kill(&session_name)?;
+
+    assert!(
+        output.contains(&start_marker),
+        "Expected capture to include full history start marker {start_marker}, got: {output:?}"
+    );
+
+    let tail_has_end_marker = output
+        .lines()
+        .rev()
+        .take(32)
+        .any(|line| line.contains(&end_marker));
+    assert!(
+        tail_has_end_marker,
+        "Expected capture tail to include end marker {end_marker}, got: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_mux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());

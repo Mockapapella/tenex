@@ -289,6 +289,31 @@ mod tests {
     }
 
     #[test]
+    fn test_render_content_pane_has_top_border() -> Result<(), Box<dyn std::error::Error>> {
+        let width = 80_u16;
+        let backend = TestBackend::new(width, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let app = create_test_app_with_agents();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+
+        // Main layout is a 30/70 split; the content pane starts at 30%.
+        let content_x = u16::try_from((u32::from(width) * 30) / 100).unwrap_or(0);
+        let top_left = buffer.cell((content_x, 0)).map(|cell| cell.symbol());
+        let top_right = buffer
+            .cell((width.saturating_sub(1), 0))
+            .map(|cell| cell.symbol());
+
+        assert_eq!(top_left, Some("┌"));
+        assert_eq!(top_right, Some("┐"));
+        Ok(())
+    }
+
+    #[test]
     fn test_render_help_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
