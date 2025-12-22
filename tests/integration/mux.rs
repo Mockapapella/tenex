@@ -189,6 +189,65 @@ fn test_mux_capture_pane_with_history_includes_full_output_tail() -> Result<(), 
 }
 
 #[test]
+fn test_mux_capture_pane_with_history_ends_with_visible_pane() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("capture_history_suffix")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("histsuffix");
+
+    let _ = manager.kill(&session_name);
+
+    let tail_marker = format!("__tenex_hist_suffix_{session_name}__");
+    let script = format!(
+        "i=0; \
+         while [ $i -lt 200 ]; do echo LINE_$i; i=$((i+1)); done; \
+         echo {tail_marker}; \
+         sleep 60"
+    );
+    let command = vec!["sh".to_string(), "-c".to_string(), script];
+
+    manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let visible = capture.capture_pane(&session_name)?;
+    let with_history = capture.capture_pane_with_history(&session_name, 1000)?;
+
+    manager.kill(&session_name)?;
+
+    assert!(
+        with_history.contains(&tail_marker),
+        "Expected history capture to include tail marker {tail_marker}, got: {with_history:?}"
+    );
+    assert!(
+        visible.contains(&tail_marker),
+        "Expected visible capture to include tail marker {tail_marker}, got: {visible:?}"
+    );
+
+    let visible_lines: Vec<&str> = visible.lines().collect();
+    let history_lines: Vec<&str> = with_history.lines().collect();
+    assert!(
+        history_lines.len() >= visible_lines.len(),
+        "Expected history capture to be at least as long as visible capture; history has {}, visible has {}",
+        history_lines.len(),
+        visible_lines.len()
+    );
+
+    let history_tail = &history_lines[history_lines.len().saturating_sub(visible_lines.len())..];
+    assert_eq!(
+        history_tail,
+        &visible_lines[..],
+        "Expected history capture to end with the visible pane content",
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_mux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());

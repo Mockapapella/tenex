@@ -493,16 +493,27 @@ fn normalize_key_event(code: KeyCode, modifiers: KeyModifiers) -> (KeyCode, KeyM
         return (code, modifiers);
     };
 
-    // For KeyCode::Char, shift is redundant: the character already encodes it.
-    // Terminals may still set the SHIFT modifier flag.
+    // For `KeyCode::Char`, terminals differ:
+    // - Some report the shifted character directly (e.g. 'G') and may redundantly set SHIFT.
+    // - With Kitty keyboard protocol, some report the unshifted character (e.g. 'g') with SHIFT.
+    // Normalize so bindings work across both representations.
+    let mut normalized_char = c;
+    if modifiers.contains(KeyModifiers::SHIFT) && normalized_char.is_ascii_lowercase() {
+        normalized_char = normalized_char.to_ascii_uppercase();
+    }
+
+    // The SHIFT modifier is redundant for char keys after normalization.
     let mut normalized_modifiers = modifiers;
     normalized_modifiers.remove(KeyModifiers::SHIFT);
 
     // Ctrl+<letter> is case-insensitive. Normalize so bindings can be defined in one place.
     if normalized_modifiers.contains(KeyModifiers::CONTROL) {
-        (KeyCode::Char(c.to_ascii_lowercase()), normalized_modifiers)
+        (
+            KeyCode::Char(normalized_char.to_ascii_lowercase()),
+            normalized_modifiers,
+        )
     } else {
-        (KeyCode::Char(c), normalized_modifiers)
+        (KeyCode::Char(normalized_char), normalized_modifiers)
     }
 }
 
@@ -638,6 +649,12 @@ mod tests {
         // Uppercase 'G' should trigger ScrollBottom
         assert_eq!(
             get_action(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            Some(Action::ScrollBottom)
+        );
+
+        // Some terminals (notably with Kitty keyboard protocol) report lowercase + SHIFT.
+        assert_eq!(
+            get_action(KeyCode::Char('g'), KeyModifiers::SHIFT),
             Some(Action::ScrollBottom)
         );
     }
