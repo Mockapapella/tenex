@@ -6,8 +6,168 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use tracing::warn;
 use uuid::Uuid;
+
+#[cfg(unix)]
+const STATE_FILE_MODE: u32 = 0o600;
+
+fn resolve_state_path(path: &Path) -> std::path::PathBuf {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return path.to_path_buf();
+    };
+
+    if !metadata.file_type().is_symlink() {
+        return path.to_path_buf();
+    }
+
+    let Ok(target) = fs::read_link(path) else {
+        return path.to_path_buf();
+    };
+
+    if target.is_absolute() {
+        return target;
+    }
+
+    path.parent().unwrap_or_else(|| Path::new(".")).join(target)
+}
+
+fn backup_state_path(path: &Path) -> std::path::PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.json");
+    path.with_file_name(format!("{name}.bak"))
+}
+
+fn temp_state_path(path: &Path) -> std::path::PathBuf {
+    let token = Uuid::new_v4();
+    let tmp_name = format!(
+        ".{}.tmp-{}-{token}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("state.json"),
+        std::process::id(),
+    );
+    path.with_file_name(tmp_name)
+}
+
+fn write_temp_state_file(path: &Path, contents: &str) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // Create the temp file with restrictive permissions immediately to avoid a brief
+        // window where sensitive contents are world-readable.
+        options.mode(STATE_FILE_MODE);
+    }
+
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("Failed to create temp state file {}", path.display()))?;
+
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("Failed to write temp state file {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("Failed to sync temp state file to disk {}", path.display()))?;
+    Ok(())
+}
+
+fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permissions>) -> Result<()> {
+    if let Some(permissions) = existing_permissions {
+        fs::set_permissions(path, permissions).with_context(|| {
+            format!(
+                "Failed to set permissions for temp state file {}",
+                path.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).with_context(|| {
+        format!(
+            "Failed to set permissions for temp state file {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
+    let backup_path = backup_state_path(path);
+    if backup_path.exists() {
+        let _ = fs::remove_file(&backup_path);
+    }
+
+    let mut moved_old = false;
+    if path.exists() {
+        fs::rename(path, &backup_path).with_context(|| {
+            format!(
+                "Failed to move old state file {} to {}",
+                path.display(),
+                backup_path.display()
+            )
+        })?;
+        moved_old = true;
+    }
+
+    if let Err(err) = fs::rename(tmp_path, path) {
+        if moved_old {
+            let _ = fs::rename(&backup_path, path);
+        }
+        return Err(err).with_context(|| {
+            format!(
+                "Failed to replace state file {} with {}",
+                path.display(),
+                tmp_path.display()
+            )
+        });
+    }
+
+    if moved_old {
+        let _ = fs::remove_file(&backup_path);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
+    fs::rename(tmp_path, path).with_context(|| {
+        format!(
+            "Failed to replace state file {} with {}",
+            path.display(),
+            tmp_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn write_state_atomically(path: &Path, contents: &str) -> Result<()> {
+    let existing_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let tmp_path = temp_state_path(path);
+
+    let write_result = (|| -> Result<()> {
+        write_temp_state_file(&tmp_path, contents)?;
+        set_temp_permissions(&tmp_path, existing_permissions)?;
+        replace_state_file(path, &tmp_path)?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+
+    write_result
+}
 
 /// Pre-computed visible agent information for efficient rendering
 #[derive(Debug, Clone)]
@@ -76,9 +236,49 @@ impl Storage {
     ///
     /// Returns an error if the state file exists but cannot be read or parsed
     pub fn load() -> Result<Self> {
-        let path = Config::state_path();
+        let configured_path = Config::state_path();
+        let path = resolve_state_path(&configured_path);
+        let backup_path = backup_state_path(&path);
+
         if path.exists() {
-            Self::load_from(&path)
+            match Self::load_from(&path) {
+                Ok(storage) => Ok(storage),
+                Err(err) => {
+                    if backup_path.exists() {
+                        warn!(
+                            error = %err,
+                            path = %path.display(),
+                            backup_path = %backup_path.display(),
+                            "Failed to load state file; attempting backup"
+                        );
+                        Self::load_from(&backup_path)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        } else if backup_path.exists() {
+            // Best-effort recovery for interrupted Windows writes where the old state was moved
+            // aside but the new state wasn't written into place.
+            match fs::rename(&backup_path, &path) {
+                Ok(()) => {
+                    warn!(
+                        path = %path.display(),
+                        backup_path = %backup_path.display(),
+                        "Recovered missing state file from backup"
+                    );
+                    Self::load_from(&path)
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        path = %path.display(),
+                        backup_path = %backup_path.display(),
+                        "Failed to restore backup state file; reading it in place"
+                    );
+                    Self::load_from(&backup_path)
+                }
+            }
         } else {
             Ok(Self::new())
         }
@@ -113,14 +313,18 @@ impl Storage {
     ///
     /// Returns an error if the file cannot be written
     pub fn save_to(&self, path: &Path) -> Result<()> {
+        let path = resolve_state_path(path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create state directory {}", parent.display())
             })?;
         }
         let contents = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
-        fs::write(path, contents)
-            .with_context(|| format!("Failed to write state to {}", path.display()))?;
+
+        // Write atomically to avoid corrupting the state file if we're interrupted mid-write.
+        // On Windows this is best-effort; Tenex will attempt to recover from a `.bak` file on
+        // startup if the main file is missing.
+        write_state_atomically(&path, &contents)?;
         Ok(())
     }
 

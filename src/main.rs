@@ -93,7 +93,33 @@ fn main() -> Result<()> {
     };
 
     let config = Config::default();
-    let storage = Storage::load().unwrap_or_default();
+    let (storage, storage_load_error) = match Storage::load() {
+        Ok(storage) => (storage, None),
+        Err(err) => {
+            let state_path = Config::state_path();
+            let mut message = format!("Failed to load state file {}: {err}", state_path.display());
+
+            if let Some(preserved) = preserve_corrupt_state_file(&state_path) {
+                message.push_str(&format!(
+                    "\nPreserved unreadable state at {}",
+                    preserved.display()
+                ));
+            } else if state_path.exists() {
+                message.push_str("\nFailed to preserve unreadable state file");
+            }
+
+            let file_name = state_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("state.json");
+            let backup_path = state_path.with_file_name(format!("{file_name}.bak"));
+            if backup_path.exists() {
+                let _ = preserve_corrupt_state_file(&backup_path);
+            }
+
+            (Storage::new(), Some(message))
+        }
+    };
     let settings = Settings::load();
 
     match cli.command {
@@ -109,14 +135,19 @@ fn main() -> Result<()> {
 
             // keyboard_enhancement_supported will be set in tui::run after terminal setup
             let mut app = App::new(config, storage, settings, false);
+            if let Some(message) = storage_load_error {
+                app.set_error(message);
+            }
 
-            match tenex::update::check_for_update() {
-                Ok(Some(info)) => {
-                    app.mode = Mode::UpdatePrompt(info);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!("Warning: Failed to check for updates: {e}");
+            if matches!(app.mode, Mode::Normal) {
+                match tenex::update::check_for_update() {
+                    Ok(Some(info)) => {
+                        app.mode = Mode::UpdatePrompt(info);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("Warning: Failed to check for updates: {e}");
+                    }
                 }
             }
 
@@ -138,6 +169,22 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn preserve_corrupt_state_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let file_name = path.file_name()?.to_string_lossy();
+    if file_name.is_empty() {
+        return None;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let preserved = path.with_file_name(format!("{file_name}.corrupt-{timestamp}"));
+
+    std::fs::rename(path, &preserved).ok()?;
+    Some(preserved)
 }
 
 fn restart_current_process() -> Result<()> {
