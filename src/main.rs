@@ -32,6 +32,21 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    init_logging();
+
+    let cli = parse_cli()?;
+    let config = Config::default();
+    let (storage, storage_load_error) = load_storage_with_error();
+    let settings = Settings::load();
+
+    match cli.command {
+        Some(Commands::Reset { force }) => cmd_reset(force),
+        Some(Commands::Muxd) => tenex::mux::run_mux_daemon(),
+        None => run_interactive(config, storage, settings, storage_load_error),
+    }
+}
+
+fn init_logging() {
     let log_path = tenex::paths::log_path();
     if let Some(parent) = log_path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -57,27 +72,31 @@ fn main() -> Result<()> {
         .and_then(|v| v.parse::<u8>().ok())
         .unwrap_or(0);
 
-    if debug_level > 0 {
-        let level = match debug_level {
-            1 => tracing::Level::WARN,
-            2 => tracing::Level::INFO,
-            _ => tracing::Level::DEBUG,
-        };
-
-        let log_dir = log_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
-
-        let file_appender = tracing_appender::rolling::never(log_dir, "tenex.log");
-        tracing_subscriber::fmt()
-            .with_writer(file_appender)
-            .with_max_level(level)
-            .with_ansi(false)
-            .init();
+    if debug_level == 0 {
+        return;
     }
 
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+    let level = match debug_level {
+        1 => tracing::Level::WARN,
+        2 => tracing::Level::INFO,
+        _ => tracing::Level::DEBUG,
+    };
+
+    let log_dir = log_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    let file_appender = tracing_appender::rolling::never(log_dir, "tenex.log");
+    tracing_subscriber::fmt()
+        .with_writer(file_appender)
+        .with_max_level(level)
+        .with_ansi(false)
+        .init();
+}
+
+fn parse_cli() -> Result<Cli> {
+    match Cli::try_parse() {
+        Ok(cli) => Ok(cli),
         Err(e) => {
             // Let --help and --version exit normally
             if e.kind() == clap::error::ErrorKind::DisplayHelp
@@ -90,54 +109,105 @@ fn main() -> Result<()> {
             Cli::command().print_help()?;
             std::process::exit(1);
         }
-    };
+    }
+}
 
-    let config = Config::default();
-    let storage = Storage::load().unwrap_or_default();
-    let settings = Settings::load();
+fn load_storage_with_error() -> (Storage, Option<String>) {
+    match Storage::load() {
+        Ok(storage) => (storage, None),
+        Err(err) => {
+            let state_path = Config::state_path();
+            let mut message = format!("Failed to load state file {}: {err}", state_path.display());
 
-    match cli.command {
-        Some(Commands::Reset { force }) => cmd_reset(force),
-        Some(Commands::Muxd) => tenex::mux::run_mux_daemon(),
-        None => {
-            // Ensure .tenex/ is excluded from git tracking
-            if let Ok(cwd) = std::env::current_dir()
-                && let Err(e) = tenex::git::ensure_tenex_excluded(&cwd)
-            {
-                eprintln!("Warning: Failed to exclude .tenex from git: {e}");
+            if let Some(preserved) = preserve_corrupt_state_file(&state_path) {
+                use std::fmt::Write as _;
+                write!(
+                    &mut message,
+                    "\nPreserved unreadable state at {}",
+                    preserved.display()
+                )
+                .unwrap_or_default();
+            } else if state_path.exists() {
+                message.push_str("\nFailed to preserve unreadable state file");
             }
 
-            // keyboard_enhancement_supported will be set in tui::run after terminal setup
-            let mut app = App::new(config, storage, settings, false);
-
-            match tenex::update::check_for_update() {
-                Ok(Some(info)) => {
-                    app.mode = Mode::UpdatePrompt(info);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!("Warning: Failed to check for updates: {e}");
-                }
+            let file_name = state_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("state.json");
+            let backup_path = state_path.with_file_name(format!("{file_name}.bak"));
+            if backup_path.exists() {
+                let _ = preserve_corrupt_state_file(&backup_path);
             }
 
-            // Auto-connect to any existing worktrees
-            let action_handler = tenex::app::Actions::new();
-            if let Err(e) = action_handler.auto_connect_worktrees(&mut app) {
-                eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
-            }
-
-            if let Some(info) = tui::run(app)? {
-                println!(
-                    "Updating Tenex from {} to {}...",
-                    info.current_version, info.latest_version
-                );
-                tenex::update::install_latest()?;
-                restart_current_process()?;
-            }
-
-            Ok(())
+            (Storage::new(), Some(message))
         }
     }
+}
+
+fn run_interactive(
+    config: Config,
+    storage: Storage,
+    settings: Settings,
+    storage_load_error: Option<String>,
+) -> Result<()> {
+    // Ensure .tenex/ is excluded from git tracking
+    if let Ok(cwd) = std::env::current_dir()
+        && let Err(e) = tenex::git::ensure_tenex_excluded(&cwd)
+    {
+        eprintln!("Warning: Failed to exclude .tenex from git: {e}");
+    }
+
+    // keyboard_enhancement_supported will be set in tui::run after terminal setup
+    let mut app = App::new(config, storage, settings, false);
+    if let Some(message) = storage_load_error {
+        app.set_error(message);
+    }
+
+    if matches!(app.mode, Mode::Normal) {
+        match tenex::update::check_for_update() {
+            Ok(Some(info)) => {
+                app.mode = Mode::UpdatePrompt(info);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("Warning: Failed to check for updates: {e}");
+            }
+        }
+    }
+
+    // Auto-connect to any existing worktrees
+    let action_handler = tenex::app::Actions::new();
+    if let Err(e) = action_handler.auto_connect_worktrees(&mut app) {
+        eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
+    }
+
+    if let Some(info) = tui::run(app)? {
+        println!(
+            "Updating Tenex from {} to {}...",
+            info.current_version, info.latest_version
+        );
+        tenex::update::install_latest()?;
+        restart_current_process()?;
+    }
+
+    Ok(())
+}
+
+fn preserve_corrupt_state_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let file_name = path.file_name()?.to_string_lossy();
+    if file_name.is_empty() {
+        return None;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let preserved = path.with_file_name(format!("{file_name}.corrupt-{timestamp}"));
+
+    std::fs::rename(path, &preserved).ok()?;
+    Some(preserved)
 }
 
 fn restart_current_process() -> Result<()> {

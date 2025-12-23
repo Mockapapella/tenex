@@ -13,21 +13,60 @@ impl Actions {
     ///
     /// # Errors
     ///
-    /// Returns an error if status sync fails
+    /// Returns an error if saving updated state fails.
+    ///
+    /// If mux session listing fails, this function treats the session state as
+    /// unknown and performs no pruning or status updates.
     pub fn sync_agent_status(self, app: &mut App) -> Result<()> {
+        // Session listing is an external observation. Avoid starting a fresh mux daemon just to
+        // check state, especially during shutdown or upgrades.
+        if !crate::mux::is_server_running() {
+            debug!("Mux daemon not running; skipping agent sync");
+            return Ok(());
+        }
+
+        let sessions = self.session_manager.list();
+        Self::sync_agent_status_with_sessions(app, sessions)
+    }
+
+    fn sync_agent_status_with_sessions(
+        app: &mut App,
+        sessions: Result<Vec<crate::mux::Session>>,
+    ) -> Result<()> {
         let mut changed = false;
 
         // Fetch all sessions once instead of calling exists() per agent.
-        let active_sessions: std::collections::HashSet<String> = match self.session_manager.list() {
-            Ok(sessions) => sessions.into_iter().map(|s| s.name).collect(),
+        let sessions = match sessions {
+            Ok(sessions) => sessions,
             Err(err) => {
-                debug!(error = %err, "Failed to list mux sessions");
-                std::collections::HashSet::new()
+                // Listing sessions is an external observation. If it fails, don't treat it as an
+                // authoritative "no sessions exist" signal or we'll incorrectly prune all agents.
+                debug!(error = %err, "Failed to list mux sessions; skipping agent sync");
+                return Ok(());
             }
         };
 
+        // A successful but empty session list can be a transient mis-observation (e.g. after the
+        // mux daemon restarts or if we're connected to a fresh daemon). Avoid turning that into a
+        // destructive prune+save.
+        if sessions.is_empty() && !app.storage.is_empty() {
+            debug!("Mux session list empty; skipping agent sync");
+            return Ok(());
+        }
+
+        let active_sessions: std::collections::HashSet<String> =
+            sessions.into_iter().map(|s| s.name).collect();
+
         // Remove stored agents whose sessions no longer exist.
         let roots: Vec<Agent> = app.storage.root_agents().into_iter().cloned().collect();
+        if !roots.is_empty()
+            && !roots
+                .iter()
+                .any(|root| active_sessions.contains(&root.mux_session))
+        {
+            debug!("No stored mux sessions found in session list; skipping agent sync");
+            return Ok(());
+        }
         for root in roots {
             if active_sessions.contains(&root.mux_session) {
                 continue;
@@ -40,7 +79,7 @@ impl Actions {
 
         // Update starting agents to running if their session exists
         for agent in app.storage.iter_mut() {
-            if agent.status == Status::Starting {
+            if agent.status == Status::Starting && active_sessions.contains(&agent.mux_session) {
                 debug!(title = %agent.title, "Agent status: Starting -> Running");
                 agent.set_status(Status::Running);
                 changed = true;
@@ -164,7 +203,6 @@ mod tests {
 
     #[test]
     fn test_sync_agent_status_with_agents() -> Result<(), Box<dyn std::error::Error>> {
-        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
         // Add agents with different statuses
@@ -188,11 +226,105 @@ mod tests {
         starting.set_status(Status::Starting);
         app.storage.add(starting);
 
-        // Sync should remove dead agents (no sessions exist)
-        handler.sync_agent_status(&mut app)?;
+        // When mux session listing succeeds but reports no sessions, treat it as uncertain and
+        // avoid destructive pruning.
+        Actions::sync_agent_status_with_sessions(&mut app, Ok(vec![]))?;
 
-        // All agents should be removed since their sessions don't exist
-        assert_eq!(app.storage.len(), 0);
+        assert_eq!(app.storage.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_agent_status_prunes_missing_sessions() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut alive = Agent::new(
+            "alive".to_string(),
+            "claude".to_string(),
+            "muster/alive".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        alive.set_status(Status::Running);
+        let alive_session = alive.mux_session.clone();
+        app.storage.add(alive);
+
+        let mut missing = Agent::new(
+            "missing".to_string(),
+            "claude".to_string(),
+            "muster/missing".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        missing.set_status(Status::Running);
+        let missing_id = missing.id;
+        app.storage.add(missing);
+
+        Actions::sync_agent_status_with_sessions(
+            &mut app,
+            Ok(vec![crate::mux::Session {
+                name: alive_session,
+                created: 0,
+                attached: false,
+            }]),
+        )?;
+
+        assert_eq!(app.storage.len(), 1);
+        assert!(app.storage.get(missing_id).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_agent_status_promotes_starting_when_session_exists()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut agent = Agent::new(
+            "starting".to_string(),
+            "claude".to_string(),
+            "muster/starting".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Starting);
+        let session = agent.mux_session.clone();
+        let agent_id = agent.id;
+        app.storage.add(agent);
+
+        Actions::sync_agent_status_with_sessions(
+            &mut app,
+            Ok(vec![crate::mux::Session {
+                name: session,
+                created: 0,
+                attached: false,
+            }]),
+        )?;
+
+        assert_eq!(
+            app.storage.get(agent_id).ok_or("Agent missing")?.status,
+            Status::Running
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_agent_status_list_error_does_not_prune() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (mut app, _temp) = create_test_app()?;
+
+        // Add a running root agent.
+        let mut agent = Agent::new(
+            "running".to_string(),
+            "claude".to_string(),
+            "muster/running".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        agent.set_status(Status::Running);
+        app.storage.add(agent);
+
+        Actions::sync_agent_status_with_sessions(&mut app, Err(anyhow::anyhow!("mux down")))?;
+        assert_eq!(app.storage.len(), 1);
         Ok(())
     }
 }
