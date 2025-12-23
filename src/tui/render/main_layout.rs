@@ -135,27 +135,19 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the content pane (tabs + preview/diff)
 pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
-
-    render_tab_bar(frame, app, chunks[0]);
-
     match app.active_tab {
-        Tab::Preview => render_preview(frame, app, chunks[1]),
-        Tab::Diff => render_diff(frame, app, chunks[1]),
+        Tab::Preview => render_preview(frame, app, area),
+        Tab::Diff => render_diff(frame, app, area),
     }
 }
 
-/// Render the tab bar
-pub fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn tab_bar_line(app: &App) -> Line<'static> {
     let tabs = vec![
         (" Preview ", app.active_tab == Tab::Preview),
         (" Diff ", app.active_tab == Tab::Diff),
     ];
 
-    let spans: Vec<Span<'_>> = tabs
+    let spans: Vec<Span<'static>> = tabs
         .into_iter()
         .map(|(name, active)| {
             if active {
@@ -167,13 +159,19 @@ pub fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                Span::styled(name, Style::default().fg(colors::TEXT_MUTED))
+                Span::styled(
+                    name,
+                    Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
+                )
             }
         })
         .collect();
 
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line).style(Style::default().bg(colors::SURFACE));
+    Line::from(spans)
+}
+
+fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let paragraph = Paragraph::new(tab_bar_line(app)).style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, area);
 }
 
@@ -189,10 +187,6 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     });
 
     let line_count = text.lines.len();
-    let visible_height = usize::from(area.height.saturating_sub(2));
-    let max_scroll = line_count.saturating_sub(visible_height);
-    let scroll = app.ui.preview_scroll.min(max_scroll);
-    let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     // Use highlighted border when focused, show exit hint in title
     let (border_color, title) = if is_focused {
@@ -204,26 +198,40 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (colors::BORDER, " Terminal Output (read-only) ")
     };
 
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        )
-        .scroll((scroll_pos, 0));
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    frame.render_widget(block.clone(), area);
 
-    frame.render_widget(paragraph, area);
+    let inner = block.inner(area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_tab_bar(frame, app, chunks[0]);
+
+    let content_area = chunks[1];
+    let visible_height = usize::from(content_area.height);
+    let max_scroll = line_count.saturating_sub(visible_height);
+    let scroll = app.ui.preview_scroll.min(max_scroll);
+    let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
+
+    let paragraph = Paragraph::new(text).scroll((scroll_pos, 0));
+    frame.render_widget(paragraph, content_area);
 
     if is_focused {
-        render_preview_cursor(frame, app, area, scroll, line_count, visible_height);
+        render_preview_cursor(frame, app, content_area, scroll, line_count, visible_height);
     }
 
     if line_count > visible_height && area.width != 0 {
-        let scrollbar_area = area.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        });
+        let scrollbar_area = Rect {
+            x: area.x,
+            y: content_area.y,
+            width: area.width,
+            height: content_area.height,
+        };
 
         if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -245,7 +253,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn render_preview_cursor(
     frame: &mut Frame<'_>,
     app: &App,
-    area: Rect,
+    content_area: Rect,
     scroll: usize,
     line_count: usize,
     visible_height: usize,
@@ -279,23 +287,19 @@ fn render_preview_cursor(
         return;
     }
 
-    let inner = area.inner(Margin {
-        vertical: 1,
-        horizontal: 1,
-    });
-    if inner.width == 0 || inner.height == 0 {
+    if content_area.width == 0 || content_area.height == 0 {
         return;
     }
 
-    let max_x = inner.width.saturating_sub(1);
+    let max_x = content_area.width.saturating_sub(1);
     let cursor_x = cursor_x.min(max_x);
     let cursor_y = u16::try_from(visible_row)
         .unwrap_or(0)
-        .min(inner.height.saturating_sub(1));
+        .min(content_area.height.saturating_sub(1));
 
     frame.set_cursor_position((
-        inner.x.saturating_add(cursor_x),
-        inner.y.saturating_add(cursor_y),
+        content_area.x.saturating_add(cursor_x),
+        content_area.y.saturating_add(cursor_y),
     ));
 }
 
@@ -303,7 +307,22 @@ fn render_preview_cursor(
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.ui.diff_content;
 
-    let visible_height = usize::from(area.height.saturating_sub(2));
+    let block = Block::default()
+        .title(" Git Diff ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::BORDER));
+    frame.render_widget(block.clone(), area);
+
+    let inner = block.inner(area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_tab_bar(frame, app, chunks[0]);
+
+    let content_area = chunks[1];
+    let visible_height = usize::from(content_area.height);
     let total_lines = app.ui.diff_line_ranges.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = app.ui.diff_scroll.min(max_scroll);
@@ -325,22 +344,16 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines.push(Line::styled(line, Style::default().fg(color)));
     }
 
-    let paragraph = Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title(" Git Diff ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, area);
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, content_area);
 
     if total_lines > visible_height && area.width != 0 {
-        let scrollbar_area = area.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        });
+        let scrollbar_area = Rect {
+            x: area.x,
+            y: content_area.y,
+            width: area.width,
+            height: content_area.height,
+        };
 
         if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -431,12 +444,12 @@ pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
     // Horizontal split: 30% agents, 70% content
     let content_width = u16::try_from((u32::from(frame_area.width) * 70) / 100).unwrap_or(0);
 
-    // Content pane: 1-line tab bar, rest is preview
-    let preview_height = main_area_height.saturating_sub(1);
+    // Content pane: preview/diff pane with 1-line tab bar inside
+    let preview_height = main_area_height;
 
-    // Inner area: subtract borders (2 chars total width, 2 lines total height)
+    // Inner area: subtract borders + 1-line tab bar (2 chars total width, 3 lines total height)
     let inner_width = content_width.saturating_sub(2);
-    let inner_height = preview_height.saturating_sub(2);
+    let inner_height = preview_height.saturating_sub(3);
 
     (inner_width, inner_height)
 }

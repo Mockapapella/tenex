@@ -309,7 +309,7 @@ impl Manager {
             let mut guard = window.lock();
             guard.master.resize(size).context("Failed to resize PTY")?;
             guard.size = size;
-            guard.parser.set_size(size.rows, size.cols);
+            guard.parser.screen_mut().set_size(size.rows, size.cols);
         }
         Ok(())
     }

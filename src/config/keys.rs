@@ -476,12 +476,45 @@ impl Action {
 /// Get the action for a key event
 #[must_use]
 pub fn get_action(code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+    let (code, modifiers) = normalize_key_event(code, modifiers);
+
     for binding in BINDINGS {
-        if binding.code == code && binding.modifiers == modifiers {
+        let (binding_code, binding_modifiers) =
+            normalize_key_event(binding.code, binding.modifiers);
+        if binding_code == code && binding_modifiers == modifiers {
             return Some(binding.action);
         }
     }
     None
+}
+
+fn normalize_key_event(code: KeyCode, modifiers: KeyModifiers) -> (KeyCode, KeyModifiers) {
+    let KeyCode::Char(c) = code else {
+        return (code, modifiers);
+    };
+
+    // For `KeyCode::Char`, terminals differ:
+    // - Some report the shifted character directly (e.g. 'G') and may redundantly set SHIFT.
+    // - With Kitty keyboard protocol, some report the unshifted character (e.g. 'g') with SHIFT.
+    // Normalize so bindings work across both representations.
+    let mut normalized_char = c;
+    if modifiers.contains(KeyModifiers::SHIFT) && normalized_char.is_ascii_lowercase() {
+        normalized_char = normalized_char.to_ascii_uppercase();
+    }
+
+    // The SHIFT modifier is redundant for char keys after normalization.
+    let mut normalized_modifiers = modifiers;
+    normalized_modifiers.remove(KeyModifiers::SHIFT);
+
+    // Ctrl+<letter> is case-insensitive. Normalize so bindings can be defined in one place.
+    if normalized_modifiers.contains(KeyModifiers::CONTROL) {
+        (
+            KeyCode::Char(normalized_char.to_ascii_lowercase()),
+            normalized_modifiers,
+        )
+    } else {
+        (KeyCode::Char(normalized_char), normalized_modifiers)
+    }
 }
 
 /// Get the display keys for an action, considering keyboard remap settings
@@ -541,8 +574,31 @@ mod tests {
             get_action(KeyCode::Char('u'), KeyModifiers::CONTROL),
             Some(Action::ScrollUp)
         );
+        // Some terminals report Ctrl+<char> as uppercase or with redundant SHIFT.
+        assert_eq!(
+            get_action(KeyCode::Char('U'), KeyModifiers::CONTROL),
+            Some(Action::ScrollUp)
+        );
+        assert_eq!(
+            get_action(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
+            Some(Action::ScrollUp)
+        );
         assert_eq!(
             get_action(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Some(Action::ScrollDown)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('D'), KeyModifiers::CONTROL),
+            Some(Action::ScrollDown)
+        );
+        assert_eq!(
+            get_action(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
             Some(Action::ScrollDown)
         );
         assert_eq!(
@@ -563,6 +619,10 @@ mod tests {
         );
         assert_eq!(
             get_action(KeyCode::Char('m'), KeyModifiers::CONTROL),
+            Some(Action::Merge)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('M'), KeyModifiers::CONTROL),
             Some(Action::Merge)
         );
     }
@@ -595,6 +655,12 @@ mod tests {
         // Uppercase 'G' should trigger ScrollBottom
         assert_eq!(
             get_action(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            Some(Action::ScrollBottom)
+        );
+
+        // Some terminals (notably with Kitty keyboard protocol) report lowercase + SHIFT.
+        assert_eq!(
+            get_action(KeyCode::Char('g'), KeyModifiers::SHIFT),
             Some(Action::ScrollBottom)
         );
     }

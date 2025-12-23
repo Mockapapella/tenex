@@ -1815,7 +1815,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "uuid",
- "vt100",
+ "vt100-ctt",
 ]
 
 [[package]]
@@ -2117,22 +2117,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vt100"
-version = "0.15.2"
+name = "vt100-ctt"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84cd863bf0db7e392ba3bd04994be3473491b31e66340672af5d11943c6274de"
+checksum = "298aca8af9c2d1395da31a65eb711abef2dc948e475e819212c8ed5008d52c9f"
 dependencies = [
  "itoa",
  "log",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.0",
  "vte",
 ]
 
 [[package]]
 name = "vte"
-version = "0.11.1"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
+checksum = "9a0b683b20ef64071ff03745b14391751f6beab06a54347885459b77a3f2caa5"
 dependencies = [
  "arrayvec",
  "utf8parse",

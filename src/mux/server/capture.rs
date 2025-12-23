@@ -32,7 +32,7 @@ impl Capture {
         let lines = usize::try_from(lines).map_or(usize::MAX, |value| value);
         let result = {
             let mut guard = window.lock();
-            capture_lines(&mut guard, lines)?
+            capture_lines(&mut guard.parser, lines)?
         };
         Ok(result)
     }
@@ -46,7 +46,7 @@ impl Capture {
         let window = super::super::backend::resolve_window(session)?;
         let result = {
             let mut guard = window.lock();
-            capture_lines(&mut guard, usize::MAX)?
+            capture_lines(&mut guard.parser, usize::MAX)?
         };
         Ok(result)
     }
@@ -152,11 +152,7 @@ fn skip_escape_sequence(bytes: &[u8], start: usize) -> usize {
     i.saturating_add(1)
 }
 
-fn capture_lines(
-    window: &mut super::super::backend::MuxWindow,
-    requested: usize,
-) -> Result<String> {
-    let parser = &mut window.parser;
+fn capture_lines(parser: &mut vt100::Parser, requested: usize) -> Result<String> {
     let (rows, _cols) = parser.screen().size();
     let height = usize::from(rows);
 
@@ -165,39 +161,56 @@ fn capture_lines(
     }
 
     let original_offset = parser.screen().scrollback();
-    parser.set_scrollback(usize::MAX);
-    let max_offset = parser.screen().scrollback();
-    let total_lines = max_offset.saturating_add(height);
+    let result = (|| -> Result<String> {
+        parser.screen_mut().set_scrollback(usize::MAX);
+        let scrollback_len = parser.screen().scrollback();
+        let total_lines = scrollback_len.saturating_add(height);
 
-    let requested = if requested == usize::MAX {
-        total_lines
-    } else {
-        requested.min(total_lines)
-    };
+        let requested = if requested == usize::MAX {
+            total_lines
+        } else {
+            requested.min(total_lines)
+        };
 
-    let start_line = total_lines.saturating_sub(requested);
-    let aligned_start = start_line.saturating_sub(start_line % height);
+        let start_line = total_lines.saturating_sub(requested);
 
-    let mut collected = Vec::new();
-    let mut line_index = aligned_start;
+        let mut collected: Vec<String> = Vec::with_capacity(requested);
 
-    while line_index < total_lines {
-        let offset = total_lines
-            .saturating_sub(height)
-            .saturating_sub(line_index);
-        parser.set_scrollback(offset);
-        collected.extend(render_screen_rows(parser.screen())?);
-        line_index = line_index.saturating_add(height);
-    }
+        if start_line >= scrollback_len {
+            parser.screen_mut().set_scrollback(0);
+            let rows = render_screen_rows(parser.screen())?;
+            let screen_start = start_line.saturating_sub(scrollback_len).min(height);
+            collected.extend(rows.into_iter().skip(screen_start));
+            return Ok(collected.join("\n"));
+        }
 
-    parser.set_scrollback(original_offset);
+        let scrollback_start = start_line;
+        let first_page_start = scrollback_start.saturating_sub(scrollback_start % height);
+        let mut page_start = first_page_start;
+        let mut skip_within_page = scrollback_start.saturating_sub(first_page_start);
 
-    let skip = start_line.saturating_sub(aligned_start);
-    let start = skip.min(collected.len());
-    let end = start.saturating_add(requested).min(collected.len());
-    let slice = collected.get(start..end).unwrap_or(&[]);
+        while page_start < scrollback_len {
+            let offset = scrollback_len.saturating_sub(page_start);
+            parser.screen_mut().set_scrollback(offset);
+            let rows = render_screen_rows(parser.screen())?;
+            let available = scrollback_len.saturating_sub(page_start).min(height);
+            let skip = skip_within_page.min(available);
 
-    Ok(slice.join("\n"))
+            collected.extend(rows.into_iter().take(available).skip(skip));
+
+            page_start = page_start.saturating_add(height);
+            skip_within_page = 0;
+        }
+
+        parser.screen_mut().set_scrollback(0);
+        let rows = render_screen_rows(parser.screen())?;
+        collected.extend(rows);
+
+        Ok(collected.join("\n"))
+    })();
+
+    parser.screen_mut().set_scrollback(original_offset);
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,6 +458,47 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains('A'));
         assert!(lines[0].ends_with("\x1b[0m"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_capture_lines_includes_tail_lines() -> Result<()> {
+        use std::fmt::Write as _;
+
+        let mut parser = vt100::Parser::new(5, 20, 1_000);
+
+        let mut output = String::new();
+        for i in 0..29 {
+            let _ = write!(&mut output, "L{i}\r\n");
+        }
+        output.push_str("L29");
+        parser.process(output.as_bytes());
+
+        let captured = capture_lines(&mut parser, usize::MAX)?;
+        let lines: Vec<&str> = captured.lines().collect();
+        if lines.len() < 10 {
+            bail!("Expected at least 10 lines, got {}", lines.len());
+        }
+
+        let tail_start = lines.len().saturating_sub(4);
+        let Some(tail) = lines.get(tail_start..) else {
+            bail!("Failed to slice captured tail");
+        };
+
+        assert!(
+            lines.first().is_some_and(|line| line.contains("L0")),
+            "Expected captured output to start with L0"
+        );
+
+        assert!(
+            lines.last().is_some_and(|line| line.contains("L29")),
+            "Expected captured output to end with L29"
+        );
+
+        assert!(tail[0].contains("L26"));
+        assert!(tail[1].contains("L27"));
+        assert!(tail[2].contains("L28"));
+        assert!(tail[3].contains("L29"));
         Ok(())
     }
 }
