@@ -580,7 +580,10 @@ mod tests {
             Some(Action::ScrollUp)
         );
         assert_eq!(
-            get_action(KeyCode::Char('u'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            get_action(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
             Some(Action::ScrollUp)
         );
         assert_eq!(
@@ -592,7 +595,10 @@ mod tests {
             Some(Action::ScrollDown)
         );
         assert_eq!(
-            get_action(KeyCode::Char('d'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            get_action(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
             Some(Action::ScrollDown)
         );
         assert_eq!(

@@ -152,10 +152,7 @@ fn skip_escape_sequence(bytes: &[u8], start: usize) -> usize {
     i.saturating_add(1)
 }
 
-fn capture_lines(
-    parser: &mut vt100::Parser,
-    requested: usize,
-) -> Result<String> {
+fn capture_lines(parser: &mut vt100::Parser, requested: usize) -> Result<String> {
     let (rows, _cols) = parser.screen().size();
     let height = usize::from(rows);
 
@@ -466,11 +463,13 @@ mod tests {
 
     #[test]
     fn test_capture_lines_includes_tail_lines() -> Result<()> {
+        use std::fmt::Write as _;
+
         let mut parser = vt100::Parser::new(5, 20, 1_000);
 
         let mut output = String::new();
         for i in 0..29 {
-            output.push_str(&format!("L{i}\r\n"));
+            let _ = write!(&mut output, "L{i}\r\n");
         }
         output.push_str("L29");
         parser.process(output.as_bytes());

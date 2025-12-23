@@ -161,9 +161,7 @@ fn tab_bar_line(app: &App) -> Line<'static> {
             } else {
                 Span::styled(
                     name,
-                    Style::default()
-                        .fg(colors::TEXT_MUTED)
-                        .bg(colors::SURFACE),
+                    Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
                 )
             }
         })

@@ -303,10 +303,12 @@ mod tests {
 
         // Main layout is a 30/70 split; the content pane starts at 30%.
         let content_x = u16::try_from((u32::from(width) * 30) / 100).unwrap_or(0);
-        let top_left = buffer.cell((content_x, 0)).map(|cell| cell.symbol());
+        let top_left = buffer
+            .cell((content_x, 0))
+            .map(ratatui::buffer::Cell::symbol);
         let top_right = buffer
             .cell((width.saturating_sub(1), 0))
-            .map(|cell| cell.symbol());
+            .map(ratatui::buffer::Cell::symbol);
 
         assert_eq!(top_left, Some("┌"));
         assert_eq!(top_right, Some("┐"));

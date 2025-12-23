@@ -139,8 +139,8 @@ fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
-fn test_mux_capture_pane_with_history_includes_full_output_tail() -> Result<(), Box<dyn std::error::Error>>
-{
+fn test_mux_capture_pane_with_history_includes_full_output_tail()
+-> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
     }
@@ -189,8 +189,8 @@ fn test_mux_capture_pane_with_history_includes_full_output_tail() -> Result<(), 
 }
 
 #[test]
-fn test_mux_capture_pane_with_history_ends_with_visible_pane() -> Result<(), Box<dyn std::error::Error>>
-{
+fn test_mux_capture_pane_with_history_ends_with_visible_pane()
+-> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
     }
