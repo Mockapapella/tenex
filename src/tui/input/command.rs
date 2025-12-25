@@ -1,7 +1,7 @@
 //! Slash command palette and related pickers
 
 use ratatui::crossterm::event::KeyCode;
-use tenex::app::App;
+use crate::app::App;
 
 /// Handle key events in `CommandPalette` mode
 pub fn handle_command_palette_mode(app: &mut App, code: KeyCode) {
@@ -54,9 +54,9 @@ pub fn handle_model_selector_mode(app: &mut App, code: KeyCode) {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-    use tenex::agent::Storage;
-    use tenex::app::{Mode, Settings};
-    use tenex::config::Config;
+    use crate::agent::Storage;
+    use crate::app::{Mode, Settings};
+    use crate::config::Config;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;

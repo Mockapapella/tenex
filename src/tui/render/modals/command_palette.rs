@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::app::App;
+use crate::app::App;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

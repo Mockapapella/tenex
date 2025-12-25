@@ -7,7 +7,7 @@
 //! - `BranchSelector` (selecting a branch)
 
 use ratatui::crossterm::event::KeyCode;
-use tenex::app::{Actions, App};
+use crate::app::{Actions, App};
 
 /// Handle key events in `ChildCount` mode
 pub fn handle_child_count_mode(app: &mut App, code: KeyCode) {
@@ -115,10 +115,10 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyCode;
     use tempfile::NamedTempFile;
-    use tenex::agent::Storage;
-    use tenex::app::{Mode, Settings};
-    use tenex::config::Config;
-    use tenex::git::BranchInfo;
+    use crate::agent::Storage;
+    use crate::app::{Mode, Settings};
+    use crate::config::Config;
+    use crate::git::BranchInfo;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;

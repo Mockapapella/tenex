@@ -10,8 +10,8 @@ use ratatui::{
         ScrollbarState, Wrap,
     },
 };
-use tenex::agent::Status;
-use tenex::app::{App, Mode, Tab};
+use crate::agent::Status;
+use crate::app::{App, Mode, Tab};
 
 use super::colors;
 
@@ -394,7 +394,7 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ),
         _ => {
             let running = app.running_agent_count();
-            let hints = tenex::config::status_hints();
+            let hints = crate::config::status_hints();
             Span::styled(
                 format!(" {running} running | {hints} "),
                 Style::default().fg(colors::TEXT_DIM),

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-use tenex::app::{Actions, App};
+use crate::app::{Actions, App};
 
 /// Handle key events in Normal or Scrolling mode
 pub fn handle_normal_mode(
@@ -14,7 +14,7 @@ pub fn handle_normal_mode(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<()> {
-    if let Some(action) = tenex::config::get_action(code, modifiers) {
+    if let Some(action) = crate::config::get_action(code, modifiers) {
         action_handler.handle_action(app, action)?;
     }
     Ok(())

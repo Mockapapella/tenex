@@ -6,8 +6,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::app::App;
-use tenex::update::UpdateInfo;
+use crate::app::App;
+use crate::update::UpdateInfo;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
@@ -503,9 +503,9 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::PathBuf;
-    use tenex::app::Settings;
-    use tenex::config::Config;
-    use tenex::{Agent, App, agent::Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    use crate::{Agent, App, agent::Storage};
 
     fn app_with_agent() -> App {
         let mut app = App::new(

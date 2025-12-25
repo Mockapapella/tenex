@@ -12,7 +12,7 @@ pub mod git;
 pub mod mux;
 pub mod paths;
 pub mod prompts;
-pub mod ui;
+pub mod tui;
 pub mod update;
 
 pub use agent::{Agent, Status};

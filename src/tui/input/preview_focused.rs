@@ -4,7 +4,7 @@
 //! keystrokes to the PTY backend.
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-use tenex::app::App;
+use crate::app::App;
 
 /// Handle key events in `PreviewFocused` mode
 pub fn handle_preview_focused_mode(
