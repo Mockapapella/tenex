@@ -3,6 +3,8 @@
 mod input;
 mod render;
 
+use crate::app::{Actions, App, Event, Handler, Mode, Tab};
+use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::{
     Terminal,
@@ -22,14 +24,17 @@ use ratatui::{
 };
 use std::io;
 use std::time::{Duration, Instant};
-use tenex::app::{Actions, App, Event, Handler, Mode, Tab};
-use tenex::update::UpdateInfo;
 use tracing::{info, warn};
 
 /// Run the TUI application
 ///
 /// Returns `Ok(Some(UpdateInfo))` if the user accepted an update prompt and the
 /// binary should reinstall and restart. Otherwise returns `Ok(None)` on normal exit.
+///
+/// # Errors
+/// Returns an error if the terminal cannot be initialized or restored (raw mode,
+/// alternate screen, mouse capture), or if the main event loop fails to poll input
+/// or render frames.
 pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -98,7 +103,7 @@ fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
             |idx| format!("{}:{}", agent.mux_session, idx),
         );
         // Use synchronous call so the mux processes keys before we capture.
-        let _ = tenex::mux::SessionManager::new().send_keys_batch(&target, batched_keys);
+        let _ = crate::mux::SessionManager::new().send_keys_batch(&target, batched_keys);
     }
 }
 
@@ -240,12 +245,12 @@ fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Storage;
+    use crate::app::ConfirmAction;
+    use crate::config::Config;
     use input::keycode_to_input_sequence;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
-    use tenex::agent::Storage;
-    use tenex::app::ConfirmAction;
-    use tenex::config::Config;
 
     /// Helper struct that cleans up test worktrees and branches on drop
     struct TestCleanup {
@@ -329,7 +334,7 @@ mod tests {
         App::new(
             create_test_config(),
             Storage::default(),
-            tenex::app::Settings::default(),
+            crate::app::Settings::default(),
             false,
         )
     }
@@ -341,7 +346,7 @@ mod tests {
             App::new(
                 config,
                 Storage::default(),
-                tenex::app::Settings::default(),
+                crate::app::Settings::default(),
                 false,
             ),
             cleanup,
@@ -1139,8 +1144,8 @@ mod tests {
         Ok(())
     }
 
-    fn create_test_branch_info(name: &str, is_remote: bool) -> tenex::git::BranchInfo {
-        tenex::git::BranchInfo {
+    fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
+        crate::git::BranchInfo {
             name: name.to_string(),
             full_name: if is_remote {
                 format!("refs/remotes/origin/{name}")

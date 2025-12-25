@@ -7,8 +7,6 @@ use tenex::agent::Storage;
 use tenex::app::{Mode, Settings};
 use tenex::config::Config;
 
-mod tui;
-
 /// Terminal multiplexer for AI coding agents
 #[derive(Parser)]
 #[command(name = "tenex")]
@@ -182,7 +180,7 @@ fn run_interactive(
         eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
     }
 
-    if let Some(info) = tui::run(app)? {
+    if let Some(info) = tenex::tui::run(app)? {
         println!(
             "Updating Tenex from {} to {}...",
             info.current_version, info.latest_version

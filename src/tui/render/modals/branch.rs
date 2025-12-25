@@ -1,12 +1,12 @@
 //! Branch selector modal rendering
 
+use crate::app::{App, Mode};
 use ratatui::{
     Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::app::{App, Mode};
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

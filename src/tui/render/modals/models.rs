@@ -1,12 +1,12 @@
 //! Model selector modal rendering (`/agents`)
 
+use crate::app::App;
 use ratatui::{
     Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use tenex::app::App;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

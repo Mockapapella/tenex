@@ -103,6 +103,69 @@ impl ReviewState {
     }
 }
 
+use super::{App, Mode};
+
+impl App {
+    /// Start the review flow - show info if no agent selected, otherwise proceed to count
+    pub fn start_review(&mut self, branches: Vec<BranchInfo>) {
+        self.review.start(branches);
+        self.spawn.child_count = 3; // Reset to default
+        self.enter_mode(Mode::ReviewChildCount);
+    }
+
+    /// Show the review info modal (when no agent is selected)
+    pub fn show_review_info(&mut self) {
+        self.enter_mode(Mode::ReviewInfo);
+    }
+
+    /// Proceed from review count to branch selector
+    pub fn proceed_to_branch_selector(&mut self) {
+        self.enter_mode(Mode::BranchSelector);
+    }
+
+    /// Get filtered branches based on current filter
+    #[must_use]
+    pub fn filtered_review_branches(&self) -> Vec<&BranchInfo> {
+        self.review.filtered_branches()
+    }
+
+    /// Select next branch in filtered list
+    pub fn select_next_branch(&mut self) {
+        self.review.select_next();
+    }
+
+    /// Select previous branch in filtered list
+    pub fn select_prev_branch(&mut self) {
+        self.review.select_prev();
+    }
+
+    /// Get the currently selected branch
+    #[must_use]
+    pub fn selected_branch(&self) -> Option<&BranchInfo> {
+        self.review.selected_branch()
+    }
+
+    /// Handle character input in branch filter
+    pub fn handle_branch_filter_char(&mut self, c: char) {
+        self.review.handle_filter_char(c);
+    }
+
+    /// Handle backspace in branch filter
+    pub fn handle_branch_filter_backspace(&mut self) {
+        self.review.handle_filter_backspace();
+    }
+
+    /// Confirm branch selection and set `review_base_branch`
+    pub fn confirm_branch_selection(&mut self) -> bool {
+        self.review.confirm_selection()
+    }
+
+    /// Clear all review-related state
+    pub fn clear_review_state(&mut self) {
+        self.review.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

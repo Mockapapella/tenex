@@ -1,5 +1,7 @@
 //! Help overlay rendering
 
+use crate::app::App;
+use crate::config::{Action, get_display_description, get_display_keys};
 use ratatui::layout::Margin;
 use ratatui::{
     Frame,
@@ -7,8 +9,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use tenex::app::App;
-use tenex::config::{Action, get_display_description, get_display_keys};
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

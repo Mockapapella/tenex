@@ -8,8 +8,8 @@
 //! - `ReconnectPrompt` (reconnect with edited prompt)
 //! - `TerminalPrompt` (terminal startup command)
 
+use crate::app::{Actions, App, Mode};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-use tenex::app::{Actions, App, Mode};
 use uuid::Uuid;
 
 /// Handle key events in text input modes
@@ -136,10 +136,10 @@ fn handle_escape(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Storage;
+    use crate::app::Settings;
+    use crate::config::Config;
     use tempfile::NamedTempFile;
-    use tenex::agent::Storage;
-    use tenex::app::Settings;
-    use tenex::config::Config;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
@@ -249,7 +249,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         app.mode = Mode::ReconnectPrompt;
-        app.spawn.worktree_conflict = Some(tenex::app::WorktreeConflictInfo {
+        app.spawn.worktree_conflict = Some(crate::app::WorktreeConflictInfo {
             title: "test".to_string(),
             branch: "test".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp"),

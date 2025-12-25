@@ -67,6 +67,13 @@ impl SpawnState {
         self.use_plan_prompt = true;
     }
 
+    /// Start spawning a planning swarm under an existing agent.
+    pub const fn start_planning_swarm_under(&mut self, parent_id: uuid::Uuid) {
+        self.spawning_under = Some(parent_id);
+        self.child_count = 3; // Reset to default
+        self.use_plan_prompt = true;
+    }
+
     /// Get the next terminal name and increment the counter
     pub fn next_terminal_name(&mut self) -> String {
         self.terminal_counter += 1;
@@ -81,6 +88,58 @@ impl SpawnState {
     /// Take and clear the worktree conflict info
     pub const fn take_conflict(&mut self) -> Option<WorktreeConflictInfo> {
         self.worktree_conflict.take()
+    }
+}
+
+use super::{App, Mode};
+
+impl App {
+    /// Increment child count (for `ChildCount` mode)
+    pub const fn increment_child_count(&mut self) {
+        self.spawn.increment_child_count();
+    }
+
+    /// Decrement child count (minimum 1)
+    pub const fn decrement_child_count(&mut self) {
+        self.spawn.decrement_child_count();
+    }
+
+    /// Start spawning children under a specific agent
+    pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
+        self.spawn.start_spawning_under(parent_id);
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Start spawning a new root agent with children (no plan prompt)
+    pub fn start_spawning_root(&mut self) {
+        self.spawn.start_spawning_root();
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Start spawning a planning swarm under the selected agent
+    pub fn start_planning_swarm(&mut self) {
+        let Some(agent) = self.selected_agent() else {
+            self.set_status("Select an agent first (press 'a')");
+            return;
+        };
+
+        self.spawn.start_planning_swarm_under(agent.id);
+        self.enter_mode(Mode::ChildCount);
+    }
+
+    /// Proceed from `ChildCount` to `ChildPrompt` mode
+    pub fn proceed_to_child_prompt(&mut self) {
+        self.enter_mode(Mode::ChildPrompt);
+    }
+
+    /// Get the next terminal name and increment the counter
+    pub fn next_terminal_name(&mut self) -> String {
+        self.spawn.next_terminal_name()
+    }
+
+    /// Start prompting for a terminal startup command
+    pub fn start_terminal_prompt(&mut self) {
+        self.enter_mode(Mode::TerminalPrompt);
     }
 }
 
@@ -163,6 +222,20 @@ mod tests {
         state.start_planning_swarm();
 
         assert!(state.spawning_under.is_none());
+        assert_eq!(state.child_count, 3); // Reset to default
+        assert!(state.use_plan_prompt);
+    }
+
+    #[test]
+    fn test_start_planning_swarm_under() {
+        let mut state = SpawnState::new();
+        state.child_count = 10;
+        state.spawning_under = None;
+
+        let parent_id = uuid::Uuid::new_v4();
+        state.start_planning_swarm_under(parent_id);
+
+        assert_eq!(state.spawning_under, Some(parent_id));
         assert_eq!(state.child_count, 3); // Reset to default
         assert!(state.use_plan_prompt);
     }

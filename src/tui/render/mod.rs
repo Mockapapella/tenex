@@ -9,13 +9,13 @@ pub mod colors;
 pub mod main_layout;
 pub mod modals;
 
+use crate::app::{App, ConfirmAction, Mode};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use tenex::app::{App, ConfirmAction, Mode};
 
 // Re-export main layout functions for convenience
 pub use main_layout::calculate_preview_dimensions;
@@ -230,12 +230,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{Agent, Status, Storage};
+    use crate::app::ConfirmAction;
+    use crate::config::Config;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
-    use tenex::agent::{Agent, Status, Storage};
-    use tenex::app::ConfirmAction;
-    use tenex::config::Config;
 
     fn create_test_config() -> Config {
         // Use a unique temp directory to avoid conflicts with real worktrees
@@ -270,7 +270,7 @@ mod tests {
         storage.add(create_test_agent("agent-2", Status::Starting));
         storage.add(create_test_agent("agent-3", Status::Running));
 
-        App::new(config, storage, tenex::app::Settings::default(), false)
+        App::new(config, storage, crate::app::Settings::default(), false)
     }
 
     #[test]
@@ -456,7 +456,7 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
-        assert_eq!(app.active_tab, tenex::app::Tab::Diff);
+        assert_eq!(app.active_tab, crate::app::Tab::Diff);
 
         // Set diff content with various line types
         app.ui.set_diff_content(
@@ -545,7 +545,7 @@ mod tests {
         let app = App::new(
             create_test_config(),
             Storage::new(),
-            tenex::app::Settings::default(),
+            crate::app::Settings::default(),
             false,
         );
 
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_render_worktree_conflict_overlay() -> Result<(), Box<dyn std::error::Error>> {
-        use tenex::app::WorktreeConflictInfo;
+        use crate::app::WorktreeConflictInfo;
 
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_render_worktree_conflict_overlay_swarm() -> Result<(), Box<dyn std::error::Error>> {
-        use tenex::app::WorktreeConflictInfo;
+        use crate::app::WorktreeConflictInfo;
 
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -767,7 +767,7 @@ mod tests {
 
     #[test]
     fn test_render_reconnect_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
-        use tenex::app::WorktreeConflictInfo;
+        use crate::app::WorktreeConflictInfo;
 
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -800,8 +800,8 @@ mod tests {
         Ok(())
     }
 
-    fn create_test_branch_info(name: &str, is_remote: bool) -> tenex::git::BranchInfo {
-        tenex::git::BranchInfo {
+    fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
+        crate::git::BranchInfo {
             name: name.to_string(),
             full_name: if is_remote {
                 format!("refs/remotes/origin/{name}")
