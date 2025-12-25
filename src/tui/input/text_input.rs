@@ -8,8 +8,8 @@
 //! - `ReconnectPrompt` (reconnect with edited prompt)
 //! - `TerminalPrompt` (terminal startup command)
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use crate::app::{Actions, App, Mode};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use uuid::Uuid;
 
 /// Handle key events in text input modes
@@ -136,10 +136,10 @@ fn handle_escape(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use crate::agent::Storage;
     use crate::app::Settings;
     use crate::config::Config;
+    use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;

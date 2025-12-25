@@ -1,5 +1,6 @@
 //! Input modal rendering
 
+use crate::app::App;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -7,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use crate::app::App;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

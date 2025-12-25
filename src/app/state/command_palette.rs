@@ -20,7 +20,7 @@ impl CommandPaletteState {
     }
 }
 
-use super::{App, Mode, SlashCommand, SLASH_COMMANDS};
+use super::{App, Mode, SLASH_COMMANDS, SlashCommand};
 
 impl App {
     /// Enter slash command palette mode and pre-fill the leading `/`

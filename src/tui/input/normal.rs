@@ -3,9 +3,9 @@
 //! Handles key events in the default application modes where
 //! keybindings are mapped to actions via the config system.
 
+use crate::app::{Actions, App};
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-use crate::app::{Actions, App};
 
 /// Handle key events in Normal or Scrolling mode
 pub fn handle_normal_mode(

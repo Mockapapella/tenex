@@ -46,4 +46,3 @@ impl App {
         self.ui.set_preview_dimensions(width, height);
     }
 }
-

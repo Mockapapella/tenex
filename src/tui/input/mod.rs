@@ -10,10 +10,10 @@ mod picker;
 mod preview_focused;
 mod text_input;
 
-use anyhow::Result;
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use crate::app::{Actions, App, Mode};
 use crate::config::{Action as KeyAction, ActionGroup};
+use anyhow::Result;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 // Re-export for tests and internal use
 #[cfg(test)]
@@ -201,13 +201,13 @@ fn help_max_scroll(app: &App) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::KeyCode;
-    use semver::Version;
-    use tempfile::NamedTempFile;
     use crate::agent::Storage;
     use crate::app::{ConfirmAction, Settings};
     use crate::config::Config;
     use crate::update::UpdateInfo;
+    use ratatui::crossterm::event::KeyCode;
+    use semver::Version;
+    use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;

@@ -7,10 +7,10 @@
 //! - `Confirming` (general yes/no confirmations)
 //! - `UpdatePrompt` (self-update prompt on startup)
 
-use anyhow::Result;
-use ratatui::crossterm::event::KeyCode;
 use crate::app::{Actions, App, ConfirmAction, Mode};
 use crate::config::Action;
+use anyhow::Result;
+use ratatui::crossterm::event::KeyCode;
 
 /// Handle key events in `ConfirmPush` mode
 pub fn handle_confirm_push_mode(app: &mut App, code: KeyCode) {
@@ -165,14 +165,14 @@ pub fn handle_update_prompt_mode(app: &mut App, code: KeyCode) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::KeyCode;
-    use semver::Version;
-    use std::path::PathBuf;
-    use tempfile::NamedTempFile;
     use crate::agent::Storage;
     use crate::app::{Mode, Settings, WorktreeConflictInfo};
     use crate::config::Config;
     use crate::update::UpdateInfo;
+    use ratatui::crossterm::event::KeyCode;
+    use semver::Version;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;

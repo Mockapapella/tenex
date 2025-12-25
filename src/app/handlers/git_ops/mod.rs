@@ -102,4 +102,3 @@ impl Actions {
 
 #[cfg(test)]
 mod tests;
-

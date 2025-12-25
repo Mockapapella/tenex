@@ -1,13 +1,13 @@
 //! Confirmation modal rendering
 
+use crate::app::App;
+use crate::update::UpdateInfo;
 use ratatui::{
     Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use crate::app::App;
-use crate::update::UpdateInfo;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;
@@ -501,11 +501,11 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
-    use std::path::PathBuf;
     use crate::app::Settings;
     use crate::config::Config;
     use crate::{Agent, App, agent::Storage};
+    use ratatui::{Terminal, backend::TestBackend};
+    use std::path::PathBuf;
 
     fn app_with_agent() -> App {
         let mut app = App::new(

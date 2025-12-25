@@ -109,4 +109,3 @@ impl App {
         self.settings.merge_key_remapped
     }
 }
-

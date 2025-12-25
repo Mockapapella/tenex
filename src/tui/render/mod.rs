@@ -9,13 +9,13 @@ pub mod colors;
 pub mod main_layout;
 pub mod modals;
 
+use crate::app::{App, ConfirmAction, Mode};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use crate::app::{App, ConfirmAction, Mode};
 
 // Re-export main layout functions for convenience
 pub use main_layout::calculate_preview_dimensions;
@@ -230,12 +230,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use std::path::PathBuf;
     use crate::agent::{Agent, Status, Storage};
     use crate::app::ConfirmAction;
     use crate::config::Config;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::PathBuf;
 
     fn create_test_config() -> Config {
         // Use a unique temp directory to avoid conflicts with real worktrees

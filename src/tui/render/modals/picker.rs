@@ -1,12 +1,12 @@
 //! Picker modal rendering (count pickers, review info)
 
+use crate::app::App;
 use ratatui::{
     Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use crate::app::App;
 
 use super::centered_rect_absolute;
 use crate::tui::render::colors;

@@ -1,5 +1,7 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
+use crate::agent::Status;
+use crate::app::{App, Mode, Tab};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -10,8 +12,6 @@ use ratatui::{
         ScrollbarState, Wrap,
     },
 };
-use crate::agent::Status;
-use crate::app::{App, Mode, Tab};
 
 use super::colors;
 

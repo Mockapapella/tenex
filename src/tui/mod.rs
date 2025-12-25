@@ -3,6 +3,8 @@
 mod input;
 mod render;
 
+use crate::app::{Actions, App, Event, Handler, Mode, Tab};
+use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::{
     Terminal,
@@ -22,8 +24,6 @@ use ratatui::{
 };
 use std::io;
 use std::time::{Duration, Instant};
-use crate::app::{Actions, App, Event, Handler, Mode, Tab};
-use crate::update::UpdateInfo;
 use tracing::{info, warn};
 
 /// Run the TUI application
@@ -245,12 +245,12 @@ fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use input::keycode_to_input_sequence;
-    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-    use std::path::PathBuf;
     use crate::agent::Storage;
     use crate::app::ConfirmAction;
     use crate::config::Config;
+    use input::keycode_to_input_sequence;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    use std::path::PathBuf;
 
     /// Helper struct that cleans up test worktrees and branches on drop
     struct TestCleanup {

@@ -3,8 +3,8 @@
 //! Handles key events when the preview pane is focused, forwarding
 //! keystrokes to the PTY backend.
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use crate::app::App;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 /// Handle key events in `PreviewFocused` mode
 pub fn handle_preview_focused_mode(

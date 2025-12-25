@@ -74,4 +74,3 @@ impl App {
         self.input.cursor_end();
     }
 }
-

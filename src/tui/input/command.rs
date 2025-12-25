@@ -1,7 +1,7 @@
 //! Slash command palette and related pickers
 
-use ratatui::crossterm::event::KeyCode;
 use crate::app::App;
+use ratatui::crossterm::event::KeyCode;
 
 /// Handle key events in `CommandPalette` mode
 pub fn handle_command_palette_mode(app: &mut App, code: KeyCode) {
@@ -53,10 +53,10 @@ pub fn handle_model_selector_mode(app: &mut App, code: KeyCode) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use crate::agent::Storage;
     use crate::app::{Mode, Settings};
     use crate::config::Config;
+    use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
