@@ -1,7 +1,7 @@
 use crate::agent::{Agent, Storage};
 use crate::app::Settings;
 use crate::app::handlers::Actions;
-use crate::app::state::{App, Mode};
+use crate::app::{App, ConfirmKind, Mode, OverlayMode, TextInputKind};
 use crate::config::Config;
 use std::path::PathBuf;
 use tempfile::{NamedTempFile, TempDir};
@@ -44,7 +44,10 @@ fn test_handle_push_with_agent() -> Result<(), Box<dyn std::error::Error>> {
     // Push should enter ConfirmPush mode
     handler.handle_action(&mut app, crate::config::Action::Push)?;
 
-    assert_eq!(app.mode, Mode::ConfirmPush);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Push))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "muster/test");
     Ok(())
@@ -65,7 +68,10 @@ fn test_push_branch_sets_confirm_mode() -> Result<(), Box<dyn std::error::Error>
 
     Actions::push_branch(&mut app)?;
 
-    assert_eq!(app.mode, Mode::ConfirmPush);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Push))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "feature/pushable");
     Ok(())
@@ -107,7 +113,10 @@ fn test_rename_agent_sets_state_for_selected() -> Result<(), Box<dyn std::error:
 
     Actions::rename_agent(&mut app)?;
 
-    assert_eq!(app.mode, Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::TextInput(TextInputKind::RenameBranch))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.original_branch, "rename-me");
     assert!(app.git_op.is_root_rename);
@@ -175,7 +184,10 @@ fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::erro
 
     Actions::open_pr_flow(&mut app)?;
 
-    assert_eq!(app.mode, Mode::ConfirmPushForPR);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::PushForPR))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "feature/pr-agent");
     assert_eq!(app.git_op.base_branch, "main");
@@ -205,7 +217,10 @@ fn test_open_pr_in_browser_missing_gh_sets_error() -> Result<(), Box<dyn std::er
 
     // gh may be missing (error modal) or present (status message), but the git op state
     // should always be cleared after attempting to open the PR.
-    assert!(matches!(app.mode, Mode::Normal | Mode::ErrorModal(_)));
+    assert!(matches!(
+        app.mode,
+        Mode::Normal | Mode::Overlay(OverlayMode::Error(_))
+    ));
     assert!(app.git_op.branch_name.is_empty());
     assert!(app.git_op.agent_id.is_none());
     assert!(
@@ -232,7 +247,10 @@ fn test_push_flow_state_transitions() -> Result<(), Box<dyn std::error::Error>> 
 
     // Start push flow
     app.start_push(agent_id, "feature/test".to_string());
-    assert_eq!(app.mode, Mode::ConfirmPush);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Push))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "feature/test");
 
@@ -260,7 +278,10 @@ fn test_rename_root_flow_state_transitions() -> Result<(), Box<dyn std::error::E
 
     // Start rename flow for root agent
     app.start_rename(agent_id, "test-agent".to_string(), true);
-    assert_eq!(app.mode, Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::TextInput(TextInputKind::RenameBranch))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.original_branch, "test-agent");
     assert_eq!(app.git_op.branch_name, "test-agent");
@@ -317,7 +338,10 @@ fn test_rename_subagent_flow_state_transitions() -> Result<(), Box<dyn std::erro
 
     // Start rename flow for sub-agent
     app.start_rename(child_id, "sub-agent".to_string(), false);
-    assert_eq!(app.mode, Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::TextInput(TextInputKind::RenameBranch))
+    );
     assert_eq!(app.git_op.agent_id, Some(child_id));
     assert_eq!(app.git_op.original_branch, "sub-agent");
     assert!(!app.git_op.is_root_rename);
@@ -363,7 +387,10 @@ fn test_open_pr_flow_state_with_unpushed() -> Result<(), Box<dyn std::error::Err
         true,
     );
 
-    assert_eq!(app.mode, Mode::ConfirmPushForPR);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::PushForPR))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "feature/test");
     assert_eq!(app.git_op.base_branch, "main");
@@ -421,7 +448,7 @@ fn test_execute_push_and_open_pr_handles_failed_push() -> Result<(), Box<dyn std
 
     Actions::execute_push_and_open_pr(&mut app)?;
 
-    assert!(matches!(app.mode, Mode::ErrorModal(_)));
+    assert!(matches!(app.mode, Mode::Overlay(OverlayMode::Error(_))));
     assert!(app.git_op.branch_name.is_empty());
     assert!(app.git_op.agent_id.is_none());
     Ok(())
@@ -473,7 +500,10 @@ fn test_handle_rename_with_root_agent() -> Result<(), Box<dyn std::error::Error>
     // Rename should enter RenameBranch mode with agent title
     handler.handle_action(&mut app, crate::config::Action::RenameBranch)?;
 
-    assert_eq!(app.mode, Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::TextInput(TextInputKind::RenameBranch))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "test-agent");
     assert_eq!(app.git_op.original_branch, "test-agent");
@@ -523,7 +553,10 @@ fn test_handle_rename_with_subagent() -> Result<(), Box<dyn std::error::Error>> 
     // Rename should enter RenameBranch mode with agent title, not root rename
     handler.handle_action(&mut app, crate::config::Action::RenameBranch)?;
 
-    assert_eq!(app.mode, Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::TextInput(TextInputKind::RenameBranch))
+    );
     assert_eq!(app.git_op.agent_id, Some(child_id));
     assert_eq!(app.git_op.branch_name, "child");
     assert_eq!(app.git_op.original_branch, "child");
@@ -640,7 +673,10 @@ fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
     handler.handle_action(&mut app, crate::config::Action::OpenPR)?;
 
     // Should enter ConfirmPushForPR mode
-    assert_eq!(app.mode, Mode::ConfirmPushForPR);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::PushForPR))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     Ok(())
 }
@@ -664,7 +700,10 @@ fn test_push_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
     handler.handle_action(&mut app, crate::config::Action::Push)?;
 
     // Should enter ConfirmPush mode
-    assert_eq!(app.mode, Mode::ConfirmPush);
+    assert_eq!(
+        app.mode,
+        Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Push))
+    );
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     Ok(())
 }
@@ -677,7 +716,7 @@ fn test_merge_branch_no_agent() -> Result<(), Box<dyn std::error::Error>> {
     Actions::merge_branch(&mut app)?;
 
     // Should have set an error message
-    assert!(matches!(app.mode, Mode::ErrorModal(_)));
+    assert!(matches!(app.mode, Mode::Overlay(OverlayMode::Error(_))));
     Ok(())
 }
 
@@ -689,7 +728,7 @@ fn test_rebase_branch_no_agent() -> Result<(), Box<dyn std::error::Error>> {
     Actions::rebase_branch(&mut app)?;
 
     // Should have set an error message
-    assert!(matches!(app.mode, Mode::ErrorModal(_)));
+    assert!(matches!(app.mode, Mode::Overlay(OverlayMode::Error(_))));
     Ok(())
 }
 

@@ -103,24 +103,28 @@ impl ReviewState {
     }
 }
 
-use super::{App, Mode};
+use super::{App, BranchPickerKind, CountPickerKind, Mode, OverlayMode};
 
 impl App {
     /// Start the review flow - show info if no agent selected, otherwise proceed to count
     pub fn start_review(&mut self, branches: Vec<BranchInfo>) {
         self.review.start(branches);
         self.spawn.child_count = 3; // Reset to default
-        self.enter_mode(Mode::ReviewChildCount);
+        self.enter_mode(Mode::Overlay(OverlayMode::CountPicker(
+            CountPickerKind::ReviewChildCount,
+        )));
     }
 
     /// Show the review info modal (when no agent is selected)
     pub fn show_review_info(&mut self) {
-        self.enter_mode(Mode::ReviewInfo);
+        self.enter_mode(Mode::Overlay(OverlayMode::ReviewInfo));
     }
 
     /// Proceed from review count to branch selector
     pub fn proceed_to_branch_selector(&mut self) {
-        self.enter_mode(Mode::BranchSelector);
+        self.enter_mode(Mode::Overlay(OverlayMode::BranchPicker(
+            BranchPickerKind::ReviewBaseBranch,
+        )));
     }
 
     /// Get filtered branches based on current filter

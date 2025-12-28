@@ -96,7 +96,9 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
     // Handle potential worktree conflict by reconnecting
     if matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+        ))
     ) {
         handler.reconnect_to_worktree(&mut app)?;
     }
@@ -256,7 +258,9 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     // Handle potential worktree conflict
     if matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+        ))
     ) {
         handler.reconnect_to_worktree(&mut app)?;
     }
@@ -283,9 +287,9 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     app.select_next();
 
     // Enter confirming mode and confirm the kill
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Kill),
+    )));
     handler.handle_action(&mut app, tenex::config::Action::Confirm)?;
 
     assert_eq!(app.storage.len(), 0, "Should have no agents after deletion");

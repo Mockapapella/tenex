@@ -121,13 +121,13 @@ impl GitOpState {
     }
 }
 
-use super::{App, BranchInfo, Mode};
+use super::{App, BranchInfo, BranchPickerKind, ConfirmKind, Mode, OverlayMode, TextInputKind};
 
 impl App {
     /// Start the push flow - show confirmation dialog
     pub fn start_push(&mut self, agent_id: uuid::Uuid, branch_name: String) {
         self.git_op.start_push(agent_id, branch_name);
-        self.enter_mode(Mode::ConfirmPush);
+        self.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Push)));
     }
 
     /// Start the rename flow
@@ -139,7 +139,9 @@ impl App {
             .start_rename(agent_id, current_name.clone(), is_root);
         self.input.buffer = current_name;
         self.input.cursor = self.input.buffer.len(); // Cursor at end
-        self.enter_mode(Mode::RenameBranch);
+        self.enter_mode(Mode::Overlay(OverlayMode::TextInput(
+            TextInputKind::RenameBranch,
+        )));
     }
 
     /// Confirm the branch rename (update `branch_name` from `input_buffer`)
@@ -164,7 +166,7 @@ impl App {
             .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
         if has_unpushed {
-            self.enter_mode(Mode::ConfirmPushForPR);
+            self.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::PushForPR)));
         } else {
             // No unpushed commits, will open PR directly (handled in handler)
         }
@@ -184,7 +186,9 @@ impl App {
     ) {
         self.git_op.start_rebase(agent_id, current_branch);
         self.review.start(branches);
-        self.enter_mode(Mode::RebaseBranchSelector);
+        self.enter_mode(Mode::Overlay(OverlayMode::BranchPicker(
+            BranchPickerKind::RebaseTargetBranch,
+        )));
     }
 
     /// Start the merge flow - show branch selector to choose source branch
@@ -196,7 +200,9 @@ impl App {
     ) {
         self.git_op.start_merge(agent_id, current_branch);
         self.review.start(branches);
-        self.enter_mode(Mode::MergeBranchSelector);
+        self.enter_mode(Mode::Overlay(OverlayMode::BranchPicker(
+            BranchPickerKind::MergeFromBranch,
+        )));
     }
 
     /// Confirm branch selection for rebase/merge and set target branch

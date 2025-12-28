@@ -41,25 +41,43 @@ pub fn home_dir() -> Option<PathBuf> {
 pub fn data_local_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .or_else(|| std::env::var_os("APPDATA"))
-            .map(PathBuf::from)
+        data_local_dir_from_env(
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            std::env::var_os("APPDATA").map(PathBuf::from),
+        )
     }
 
     #[cfg(not(windows))]
     {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                home_dir().map(|home| {
-                    if cfg!(target_os = "macos") {
-                        home.join("Library").join("Application Support")
-                    } else {
-                        home.join(".local").join("share")
-                    }
-                })
-            })
+        data_local_dir_from_env(
+            std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+            home_dir(),
+        )
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn data_local_dir_from_env(
+    local_app_data: Option<PathBuf>,
+    roaming_app_data: Option<PathBuf>,
+) -> Option<PathBuf> {
+    local_app_data.or(roaming_app_data)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn data_local_dir_from_env(
+    xdg_data_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    xdg_data_home.or_else(|| {
+        home.map(|home| {
+            if cfg!(target_os = "macos") {
+                home.join("Library").join("Application Support")
+            } else {
+                home.join(".local").join("share")
+            }
+        })
+    })
 }
 
 #[cfg(test)]
@@ -70,6 +88,43 @@ mod tests {
     fn test_log_path_suffix() {
         let path = log_path();
         assert!(path.ends_with("tenex.log"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_data_local_dir_from_env_prefers_xdg_data_home() {
+        assert_eq!(
+            data_local_dir_from_env(
+                Some(PathBuf::from("/tmp/tenex-xdg-data")),
+                Some(PathBuf::from("/tmp/tenex-home")),
+            ),
+            Some(PathBuf::from("/tmp/tenex-xdg-data"))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_data_local_dir_from_env_falls_back_to_home() {
+        let expected = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp/tenex-home")
+                .join("Library")
+                .join("Application Support")
+        } else {
+            PathBuf::from("/tmp/tenex-home")
+                .join(".local")
+                .join("share")
+        };
+
+        assert_eq!(
+            data_local_dir_from_env(None, Some(PathBuf::from("/tmp/tenex-home"))),
+            Some(expected)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_data_local_dir_from_env_returns_none_when_missing() {
+        assert!(data_local_dir_from_env(None, None).is_none());
     }
 
     #[test]

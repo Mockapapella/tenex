@@ -114,11 +114,25 @@ pub fn handle_success_modal_mode(app: &mut App) {
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::{Mode, Settings};
+    use crate::app::{
+        BranchPickerKind, CountPickerKind, Mode, OverlayMode, Settings, TextInputKind,
+    };
     use crate::config::Config;
     use crate::git::BranchInfo;
     use ratatui::crossterm::event::KeyCode;
     use tempfile::NamedTempFile;
+
+    fn count_picker_mode(kind: CountPickerKind) -> Mode {
+        Mode::Overlay(OverlayMode::CountPicker(kind))
+    }
+
+    fn branch_picker_mode(kind: BranchPickerKind) -> Mode {
+        Mode::Overlay(OverlayMode::BranchPicker(kind))
+    }
+
+    fn text_input_mode(kind: TextInputKind) -> Mode {
+        Mode::Overlay(OverlayMode::TextInput(kind))
+    }
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
@@ -171,7 +185,7 @@ mod tests {
     #[test]
     fn test_handle_child_count_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ChildCount);
         handle_child_count_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
@@ -180,21 +194,21 @@ mod tests {
     #[test]
     fn test_handle_child_count_mode_enter() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ChildCount);
         app.spawn.child_count = 2;
         handle_child_count_mode(&mut app, KeyCode::Enter);
         // Should proceed to ChildPrompt mode
-        assert_eq!(app.mode, Mode::ChildPrompt);
+        assert_eq!(app.mode, text_input_mode(TextInputKind::ChildPrompt));
         Ok(())
     }
 
     #[test]
     fn test_handle_child_count_mode_other_key_ignored() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ChildCount);
         app.spawn.child_count = 2;
         handle_child_count_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::ChildCount);
+        assert_eq!(app.mode, count_picker_mode(CountPickerKind::ChildCount));
         assert_eq!(app.spawn.child_count, 2);
         Ok(())
     }
@@ -222,7 +236,7 @@ mod tests {
     #[test]
     fn test_handle_review_child_count_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ReviewChildCount);
         handle_review_child_count_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
@@ -231,20 +245,26 @@ mod tests {
     #[test]
     fn test_handle_review_child_count_mode_enter() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ReviewChildCount);
         handle_review_child_count_mode(&mut app, KeyCode::Enter);
         // Should proceed to BranchSelector mode
-        assert_eq!(app.mode, Mode::BranchSelector);
+        assert_eq!(
+            app.mode,
+            branch_picker_mode(BranchPickerKind::ReviewBaseBranch)
+        );
         Ok(())
     }
 
     #[test]
     fn test_handle_review_child_count_mode_other_key_ignored() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
+        app.mode = count_picker_mode(CountPickerKind::ReviewChildCount);
         app.spawn.child_count = 2;
         handle_review_child_count_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::ReviewChildCount);
+        assert_eq!(
+            app.mode,
+            count_picker_mode(CountPickerKind::ReviewChildCount)
+        );
         assert_eq!(app.spawn.child_count, 2);
         Ok(())
     }
@@ -254,7 +274,7 @@ mod tests {
     #[test]
     fn test_handle_review_info_mode() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewInfo;
+        app.mode = Mode::Overlay(OverlayMode::ReviewInfo);
         handle_review_info_mode(&mut app);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
@@ -265,7 +285,7 @@ mod tests {
     #[test]
     fn test_handle_branch_selector_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::BranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::ReviewBaseBranch);
         let action_handler = Actions::new();
         handle_branch_selector_mode(&mut app, action_handler, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
@@ -316,10 +336,13 @@ mod tests {
     #[test]
     fn test_handle_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::BranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::ReviewBaseBranch);
         let action_handler = Actions::new();
         handle_branch_selector_mode(&mut app, action_handler, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::BranchSelector);
+        assert_eq!(
+            app.mode,
+            branch_picker_mode(BranchPickerKind::ReviewBaseBranch)
+        );
         Ok(())
     }
 
@@ -328,7 +351,7 @@ mod tests {
     #[test]
     fn test_handle_rebase_branch_selector_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RebaseBranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::RebaseTargetBranch);
         handle_rebase_branch_selector_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
@@ -368,9 +391,12 @@ mod tests {
     #[test]
     fn test_handle_rebase_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RebaseBranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::RebaseTargetBranch);
         handle_rebase_branch_selector_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::RebaseBranchSelector);
+        assert_eq!(
+            app.mode,
+            branch_picker_mode(BranchPickerKind::RebaseTargetBranch)
+        );
         Ok(())
     }
 
@@ -379,7 +405,7 @@ mod tests {
     #[test]
     fn test_handle_merge_branch_selector_mode_esc() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::MergeBranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::MergeFromBranch);
         handle_merge_branch_selector_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())
@@ -419,9 +445,12 @@ mod tests {
     #[test]
     fn test_handle_merge_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::MergeBranchSelector;
+        app.mode = branch_picker_mode(BranchPickerKind::MergeFromBranch);
         handle_merge_branch_selector_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::MergeBranchSelector);
+        assert_eq!(
+            app.mode,
+            branch_picker_mode(BranchPickerKind::MergeFromBranch)
+        );
         Ok(())
     }
 
@@ -430,7 +459,7 @@ mod tests {
     #[test]
     fn test_handle_success_modal_mode() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::SuccessModal("Test".to_string());
+        app.mode = Mode::Overlay(OverlayMode::Success("Test".to_string()));
         handle_success_modal_mode(&mut app);
         assert_eq!(app.mode, Mode::Normal);
         Ok(())

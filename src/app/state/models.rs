@@ -85,13 +85,13 @@ impl ModelSelectorState {
     }
 }
 
-use super::{App, Mode};
+use super::{App, Mode, OverlayMode, TextInputKind};
 
 impl App {
     /// Enter the `/agents` selector modal.
     pub fn start_model_selector(&mut self) {
         self.model_selector.start(self.settings.agent_program);
-        self.enter_mode(Mode::ModelSelector);
+        self.enter_mode(Mode::Overlay(OverlayMode::ModelSelector));
     }
 
     /// Return the filtered model/program list for the selector UI.
@@ -139,13 +139,13 @@ impl App {
             }
             AgentProgram::Custom => {
                 self.set_agent_program_and_save(AgentProgram::Custom);
-                if !matches!(self.mode, Mode::ErrorModal(_)) {
+                if !matches!(self.mode, Mode::Overlay(OverlayMode::Error(_))) {
                     self.exit_mode();
                 }
             }
             other => {
                 self.set_agent_program_and_save(other);
-                if !matches!(self.mode, Mode::ErrorModal(_)) {
+                if !matches!(self.mode, Mode::Overlay(OverlayMode::Error(_))) {
                     self.exit_mode();
                 }
             }
@@ -154,7 +154,9 @@ impl App {
 
     /// Open the custom agent command prompt (used when selecting `custom`).
     pub fn start_custom_agent_command_prompt(&mut self) {
-        self.enter_mode(Mode::CustomAgentCommand);
+        self.enter_mode(Mode::Overlay(OverlayMode::TextInput(
+            TextInputKind::CustomAgentCommand,
+        )));
         self.input.set(self.settings.custom_agent_command.clone());
     }
 

@@ -34,7 +34,10 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     assert!(result.is_ok());
 
     // Should be in error modal mode
-    assert!(matches!(app.mode, tenex::app::Mode::ErrorModal(_)));
+    assert!(matches!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Error(_))
+    ));
 
     // Cleanup
     let manager = SessionManager::new();
@@ -77,7 +80,9 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::Synthesize)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Synthesize)
+        ))
     );
 
     // Cleanup
@@ -159,9 +164,9 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     app.selected = 0;
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Synthesize),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
@@ -250,9 +255,9 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     app.selected = 0;
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Synthesize),
+    )));
     let handler = tenex::app::Actions::new();
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
@@ -358,7 +363,9 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::Synthesize)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Synthesize)
+        ))
     );
 
     // Now confirm - this should fail because all children are terminals
@@ -367,7 +374,10 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     assert!(result.is_ok());
 
     // Should show error modal
-    assert!(matches!(app.mode, tenex::app::Mode::ErrorModal(_)));
+    assert!(matches!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Error(_))
+    ));
 
     // All agents should still exist (nothing was removed)
     assert_eq!(app.storage.len(), 3);
@@ -448,9 +458,9 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     }
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Synthesize),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 

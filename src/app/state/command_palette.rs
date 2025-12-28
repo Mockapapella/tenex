@@ -20,12 +20,12 @@ impl CommandPaletteState {
     }
 }
 
-use super::{App, Mode, SLASH_COMMANDS, SlashCommand};
+use super::{App, Mode, OverlayMode, SLASH_COMMANDS, SlashCommand};
 
 impl App {
     /// Enter slash command palette mode and pre-fill the leading `/`
     pub fn start_command_palette(&mut self) {
-        self.enter_mode(Mode::CommandPalette);
+        self.enter_mode(Mode::Overlay(OverlayMode::CommandPalette));
         self.command_palette.reset();
         self.input.buffer = "/".to_string();
         self.input.cursor = 1;
@@ -122,7 +122,7 @@ impl App {
             }
             "/help" => {
                 self.ui.help_scroll = 0;
-                self.enter_mode(Mode::Help);
+                self.enter_mode(Mode::Overlay(OverlayMode::Help));
             }
             _ => {
                 self.set_status(format!("Unknown command: {}", cmd.name));

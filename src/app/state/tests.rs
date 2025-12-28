@@ -13,6 +13,14 @@ fn create_test_agent(title: &str) -> Agent {
     )
 }
 
+fn text_input_mode(kind: TextInputKind) -> Mode {
+    Mode::Overlay(OverlayMode::TextInput(kind))
+}
+
+fn count_picker_mode(kind: CountPickerKind) -> Mode {
+    Mode::Overlay(OverlayMode::CountPicker(kind))
+}
+
 #[test]
 fn test_app_new() {
     let app = App::default();
@@ -77,8 +85,8 @@ fn test_switch_tab() {
 fn test_enter_exit_mode() {
     let mut app = App::default();
 
-    app.enter_mode(Mode::Creating);
-    assert_eq!(app.mode, Mode::Creating);
+    app.enter_mode(text_input_mode(TextInputKind::Creating));
+    assert_eq!(app.mode, text_input_mode(TextInputKind::Creating));
     assert!(app.input.buffer.is_empty());
 
     app.input.buffer.push_str("test");
@@ -116,7 +124,7 @@ fn test_handle_char() {
     app.handle_char('a');
     assert!(app.input.buffer.is_empty());
 
-    app.enter_mode(Mode::Creating);
+    app.enter_mode(text_input_mode(TextInputKind::Creating));
     app.handle_char('t');
     app.handle_char('e');
     app.handle_char('s');
@@ -127,7 +135,7 @@ fn test_handle_char() {
 #[test]
 fn test_handle_backspace() {
     let mut app = App::default();
-    app.enter_mode(Mode::Creating);
+    app.enter_mode(text_input_mode(TextInputKind::Creating));
     app.input.buffer = "test".to_string();
     app.input.cursor = 4; // Cursor at end
 
@@ -192,7 +200,7 @@ fn test_start_spawning_under() {
     app.start_spawning_under(id);
     assert_eq!(app.spawn.spawning_under, Some(id));
     assert_eq!(app.spawn.child_count, 3);
-    assert_eq!(app.mode, Mode::ChildCount);
+    assert_eq!(app.mode, count_picker_mode(CountPickerKind::ChildCount));
 }
 
 #[test]
@@ -201,20 +209,20 @@ fn test_start_spawning_root() {
     app.start_spawning_root();
     assert!(app.spawn.spawning_under.is_none());
     assert_eq!(app.spawn.child_count, 3);
-    assert_eq!(app.mode, Mode::ChildCount);
+    assert_eq!(app.mode, count_picker_mode(CountPickerKind::ChildCount));
 }
 
 #[test]
 fn test_proceed_to_child_prompt() {
     let mut app = App::default();
     app.proceed_to_child_prompt();
-    assert_eq!(app.mode, Mode::ChildPrompt);
+    assert_eq!(app.mode, text_input_mode(TextInputKind::ChildPrompt));
 }
 
 #[test]
 fn test_dismiss_error() {
     let mut app = App {
-        mode: Mode::ErrorModal("Test error".to_string()),
+        mode: Mode::Overlay(OverlayMode::Error("Test error".to_string())),
         ..App::default()
     };
     app.ui.last_error = Some("Test error".to_string());
@@ -250,7 +258,7 @@ fn test_selected_agent_mut() {
 #[test]
 fn test_handle_delete() {
     let mut app = App::default();
-    app.enter_mode(Mode::Creating);
+    app.enter_mode(text_input_mode(TextInputKind::Creating));
     app.input.buffer = "test".to_string();
     app.input.cursor = 2; // Cursor at 'st'
 
@@ -389,7 +397,7 @@ fn test_start_planning_swarm() {
     assert_eq!(app.spawn.spawning_under, Some(agent_id));
     assert_eq!(app.spawn.child_count, 3);
     assert!(app.spawn.use_plan_prompt);
-    assert_eq!(app.mode, Mode::ChildCount);
+    assert_eq!(app.mode, count_picker_mode(CountPickerKind::ChildCount));
 }
 
 #[test]
@@ -476,7 +484,7 @@ fn test_start_command_palette() {
     let mut app = App::default();
     app.start_command_palette();
 
-    assert_eq!(app.mode, Mode::CommandPalette);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::CommandPalette));
     assert_eq!(app.input.buffer, "/");
     assert_eq!(app.input.cursor, 1);
     assert_eq!(app.command_palette.selected, 0);
@@ -569,7 +577,7 @@ fn test_run_slash_command_agents() {
         name: "/agents",
         description: "test",
     });
-    assert_eq!(app.mode, Mode::ModelSelector);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::ModelSelector));
 }
 
 #[test]
@@ -579,13 +587,13 @@ fn test_run_slash_command_help() {
         name: "/help",
         description: "test",
     });
-    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::Help));
 }
 
 #[test]
 fn test_run_slash_command_unknown() {
     let mut app = App::default();
-    app.enter_mode(Mode::CommandPalette);
+    app.enter_mode(Mode::Overlay(OverlayMode::CommandPalette));
     app.run_slash_command(SlashCommand {
         name: "/unknown",
         description: "test",
@@ -609,7 +617,7 @@ fn test_submit_slash_command_palette_exact_match() {
     app.start_command_palette();
     app.input.buffer = "/help".to_string();
     app.submit_slash_command_palette();
-    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::Help));
 }
 
 #[test]
@@ -618,7 +626,7 @@ fn test_submit_slash_command_palette_prefix_match() {
     app.start_command_palette();
     app.input.buffer = "/hel".to_string();
     app.submit_slash_command_palette();
-    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::Help));
 }
 
 #[test]
@@ -637,7 +645,7 @@ fn test_confirm_slash_command_selection() {
     app.start_command_palette();
     app.command_palette.selected = 1;
     app.confirm_slash_command_selection();
-    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::Help));
 }
 
 // ========== Model selector tests ==========
@@ -647,7 +655,7 @@ fn test_start_model_selector() {
     let mut app = App::default();
     app.start_model_selector();
 
-    assert_eq!(app.mode, Mode::ModelSelector);
+    assert_eq!(app.mode, Mode::Overlay(OverlayMode::ModelSelector));
 }
 
 #[test]
@@ -751,7 +759,7 @@ fn test_start_custom_agent_command_prompt() {
     app.settings.custom_agent_command = "my-agent".to_string();
 
     app.start_custom_agent_command_prompt();
-    assert_eq!(app.mode, Mode::CustomAgentCommand);
+    assert_eq!(app.mode, text_input_mode(TextInputKind::CustomAgentCommand));
     assert_eq!(app.input.buffer, "my-agent");
 }
 
@@ -763,5 +771,8 @@ fn test_confirm_model_program_selection_codex() {
 
     app.confirm_model_program_selection();
     // Should return to normal mode (may have error due to no file system)
-    assert!(matches!(app.mode, Mode::Normal | Mode::ErrorModal(_)));
+    assert!(matches!(
+        app.mode,
+        Mode::Normal | Mode::Overlay(OverlayMode::Error(_))
+    ));
 }

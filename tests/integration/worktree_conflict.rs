@@ -39,7 +39,9 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+                tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+            ))
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
@@ -96,7 +98,9 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+        ))
     ));
 
     // Modify the prompt before reconnecting (simulating user editing)
@@ -162,7 +166,9 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+        ))
     ));
 
     // Now recreate (delete and create fresh)
@@ -226,7 +232,9 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+                tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+            ))
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
@@ -293,7 +301,9 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+                tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+            ))
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
@@ -401,7 +411,9 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+        ))
     ));
 
     // Now recreate
@@ -470,7 +482,9 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
     assert!(
         !matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+                tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::WorktreeConflict)
+            ))
         ),
         "Adding children to existing agent should not trigger conflict"
     );

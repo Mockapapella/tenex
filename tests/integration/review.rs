@@ -3,7 +3,7 @@
 //! Tests for [R] review agent functionality
 
 use crate::common::{TestFixture, skip_if_no_mux};
-use tenex::app::Mode;
+use tenex::app::{BranchPickerKind, CountPickerKind, Mode, OverlayMode};
 use tenex::config::Action;
 use tenex::mux::SessionManager;
 
@@ -24,7 +24,7 @@ fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::
 
     // Should be in ReviewInfo mode
     assert!(
-        matches!(app.mode, Mode::ReviewInfo),
+        matches!(app.mode, Mode::Overlay(OverlayMode::ReviewInfo)),
         "Expected ReviewInfo mode when no agent selected, got {:?}",
         app.mode
     );
@@ -62,7 +62,10 @@ fn test_review_action_with_agent_selected_shows_count_picker()
 
     // Should be in ReviewChildCount mode
     assert!(
-        matches!(app.mode, Mode::ReviewChildCount),
+        matches!(
+            app.mode,
+            Mode::Overlay(OverlayMode::CountPicker(CountPickerKind::ReviewChildCount))
+        ),
         "Expected ReviewChildCount mode when agent selected, got {:?}",
         app.mode
     );
@@ -367,11 +370,19 @@ fn test_review_modes_flow() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start in ReviewChildCount mode
     app.start_review(app.review.branches.clone());
-    assert!(matches!(app.mode, Mode::ReviewChildCount));
+    assert!(matches!(
+        app.mode,
+        Mode::Overlay(OverlayMode::CountPicker(CountPickerKind::ReviewChildCount))
+    ));
 
     // Proceed to branch selector
     app.proceed_to_branch_selector();
-    assert!(matches!(app.mode, Mode::BranchSelector));
+    assert!(matches!(
+        app.mode,
+        Mode::Overlay(OverlayMode::BranchPicker(
+            BranchPickerKind::ReviewBaseBranch
+        ))
+    ));
 
     // Exit should return to Normal
     app.exit_mode();

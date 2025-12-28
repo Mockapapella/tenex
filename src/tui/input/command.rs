@@ -54,7 +54,7 @@ pub fn handle_model_selector_mode(app: &mut App, code: KeyCode) {
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::{Mode, Settings};
+    use crate::app::{Mode, OverlayMode, Settings};
     use crate::config::Config;
     use tempfile::NamedTempFile;
 
@@ -73,7 +73,7 @@ mod tests {
     fn test_command_palette_esc_exits() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.start_command_palette();
-        assert_eq!(app.mode, Mode::CommandPalette);
+        assert_eq!(app.mode, Mode::Overlay(OverlayMode::CommandPalette));
 
         handle_command_palette_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
@@ -125,7 +125,7 @@ mod tests {
         handle_command_palette_mode(&mut app, KeyCode::Down);
 
         handle_command_palette_mode(&mut app, KeyCode::Enter);
-        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.mode, Mode::Overlay(OverlayMode::Help));
         Ok(())
     }
 
@@ -156,7 +156,7 @@ mod tests {
     fn test_model_selector_esc_exits() -> Result<(), std::io::Error> {
         let (mut app, _temp) = create_test_app()?;
         app.start_model_selector();
-        assert_eq!(app.mode, Mode::ModelSelector);
+        assert_eq!(app.mode, Mode::Overlay(OverlayMode::ModelSelector));
 
         handle_model_selector_mode(&mut app, KeyCode::Esc);
         assert_eq!(app.mode, Mode::Normal);
@@ -199,7 +199,7 @@ mod tests {
 
         handle_model_selector_mode(&mut app, KeyCode::Tab);
         assert_eq!(app.model_selector.selected, selected);
-        assert_eq!(app.mode, Mode::ModelSelector);
+        assert_eq!(app.mode, Mode::Overlay(OverlayMode::ModelSelector));
         Ok(())
     }
 }
