@@ -2,8 +2,10 @@ use super::*;
 use crate::agent::{Agent, Status, Storage};
 use crate::app::ConfirmAction;
 use crate::config::Config;
+use crate::update::UpdateInfo;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use semver::Version;
 use std::path::PathBuf;
 
 fn create_test_config() -> Config {
@@ -40,6 +42,16 @@ fn create_test_app_with_agents() -> App {
     storage.add(create_test_agent("agent-3", Status::Running));
 
     App::new(config, storage, crate::app::Settings::default(), false)
+}
+
+fn create_test_app_without_agents() -> App {
+    let config = create_test_config();
+    App::new(
+        config,
+        Storage::new(),
+        crate::app::Settings::default(),
+        false,
+    )
 }
 
 #[test]
@@ -187,6 +199,146 @@ fn test_render_confirming_quit_mode() -> Result<(), Box<dyn std::error::Error>> 
     app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
         ConfirmAction::Quit,
     ))));
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_confirming_synthesize_mode_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+    let mut app = create_test_app_without_agents();
+    app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+        ConfirmAction::Synthesize,
+    ))));
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_confirming_synthesize_mode_single_descendant()
+-> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let config = create_test_config();
+    let mut storage = Storage::new();
+
+    let root = create_test_agent("root", Status::Running);
+    let root_id = root.id;
+    let root_mux_session = root.mux_session.clone();
+    storage.add(root);
+
+    let mut child = create_test_agent("child-1", Status::Running);
+    child.parent_id = Some(root_id);
+    child.mux_session = root_mux_session;
+    storage.add(child);
+
+    let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+    app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+        ConfirmAction::Synthesize,
+    ))));
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_confirming_synthesize_mode_multiple_descendants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+
+    let config = create_test_config();
+    let mut storage = Storage::new();
+
+    let root = create_test_agent("root", Status::Running);
+    let root_id = root.id;
+    let root_mux_session = root.mux_session.clone();
+    storage.add(root);
+
+    for idx in 0..2 {
+        let mut child = create_test_agent(&format!("child-{idx}"), Status::Running);
+        child.parent_id = Some(root_id);
+        child.mux_session = root_mux_session.clone();
+        storage.add(child);
+    }
+
+    let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+    app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+        ConfirmAction::Synthesize,
+    ))));
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_keyboard_remap_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+    let mut app = create_test_app_with_agents();
+    app.show_keyboard_remap_prompt();
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_update_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+    let mut app = create_test_app_with_agents();
+    let info = UpdateInfo {
+        current_version: Version::new(1, 0, 0),
+        latest_version: Version::new(2, 0, 0),
+    };
+    app.enter_mode(Mode::Overlay(OverlayMode::Confirm(
+        ConfirmKind::UpdatePrompt(info),
+    )));
+
+    terminal.draw(|frame| {
+        render(frame, &app);
+    })?;
+
+    let buffer = terminal.backend().buffer();
+    assert!(!buffer.content.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_render_success_modal_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend)?;
+    let mut app = create_test_app_with_agents();
+    app.show_success("Success!");
 
     terminal.draw(|frame| {
         render(frame, &app);

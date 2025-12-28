@@ -743,3 +743,116 @@ fn test_handle_key_event_help_mode_any_other_key_exits() -> anyhow::Result<()> {
     assert_eq!(app.mode, Mode::Normal);
     Ok(())
 }
+
+// ========== Preview-focused mode tests ==========
+
+#[test]
+fn test_handle_preview_focused_mode_ctrl_q_exits() -> anyhow::Result<()> {
+    let (mut app, _temp) = create_test_app()?;
+    app.mode = Mode::PreviewFocused;
+    let mut batched_keys = Vec::new();
+
+    super::preview_focused::handle_preview_focused_mode(
+        &mut app,
+        KeyCode::Char('q'),
+        KeyModifiers::CONTROL,
+        &mut batched_keys,
+    );
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(batched_keys.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_keycode_to_input_sequence_base_sequences() -> anyhow::Result<()> {
+    let assert_sequence =
+        |code: KeyCode, modifiers: KeyModifiers, expected: &[u8]| -> anyhow::Result<()> {
+            let seq = keycode_to_input_sequence(code, modifiers);
+            let Some(seq) = seq else {
+                anyhow::bail!("Expected Some sequence for {code:?} {modifiers:?}");
+            };
+            assert_eq!(seq.as_bytes(), expected);
+            Ok(())
+        };
+
+    assert_sequence(KeyCode::Enter, KeyModifiers::NONE, b"\r")?;
+    assert_sequence(KeyCode::Esc, KeyModifiers::NONE, b"\x1b")?;
+    assert_sequence(KeyCode::Backspace, KeyModifiers::NONE, &[0x7f])?;
+    assert_sequence(KeyCode::Tab, KeyModifiers::NONE, b"\t")?;
+    assert_sequence(KeyCode::BackTab, KeyModifiers::NONE, b"\x1b[Z")?;
+    assert_sequence(KeyCode::Up, KeyModifiers::NONE, b"\x1b[A")?;
+    assert_sequence(KeyCode::Down, KeyModifiers::NONE, b"\x1b[B")?;
+    assert_sequence(KeyCode::Left, KeyModifiers::NONE, b"\x1b[D")?;
+    assert_sequence(KeyCode::Right, KeyModifiers::NONE, b"\x1b[C")?;
+    assert_sequence(KeyCode::Home, KeyModifiers::NONE, b"\x1b[H")?;
+    assert_sequence(KeyCode::End, KeyModifiers::NONE, b"\x1b[F")?;
+    assert_sequence(KeyCode::PageUp, KeyModifiers::NONE, b"\x1b[5~")?;
+    assert_sequence(KeyCode::PageDown, KeyModifiers::NONE, b"\x1b[6~")?;
+    assert_sequence(KeyCode::Delete, KeyModifiers::NONE, b"\x1b[3~")?;
+    assert_sequence(KeyCode::Insert, KeyModifiers::NONE, b"\x1b[2~")?;
+    assert_sequence(KeyCode::F(1), KeyModifiers::NONE, b"\x1bOP")?;
+    assert_sequence(KeyCode::F(2), KeyModifiers::NONE, b"\x1bOQ")?;
+    assert_sequence(KeyCode::F(3), KeyModifiers::NONE, b"\x1bOR")?;
+    assert_sequence(KeyCode::F(4), KeyModifiers::NONE, b"\x1bOS")?;
+    assert_sequence(KeyCode::F(5), KeyModifiers::NONE, b"\x1b[15~")?;
+    assert_sequence(KeyCode::F(6), KeyModifiers::NONE, b"\x1b[17~")?;
+    assert_sequence(KeyCode::F(7), KeyModifiers::NONE, b"\x1b[18~")?;
+    assert_sequence(KeyCode::F(8), KeyModifiers::NONE, b"\x1b[19~")?;
+    assert_sequence(KeyCode::F(9), KeyModifiers::NONE, b"\x1b[20~")?;
+    assert_sequence(KeyCode::F(10), KeyModifiers::NONE, b"\x1b[21~")?;
+    assert_sequence(KeyCode::F(11), KeyModifiers::NONE, b"\x1b[23~")?;
+    assert_sequence(KeyCode::F(12), KeyModifiers::NONE, b"\x1b[24~")?;
+
+    Ok(())
+}
+
+#[test]
+fn test_keycode_to_input_sequence_with_modifiers() -> anyhow::Result<()> {
+    let assert_sequence =
+        |code: KeyCode, modifiers: KeyModifiers, expected: &[u8]| -> anyhow::Result<()> {
+            let seq = keycode_to_input_sequence(code, modifiers);
+            let Some(seq) = seq else {
+                anyhow::bail!("Expected Some sequence for {code:?} {modifiers:?}");
+            };
+            assert_eq!(seq.as_bytes(), expected);
+            Ok(())
+        };
+
+    // Ctrl converts ASCII characters to control codes (Ctrl+A = 0x01).
+    assert_sequence(KeyCode::Char('a'), KeyModifiers::CONTROL, &[0x01])?;
+    // Alt prefixes ESC for printable characters.
+    assert_sequence(KeyCode::Char('x'), KeyModifiers::ALT, b"\x1bx")?;
+    // Ctrl+Alt combines both behaviors.
+    assert_sequence(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+        b"\x1b\x01",
+    )?;
+
+    // Modifier application for CSI-style sequences.
+    assert_sequence(KeyCode::Up, KeyModifiers::ALT, b"\x1b[1;3A")?;
+    assert_sequence(KeyCode::Up, KeyModifiers::CONTROL, b"\x1b[1;5A")?;
+    assert_sequence(
+        KeyCode::Up,
+        KeyModifiers::ALT | KeyModifiers::CONTROL,
+        b"\x1b[1;7A",
+    )?;
+
+    // Modifier application for "~" sequences.
+    assert_sequence(KeyCode::PageUp, KeyModifiers::ALT, b"\x1b[5;3~")?;
+
+    // Modifier application for SS3 function-key sequences.
+    assert_sequence(KeyCode::F(1), KeyModifiers::ALT, b"\x1b[1;3P")?;
+
+    // Alt prefixes ESC for non-escape base sequences.
+    assert_sequence(KeyCode::Enter, KeyModifiers::ALT, b"\x1b\r")?;
+
+    Ok(())
+}
+
+#[test]
+fn test_keycode_to_input_sequence_ctrl_non_ascii_returns_none() {
+    let seq = keycode_to_input_sequence(KeyCode::Char('é'), KeyModifiers::CONTROL);
+    assert!(seq.is_none());
+}
