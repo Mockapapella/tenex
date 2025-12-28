@@ -97,9 +97,9 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
     app.select_next();
 
     // Now kill it via confirm action
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Kill),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
 
     std::env::set_current_dir(&original_dir)?;
@@ -252,9 +252,9 @@ fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>
     assert_eq!(app.storage.len(), 2);
 
     // Reset all via confirm action
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Reset,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Reset),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
     assert_eq!(app.storage.len(), 0);

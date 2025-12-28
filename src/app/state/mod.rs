@@ -149,60 +149,266 @@ pub enum Mode {
     /// Normal operation mode
     #[default]
     Normal,
-    /// Creating a new agent (typing name)
-    Creating,
-    /// Typing a prompt to send to agent
-    Prompting,
-    /// Confirming an action
-    Confirming(ConfirmAction),
-    /// Showing help overlay
-    Help,
-    /// Slash command palette (type `/...`)
-    CommandPalette,
-    /// Selecting which model/program to run for new agents
-    ModelSelector,
     /// Scrolling through preview/diff
     Scrolling,
     /// Preview pane is focused - keystrokes are forwarded to the mux backend
     PreviewFocused,
-    /// Selecting number of child agents to spawn
-    ChildCount,
-    /// Typing the task/prompt for child agents
-    ChildPrompt,
-    /// Typing a message to broadcast to agent and leaf descendants
-    Broadcasting,
-    /// Showing an error modal
-    ErrorModal(String),
-    /// Editing prompt after choosing to reconnect to existing worktree
-    ReconnectPrompt,
-    /// Showing info that an agent must be selected before review
-    ReviewInfo,
-    /// Selecting number of review agents
-    ReviewChildCount,
-    /// Selecting base branch for review
-    BranchSelector,
-    /// Confirming push to remote (Y/N)
-    ConfirmPush,
-    /// Renaming branch (input mode) - triggered by 'r' key
-    RenameBranch,
-    /// Confirming push before opening PR (Y/N) - triggered by Ctrl+o
-    ConfirmPushForPR,
-    /// Typing a startup command for a new terminal - triggered by 'T' key
-    TerminalPrompt,
-    /// Typing a custom command to run for new agents
-    CustomAgentCommand,
-    /// Selecting branch to rebase onto - triggered by Alt+r
-    RebaseBranchSelector,
-    /// Selecting branch to merge from - triggered by Alt+m
-    MergeBranchSelector,
-    /// Showing success modal after git operation
-    SuccessModal(String),
-    /// Prompting user to remap Ctrl+M due to terminal incompatibility
-    KeyboardRemapPrompt,
-    /// Prompting user to update Tenex to a newer version
-    UpdatePrompt(UpdateInfo),
+    /// A modal/overlay is open.
+    Overlay(OverlayMode),
     /// User accepted update; exit TUI to install and restart
     UpdateRequested(UpdateInfo),
+}
+
+/// Modal/overlay modes that temporarily take over input and rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlayMode {
+    /// Showing help overlay.
+    Help,
+    /// Slash command palette (type `/...`).
+    CommandPalette,
+    /// Selecting which model/program to run for new agents.
+    ModelSelector,
+    /// Text input overlays backed by the shared input buffer.
+    TextInput(TextInputKind),
+    /// Count picker overlays (child/review counts).
+    CountPicker(CountPickerKind),
+    /// Branch picker overlays (review base branch, rebase target, merge source).
+    BranchPicker(BranchPickerKind),
+    /// Confirmation overlays (yes/no, worktree conflict, update prompt).
+    Confirm(ConfirmKind),
+    /// Showing info that an agent must be selected before review.
+    ReviewInfo,
+    /// Showing an error modal.
+    Error(String),
+    /// Showing success modal after git operation.
+    Success(String),
+}
+
+/// A specific "text input" overlay backed by the shared input buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputKind {
+    /// Creating a new agent (typing name).
+    Creating,
+    /// Typing a prompt to send to agent.
+    Prompting,
+    /// Typing the task/prompt for child agents.
+    ChildPrompt,
+    /// Typing a message to broadcast to agent and leaf descendants.
+    Broadcasting,
+    /// Editing prompt after choosing to reconnect to existing worktree.
+    ReconnectPrompt,
+    /// Typing a startup command for a new terminal.
+    TerminalPrompt,
+    /// Typing a custom command to run for new agents.
+    CustomAgentCommand,
+    /// Renaming branch (input mode) - triggered by 'r' key.
+    RenameBranch,
+}
+
+/// A specific count picker overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CountPickerKind {
+    /// Selecting number of child agents to spawn.
+    ChildCount,
+    /// Selecting number of review agents.
+    ReviewChildCount,
+}
+
+/// A specific branch picker overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchPickerKind {
+    /// Selecting base branch for review.
+    ReviewBaseBranch,
+    /// Selecting branch to rebase onto - triggered by Alt+r.
+    RebaseTargetBranch,
+    /// Selecting branch to merge from - triggered by Alt+m.
+    MergeFromBranch,
+}
+
+/// A specific confirmation overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// Confirming an action (Kill/Reset/Quit/Synthesize/WorktreeConflict).
+    Action(ConfirmAction),
+    /// Confirming push to remote (Y/N).
+    Push,
+    /// Confirming push before opening PR (Y/N) - triggered by Ctrl+o.
+    PushForPR,
+    /// Prompting user to remap Ctrl+M due to terminal incompatibility.
+    KeyboardRemap,
+    /// Prompting user to update Tenex to a newer version.
+    UpdatePrompt(UpdateInfo),
+}
+
+impl Mode {
+    /// Returns true if entering this mode should clear the shared input buffer.
+    ///
+    /// This encodes the behavior previously duplicated in `App::enter_mode`.
+    #[must_use]
+    pub const fn clears_input_on_enter(&self) -> bool {
+        match self {
+            Self::Overlay(overlay) => overlay.clears_input_on_enter(),
+            Self::Normal | Self::Scrolling | Self::PreviewFocused | Self::UpdateRequested(_) => {
+                false
+            }
+        }
+    }
+
+    /// Returns true if this mode uses the shared text input buffer.
+    ///
+    /// This consolidates checks used by text-editing helpers like `handle_char`.
+    #[must_use]
+    pub const fn uses_text_input_buffer(&self) -> bool {
+        match self {
+            Self::Overlay(overlay) => overlay.uses_text_input_buffer(),
+            Self::Normal | Self::Scrolling | Self::PreviewFocused | Self::UpdateRequested(_) => {
+                false
+            }
+        }
+    }
+
+    /// Returns true if this mode is handled by the "simple" text input handler and
+    /// rendered via the generic input overlay.
+    #[must_use]
+    pub const fn is_text_input_overlay(&self) -> bool {
+        matches!(
+            self,
+            Self::Overlay(OverlayMode::TextInput(kind)) if kind.uses_generic_input_overlay()
+        )
+    }
+
+    /// Returns true if submitting an empty string is meaningful for this text input mode.
+    #[must_use]
+    pub const fn text_input_allows_empty_submit(&self) -> bool {
+        matches!(
+            self,
+            Self::Overlay(OverlayMode::TextInput(kind)) if kind.allows_empty_submit()
+        )
+    }
+
+    /// Returns the title and prompt for modes rendered via the generic input overlay.
+    #[must_use]
+    pub fn input_overlay_spec(&self, app: &App) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Overlay(OverlayMode::TextInput(kind)) => kind.input_overlay_spec(app),
+            _ => None,
+        }
+    }
+}
+
+impl OverlayMode {
+    /// Returns true if entering this overlay should clear the shared input buffer.
+    #[must_use]
+    pub const fn clears_input_on_enter(&self) -> bool {
+        match self {
+            Self::TextInput(kind) => kind.clears_input_on_enter(),
+            Self::CommandPalette | Self::Confirm(ConfirmKind::Action(_)) => true,
+            Self::Help
+            | Self::ModelSelector
+            | Self::CountPicker(_)
+            | Self::BranchPicker(_)
+            | Self::Confirm(_)
+            | Self::ReviewInfo
+            | Self::Error(_)
+            | Self::Success(_) => false,
+        }
+    }
+
+    /// Returns true if this overlay uses the shared text input buffer.
+    #[must_use]
+    pub const fn uses_text_input_buffer(&self) -> bool {
+        match self {
+            Self::TextInput(_) | Self::CommandPalette | Self::Confirm(ConfirmKind::Action(_)) => {
+                true
+            }
+            Self::Help
+            | Self::ModelSelector
+            | Self::CountPicker(_)
+            | Self::BranchPicker(_)
+            | Self::Confirm(_)
+            | Self::ReviewInfo
+            | Self::Error(_)
+            | Self::Success(_) => false,
+        }
+    }
+}
+
+impl TextInputKind {
+    /// Returns true if entering this text input overlay should clear the shared input buffer.
+    #[must_use]
+    pub const fn clears_input_on_enter(self) -> bool {
+        matches!(
+            self,
+            Self::Creating
+                | Self::Prompting
+                | Self::ChildPrompt
+                | Self::Broadcasting
+                | Self::TerminalPrompt
+                | Self::CustomAgentCommand
+        )
+    }
+
+    /// Returns true if this kind is rendered via the generic input overlay.
+    #[must_use]
+    pub const fn uses_generic_input_overlay(self) -> bool {
+        !matches!(self, Self::RenameBranch)
+    }
+
+    /// Returns true if submitting an empty string is meaningful for this text input kind.
+    #[must_use]
+    pub const fn allows_empty_submit(self) -> bool {
+        matches!(
+            self,
+            Self::ReconnectPrompt | Self::Prompting | Self::ChildPrompt | Self::TerminalPrompt
+        )
+    }
+
+    /// Returns the title and prompt for kinds rendered via the generic input overlay.
+    #[must_use]
+    pub fn input_overlay_spec(self, app: &App) -> Option<(&'static str, &'static str)> {
+        if !self.uses_generic_input_overlay() {
+            return None;
+        }
+
+        let title = match self {
+            Self::Creating => "New Agent",
+            Self::Prompting => "New Agent with Prompt",
+            Self::ChildPrompt => "Spawn Children",
+            Self::Broadcasting => "Broadcast Message",
+            Self::ReconnectPrompt => {
+                app.spawn
+                    .worktree_conflict
+                    .as_ref()
+                    .map_or("Reconnect", |c| {
+                        if c.swarm_child_count.is_some() {
+                            "Reconnect Swarm"
+                        } else {
+                            "Reconnect Agent"
+                        }
+                    })
+            }
+            Self::TerminalPrompt => "New Terminal",
+            Self::CustomAgentCommand => "Custom Agent Command",
+            Self::RenameBranch => {
+                return None;
+            }
+        };
+
+        let prompt = match self {
+            Self::Creating => "Enter agent name:",
+            Self::Prompting => "Enter prompt:",
+            Self::ChildPrompt => "Enter task for children:",
+            Self::Broadcasting => "Enter message to broadcast to leaf agents:",
+            Self::ReconnectPrompt => "Edit prompt (or leave empty):",
+            Self::TerminalPrompt => "Enter startup command (or leave empty):",
+            Self::CustomAgentCommand => "Enter the command to run for new agents:",
+            Self::RenameBranch => {
+                return None;
+            }
+        };
+
+        Some((title, prompt))
+    }
 }
 
 /// Actions that require confirmation

@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
 use tenex::agent::Storage;
-use tenex::app::{Mode, Settings};
+use tenex::app::{ConfirmKind, Mode, OverlayMode, Settings};
 use tenex::config::Config;
 
 /// Terminal multiplexer for AI coding agents
@@ -165,7 +165,7 @@ fn run_interactive(
     if matches!(app.mode, Mode::Normal) {
         match tenex::update::check_for_update() {
             Ok(Some(info)) => {
-                app.mode = Mode::UpdatePrompt(info);
+                app.mode = Mode::Overlay(OverlayMode::Confirm(ConfirmKind::UpdatePrompt(info)));
             }
             Ok(None) => {}
             Err(e) => {

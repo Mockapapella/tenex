@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use super::Actions;
 use super::swarm::SpawnConfig;
-use crate::app::state::{App, Mode, WorktreeConflictInfo};
+use crate::app::state::{App, ConfirmAction, ConfirmKind, Mode, OverlayMode, WorktreeConflictInfo};
 
 impl Actions {
     /// Create a new agent
@@ -55,9 +55,9 @@ impl Actions {
                 current_commit,
                 swarm_child_count: None, // Not a swarm creation
             });
-            app.enter_mode(Mode::Confirming(
-                crate::app::state::ConfirmAction::WorktreeConflict,
-            ));
+            app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+                ConfirmAction::WorktreeConflict,
+            ))));
             return Ok(());
         }
 
@@ -515,7 +515,9 @@ mod tests {
         ));
 
         // Enter confirming mode for kill
-        app.enter_mode(Mode::Confirming(crate::app::state::ConfirmAction::Kill));
+        app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+            ConfirmAction::Kill,
+        ))));
 
         // Confirm should kill and exit mode
         handler.handle_action(&mut app, crate::config::Action::Confirm)?;

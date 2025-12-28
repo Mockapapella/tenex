@@ -1,7 +1,7 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
 use crate::agent::Status;
-use crate::app::{App, Mode, Tab};
+use crate::app::{App, Mode, OverlayMode, Tab};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -375,7 +375,7 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Render the status bar
 pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Don't show error in status bar when error modal is displayed
-    let showing_error_modal = matches!(app.mode, Mode::ErrorModal(_));
+    let showing_error_modal = matches!(app.mode, Mode::Overlay(OverlayMode::Error(_)));
 
     let left_content = match (
         &app.ui.last_error,

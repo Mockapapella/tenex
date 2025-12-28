@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::state::{App, Mode, WorktreeConflictInfo};
+use crate::app::state::{App, ConfirmAction, ConfirmKind, Mode, OverlayMode, WorktreeConflictInfo};
 
 /// Configuration for spawning child agents
 pub struct SpawnConfig {
@@ -179,9 +179,9 @@ impl Actions {
             current_commit,
             swarm_child_count: Some(count),
         });
-        app.enter_mode(Mode::Confirming(
-            crate::app::state::ConfirmAction::WorktreeConflict,
-        ));
+        app.enter_mode(Mode::Overlay(OverlayMode::Confirm(ConfirmKind::Action(
+            ConfirmAction::WorktreeConflict,
+        ))));
     }
 
     /// Spawn the actual child agents

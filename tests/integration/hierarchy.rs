@@ -105,9 +105,9 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
         app.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Kill),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
@@ -251,9 +251,9 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
         app.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Kill),
+    )));
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
@@ -616,9 +616,9 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
         app.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+        tenex::app::ConfirmKind::Action(tenex::app::ConfirmAction::Kill),
+    )));
     let kill_result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(kill_result.is_ok(), "Kill should succeed");
 

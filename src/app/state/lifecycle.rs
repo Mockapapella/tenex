@@ -2,24 +2,13 @@
 
 use tracing::{debug, warn};
 
-use super::{App, Mode};
+use super::{App, ConfirmKind, Mode, OverlayMode};
 
 impl App {
     /// Enter a new application mode
     pub fn enter_mode(&mut self, mode: Mode) {
         debug!(new_mode = ?mode, old_mode = ?self.mode, "Entering mode");
-        // Don't clear for PushRenameBranch - we pre-fill it with the branch name
-        let should_clear = matches!(
-            mode,
-            Mode::Creating
-                | Mode::Prompting
-                | Mode::Confirming(_)
-                | Mode::CommandPalette
-                | Mode::ChildPrompt
-                | Mode::Broadcasting
-                | Mode::TerminalPrompt
-                | Mode::CustomAgentCommand
-        );
+        let should_clear = mode.clears_input_on_enter();
         self.mode = mode;
         if should_clear {
             self.input.clear();
@@ -37,7 +26,7 @@ impl App {
     pub fn set_error(&mut self, message: impl Into<String>) {
         let msg = message.into();
         self.ui.set_error(msg.clone());
-        self.mode = Mode::ErrorModal(msg);
+        self.mode = Mode::Overlay(OverlayMode::Error(msg));
     }
 
     /// Clear the current error message
@@ -47,7 +36,7 @@ impl App {
 
     /// Dismiss the error modal (returns to normal mode)
     pub fn dismiss_error(&mut self) {
-        if matches!(self.mode, Mode::ErrorModal(_)) {
+        if matches!(self.mode, Mode::Overlay(OverlayMode::Error(_))) {
             self.mode = Mode::Normal;
         }
         self.ui.clear_error();
@@ -65,12 +54,12 @@ impl App {
 
     /// Show success modal with message
     pub fn show_success(&mut self, message: impl Into<String>) {
-        self.mode = Mode::SuccessModal(message.into());
+        self.mode = Mode::Overlay(OverlayMode::Success(message.into()));
     }
 
     /// Dismiss success modal
     pub fn dismiss_success(&mut self) {
-        if matches!(self.mode, Mode::SuccessModal(_)) {
+        if matches!(self.mode, Mode::Overlay(OverlayMode::Success(_))) {
             self.mode = Mode::Normal;
         }
     }
@@ -84,7 +73,7 @@ impl App {
 
     /// Show the keyboard remap prompt modal
     pub fn show_keyboard_remap_prompt(&mut self) {
-        self.mode = Mode::KeyboardRemapPrompt;
+        self.mode = Mode::Overlay(OverlayMode::Confirm(ConfirmKind::KeyboardRemap));
     }
 
     /// Accept the keyboard remap (Ctrl+M -> Ctrl+N)

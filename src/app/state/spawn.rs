@@ -91,7 +91,7 @@ impl SpawnState {
     }
 }
 
-use super::{App, Mode};
+use super::{App, CountPickerKind, Mode, OverlayMode, TextInputKind};
 
 impl App {
     /// Increment child count (for `ChildCount` mode)
@@ -107,13 +107,17 @@ impl App {
     /// Start spawning children under a specific agent
     pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
         self.spawn.start_spawning_under(parent_id);
-        self.enter_mode(Mode::ChildCount);
+        self.enter_mode(Mode::Overlay(OverlayMode::CountPicker(
+            CountPickerKind::ChildCount,
+        )));
     }
 
     /// Start spawning a new root agent with children (no plan prompt)
     pub fn start_spawning_root(&mut self) {
         self.spawn.start_spawning_root();
-        self.enter_mode(Mode::ChildCount);
+        self.enter_mode(Mode::Overlay(OverlayMode::CountPicker(
+            CountPickerKind::ChildCount,
+        )));
     }
 
     /// Start spawning a planning swarm under the selected agent
@@ -124,12 +128,16 @@ impl App {
         };
 
         self.spawn.start_planning_swarm_under(agent.id);
-        self.enter_mode(Mode::ChildCount);
+        self.enter_mode(Mode::Overlay(OverlayMode::CountPicker(
+            CountPickerKind::ChildCount,
+        )));
     }
 
     /// Proceed from `ChildCount` to `ChildPrompt` mode
     pub fn proceed_to_child_prompt(&mut self) {
-        self.enter_mode(Mode::ChildPrompt);
+        self.enter_mode(Mode::Overlay(OverlayMode::TextInput(
+            TextInputKind::ChildPrompt,
+        )));
     }
 
     /// Get the next terminal name and increment the counter
@@ -139,7 +147,9 @@ impl App {
 
     /// Start prompting for a terminal startup command
     pub fn start_terminal_prompt(&mut self) {
-        self.enter_mode(Mode::TerminalPrompt);
+        self.enter_mode(Mode::Overlay(OverlayMode::TextInput(
+            TextInputKind::TerminalPrompt,
+        )));
     }
 }
 

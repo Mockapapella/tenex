@@ -1,14 +1,16 @@
 //! Text input mode key handling
 //!
 //! Handles key events for modes that involve text input:
-//! - `Creating` (new agent name)
-//! - `Prompting` (new agent with prompt)
-//! - `ChildPrompt` (task for children)
-//! - `Broadcasting` (message to leaves)
-//! - `ReconnectPrompt` (reconnect with edited prompt)
-//! - `TerminalPrompt` (terminal startup command)
+//! - `TextInputKind::Creating` (new agent name)
+//! - `TextInputKind::Prompting` (new agent with prompt)
+//! - `TextInputKind::ChildPrompt` (task for children)
+//! - `TextInputKind::Broadcasting` (message to leaves)
+//! - `TextInputKind::ReconnectPrompt` (reconnect with edited prompt)
+//! - `TextInputKind::TerminalPrompt` (terminal startup command)
+//! - `TextInputKind::CustomAgentCommand` (custom spawn command)
+//! - `TextInputKind::RenameBranch` (rename flow input)
 
-use crate::app::{Actions, App, Mode};
+use crate::app::{Actions, App, TextInputKind};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use uuid::Uuid;
 
@@ -16,19 +18,25 @@ use uuid::Uuid;
 pub fn handle_text_input_mode(
     app: &mut App,
     action_handler: Actions,
+    kind: TextInputKind,
     code: KeyCode,
     modifiers: KeyModifiers,
 ) {
+    if kind == TextInputKind::RenameBranch {
+        handle_rename_branch_key(app, code);
+        return;
+    }
+
     match code {
         KeyCode::Enter if modifiers.contains(KeyModifiers::ALT) => {
             // Alt+Enter inserts a newline
             app.handle_char('\n');
         }
         KeyCode::Enter => {
-            handle_enter(app, action_handler);
+            handle_enter(app, action_handler, kind);
         }
         KeyCode::Esc => {
-            handle_escape(app);
+            handle_escape(app, kind);
         }
         KeyCode::Char(c) => app.handle_char(c),
         KeyCode::Backspace => app.handle_backspace(),
@@ -44,27 +52,22 @@ pub fn handle_text_input_mode(
 }
 
 /// Handle Enter key in text input modes
-fn handle_enter(app: &mut App, action_handler: Actions) {
+fn handle_enter(app: &mut App, action_handler: Actions, kind: TextInputKind) {
     let input = app.input.buffer.clone();
 
-    if matches!(app.mode, Mode::CustomAgentCommand) && input.trim().is_empty() {
+    if kind == TextInputKind::CustomAgentCommand && input.trim().is_empty() {
         app.set_status("Custom agent command cannot be empty");
         return;
     }
 
     // Some modes allow empty input, others don't
-    if !input.is_empty()
-        || matches!(
-            app.mode,
-            Mode::ReconnectPrompt | Mode::Prompting | Mode::ChildPrompt | Mode::TerminalPrompt
-        )
-    {
-        // Remember the original mode before the action
+    if !input.is_empty() || kind.allows_empty_submit() {
+        // Remember the original mode before the action (some actions transition to another mode).
         let original_mode = app.mode.clone();
 
-        let result = match app.mode {
-            Mode::Creating => action_handler.create_agent(app, &input, None),
-            Mode::Prompting => {
+        let result = match kind {
+            TextInputKind::Creating => action_handler.create_agent(app, &input, None),
+            TextInputKind::Prompting => {
                 let short_id = &Uuid::new_v4().to_string()[..8];
                 let title = format!("Agent ({short_id})");
                 let prompt = if input.is_empty() {
@@ -74,7 +77,7 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
                 };
                 action_handler.create_agent(app, &title, prompt)
             }
-            Mode::ChildPrompt => {
+            TextInputKind::ChildPrompt => {
                 let prompt = if input.is_empty() {
                     None
                 } else {
@@ -82,15 +85,15 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
                 };
                 action_handler.spawn_children(app, prompt)
             }
-            Mode::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
-            Mode::ReconnectPrompt => {
+            TextInputKind::Broadcasting => action_handler.broadcast_to_leaves(app, &input),
+            TextInputKind::ReconnectPrompt => {
                 // Update the prompt in the conflict info and reconnect
                 if let Some(ref mut conflict) = app.spawn.worktree_conflict {
                     conflict.prompt = if input.is_empty() { None } else { Some(input) };
                 }
                 action_handler.reconnect_to_worktree(app)
             }
-            Mode::TerminalPrompt => {
+            TextInputKind::TerminalPrompt => {
                 let command = if input.is_empty() {
                     None
                 } else {
@@ -98,12 +101,12 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
                 };
                 action_handler.spawn_terminal(app, command)
             }
-            Mode::CustomAgentCommand => {
+            TextInputKind::CustomAgentCommand => {
                 let command = input.trim().to_string();
                 app.set_custom_agent_command_and_save(command);
                 Ok(())
             }
-            _ => Ok(()),
+            TextInputKind::RenameBranch => Ok(()),
         };
 
         if let Err(e) = result {
@@ -113,31 +116,51 @@ fn handle_enter(app: &mut App, action_handler: Actions) {
         }
 
         // Only exit mode if it wasn't changed by the action
-        // (e.g., create_agent might set Confirming mode for worktree conflicts)
+        // (e.g., create_agent might set a worktree conflict confirmation overlay)
         if app.mode == original_mode {
             app.exit_mode();
         }
         return;
     }
 
-    // Empty input in Creating mode - just exit
+    // Empty input where it's not meaningful - just exit.
     app.exit_mode();
 }
 
 /// Handle Escape key in text input modes
-fn handle_escape(app: &mut App) {
+fn handle_escape(app: &mut App, kind: TextInputKind) {
     // For ReconnectPrompt, cancel and clear conflict info
-    if matches!(app.mode, Mode::ReconnectPrompt) {
+    if kind == TextInputKind::ReconnectPrompt {
         app.spawn.worktree_conflict = None;
     }
     app.exit_mode();
+}
+
+fn handle_rename_branch_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Enter => {
+            if app.confirm_rename_branch()
+                && let Err(e) = Actions::execute_rename(app)
+            {
+                app.set_error(format!("Rename failed: {e:#}"));
+            }
+            // If rename failed (empty name), stay in mode.
+        }
+        KeyCode::Esc => {
+            app.clear_git_op_state();
+            app.exit_mode();
+        }
+        KeyCode::Char(c) => app.handle_char(c),
+        KeyCode::Backspace => app.handle_backspace(),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::Settings;
+    use crate::app::{Mode, OverlayMode, Settings};
     use crate::config::Config;
     use tempfile::NamedTempFile;
 
@@ -153,11 +176,12 @@ mod tests {
     #[test]
     fn test_handle_text_input_char() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
 
         handle_text_input_mode(
             &mut app,
             Actions::new(),
+            TextInputKind::Creating,
             KeyCode::Char('a'),
             KeyModifiers::NONE,
         );
@@ -166,6 +190,7 @@ mod tests {
         handle_text_input_mode(
             &mut app,
             Actions::new(),
+            TextInputKind::Creating,
             KeyCode::Char('b'),
             KeyModifiers::NONE,
         );
@@ -177,13 +202,14 @@ mod tests {
     #[test]
     fn test_handle_text_input_backspace() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = "test".to_string();
         app.input.cursor = 4;
 
         handle_text_input_mode(
             &mut app,
             Actions::new(),
+            TextInputKind::Creating,
             KeyCode::Backspace,
             KeyModifiers::NONE,
         );
@@ -195,13 +221,14 @@ mod tests {
     #[test]
     fn test_handle_text_input_delete() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = "test".to_string();
         app.input.cursor = 0;
 
         handle_text_input_mode(
             &mut app,
             Actions::new(),
+            TextInputKind::Creating,
             KeyCode::Delete,
             KeyModifiers::NONE,
         );
@@ -213,20 +240,44 @@ mod tests {
     #[test]
     fn test_handle_text_input_cursor_movement() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = "test".to_string();
         app.input.cursor = 2;
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Left, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Left,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.input.cursor, 1);
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Right, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Right,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.input.cursor, 2);
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Home, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Home,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.input.cursor, 0);
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::End, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::End,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.input.cursor, 4);
 
         Ok(())
@@ -235,10 +286,16 @@ mod tests {
     #[test]
     fn test_handle_text_input_escape() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = "test".to_string();
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Esc, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.mode, Mode::Normal);
 
         Ok(())
@@ -248,7 +305,7 @@ mod tests {
     fn test_handle_escape_reconnect_prompt_clears_conflict()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReconnectPrompt;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::ReconnectPrompt));
         app.spawn.worktree_conflict = Some(crate::app::WorktreeConflictInfo {
             title: "test".to_string(),
             branch: "test".to_string(),
@@ -261,7 +318,13 @@ mod tests {
             swarm_child_count: None,
         });
 
-        handle_escape(&mut app);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::ReconnectPrompt,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        );
 
         assert!(app.spawn.worktree_conflict.is_none());
         assert_eq!(app.mode, Mode::Normal);
@@ -272,10 +335,16 @@ mod tests {
     #[test]
     fn test_handle_enter_empty_creating_exits() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = String::new();
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Enter, KeyModifiers::NONE);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        );
         assert_eq!(app.mode, Mode::Normal);
 
         Ok(())
@@ -284,11 +353,17 @@ mod tests {
     #[test]
     fn test_handle_alt_enter_inserts_newline() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
+        app.mode = Mode::Overlay(OverlayMode::TextInput(TextInputKind::Creating));
         app.input.buffer = "test".to_string();
         app.input.cursor = 4;
 
-        handle_text_input_mode(&mut app, Actions::new(), KeyCode::Enter, KeyModifiers::ALT);
+        handle_text_input_mode(
+            &mut app,
+            Actions::new(),
+            TextInputKind::Creating,
+            KeyCode::Enter,
+            KeyModifiers::ALT,
+        );
         assert!(app.input.buffer.contains('\n'));
 
         Ok(())

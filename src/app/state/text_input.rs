@@ -1,6 +1,6 @@
 //! Text input helpers for modes that accept editing.
 
-use super::{App, Mode};
+use super::App;
 
 impl App {
     /// Check if the current mode accepts text input
@@ -9,18 +9,7 @@ impl App {
     /// duplicated across `handle_char`, `handle_backspace`, and `handle_delete`.
     #[must_use]
     pub const fn is_text_input_mode(&self) -> bool {
-        matches!(
-            self.mode,
-            Mode::Creating
-                | Mode::Prompting
-                | Mode::CommandPalette
-                | Mode::ChildPrompt
-                | Mode::Broadcasting
-                | Mode::RenameBranch
-                | Mode::ReconnectPrompt
-                | Mode::TerminalPrompt
-                | Mode::CustomAgentCommand
-        ) || matches!(self.mode, Mode::Confirming(_))
+        self.mode.uses_text_input_buffer()
     }
 
     /// Handle a character input in text input modes

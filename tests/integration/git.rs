@@ -192,7 +192,10 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
 
     // Should either show success or set an error (depends on git state)
     // The key test is that the function doesn't panic and handles the result
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    let is_success = matches!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Success(_))
+    );
     let has_error = app.ui.last_error.is_some();
     assert!(
         is_success || has_error,
@@ -283,7 +286,12 @@ fn test_push_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     // Should set up git_op state
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, "feature/test");
-    assert_eq!(app.mode, tenex::app::Mode::ConfirmPush);
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::Push
+        ))
+    );
 
     Ok(())
 }
@@ -315,7 +323,12 @@ fn test_rename_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.original_branch, "rename-action-test");
     assert!(app.git_op.is_root_rename);
-    assert_eq!(app.mode, tenex::app::Mode::RenameBranch);
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::TextInput(
+            tenex::app::TextInputKind::RenameBranch
+        ))
+    );
 
     Ok(())
 }
@@ -348,7 +361,12 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     // DirGuard will restore directory on drop
     assert!(result.is_ok());
-    assert_eq!(app.mode, tenex::app::Mode::RebaseBranchSelector);
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::BranchPicker(
+            tenex::app::BranchPickerKind::RebaseTargetBranch
+        ))
+    );
 
     Ok(())
 }
@@ -381,7 +399,12 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     // DirGuard will restore directory on drop
     assert!(result.is_ok());
-    assert_eq!(app.mode, tenex::app::Mode::MergeBranchSelector);
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::BranchPicker(
+            tenex::app::BranchPickerKind::MergeFromBranch
+        ))
+    );
 
     Ok(())
 }
@@ -419,7 +442,12 @@ fn test_open_pr_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(app.git_op.agent_id, Some(agent_id));
     assert_eq!(app.git_op.branch_name, branch_name);
     // Should have detected a base branch or be in the right mode
-    assert_eq!(app.mode, tenex::app::Mode::ConfirmPushForPR);
+    assert_eq!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Confirm(
+            tenex::app::ConfirmKind::PushForPR
+        ))
+    );
 
     Ok(())
 }
@@ -607,7 +635,10 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
     // The key is that the function handles it without panicking.
     let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
     let has_error = result.is_err() || app.ui.last_error.is_some();
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    let is_success = matches!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Success(_))
+    );
 
     assert!(
         conflict_terminal_spawned || has_error || is_success,
@@ -703,7 +734,10 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
     // The key is that the function handles it without panicking.
     let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
     let has_error = result.is_err() || app.ui.last_error.is_some();
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    let is_success = matches!(
+        app.mode,
+        tenex::app::Mode::Overlay(tenex::app::OverlayMode::Success(_))
+    );
 
     // The merge function should complete without panicking.
     // In different environments, the outcome varies:
@@ -799,7 +833,9 @@ fn test_rename_unchanged_name() -> Result<(), Box<dyn std::error::Error>> {
     app.git_op.is_root_rename = true;
 
     // Start in rename mode
-    app.mode = tenex::app::Mode::RenameBranch;
+    app.mode = tenex::app::Mode::Overlay(tenex::app::OverlayMode::TextInput(
+        tenex::app::TextInputKind::RenameBranch,
+    ));
 
     // Execute rename
     Actions::execute_rename(&mut app)?;

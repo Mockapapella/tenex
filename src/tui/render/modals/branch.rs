@@ -1,6 +1,6 @@
 //! Branch selector modal rendering
 
-use crate::app::{App, Mode};
+use crate::app::{App, BranchPickerKind, Mode, OverlayMode};
 use ratatui::{
     Frame,
     style::{Modifier, Style},
@@ -22,8 +22,12 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
 
     // Determine title based on mode
     let title = match &app.mode {
-        Mode::RebaseBranchSelector => " Rebase onto Branch ",
-        Mode::MergeBranchSelector => " Merge Branch ",
+        Mode::Overlay(OverlayMode::BranchPicker(BranchPickerKind::RebaseTargetBranch)) => {
+            " Rebase onto Branch "
+        }
+        Mode::Overlay(OverlayMode::BranchPicker(BranchPickerKind::MergeFromBranch)) => {
+            " Merge Branch "
+        }
         _ => " Select Base Branch ",
     };
 
@@ -55,7 +59,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
 
     // Show merge/rebase direction instruction
     match &app.mode {
-        Mode::MergeBranchSelector => {
+        Mode::Overlay(OverlayMode::BranchPicker(BranchPickerKind::MergeFromBranch)) => {
             lines.push(Line::from(vec![
                 Span::styled(
                     "Select branch to merge ",
@@ -70,7 +74,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
                 Span::styled(" into", Style::default().fg(colors::TEXT_DIM)),
             ]));
         }
-        Mode::RebaseBranchSelector => {
+        Mode::Overlay(OverlayMode::BranchPicker(BranchPickerKind::RebaseTargetBranch)) => {
             lines.push(Line::from(vec![
                 Span::styled("Rebase ", Style::default().fg(colors::TEXT_DIM)),
                 Span::styled(
