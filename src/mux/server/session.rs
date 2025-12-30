@@ -439,6 +439,7 @@ fn is_session_alive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn test_command() -> Vec<String> {
         #[cfg(windows)]
@@ -457,13 +458,29 @@ mod tests {
         }
     }
 
-    fn test_exit_command() -> Vec<String> {
+    fn test_long_command() -> Vec<String> {
         #[cfg(windows)]
         {
             return vec![
                 "powershell.exe".to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
+                "Start-Sleep -Seconds 10".to_string(),
+            ];
+        }
+
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        }
+    }
+
+    fn test_exit_command() -> Vec<String> {
+        #[cfg(windows)]
+        {
+            return vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
                 "exit 0".to_string(),
             ];
         }
@@ -591,17 +608,45 @@ mod tests {
         }
 
         Manager::create(session_name, &tmp, Some(&test_exit_command()))?;
-        Manager::create_window(session_name, "child", &tmp, Some(&test_command()))?;
+        Manager::create_window(session_name, "child", &tmp, Some(&test_long_command()))?;
 
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Manager::exists(session_name) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
 
-        let pids = Manager::list_pane_pids(session_name)?;
         assert!(
-            !pids.is_empty(),
-            "Expected a child window process to still be running"
+            !Manager::exists(session_name),
+            "Expected session to be considered dead once the root window exits"
         );
 
-        assert!(!Manager::exists(session_name));
+        let child_running = {
+            let session_ref = {
+                let state = global_state().lock();
+                state.sessions.get(session_name).cloned()
+            };
+
+            let session_ref = session_ref.ok_or_else(|| anyhow::anyhow!("Session vanished"))?;
+            let child_window = {
+                let guard = session_ref.lock();
+                guard
+                    .windows
+                    .get(1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Child window missing"))?
+            };
+
+            let mut guard = child_window.lock();
+            match guard.child.try_wait() {
+                Ok(None) | Err(_) => true,
+                Ok(Some(_)) => false,
+            }
+        };
+        assert!(
+            child_running,
+            "Expected child window process to still be running"
+        );
+
         assert!(
             !Manager::list().iter().any(|s| s.name == session_name),
             "Did not expect session list to include {session_name} after root exit"
