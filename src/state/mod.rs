@@ -16,6 +16,7 @@ mod keyboard_remap_prompt;
 mod merge_branch_selector;
 mod model_selector;
 mod normal;
+mod preview_focused;
 mod prompting;
 mod rebase_branch_selector;
 mod reconnect_prompt;
@@ -44,6 +45,7 @@ pub use keyboard_remap_prompt::KeyboardRemapPromptMode;
 pub use merge_branch_selector::MergeBranchSelectorMode;
 pub use model_selector::ModelSelectorMode;
 pub use normal::NormalMode;
+pub use preview_focused::PreviewFocusedMode;
 pub use prompting::PromptingMode;
 pub use rebase_branch_selector::RebaseBranchSelectorMode;
 pub use reconnect_prompt::ReconnectPromptMode;
@@ -118,6 +120,8 @@ pub enum ModeUnion {
     ErrorModal(ErrorModalMode),
     /// Success modal mode.
     SuccessModal(SuccessModalMode),
+    /// Preview focused mode.
+    PreviewFocused(PreviewFocusedMode),
     /// Transition to a legacy runtime `Mode`.
     Legacy(Mode),
 }
@@ -267,6 +271,11 @@ impl ModeUnion {
                 Mode::SuccessModal(message) if message == &state.message => {}
                 _ => app.show_success(state.message),
             },
+            Self::PreviewFocused(_) => {
+                if app.mode != Mode::PreviewFocused {
+                    app.enter_mode(Mode::PreviewFocused);
+                }
+            }
             Self::Legacy(mode) => {
                 if app.mode == mode {
                     return;
@@ -448,5 +457,11 @@ impl From<ErrorModalMode> for ModeUnion {
 impl From<SuccessModalMode> for ModeUnion {
     fn from(state: SuccessModalMode) -> Self {
         Self::SuccessModal(state)
+    }
+}
+
+impl From<PreviewFocusedMode> for ModeUnion {
+    fn from(_: PreviewFocusedMode) -> Self {
+        Self::PreviewFocused(PreviewFocusedMode)
     }
 }

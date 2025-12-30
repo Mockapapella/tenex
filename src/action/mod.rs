@@ -7,6 +7,7 @@ mod misc;
 mod modal;
 mod navigation;
 mod picker;
+mod preview;
 mod text_input;
 
 pub use agent::*;
@@ -18,6 +19,9 @@ pub(crate) use modal::help_max_scroll;
 pub use modal::{HalfPageDownAction, HalfPageUpAction, PageDownAction, PageUpAction};
 pub use navigation::*;
 pub use picker::*;
+#[cfg(test)]
+pub(crate) use preview::keycode_to_input_sequence;
+pub use preview::{ForwardKeystrokeAction, UnfocusPreviewAction};
 pub use text_input::*;
 
 use crate::app::{Actions, App, AppData, ConfirmAction};
@@ -26,9 +30,9 @@ use crate::state::{
     BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
     ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode, CustomAgentCommandMode,
     ErrorModalMode, HelpMode, KeyboardRemapPromptMode, MergeBranchSelectorMode, ModeUnion,
-    ModelSelectorMode, NormalMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode,
-    RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode, SuccessModalMode,
-    TerminalPromptMode, UpdatePromptMode,
+    ModelSelectorMode, NormalMode, PreviewFocusedMode, PromptingMode, RebaseBranchSelectorMode,
+    ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode,
+    SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
@@ -210,6 +214,36 @@ pub fn dispatch_error_modal_mode(app: &mut App, actions: Actions, message: Strin
 pub fn dispatch_success_modal_mode(app: &mut App, actions: Actions, message: String) -> Result<()> {
     let mut app_data = AppData::new(app, actions);
     let next = DismissAction.execute(SuccessModalMode { message }, &mut app_data)?;
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `PreviewFocusedMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_preview_focused_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    batched_keys: &mut Vec<String>,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    // Ctrl+q exits preview focus mode (same key quits app when not focused).
+    let next = if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
+        UnfocusPreviewAction.execute(PreviewFocusedMode, &mut app_data)?
+    } else {
+        ForwardKeystrokeAction {
+            code,
+            modifiers,
+            batched_keys,
+        }
+        .execute(PreviewFocusedMode, &mut app_data)?
+    };
+
     next.apply(app_data.app);
     Ok(())
 }

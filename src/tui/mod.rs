@@ -245,10 +245,10 @@ fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::keycode_to_input_sequence;
     use crate::agent::Storage;
     use crate::app::ConfirmAction;
     use crate::config::Config;
-    use input::keycode_to_input_sequence;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
 

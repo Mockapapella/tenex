@@ -1,6 +1,6 @@
 use crate::action::ValidIn;
-use crate::app::{AppData, Mode, Tab};
-use crate::state::{ModeUnion, NormalMode, ScrollingMode};
+use crate::app::{AppData, Tab};
+use crate::state::{ModeUnion, NormalMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 
 /// Normal-mode action: switch the detail pane tab (Preview/Diff).
@@ -167,7 +167,7 @@ impl ValidIn<NormalMode> for FocusPreviewAction {
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
             app_data.active_tab = Tab::Preview;
-            Ok(ModeUnion::Legacy(Mode::PreviewFocused))
+            Ok(PreviewFocusedMode.into())
         } else {
             Ok(ModeUnion::normal())
         }
@@ -180,7 +180,7 @@ impl ValidIn<ScrollingMode> for FocusPreviewAction {
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
             app_data.active_tab = Tab::Preview;
-            Ok(ModeUnion::Legacy(Mode::PreviewFocused))
+            Ok(PreviewFocusedMode.into())
         } else {
             Ok(ScrollingMode.into())
         }

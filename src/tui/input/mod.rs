@@ -7,16 +7,11 @@ mod command;
 mod confirm;
 mod normal;
 mod picker;
-mod preview_focused;
 mod text_input;
 
 use crate::app::{Actions, App, Mode};
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-
-// Re-export for tests and internal use
-#[cfg(test)]
-pub use preview_focused::keycode_to_input_sequence;
 
 /// Handle a key event based on the current mode
 ///
@@ -114,7 +109,13 @@ pub fn handle_key_event(
 
         // Preview focused mode (forwards keys to the mux backend)
         Mode::PreviewFocused => {
-            preview_focused::handle_preview_focused_mode(app, code, modifiers, batched_keys);
+            crate::action::dispatch_preview_focused_mode(
+                app,
+                action_handler,
+                code,
+                modifiers,
+                batched_keys,
+            )?;
         }
 
         // Normal and scrolling modes
