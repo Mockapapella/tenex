@@ -3,7 +3,7 @@
 use crate::agent::{Agent, Status};
 use crate::git::{self, WorktreeManager};
 use anyhow::{Context, Result};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::Actions;
 use crate::app::state::App;
@@ -26,10 +26,11 @@ impl Actions {
         }
 
         let sessions = self.session_manager.list();
-        Self::sync_agent_status_with_sessions(app, sessions)
+        self.sync_agent_status_with_sessions(app, sessions)
     }
 
     fn sync_agent_status_with_sessions(
+        self,
         app: &mut App,
         sessions: Result<Vec<crate::mux::Session>>,
     ) -> Result<()> {
@@ -67,9 +68,29 @@ impl Actions {
             debug!("No stored mux sessions found in session list; skipping agent sync");
             return Ok(());
         }
+
         for root in roots {
             if active_sessions.contains(&root.mux_session) {
                 continue;
+            }
+
+            if let Err(err) = self.session_manager.kill(&root.mux_session) {
+                let error = err.to_string();
+                if error.contains("not found") {
+                    debug!(
+                        title = %root.title,
+                        session = %root.mux_session,
+                        error,
+                        "Mux session already gone while pruning agent"
+                    );
+                } else {
+                    warn!(
+                        title = %root.title,
+                        session = %root.mux_session,
+                        error,
+                        "Failed to kill mux session for missing agent"
+                    );
+                }
             }
 
             debug!(title = %root.title, session = %root.mux_session, "Removing agent with missing mux session");
@@ -228,7 +249,7 @@ mod tests {
 
         // When mux session listing succeeds but reports no sessions, treat it as uncertain and
         // avoid destructive pruning.
-        Actions::sync_agent_status_with_sessions(&mut app, Ok(vec![]))?;
+        Actions::new().sync_agent_status_with_sessions(&mut app, Ok(vec![]))?;
 
         assert_eq!(app.storage.len(), 2);
         Ok(())
@@ -260,7 +281,7 @@ mod tests {
         let missing_id = missing.id;
         app.storage.add(missing);
 
-        Actions::sync_agent_status_with_sessions(
+        Actions::new().sync_agent_status_with_sessions(
             &mut app,
             Ok(vec![crate::mux::Session {
                 name: alive_session,
@@ -291,7 +312,7 @@ mod tests {
         let agent_id = agent.id;
         app.storage.add(agent);
 
-        Actions::sync_agent_status_with_sessions(
+        Actions::new().sync_agent_status_with_sessions(
             &mut app,
             Ok(vec![crate::mux::Session {
                 name: session,
@@ -323,7 +344,8 @@ mod tests {
         agent.set_status(Status::Running);
         app.storage.add(agent);
 
-        Actions::sync_agent_status_with_sessions(&mut app, Err(anyhow::anyhow!("mux down")))?;
+        Actions::new()
+            .sync_agent_status_with_sessions(&mut app, Err(anyhow::anyhow!("mux down")))?;
         assert_eq!(app.storage.len(), 1);
         Ok(())
     }

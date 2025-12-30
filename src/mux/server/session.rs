@@ -92,18 +92,32 @@ impl Manager {
             state.sessions.values().cloned().collect::<Vec<_>>()
         };
 
-        sessions
-            .into_iter()
-            .filter(is_session_alive)
-            .map(|session| {
-                let guard = session.lock();
-                Session {
-                    name: guard.name.clone(),
-                    created: guard.created,
-                    attached: false,
-                }
-            })
-            .collect()
+        let mut dead_names = Vec::new();
+        let mut result = Vec::new();
+
+        for session in sessions {
+            if !is_session_alive(&session) {
+                dead_names.push(session.lock().name.clone());
+                continue;
+            }
+
+            let guard = session.lock();
+            result.push(Session {
+                name: guard.name.clone(),
+                created: guard.created,
+                attached: false,
+            });
+        }
+
+        for name in dead_names {
+            if let Err(err) = Self::kill(&name)
+                && !err.to_string().contains("not found")
+            {
+                warn!(session = name, error = %err, "Failed to cleanup dead mux session");
+            }
+        }
+
+        result
     }
 
     /// Send raw input bytes to a target.
@@ -443,6 +457,23 @@ mod tests {
         }
     }
 
+    fn test_exit_command() -> Vec<String> {
+        #[cfg(windows)]
+        {
+            return vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "exit 0".to_string(),
+            ];
+        }
+
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+        }
+    }
+
     #[test]
     fn test_session_manager_new() {
         let manager = Manager;
@@ -546,5 +577,43 @@ mod tests {
         assert!(Manager::rename_window("tenex-test-nope", 1, "x").is_err());
         assert!(Manager::resize_window("tenex-test-nope", 80, 24).is_err());
         assert!(Manager::send_input("tenex-test-nope", b"").is_err());
+    }
+
+    #[test]
+    fn test_session_alive_when_root_exits_but_child_still_running() -> Result<()> {
+        let session_name = "tenex-test-root-exits-child-alive";
+        let tmp = std::env::temp_dir();
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+
+        Manager::create(session_name, &tmp, Some(&test_exit_command()))?;
+        Manager::create_window(session_name, "child", &tmp, Some(&test_command()))?;
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let pids = Manager::list_pane_pids(session_name)?;
+        assert!(
+            !pids.is_empty(),
+            "Expected a child window process to still be running"
+        );
+
+        assert!(!Manager::exists(session_name));
+        assert!(
+            !Manager::list().iter().any(|s| s.name == session_name),
+            "Did not expect session list to include {session_name} after root exit"
+        );
+
+        assert!(Manager::list_pane_pids(session_name).is_err());
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+        Ok(())
     }
 }
