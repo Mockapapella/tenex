@@ -234,6 +234,7 @@ mod tests {
     use crate::app::ConfirmAction;
     use crate::config::Config;
     use ratatui::Terminal;
+    use ratatui::backend::Backend;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
@@ -371,6 +372,32 @@ mod tests {
     }
 
     #[test]
+    fn test_render_prompting_mode_with_scrollbar() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(Mode::Prompting);
+        app.input.buffer = (0..30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.input.cursor = app.input.buffer.len();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+
+        assert!(text.contains('█'));
+        Ok(())
+    }
+
+    #[test]
     fn test_render_confirming_kill_mode() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -451,6 +478,28 @@ mod tests {
     }
 
     #[test]
+    fn test_render_status_bar_shows_error_when_not_in_modal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.ui.last_error = Some("boom".to_string());
+        app.mode = Mode::Normal;
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+        assert!(text.contains("Error: boom"));
+        Ok(())
+    }
+
+    #[test]
     fn test_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -516,6 +565,57 @@ mod tests {
     }
 
     #[test]
+    fn test_render_preview_focused_sets_cursor_position_simple()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::layout::Position;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(Mode::PreviewFocused);
+        app.ui.preview_content = (0..10)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.ui.preview_cursor_position = Some((3, 4, false));
+        app.ui.preview_pane_size = Some((54, 50));
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let cursor = terminal.backend_mut().get_cursor_position()?;
+        assert_eq!(cursor, Position { x: 28, y: 6 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_preview_focused_sets_cursor_position_with_scroll()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::layout::Position;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(Mode::PreviewFocused);
+        app.ui.preview_content = (0..50)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.ui.preview_scroll = 16;
+        app.ui.preview_cursor_position = Some((7, 5, false));
+        app.ui.preview_pane_size = Some((54, 20));
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let cursor = terminal.backend_mut().get_cursor_position()?;
+        assert_eq!(cursor, Position { x: 32, y: 21 });
+        Ok(())
+    }
+
+    #[test]
     fn test_render_diff_with_scroll() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -555,6 +655,75 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_agent_list_scrollbar_and_hierarchy_indicators()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend)?;
+
+        let config = create_test_config();
+        let mut storage = Storage::new();
+
+        let mut expanded_root = create_test_agent("expanded-root", Status::Running);
+        expanded_root.collapsed = false;
+        let expanded_root_id = expanded_root.id;
+        let expanded_root_mux_session = expanded_root.mux_session.clone();
+        storage.add(expanded_root);
+
+        storage.add(Agent::new_child(
+            "child-visible".to_string(),
+            "echo".to_string(),
+            "test".to_string(),
+            PathBuf::from("/tmp/tenex-render-test-child-visible"),
+            None,
+            crate::agent::ChildConfig {
+                parent_id: expanded_root_id,
+                mux_session: expanded_root_mux_session,
+                window_index: 1,
+            },
+        ));
+
+        let collapsed_root = create_test_agent("collapsed-root", Status::Running);
+        let collapsed_root_id = collapsed_root.id;
+        let collapsed_root_mux_session = collapsed_root.mux_session.clone();
+        storage.add(collapsed_root);
+
+        storage.add(Agent::new_child(
+            "child-hidden".to_string(),
+            "echo".to_string(),
+            "test".to_string(),
+            PathBuf::from("/tmp/tenex-render-test-child-hidden"),
+            None,
+            crate::agent::ChildConfig {
+                parent_id: collapsed_root_id,
+                mux_session: collapsed_root_mux_session,
+                window_index: 1,
+            },
+        ));
+
+        for i in 0..30 {
+            storage.add(create_test_agent(&format!("agent-{i:02}"), Status::Running));
+        }
+
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.ui.agent_list_scroll = 0;
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+
+        assert!(text.contains('░'));
+        assert!(text.contains('▼'));
+        assert!(text.contains('▶'));
         Ok(())
     }
 

@@ -129,3 +129,89 @@ fn apply_modifier(base: &[u8], param: u8) -> Vec<u8> {
 
     base.to_vec()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::Storage;
+    use crate::app::{App, Mode, Settings};
+    use crate::config::Config;
+
+    #[test]
+    fn test_handle_preview_focused_mode_ctrl_q_exits() {
+        let mut app = App::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+        app.mode = Mode::PreviewFocused;
+        let mut batched_keys = Vec::new();
+
+        handle_preview_focused_mode(
+            &mut app,
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+            &mut batched_keys,
+        );
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(batched_keys.is_empty());
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_char_variants() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Char('a'), KeyModifiers::NONE).as_deref(),
+            Some("a")
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Char('a'), KeyModifiers::CONTROL)
+                .map(std::string::String::into_bytes),
+            Some(vec![0x01])
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Char('a'), KeyModifiers::ALT)
+                .map(std::string::String::into_bytes),
+            Some(vec![0x1b, b'a'])
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT
+            )
+            .map(std::string::String::into_bytes),
+            Some(vec![0x1b, 0x01])
+        );
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_applies_modifiers() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Up, KeyModifiers::CONTROL).as_deref(),
+            Some("\u{1b}[1;5A")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Up, KeyModifiers::ALT).as_deref(),
+            Some("\u{1b}[1;3A")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Up, KeyModifiers::CONTROL | KeyModifiers::ALT)
+                .as_deref(),
+            Some("\u{1b}[1;7A")
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(1), KeyModifiers::CONTROL).as_deref(),
+            Some("\u{1b}[1;5P")
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::PageUp, KeyModifiers::ALT).as_deref(),
+            Some("\u{1b}[5;3~")
+        );
+    }
+}
