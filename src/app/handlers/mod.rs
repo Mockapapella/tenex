@@ -43,6 +43,10 @@ impl Actions {
     ///
     /// Returns an error if the action fails
     pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
+        if app.mode == Mode::Normal {
+            return crate::action::dispatch_normal_mode(app, self, action);
+        }
+
         match action {
             // Mode entry actions
             Action::NewAgent => app.enter_mode(Mode::Creating),
