@@ -1,6 +1,6 @@
 [alias]
 # 100% lines + functions, coverage profile, across the workspace.
-cov = "llvm-cov --workspace --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1"
+cov = "llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1"
 
 # "Do everything the LLM must pass" entrypoint (used in CI).
 ci = ["check", "--all-targets", "--all-features", "--workspace"]

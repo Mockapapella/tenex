@@ -2,15 +2,15 @@ repos:
   - repo: local
     hooks:
       - id: cargo-fmt
-        name: cargo fmt
-        entry: bash -c 'cargo fmt --all && git add -u'
+        name: cargo fmt --check
+        entry: cargo fmt --all -- --check
         language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-clippy
-        name: cargo clippy (all targets, all features)
-        entry: cargo clippy --all-targets --all-features --workspace
+        name: cargo clippy (all targets, all features, deny warnings)
+        entry: cargo clippy --all-targets --all-features --workspace -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
