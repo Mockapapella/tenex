@@ -4,6 +4,7 @@ mod agent;
 mod confirm;
 mod git;
 mod misc;
+mod modal;
 mod navigation;
 mod picker;
 mod text_input;
@@ -12,6 +13,9 @@ pub use agent::*;
 pub use confirm::*;
 pub use git::*;
 pub use misc::*;
+#[cfg(test)]
+pub(crate) use modal::help_max_scroll;
+pub use modal::{HalfPageDownAction, HalfPageUpAction, PageDownAction, PageUpAction};
 pub use navigation::*;
 pub use picker::*;
 pub use text_input::*;
@@ -21,9 +25,10 @@ use crate::config::Action as KeyAction;
 use crate::state::{
     BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
     ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode, CustomAgentCommandMode,
-    KeyboardRemapPromptMode, MergeBranchSelectorMode, ModeUnion, ModelSelectorMode, NormalMode,
-    PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode,
-    ReviewChildCountMode, ReviewInfoMode, ScrollingMode, TerminalPromptMode, UpdatePromptMode,
+    ErrorModalMode, HelpMode, KeyboardRemapPromptMode, MergeBranchSelectorMode, ModeUnion,
+    ModelSelectorMode, NormalMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode,
+    RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode, SuccessModalMode,
+    TerminalPromptMode, UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
@@ -144,6 +149,67 @@ pub fn dispatch_scrolling_mode(app: &mut App, actions: Actions, action: KeyActio
         KeyAction::Confirm | KeyAction::UnfocusPreview => ScrollingMode.into(),
     };
 
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `HelpMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_help_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match (code, modifiers) {
+        (KeyCode::Up, _) => ScrollUpAction.execute(HelpMode, &mut app_data)?,
+        (KeyCode::Down, _) => ScrollDownAction.execute(HelpMode, &mut app_data)?,
+        (KeyCode::PageUp, _) => PageUpAction.execute(HelpMode, &mut app_data)?,
+        (KeyCode::PageDown, _) => PageDownAction.execute(HelpMode, &mut app_data)?,
+        (KeyCode::Char('u'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+            HalfPageUpAction.execute(HelpMode, &mut app_data)?
+        }
+        (KeyCode::Char('d'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+            HalfPageDownAction.execute(HelpMode, &mut app_data)?
+        }
+        (KeyCode::Char('g') | KeyCode::Home, _) => {
+            ScrollTopAction.execute(HelpMode, &mut app_data)?
+        }
+        (KeyCode::Char('G') | KeyCode::End, _) => {
+            ScrollBottomAction.execute(HelpMode, &mut app_data)?
+        }
+        _ => DismissAction.execute(HelpMode, &mut app_data)?,
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ErrorModalMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_error_modal_mode(app: &mut App, actions: Actions, message: String) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+    let next = DismissAction.execute(ErrorModalMode { message }, &mut app_data)?;
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `SuccessModalMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_success_modal_mode(app: &mut App, actions: Actions, message: String) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+    let next = DismissAction.execute(SuccessModalMode { message }, &mut app_data)?;
     next.apply(app_data.app);
     Ok(())
 }

@@ -1,8 +1,8 @@
 use crate::action::{CancelAction, ValidIn};
-use crate::app::{Actions, App, AppData, Mode};
+use crate::app::{Actions, App, AppData};
 use crate::state::{
-    BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode, ModeUnion,
-    PromptingMode, ReconnectPromptMode, TerminalPromptMode,
+    BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode, ErrorModalMode,
+    ModeUnion, PromptingMode, ReconnectPromptMode, TerminalPromptMode,
 };
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -1053,9 +1053,10 @@ impl ValidIn<CreatingMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }
@@ -1084,9 +1085,10 @@ impl ValidIn<PromptingMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }
@@ -1117,9 +1119,10 @@ impl ValidIn<ChildPromptMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }
@@ -1149,9 +1152,10 @@ impl ValidIn<BroadcastingMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }
@@ -1181,9 +1185,10 @@ impl ValidIn<ReconnectPromptMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }
@@ -1214,9 +1219,10 @@ impl ValidIn<TerminalPromptMode> for SubmitAction {
                     Ok(ModeUnion::Legacy(app_data.mode.clone()))
                 }
             }
-            Err(err) => Ok(ModeUnion::Legacy(Mode::ErrorModal(format!(
-                "Failed: {err:#}"
-            )))),
+            Err(err) => Ok(ErrorModalMode {
+                message: format!("Failed: {err:#}"),
+            }
+            .into()),
         }
     }
 }

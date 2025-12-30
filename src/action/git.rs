@@ -2,7 +2,8 @@ use crate::action::ValidIn;
 use crate::app::{Actions, AppData, Mode};
 use crate::git;
 use crate::state::{
-    ConfirmPushForPRMode, ConfirmPushMode, ModeUnion, NormalMode, RenameBranchMode, ScrollingMode,
+    ConfirmPushForPRMode, ConfirmPushMode, ErrorModalMode, ModeUnion, NormalMode, RenameBranchMode,
+    ScrollingMode,
 };
 use anyhow::{Context, Result};
 
@@ -159,9 +160,10 @@ impl ValidIn<NormalMode> for RebaseAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
-            return Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "No agent selected. Select an agent first to rebase.".to_string(),
-            )));
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to rebase.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;
@@ -185,9 +187,10 @@ impl ValidIn<ScrollingMode> for RebaseAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
-            return Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "No agent selected. Select an agent first to rebase.".to_string(),
-            )));
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to rebase.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;
@@ -215,9 +218,10 @@ impl ValidIn<NormalMode> for MergeAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
-            return Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "No agent selected. Select an agent first to merge.".to_string(),
-            )));
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to merge.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;
@@ -241,9 +245,10 @@ impl ValidIn<ScrollingMode> for MergeAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
-            return Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "No agent selected. Select an agent first to merge.".to_string(),
-            )));
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to merge.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;

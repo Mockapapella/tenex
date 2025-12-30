@@ -60,11 +60,6 @@ pub fn handle_merge_branch_selector_mode(
     crate::action::dispatch_merge_branch_selector_mode(app, action_handler, code)
 }
 
-/// Handle key events in `SuccessModal` mode (any key dismisses)
-pub fn handle_success_modal_mode(app: &mut App) {
-    app.dismiss_success();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,17 +390,6 @@ mod tests {
         app.mode = Mode::MergeBranchSelector;
         handle_merge_branch_selector_mode(&mut app, Actions::new(), KeyCode::Tab)?;
         assert_eq!(app.mode, Mode::MergeBranchSelector);
-        Ok(())
-    }
-
-    // ========== SuccessModal mode tests ==========
-
-    #[test]
-    fn test_handle_success_modal_mode() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::SuccessModal("Test".to_string());
-        handle_success_modal_mode(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
         Ok(())
     }
 }

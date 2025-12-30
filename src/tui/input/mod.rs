@@ -11,7 +11,6 @@ mod preview_focused;
 mod text_input;
 
 use crate::app::{Actions, App, Mode};
-use crate::config::{Action as KeyAction, ActionGroup};
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -94,45 +93,13 @@ pub fn handle_key_event(
 
         // Help, error, and success modes
         Mode::Help => {
-            let max_scroll = help_max_scroll(app);
-            // Clamp any out-of-range scroll immediately (fixes "dead zone" when scroll is usize::MAX).
-            app.ui.help_scroll = app.ui.help_scroll.min(max_scroll);
-            match (code, modifiers) {
-                // Scroll help content (does not close help)
-                (KeyCode::Up, _) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(1).min(max_scroll);
-                }
-                (KeyCode::Down, _) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(1).min(max_scroll);
-                }
-                (KeyCode::PageUp, _) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(10).min(max_scroll);
-                }
-                (KeyCode::PageDown, _) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(10).min(max_scroll);
-                }
-                (KeyCode::Char('u'), mods) if mods.contains(KeyModifiers::CONTROL) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_sub(5).min(max_scroll);
-                }
-                (KeyCode::Char('d'), mods) if mods.contains(KeyModifiers::CONTROL) => {
-                    app.ui.help_scroll = app.ui.help_scroll.saturating_add(5).min(max_scroll);
-                }
-                (KeyCode::Char('g') | KeyCode::Home, _) => {
-                    app.ui.help_scroll = 0;
-                }
-                (KeyCode::Char('G') | KeyCode::End, _) => {
-                    app.ui.help_scroll = max_scroll;
-                }
-
-                // Any non-scroll key (Esc, q, ?, Enter, etc.) closes help
-                _ => app.exit_mode(),
-            }
+            crate::action::dispatch_help_mode(app, action_handler, code, modifiers)?;
         }
-        Mode::ErrorModal(_) => {
-            app.dismiss_error();
+        Mode::ErrorModal(message) => {
+            crate::action::dispatch_error_modal_mode(app, action_handler, message.clone())?;
         }
-        Mode::SuccessModal(_) => {
-            picker::handle_success_modal_mode(app);
+        Mode::SuccessModal(message) => {
+            crate::action::dispatch_success_modal_mode(app, action_handler, message.clone())?;
         }
 
         // Slash commands
@@ -156,46 +123,6 @@ pub fn handle_key_event(
         }
     }
     Ok(())
-}
-
-/// Compute the total number of lines in the help overlay content.
-///
-/// This is used for scroll normalization in Help mode.
-fn help_total_lines() -> usize {
-    let mut group_count = 0usize;
-    let mut last_group: Option<ActionGroup> = None;
-    for &action in KeyAction::ALL_FOR_HELP {
-        let group = action.group();
-        if Some(group) != last_group {
-            group_count = group_count.saturating_add(1);
-            last_group = Some(group);
-        }
-    }
-
-    // Content structure:
-    // - Header: 2 lines ("Keybindings" + blank)
-    // - Groups: each group adds a header line, and each transition adds an extra blank line
-    // - Actions: 1 line per action
-    // - Footer: blank line + 2 footer lines
-    KeyAction::ALL_FOR_HELP
-        .len()
-        .saturating_add(group_count.saturating_mul(2))
-        .saturating_add(4)
-}
-
-/// Compute the maximum scroll offset for the help overlay based on terminal height.
-fn help_max_scroll(app: &App) -> usize {
-    let total_lines = help_total_lines();
-
-    // The help overlay uses `frame.area().height.saturating_sub(4)` as its max height.
-    // `preview_dimensions` stores the preview inner height, which is also `frame_height - 4`.
-    let max_height = usize::from(app.ui.preview_dimensions.map_or(20, |(_, h)| h));
-    let min_height = 12usize.min(max_height);
-    let desired_height = total_lines.saturating_add(2);
-    let height = desired_height.min(max_height).max(min_height);
-
-    let visible_height = height.saturating_sub(2);
-    total_lines.saturating_sub(visible_height)
 }
 
 #[cfg(test)]
@@ -719,7 +646,7 @@ mod tests {
         app.mode = Mode::Help;
         app.ui.help_scroll = usize::MAX;
 
-        let max_scroll = help_max_scroll(&app);
+        let max_scroll = crate::action::help_max_scroll(&app);
         assert_ne!(max_scroll, 0, "help should be scrollable for this test");
 
         let action_handler = Actions::new();
@@ -860,7 +787,7 @@ mod tests {
         )?;
 
         assert_eq!(app.mode, Mode::Help);
-        let max_scroll = help_max_scroll(&app);
+        let max_scroll = crate::action::help_max_scroll(&app);
         assert_eq!(app.ui.help_scroll, max_scroll);
         Ok(())
     }
@@ -903,7 +830,7 @@ mod tests {
         )?;
 
         assert_eq!(app.mode, Mode::Help);
-        let max_scroll = help_max_scroll(&app);
+        let max_scroll = crate::action::help_max_scroll(&app);
         assert_eq!(app.ui.help_scroll, max_scroll);
         Ok(())
     }

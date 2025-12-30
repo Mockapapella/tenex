@@ -10,6 +10,8 @@ mod confirm_push_for_pr;
 mod confirming;
 mod creating;
 mod custom_agent_cmd;
+mod error_modal;
+mod help;
 mod keyboard_remap_prompt;
 mod merge_branch_selector;
 mod model_selector;
@@ -21,6 +23,7 @@ mod rename_branch;
 mod review_child_count;
 mod review_info;
 mod scrolling;
+mod success_modal;
 mod terminal_prompt;
 mod update_prompt;
 mod update_requested;
@@ -35,6 +38,8 @@ pub use confirm_push_for_pr::ConfirmPushForPRMode;
 pub use confirming::ConfirmingMode;
 pub use creating::CreatingMode;
 pub use custom_agent_cmd::CustomAgentCommandMode;
+pub use error_modal::ErrorModalMode;
+pub use help::HelpMode;
 pub use keyboard_remap_prompt::KeyboardRemapPromptMode;
 pub use merge_branch_selector::MergeBranchSelectorMode;
 pub use model_selector::ModelSelectorMode;
@@ -46,6 +51,7 @@ pub use rename_branch::RenameBranchMode;
 pub use review_child_count::ReviewChildCountMode;
 pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
+pub use success_modal::SuccessModalMode;
 pub use terminal_prompt::TerminalPromptMode;
 pub use update_prompt::UpdatePromptMode;
 pub use update_requested::UpdateRequestedMode;
@@ -106,6 +112,12 @@ pub enum ModeUnion {
     UpdatePrompt(UpdatePromptMode),
     /// Update requested mode (input ignored).
     UpdateRequested(UpdateRequestedMode),
+    /// Help overlay mode.
+    Help(HelpMode),
+    /// Error modal mode.
+    ErrorModal(ErrorModalMode),
+    /// Success modal mode.
+    SuccessModal(SuccessModalMode),
     /// Transition to a legacy runtime `Mode`.
     Legacy(Mode),
 }
@@ -241,6 +253,19 @@ impl ModeUnion {
             Self::UpdateRequested(state) => match &app.mode {
                 Mode::UpdateRequested(info) if info == &state.info => {}
                 _ => app.enter_mode(Mode::UpdateRequested(state.info)),
+            },
+            Self::Help(_) => {
+                if app.mode != Mode::Help {
+                    app.enter_mode(Mode::Help);
+                }
+            }
+            Self::ErrorModal(state) => match &app.mode {
+                Mode::ErrorModal(message) if message == &state.message => {}
+                _ => app.set_error(state.message),
+            },
+            Self::SuccessModal(state) => match &app.mode {
+                Mode::SuccessModal(message) if message == &state.message => {}
+                _ => app.show_success(state.message),
             },
             Self::Legacy(mode) => {
                 if app.mode == mode {
@@ -405,5 +430,23 @@ impl From<UpdatePromptMode> for ModeUnion {
 impl From<UpdateRequestedMode> for ModeUnion {
     fn from(state: UpdateRequestedMode) -> Self {
         Self::UpdateRequested(state)
+    }
+}
+
+impl From<HelpMode> for ModeUnion {
+    fn from(_: HelpMode) -> Self {
+        Self::Help(HelpMode)
+    }
+}
+
+impl From<ErrorModalMode> for ModeUnion {
+    fn from(state: ErrorModalMode) -> Self {
+        Self::ErrorModal(state)
+    }
+}
+
+impl From<SuccessModalMode> for ModeUnion {
+    fn from(state: SuccessModalMode) -> Self {
+        Self::SuccessModal(state)
     }
 }

@@ -1,6 +1,6 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, ConfirmAction, Mode};
-use crate::state::{ConfirmingMode, ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{ConfirmingMode, HelpMode, ModeUnion, NormalMode, ScrollingMode};
 use anyhow::Result;
 
 /// Normal-mode action: open the help overlay.
@@ -12,7 +12,7 @@ impl ValidIn<NormalMode> for HelpAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.ui.help_scroll = 0;
-        Ok(ModeUnion::Legacy(Mode::Help))
+        Ok(HelpMode.into())
     }
 }
 
@@ -21,7 +21,7 @@ impl ValidIn<ScrollingMode> for HelpAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.ui.help_scroll = 0;
-        Ok(ModeUnion::Legacy(Mode::Help))
+        Ok(HelpMode.into())
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, ConfirmAction, Mode};
 use crate::git;
-use crate::state::{ConfirmingMode, ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{ConfirmingMode, ErrorModalMode, ModeUnion, NormalMode, ScrollingMode};
 use anyhow::{Context, Result};
 
 /// Normal-mode action: enter agent creation mode.
@@ -188,9 +188,10 @@ impl ValidIn<NormalMode> for SynthesizeAction {
             }
             .into())
         } else {
-            Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "Selected agent has no children to synthesize".to_string(),
-            )))
+            Ok(ErrorModalMode {
+                message: "Selected agent has no children to synthesize".to_string(),
+            }
+            .into())
         }
     }
 }
@@ -209,9 +210,10 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
             }
             .into())
         } else {
-            Ok(ModeUnion::Legacy(Mode::ErrorModal(
-                "Selected agent has no children to synthesize".to_string(),
-            )))
+            Ok(ErrorModalMode {
+                message: "Selected agent has no children to synthesize".to_string(),
+            }
+            .into())
         }
     }
 }
