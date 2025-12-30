@@ -2,7 +2,7 @@
 
 use crate::action::ValidIn;
 use crate::app::AppData;
-use crate::state::{ModeUnion, PreviewFocusedMode};
+use crate::state::{AppMode, PreviewFocusedMode};
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -22,24 +22,24 @@ pub struct ForwardKeystrokeAction<'a> {
 }
 
 impl ValidIn<PreviewFocusedMode> for UnfocusPreviewAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: PreviewFocusedMode,
-        _app_data: &mut AppData<'_>,
+        _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        Ok(ModeUnion::normal())
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<PreviewFocusedMode> for ForwardKeystrokeAction<'_> {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: PreviewFocusedMode,
-        _app_data: &mut AppData<'_>,
+        _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
         if let Some(sequence) = keycode_to_input_sequence(self.code, self.modifiers) {
             self.batched_keys.push(sequence);

@@ -22,7 +22,11 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
     let handler = Actions::new();
 
     // Verify no agents exist initially
-    assert_eq!(app.storage.len(), 0, "Storage should be empty initially");
+    assert_eq!(
+        app.data.storage.len(),
+        0,
+        "Storage should be empty initially"
+    );
 
     // Create a worktree manually to simulate an existing worktree from a previous session
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -39,13 +43,18 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
 
     // Verify an agent was created
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         1,
         "Should have created one agent for the existing worktree"
     );
 
     // Verify the agent has the correct properties
-    let agent = app.storage.iter().next().ok_or("Should have an agent")?;
+    let agent = app
+        .data
+        .storage
+        .iter()
+        .next()
+        .ok_or("Should have an agent")?;
     assert_eq!(
         agent.branch, branch_name,
         "Agent branch should match the worktree branch"
@@ -91,17 +100,21 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Create an agent for this worktree first (simulating it already being tracked)
-    handler.create_agent(&mut app, "existing-agent", None)?;
+    let next = handler.create_agent(&mut app.data, "existing-agent", None)?;
+    app.apply_mode(next);
 
     // Handle potential worktree conflict by reconnecting
     if matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::WorktreeConflict,
+        })
     ) {
-        handler.reconnect_to_worktree(&mut app)?;
+        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        app.apply_mode(next);
     }
 
-    let initial_count = app.storage.len();
+    let initial_count = app.data.storage.len();
     assert!(initial_count > 0, "Should have at least one agent");
 
     // Call auto_connect_worktrees - should not create duplicates
@@ -109,7 +122,7 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
 
     // Verify no new agents were created
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         initial_count,
         "Should not create duplicate agents"
     );
@@ -149,7 +162,7 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
 
     // Verify no agents were created (wrong prefix)
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         0,
         "Should not create agents for worktrees with different prefix"
     );
@@ -198,13 +211,13 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
 
     // Verify all three agents were created
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         3,
         "Should have created agents for all three worktrees"
     );
 
     // Verify each branch has a corresponding agent
-    let branches: Vec<_> = app.storage.iter().map(|a| a.branch.clone()).collect();
+    let branches: Vec<_> = app.data.storage.iter().map(|a| a.branch.clone()).collect();
     assert!(branches.contains(&branch1), "Should have agent for branch1");
     assert!(branches.contains(&branch2), "Should have agent for branch2");
     assert!(branches.contains(&branch3), "Should have agent for branch3");
@@ -251,19 +264,28 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     let handler = Actions::new();
 
     // Step 1: Create an agent
-    handler.create_agent(&mut app, "will-be-deleted", None)?;
+    let next = handler.create_agent(&mut app.data, "will-be-deleted", None)?;
+    app.apply_mode(next);
 
     // Handle potential worktree conflict
     if matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::WorktreeConflict,
+        })
     ) {
-        handler.reconnect_to_worktree(&mut app)?;
+        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        app.apply_mode(next);
     }
 
-    assert_eq!(app.storage.len(), 1, "Should have one agent after creation");
+    assert_eq!(
+        app.data.storage.len(),
+        1,
+        "Should have one agent after creation"
+    );
 
     let branch_name = app
+        .data
         .storage
         .iter()
         .next()
@@ -283,12 +305,19 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     app.select_next();
 
     // Enter confirming mode and confirm the kill
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Kill,
+        }
+        .into(),
+    );
     handler.handle_action(&mut app, tenex::config::Action::Confirm)?;
 
-    assert_eq!(app.storage.len(), 0, "Should have no agents after deletion");
+    assert_eq!(
+        app.data.storage.len(),
+        0,
+        "Should have no agents after deletion"
+    );
 
     // Verify the worktree was removed
     // Re-open the repo to get fresh state
@@ -308,7 +337,7 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
 
     // Step 4: Verify the deleted agent does NOT reappear
     assert_eq!(
-        app2.storage.len(),
+        app2.data.storage.len(),
         0,
         "Deleted agent should NOT reappear after restart - worktree should have been cleaned up"
     );

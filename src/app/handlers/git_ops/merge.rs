@@ -1,11 +1,13 @@
 //! Merge flow (branch selector + merge execution).
 
 use crate::agent::{Agent, ChildConfig};
-use crate::app::state::App;
 use crate::git;
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
+
+use crate::app::AppData;
+use crate::state::{AppMode, ErrorModalMode, MergeBranchSelectorMode, SuccessModalMode};
 
 use super::super::Actions;
 
@@ -18,10 +20,16 @@ enum MergeResult {
 
 impl Actions {
     /// Start the merge flow - show branch selector (Ctrl+m or Ctrl+n)
-    pub(crate) fn merge_branch(app: &mut App) -> Result<()> {
-        let Some(agent) = app.selected_agent() else {
-            app.set_error("No agent selected. Select an agent first to merge.");
-            return Ok(());
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the git repository cannot be opened or branches cannot be listed.
+    pub fn merge_branch(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to merge.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;
@@ -35,8 +43,9 @@ impl Actions {
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
-        app.start_merge(agent_id, current_branch, branches);
-        Ok(())
+        app_data.git_op.start_merge(agent_id, current_branch);
+        app_data.review.start(branches);
+        Ok(MergeBranchSelectorMode.into())
     }
 
     /// Execute the merge operation
@@ -48,19 +57,28 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the merge operation fails
-    pub fn execute_merge(app: &mut App) -> Result<()> {
-        let agent_id = app
-            .git_op
-            .agent_id
-            .ok_or_else(|| anyhow::anyhow!("No agent ID for merge"))?;
+    pub fn execute_merge(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent_id) = app_data.git_op.agent_id else {
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: "No agent ID for merge".to_string(),
+            }
+            .into());
+        };
 
         // Verify agent exists
-        if app.storage.get(agent_id).is_none() {
-            anyhow::bail!("Agent not found");
+        if app_data.storage.get(agent_id).is_none() {
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: "Agent not found".to_string(),
+            }
+            .into());
         }
 
-        let source_branch = app.git_op.branch_name.clone(); // Agent's branch (e.g., tenex/feature)
-        let target_branch = app.git_op.target_branch.clone(); // Branch to merge into (e.g., master)
+        let source_branch = app_data.git_op.branch_name.clone(); // Agent's branch (e.g., tenex/feature)
+        let target_branch = app_data.git_op.target_branch.clone(); // Branch to merge into (e.g., master)
 
         debug!(
             source = %source_branch,
@@ -70,9 +88,14 @@ impl Actions {
 
         // Check if target branch has a worktree
         if let Some(worktree_path) = Self::find_worktree_for_branch(&target_branch)? {
-            Self::execute_merge_in_worktree(app, &source_branch, &target_branch, &worktree_path)
+            Self::execute_merge_in_worktree(
+                app_data,
+                &source_branch,
+                &target_branch,
+                &worktree_path,
+            )
         } else {
-            Self::execute_merge_in_main_repo(app, &source_branch, &target_branch)
+            Self::execute_merge_in_main_repo(app_data, &source_branch, &target_branch)
         }
     }
 
@@ -102,11 +125,11 @@ impl Actions {
 
     /// Execute merge directly in a worktree (when target branch is checked out there)
     fn execute_merge_in_worktree(
-        app: &mut App,
+        app_data: &mut AppData,
         source_branch: &str,
         target_branch: &str,
         worktree_path: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<AppMode> {
         debug!(
             source = %source_branch,
             target = %target_branch,
@@ -139,13 +162,12 @@ impl Actions {
                     "Merge has conflicts - spawning terminal"
                 );
 
-                Self::spawn_merge_conflict_terminal_in_worktree(
-                    app,
+                return Self::spawn_merge_conflict_terminal_in_worktree(
+                    app_data,
                     source_branch,
                     target_branch,
                     worktree_path,
-                )?;
-                return Ok(());
+                );
             }
 
             // Show error with both stdout and stderr for context
@@ -156,10 +178,12 @@ impl Actions {
             } else {
                 "Unknown error".to_string()
             };
-            app.set_error(format!("Merge failed: {error_msg}"));
-            app.clear_git_op_state();
-            app.clear_review_state();
-            return Ok(());
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: format!("Merge failed: {error_msg}"),
+            }
+            .into());
         }
 
         info!(
@@ -167,22 +191,23 @@ impl Actions {
             target = %target_branch,
             "Merge successful in worktree"
         );
-        app.show_success(format!("Merged {source_branch} into {target_branch}"));
-        app.clear_git_op_state();
-        app.clear_review_state();
-
-        Ok(())
+        app_data.git_op.clear();
+        app_data.review.clear();
+        Ok(SuccessModalMode {
+            message: format!("Merged {source_branch} into {target_branch}"),
+        }
+        .into())
     }
 
     /// Spawn a terminal for merge conflict resolution in a worktree
     fn spawn_merge_conflict_terminal_in_worktree(
-        app: &mut App,
+        app_data: &mut AppData,
         source_branch: &str,
         target_branch: &str,
         worktree_path: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<AppMode> {
         // Find the agent that owns this worktree
-        let owner_agent = app
+        let owner_agent = app_data
             .storage
             .agents
             .iter()
@@ -190,7 +215,7 @@ impl Actions {
             .map(|a| a.id);
 
         if let Some(root_id) = owner_agent {
-            let root = app
+            let root = app_data
                 .storage
                 .get(root_id)
                 .ok_or_else(|| anyhow::anyhow!("Root agent not found"))?;
@@ -201,7 +226,7 @@ impl Actions {
             let title = format!("Merge Conflict: {source_branch} -> {target_branch}");
 
             // Reserve a window index
-            let window_index = app.storage.reserve_window_indices(root_id);
+            let window_index = app_data.storage.reserve_window_indices(root_id);
 
             // Create child agent marked as terminal
             let mut terminal = Agent::new_child(
@@ -224,7 +249,7 @@ impl Actions {
                 session_manager.create_window(&root_session, &title, worktree_path, None)?;
 
             // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
+            if let Some((width, height)) = app_data.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(&root_session, actual_index);
                 let _ = session_manager.resize_window(&window_target, width, height);
             }
@@ -236,37 +261,36 @@ impl Actions {
             let window_target = SessionManager::window_target(&root_session, actual_index);
             session_manager.send_keys_and_submit(&window_target, "git status")?;
 
-            app.storage.add(terminal);
+            app_data.storage.add(terminal);
 
             // Expand the parent to show the new terminal
-            if let Some(parent) = app.storage.get_mut(root_id) {
+            if let Some(parent) = app_data.storage.get_mut(root_id) {
                 parent.collapsed = false;
             }
 
-            app.storage.save()?;
+            app_data.storage.save()?;
 
-            app.set_status(format!("Opened terminal for conflict resolution: {title}"));
+            app_data.set_status(format!("Opened terminal for conflict resolution: {title}"));
         } else {
             // No agent owns this worktree, just show a message
-            app.set_status(format!(
+            app_data.set_status(format!(
                 "Merge conflict in {target_branch}. Resolve in: {}",
                 worktree_path.display()
             ));
         }
 
-        app.clear_git_op_state();
-        app.clear_review_state();
-        app.exit_mode();
+        app_data.git_op.clear();
+        app_data.review.clear();
 
-        Ok(())
+        Ok(AppMode::normal())
     }
 
     /// Execute merge from main repo (when target branch has no worktree)
     fn execute_merge_in_main_repo(
-        app: &mut App,
+        app_data: &mut AppData,
         source_branch: &str,
         target_branch: &str,
-    ) -> Result<()> {
+    ) -> Result<AppMode> {
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
 
         debug!(
@@ -282,10 +306,12 @@ impl Actions {
         // Checkout target branch
         if !Self::git_checkout(&repo_path, target_branch)? {
             Self::restore_git_state(&repo_path, did_stash);
-            app.set_error(format!("Failed to checkout {target_branch}"));
-            app.clear_git_op_state();
-            app.clear_review_state();
-            return Ok(());
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: format!("Failed to checkout {target_branch}"),
+            }
+            .into());
         }
 
         // Attempt merge
@@ -297,31 +323,36 @@ impl Actions {
             did_stash,
         );
 
-        match merge_result {
+        let next = match merge_result {
             MergeResult::Success => {
                 Self::restore_git_state(&repo_path, did_stash);
                 info!(source = %source_branch, target = %target_branch, "Merge successful");
-                app.show_success(format!("Merged {source_branch} into {target_branch}"));
+                SuccessModalMode {
+                    message: format!("Merged {source_branch} into {target_branch}"),
+                }
+                .into()
             }
             MergeResult::Conflict => {
-                // Stay on target branch, don't restore stash - user needs to resolve
-                Self::spawn_conflict_terminal(
-                    app,
+                // Stay on target branch, don't restore stash - user needs to resolve.
+                return Self::spawn_conflict_terminal(
+                    app_data,
                     &format!("Merge Conflict: {source_branch} -> {target_branch}"),
                     "git status",
-                )?;
-                return Ok(());
+                );
             }
             MergeResult::Failed(error_msg) => {
                 Self::git_checkout(&repo_path, &original_branch)?;
                 Self::restore_git_state(&repo_path, did_stash);
-                app.set_error(format!("Merge failed: {error_msg}"));
+                ErrorModalMode {
+                    message: format!("Merge failed: {error_msg}"),
+                }
+                .into()
             }
-        }
+        };
 
-        app.clear_git_op_state();
-        app.clear_review_state();
-        Ok(())
+        app_data.git_op.clear();
+        app_data.review.clear();
+        Ok(next)
     }
 
     /// Stash any uncommitted changes

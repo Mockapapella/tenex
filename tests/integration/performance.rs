@@ -68,7 +68,7 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
         tenex::app::Settings::default(),
         false,
     );
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Sync agent status - should remove agents without sessions
     let handler = Actions::new();
@@ -76,13 +76,17 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
 
     // Only agent1 should remain (the one with a real session).
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         1,
         "Expected 1 agent, got {}. Remaining: {:?}",
-        app.storage.len(),
-        app.storage.iter().map(|a| &a.title).collect::<Vec<_>>()
+        app.data.storage.len(),
+        app.data
+            .storage
+            .iter()
+            .map(|a| &a.title)
+            .collect::<Vec<_>>()
     );
-    assert!(app.storage.iter().any(|a| a.title == "agent1"));
+    assert!(app.data.storage.iter().any(|a| a.title == "agent1"));
 
     // Cleanup the session we created
     let _ = manager.kill(&agent1_session);
@@ -201,12 +205,12 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
     // Children share the same session, so they also remain
     // (The optimization is about *how* we check, not *what* we check)
     assert!(
-        !app.storage.is_empty(),
+        !app.data.storage.is_empty(),
         "Root should remain since its session exists. Got {} agents.",
-        app.storage.len()
+        app.data.storage.len()
     );
     assert!(
-        app.storage.iter().any(|a| a.id == root_id),
+        app.data.storage.iter().any(|a| a.id == root_id),
         "Root agent should be in storage"
     );
 

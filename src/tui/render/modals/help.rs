@@ -139,7 +139,7 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
 
     let visible_height = usize::from(area.height.saturating_sub(2));
     let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll = app.ui.help_scroll.min(max_scroll);
+    let scroll = app.data.ui.help_scroll.min(max_scroll);
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(help_text)

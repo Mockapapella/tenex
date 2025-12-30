@@ -3,9 +3,11 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
+use tenex::AppMode;
 use tenex::agent::Storage;
-use tenex::app::{Mode, Settings};
+use tenex::app::Settings;
 use tenex::config::Config;
+use tenex::state::UpdatePromptMode;
 
 /// Terminal multiplexer for AI coding agents
 #[derive(Parser)]
@@ -162,10 +164,10 @@ fn run_interactive(
         app.set_error(message);
     }
 
-    if matches!(app.mode, Mode::Normal) {
+    if matches!(&app.mode, AppMode::Normal(_)) {
         match tenex::update::check_for_update() {
             Ok(Some(info)) => {
-                app.mode = Mode::UpdatePrompt(info);
+                app.apply_mode(UpdatePromptMode { info }.into());
             }
             Ok(None) => {}
             Err(e) => {

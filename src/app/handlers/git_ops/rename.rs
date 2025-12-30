@@ -1,9 +1,11 @@
 //! Git rename flow (agents/branches/worktrees/mux sessions).
 
-use crate::app::state::App;
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
+
+use crate::app::AppData;
+use crate::state::{AppMode, ErrorModalMode, RenameBranchMode};
 
 use super::super::Actions;
 
@@ -12,8 +14,12 @@ impl Actions {
     ///
     /// For root agents: Renames branch (local + remote if exists) + agent title + mux session
     /// For sub-agents: Renames agent title + mux window only
-    pub(crate) fn rename_agent(app: &mut App) -> Result<()> {
-        let agent = app
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no agent is selected.
+    pub fn rename_agent(app_data: &mut AppData) -> Result<AppMode> {
+        let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
@@ -27,8 +33,12 @@ impl Actions {
             "Starting rename flow"
         );
 
-        app.start_rename(agent_id, current_name, is_root);
-        Ok(())
+        app_data
+            .git_op
+            .start_rename(agent_id, current_name.clone(), is_root);
+        app_data.input.buffer = current_name;
+        app_data.input.cursor = app_data.input.buffer.len();
+        Ok(RenameBranchMode.into())
     }
 
     /// Check if a remote branch exists
@@ -54,26 +64,32 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the rename operation fails
-    pub fn execute_rename(app: &mut App) -> Result<()> {
-        let agent_id = app
-            .git_op
-            .agent_id
-            .ok_or_else(|| anyhow::anyhow!("No agent ID for rename"))?;
+    pub fn execute_rename(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent_id) = app_data.git_op.agent_id else {
+            app_data.git_op.clear();
+            return Ok(ErrorModalMode {
+                message: "No agent ID for rename".to_string(),
+            }
+            .into());
+        };
 
         // Verify agent exists
-        if app.storage.get(agent_id).is_none() {
-            anyhow::bail!("Agent not found");
+        if app_data.storage.get(agent_id).is_none() {
+            app_data.git_op.agent_id = None;
+            return Ok(ErrorModalMode {
+                message: "Agent not found".to_string(),
+            }
+            .into());
         }
 
-        let old_name = app.git_op.original_branch.clone();
-        let new_name = app.git_op.branch_name.clone();
-        let is_root = app.git_op.is_root_rename;
+        let old_name = app_data.git_op.original_branch.clone();
+        let new_name = app_data.git_op.branch_name.clone();
+        let is_root = app_data.git_op.is_root_rename;
 
         if old_name == new_name {
-            app.set_status("Name unchanged");
-            app.clear_git_op_state();
-            app.exit_mode();
-            return Ok(());
+            app_data.set_status("Name unchanged");
+            app_data.git_op.clear();
+            return Ok(AppMode::normal());
         }
 
         debug!(
@@ -83,27 +99,34 @@ impl Actions {
             "Executing rename"
         );
 
-        if is_root {
+        let result = if is_root {
             // Root agent: rename branch + agent + mux session
-            Self::execute_root_rename(app, agent_id, &old_name, &new_name)?;
+            Self::execute_root_rename(app_data, agent_id, &old_name, &new_name)
         } else {
             // Sub-agent: rename agent title + mux window only
-            Self::execute_subagent_rename(app, agent_id, &new_name)?;
+            Self::execute_subagent_rename(app_data, agent_id, &new_name)
+        };
+
+        if let Err(err) = result {
+            app_data.git_op.clear();
+            return Ok(ErrorModalMode {
+                message: format!("Rename failed: {err:#}"),
+            }
+            .into());
         }
 
-        app.clear_git_op_state();
-        app.exit_mode();
-        Ok(())
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 
     /// Execute rename for a root agent (branch + agent + mux session + worktree path)
     fn execute_root_rename(
-        app: &mut App,
+        app_data: &mut AppData,
         agent_id: uuid::Uuid,
         old_name: &str,
         new_name: &str,
     ) -> Result<()> {
-        let agent = app
+        let agent = app_data
             .storage
             .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
@@ -113,8 +136,8 @@ impl Actions {
         let mux_session = agent.mux_session.clone();
 
         // Generate new branch name from new title
-        let new_branch = app.config.generate_branch_name(new_name);
-        let new_worktree_path = app.config.worktree_dir.join(&new_branch);
+        let new_branch = app_data.config.generate_branch_name(new_name);
+        let new_worktree_path = app_data.config.worktree_dir.join(&new_branch);
 
         // Check if remote branch exists before we start
         let remote_exists = Self::check_remote_branch_exists(&worktree_path, &old_branch)?;
@@ -128,8 +151,7 @@ impl Actions {
 
         if !rename_output.status.success() {
             let stderr = String::from_utf8_lossy(&rename_output.stderr);
-            app.set_error(format!("Failed to rename branch: {}", stderr.trim()));
-            return Ok(());
+            anyhow::bail!("Failed to rename branch: {}", stderr.trim());
         }
 
         // Move the worktree directory and update metadata
@@ -149,17 +171,17 @@ impl Actions {
 
         // Update agent records and mux session
         Self::update_agent_records(
-            app,
+            app_data,
             agent_id,
             new_name,
             &new_branch,
             &effective_worktree_path,
         )?;
-        Self::rename_mux_session_for_agent(app, agent_id, &mux_session, new_name)?;
+        Self::rename_mux_session_for_agent(app_data, agent_id, &mux_session, new_name)?;
 
         // Handle remote branch rename if needed
         Self::handle_remote_branch_rename(
-            app,
+            app_data,
             &effective_worktree_path,
             &old_branch,
             &new_branch,
@@ -256,38 +278,38 @@ impl Actions {
 
     /// Update agent records after rename
     fn update_agent_records(
-        app: &mut App,
+        app_data: &mut AppData,
         agent_id: uuid::Uuid,
         new_name: &str,
         new_branch: &str,
         new_worktree_path: &std::path::Path,
     ) -> Result<()> {
         // Update the agent's title, branch name, and worktree path
-        if let Some(agent) = app.storage.get_mut(agent_id) {
+        if let Some(agent) = app_data.storage.get_mut(agent_id) {
             agent.title = new_name.to_string();
             agent.branch = new_branch.to_string();
             agent.worktree_path = new_worktree_path.to_path_buf();
         }
 
         // Update all descendants' worktree_path
-        let descendant_ids: Vec<uuid::Uuid> = app
+        let descendant_ids: Vec<uuid::Uuid> = app_data
             .storage
             .descendants(agent_id)
             .iter()
             .map(|a| a.id)
             .collect();
         for desc_id in descendant_ids {
-            if let Some(desc) = app.storage.get_mut(desc_id) {
+            if let Some(desc) = app_data.storage.get_mut(desc_id) {
                 desc.worktree_path = new_worktree_path.to_path_buf();
             }
         }
 
-        app.storage.save()
+        app_data.storage.save()
     }
 
     /// Rename mux session and update agent records
     fn rename_mux_session_for_agent(
-        app: &mut App,
+        app_data: &mut AppData,
         agent_id: uuid::Uuid,
         old_session: &str,
         new_name: &str,
@@ -301,29 +323,29 @@ impl Actions {
         }
 
         // Update root agent's mux_session
-        if let Some(agent) = app.storage.get_mut(agent_id) {
+        if let Some(agent) = app_data.storage.get_mut(agent_id) {
             agent.mux_session.clone_from(&new_session_name);
         }
 
         // Update all descendants' mux_session
-        let descendant_ids: Vec<uuid::Uuid> = app
+        let descendant_ids: Vec<uuid::Uuid> = app_data
             .storage
             .descendants(agent_id)
             .iter()
             .map(|a| a.id)
             .collect();
         for desc_id in descendant_ids {
-            if let Some(desc) = app.storage.get_mut(desc_id) {
+            if let Some(desc) = app_data.storage.get_mut(desc_id) {
                 desc.mux_session.clone_from(&new_session_name);
             }
         }
 
-        app.storage.save()
+        app_data.storage.save()
     }
 
     /// Handle remote branch rename (delete old, push new)
     fn handle_remote_branch_rename(
-        app: &mut App,
+        app_data: &mut AppData,
         worktree_path: &std::path::Path,
         old_branch: &str,
         new_branch: &str,
@@ -337,7 +359,7 @@ impl Actions {
                 new_name = %new_name,
                 "Root agent renamed successfully (local only)"
             );
-            app.set_status(format!("Renamed: {old_name} → {new_name}"));
+            app_data.set_status(format!("Renamed: {old_name} → {new_name}"));
             return Ok(());
         }
 
@@ -360,19 +382,23 @@ impl Actions {
                 new_name = %new_name,
                 "Root agent renamed successfully"
             );
-            app.set_status(format!("Renamed: {old_name} → {new_name}"));
+            app_data.set_status(format!("Renamed: {old_name} → {new_name}"));
         } else {
             let stderr = String::from_utf8_lossy(&push_output.stderr);
             warn!(error = %stderr, "Failed to push renamed branch to remote");
-            app.set_status(format!("Renamed to {new_name} (remote push failed)"));
+            app_data.set_status(format!("Renamed to {new_name} (remote push failed)"));
         }
 
         Ok(())
     }
 
     /// Execute rename for a sub-agent (title + mux window only)
-    fn execute_subagent_rename(app: &mut App, agent_id: uuid::Uuid, new_name: &str) -> Result<()> {
-        let agent = app
+    fn execute_subagent_rename(
+        app_data: &mut AppData,
+        agent_id: uuid::Uuid,
+        new_name: &str,
+    ) -> Result<()> {
+        let agent = app_data
             .storage
             .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
@@ -382,10 +408,10 @@ impl Actions {
         let window_index = agent.window_index;
 
         // Update the agent's title
-        if let Some(agent) = app.storage.get_mut(agent_id) {
+        if let Some(agent) = app_data.storage.get_mut(agent_id) {
             agent.title = new_name.to_string();
         }
-        app.storage.save()?;
+        app_data.storage.save()?;
 
         // Rename mux window if agent has a window index
         if let Some(idx) = window_index
@@ -399,7 +425,7 @@ impl Actions {
             new_name = %new_name,
             "Sub-agent renamed successfully"
         );
-        app.set_status(format!("Renamed: {old_name} → {new_name}"));
+        app_data.set_status(format!("Renamed: {old_name} → {new_name}"));
 
         Ok(())
     }

@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::state::{App, Mode, WorktreeConflictInfo};
+use crate::app::{AppData, WorktreeConflictInfo};
+use crate::state::{AppMode, ConfirmAction, ConfirmingMode, ErrorModalMode};
 
 /// Configuration for spawning child agents
 pub struct SpawnConfig {
@@ -27,9 +28,9 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
-    pub fn spawn_children(self, app: &mut App, task: Option<&str>) -> Result<()> {
-        let count = app.spawn.child_count;
-        let parent_id = app.spawn.spawning_under;
+    pub fn spawn_children(self, app_data: &mut AppData, task: Option<&str>) -> Result<AppMode> {
+        let count = app_data.spawn.child_count;
+        let parent_id = app_data.spawn.spawning_under;
 
         info!(
             count,
@@ -39,30 +40,35 @@ impl Actions {
         );
 
         let spawn_config = if let Some(pid) = parent_id {
-            Self::get_existing_parent_config(app, pid)?
+            Self::get_existing_parent_config(app_data, pid)?
         } else {
-            match self.create_new_root_for_swarm(app, task, count)? {
+            match self.create_new_root_for_swarm(app_data, task, count)? {
                 Some(config) => config,
-                None => return Ok(()), // Worktree conflict, user needs to choose
+                None => {
+                    return Ok(ConfirmingMode {
+                        action: ConfirmAction::WorktreeConflict,
+                    }
+                    .into());
+                }
             }
         };
 
-        self.spawn_child_agents(app, &spawn_config, count, task)?;
+        self.spawn_child_agents(app_data, &spawn_config, count, task)?;
 
         // Expand the parent to show children
-        if let Some(parent) = app.storage.get_mut(spawn_config.parent_agent_id) {
+        if let Some(parent) = app_data.storage.get_mut(spawn_config.parent_agent_id) {
             parent.collapsed = false;
         }
 
-        app.storage.save()?;
+        app_data.storage.save()?;
         info!(count, parent_id = %spawn_config.parent_agent_id, "Child agents spawned successfully");
-        app.set_status(format!("Spawned {count} child agents"));
-        Ok(())
+        app_data.set_status(format!("Spawned {count} child agents"));
+        Ok(AppMode::normal())
     }
 
     /// Get spawn configuration from an existing parent agent
-    fn get_existing_parent_config(app: &App, pid: uuid::Uuid) -> Result<SpawnConfig> {
-        let root = app
+    fn get_existing_parent_config(app_data: &AppData, pid: uuid::Uuid) -> Result<SpawnConfig> {
+        let root = app_data
             .storage
             .root_ancestor(pid)
             .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
@@ -77,13 +83,13 @@ impl Actions {
     /// Create a new root agent for a swarm, returns None if worktree conflict
     fn create_new_root_for_swarm(
         self,
-        app: &mut App,
+        app_data: &mut AppData,
         task: Option<&str>,
         count: usize,
     ) -> Result<Option<SpawnConfig>> {
         let root_title = Self::generate_root_title(task);
-        let branch = app.config.generate_branch_name(&root_title);
-        let worktree_path = app.config.worktree_dir.join(&branch);
+        let branch = app_data.config.generate_branch_name(&root_title);
+        let worktree_path = app_data.config.worktree_dir.join(&branch);
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
         let repo = git::open_repository(&repo_path)?;
 
@@ -91,7 +97,7 @@ impl Actions {
 
         if worktree_mgr.exists(&branch) {
             Self::setup_worktree_conflict(
-                app,
+                app_data,
                 &worktree_mgr,
                 root_title,
                 task,
@@ -104,7 +110,7 @@ impl Actions {
 
         worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
-        let program = app.agent_spawn_command();
+        let program = app_data.agent_spawn_command();
         let root_agent = Agent::new(
             root_title,
             program.clone(),
@@ -120,13 +126,13 @@ impl Actions {
         self.session_manager
             .create(&root_session, &worktree_path, Some(&command))?;
 
-        if let Some((width, height)) = app.ui.preview_dimensions {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
             let _ = self
                 .session_manager
                 .resize_window(&root_session, width, height);
         }
 
-        app.storage.add(root_agent);
+        app_data.storage.add(root_agent);
         Ok(Some(SpawnConfig {
             root_session,
             worktree_path,
@@ -149,7 +155,7 @@ impl Actions {
 
     /// Setup worktree conflict info for user to resolve
     fn setup_worktree_conflict(
-        app: &mut App,
+        app_data: &mut AppData,
         worktree_mgr: &WorktreeManager<'_>,
         root_title: String,
         task: Option<&str>,
@@ -168,7 +174,7 @@ impl Actions {
             .map(|(b, c)| (Some(b), Some(c)))
             .unwrap_or((None, None));
 
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app_data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: root_title,
             prompt: task.map(String::from),
             branch,
@@ -179,27 +185,27 @@ impl Actions {
             current_commit,
             swarm_child_count: Some(count),
         });
-        app.enter_mode(Mode::Confirming(
-            crate::app::state::ConfirmAction::WorktreeConflict,
-        ));
     }
 
     /// Spawn the actual child agents
     fn spawn_child_agents(
         self,
-        app: &mut App,
+        app_data: &mut AppData,
         config: &SpawnConfig,
         count: usize,
         task: Option<&str>,
     ) -> Result<()> {
-        let start_window_index = app.storage.reserve_window_indices(config.parent_agent_id);
-        let program = app.agent_spawn_command();
-        let child_prompt = task.map(|t| Self::build_child_prompt(t, app.spawn.use_plan_prompt));
+        let start_window_index = app_data
+            .storage
+            .reserve_window_indices(config.parent_agent_id);
+        let program = app_data.agent_spawn_command();
+        let child_prompt =
+            task.map(|t| Self::build_child_prompt(t, app_data.spawn.use_plan_prompt));
 
         for i in 0..count {
             let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
             self.spawn_single_child(
-                app,
+                app_data,
                 config,
                 i,
                 window_index,
@@ -223,7 +229,7 @@ impl Actions {
     /// Spawn a single child agent
     fn spawn_single_child(
         self,
-        app: &mut App,
+        app_data: &mut AppData,
         config: &SpawnConfig,
         index: usize,
         window_index: u32,
@@ -243,7 +249,7 @@ impl Actions {
             },
         );
 
-        let child_title = if app.spawn.use_plan_prompt && child_prompt.is_some() {
+        let child_title = if app_data.spawn.use_plan_prompt && child_prompt.is_some() {
             format!("Planner {} ({})", index + 1, child.short_id())
         } else {
             format!("Agent {} ({})", index + 1, child.short_id())
@@ -259,7 +265,7 @@ impl Actions {
             Some(&command),
         )?;
 
-        if let Some((width, height)) = app.ui.preview_dimensions {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
             let window_target = SessionManager::window_target(&config.root_session, actual_index);
             let _ = self
                 .session_manager
@@ -267,7 +273,7 @@ impl Actions {
         }
 
         child.window_index = Some(actual_index);
-        app.storage.add(child);
+        app_data.storage.add(child);
 
         Ok(())
     }
@@ -277,15 +283,15 @@ impl Actions {
     /// This is a helper used by both `spawn_children` and `reconnect_to_worktree`
     pub(crate) fn spawn_children_for_root(
         self,
-        app: &mut App,
+        app_data: &mut AppData,
         config: &SpawnConfig,
         count: usize,
         task: &str,
     ) -> Result<()> {
-        self.spawn_child_agents(app, config, count, Some(task))?;
+        self.spawn_child_agents(app_data, config, count, Some(task))?;
 
         // Expand the parent to show children
-        if let Some(parent) = app.storage.get_mut(config.parent_agent_id) {
+        if let Some(parent) = app_data.storage.get_mut(config.parent_agent_id) {
             parent.collapsed = false;
         }
 
@@ -297,13 +303,13 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
-    pub fn spawn_review_agents(self, app: &mut App) -> Result<()> {
-        let count = app.spawn.child_count;
-        let parent_id = app
+    pub fn spawn_review_agents(self, app_data: &mut AppData) -> Result<()> {
+        let count = app_data.spawn.child_count;
+        let parent_id = app_data
             .spawn
             .spawning_under
             .ok_or_else(|| anyhow::anyhow!("No agent selected for review"))?;
-        let base_branch = app
+        let base_branch = app_data
             .review
             .base_branch
             .clone()
@@ -317,7 +323,7 @@ impl Actions {
         );
 
         // Get the root agent's session and worktree info
-        let root = app
+        let root = app_data
             .storage
             .root_ancestor(parent_id)
             .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
@@ -330,8 +336,8 @@ impl Actions {
         let review_prompt = prompts::build_review_prompt(&base_branch);
 
         // Reserve window indices
-        let start_window_index = app.storage.reserve_window_indices(parent_id);
-        let program = app.agent_spawn_command();
+        let start_window_index = app_data.storage.reserve_window_indices(parent_id);
+        let program = app_data.agent_spawn_command();
 
         // Create review child agents
         for i in 0..count {
@@ -365,7 +371,7 @@ impl Actions {
             )?;
 
             // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
+            if let Some((width, height)) = app_data.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(&root_session, actual_index);
                 let _ = self
                     .session_manager
@@ -375,22 +381,22 @@ impl Actions {
             // Update window index if it differs
             child.window_index = Some(actual_index);
 
-            app.storage.add(child);
+            app_data.storage.add(child);
         }
 
         // Expand the parent to show children
-        if let Some(parent) = app.storage.get_mut(parent_id) {
+        if let Some(parent) = app_data.storage.get_mut(parent_id) {
             parent.collapsed = false;
         }
 
-        app.storage.save()?;
+        app_data.storage.save()?;
         info!(count, parent_id = %parent_id, base_branch, "Review agents spawned successfully");
-        app.set_status(format!(
+        app_data.set_status(format!(
             "Spawned {count} review agents against {base_branch}"
         ));
 
         // Clear review state
-        app.clear_review_state();
+        app_data.review.clear();
 
         Ok(())
     }
@@ -402,15 +408,20 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if synthesis fails
-    pub fn synthesize(self, app: &mut App) -> Result<()> {
-        let agent = app
-            .selected_agent()
-            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+    pub fn synthesize(self, app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected".to_string(),
+            }
+            .into());
+        };
 
-        if !app.storage.has_children(agent.id) {
+        if !app_data.storage.has_children(agent.id) {
             warn!(agent_id = %agent.id, title = %agent.title, "No children to synthesize");
-            app.set_error("Selected agent has no children to synthesize");
-            return Ok(());
+            return Ok(ErrorModalMode {
+                message: "Selected agent has no children to synthesize".to_string(),
+            }
+            .into());
         }
 
         let parent_id = agent.id;
@@ -429,7 +440,7 @@ impl Actions {
 
         // Collect findings from all descendants (children, grandchildren, etc.)
         // Filter out terminal agents - they are interactive shells, not research agents
-        let descendants: Vec<_> = app
+        let descendants: Vec<_> = app_data
             .storage
             .descendants(parent_id)
             .into_iter()
@@ -438,8 +449,10 @@ impl Actions {
 
         if descendants.is_empty() {
             warn!(agent_id = %parent_id, title = %parent_title, "No non-terminal children to synthesize");
-            app.set_error("Selected agent has no non-terminal children to synthesize");
-            return Ok(());
+            return Ok(ErrorModalMode {
+                message: "Selected agent has no non-terminal children to synthesize".to_string(),
+            }
+            .into());
         }
 
         let mut findings: Vec<(String, String)> = Vec::new();
@@ -495,7 +508,7 @@ impl Actions {
                 );
             }
             // Remove from storage (remove_with_descendants handles nested removal)
-            app.storage.remove(descendant_id);
+            app_data.storage.remove(descendant_id);
         }
 
         // Now tell the parent to read the file
@@ -513,20 +526,22 @@ impl Actions {
             &read_command,
         )?;
 
-        app.validate_selection();
-        app.storage.save()?;
+        app_data.validate_selection();
+        app_data.storage.save()?;
         info!(%parent_title, descendants_count, "Synthesis complete");
-        app.set_status("Synthesized findings into parent agent");
-        Ok(())
+        app_data.set_status("Synthesized findings into parent agent");
+        Ok(AppMode::normal())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::App;
     use crate::agent::Storage;
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::state::AppMode;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
@@ -553,7 +568,7 @@ mod tests {
             None,
         );
         let root_id = root.id;
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Calling spawn_children_for_root should fail because the session doesn't exist
         let spawn_config = SpawnConfig {
@@ -562,7 +577,7 @@ mod tests {
             branch: "test-branch".to_string(),
             parent_agent_id: root_id,
         };
-        let result = handler.spawn_children_for_root(&mut app, &spawn_config, 2, "test task");
+        let result = handler.spawn_children_for_root(&mut app.data, &spawn_config, 2, "test task");
 
         // This should error because the session doesn't exist
         assert!(result.is_err());
@@ -574,9 +589,9 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        // Should error with no agent selected
-        let result = handler.synthesize(&mut app);
-        assert!(result.is_err());
+        // Should return error modal with no agent selected
+        let next = handler.synthesize(&mut app.data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -585,7 +600,7 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -594,10 +609,12 @@ mod tests {
         ));
 
         // Should set error when agent has no children
-        handler.synthesize(&mut app)?;
-        assert!(app.ui.last_error.is_some());
+        let next = handler.synthesize(&mut app.data)?;
+        app.apply_mode(next);
+        assert!(app.data.ui.last_error.is_some());
         assert!(
-            app.ui
+            app.data
+                .ui
                 .last_error
                 .as_ref()
                 .ok_or("Expected last_error")?
@@ -612,10 +629,10 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // No spawning_under set - should error
-        app.spawn.spawning_under = None;
-        app.review.base_branch = Some("main".to_string());
+        app.data.spawn.spawning_under = None;
+        app.data.review.base_branch = Some("main".to_string());
 
-        let result = handler.spawn_review_agents(&mut app);
+        let result = handler.spawn_review_agents(&mut app.data);
         assert!(result.is_err());
         Ok(())
     }
@@ -634,13 +651,13 @@ mod tests {
             None,
         );
         let agent_id = agent.id;
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
         // spawning_under set but no base branch - should error
-        app.spawn.spawning_under = Some(agent_id);
-        app.review.base_branch = None;
+        app.data.spawn.spawning_under = Some(agent_id);
+        app.data.review.base_branch = None;
 
-        let result = handler.spawn_review_agents(&mut app);
+        let result = handler.spawn_review_agents(&mut app.data);
         assert!(result.is_err());
         Ok(())
     }
@@ -661,7 +678,7 @@ mod tests {
         root.collapsed = false;
         let root_id = root.id;
         let root_session = root.mux_session.clone();
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Add a regular child agent
         let child = Agent::new_child(
@@ -676,7 +693,7 @@ mod tests {
                 window_index: 2,
             },
         );
-        app.storage.add(child);
+        app.data.storage.add(child);
 
         // Add a terminal child (is_terminal = true)
         let mut terminal = Agent::new_child(
@@ -692,12 +709,12 @@ mod tests {
             },
         );
         terminal.is_terminal = true;
-        app.storage.add(terminal);
+        app.data.storage.add(terminal);
 
         // Broadcast should only target the non-terminal child (1 agent)
         // Since mux sessions don't exist, it will fail but we can check
         // it attempts to send to the right number of agents
-        let result = handler.broadcast_to_leaves(&mut app, "test");
+        let result = handler.broadcast_to_leaves(&mut app.data, "test");
 
         // The broadcast will "succeed" with 0 sent (sessions don't exist)
         // but importantly it should NOT error and should report 0 (not try terminal)

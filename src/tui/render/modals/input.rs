@@ -209,7 +209,7 @@ pub fn render_input_overlay(
 
 /// Render the rename overlay
 pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
-    let is_root = app.git_op.is_root_rename;
+    let is_root = app.data.git_op.is_root_rename;
 
     let (title, description) = if is_root {
         ("Rename Agent", "Renames agent title, branch, and session:")
@@ -234,7 +234,7 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            format!("{}_", &app.input.buffer),
+            format!("{}_", &app.data.input.buffer),
             Style::default()
                 .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),

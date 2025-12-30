@@ -1,7 +1,8 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
 use crate::agent::Status;
-use crate::app::{App, Mode, Tab};
+use crate::app::{App, Tab};
+use crate::state::AppMode;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -29,11 +30,11 @@ pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Render the agent list panel
 pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Use optimized method that pre-computes child info in O(n) instead of O(n²)
-    let visible = app.storage.visible_agents_with_info();
+    let visible = app.data.storage.visible_agents_with_info();
     let total_items = visible.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
     let max_scroll = total_items.saturating_sub(visible_height);
-    let scroll = app.ui.agent_list_scroll.min(max_scroll);
+    let scroll = app.data.ui.agent_list_scroll.min(max_scroll);
 
     let items: Vec<ListItem<'_>> = visible
         .iter()
@@ -44,7 +45,7 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Status::Running => colors::STATUS_RUNNING,
             };
 
-            let style = if i == app.selected {
+            let style = if i == app.data.selected {
                 Style::default()
                     .fg(colors::TEXT_PRIMARY)
                     .bg(colors::SURFACE_HIGHLIGHT)
@@ -89,10 +90,10 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         })
         .collect();
 
-    let title = format!(" Agents ({}) ", app.storage.len());
+    let title = format!(" Agents ({}) ", app.data.storage.len());
 
     // Highlight agents list border when it has focus (not in PreviewFocused mode)
-    let border_color = if app.mode == Mode::PreviewFocused {
+    let border_color = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
         colors::BORDER
     } else {
         colors::SELECTED
@@ -135,7 +136,7 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the content pane (tabs + preview/diff)
 pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    match app.active_tab {
+    match app.data.active_tab {
         Tab::Preview => render_preview(frame, app, area),
         Tab::Diff => render_diff(frame, app, area),
     }
@@ -143,8 +144,8 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn tab_bar_line(app: &App) -> Line<'static> {
     let tabs = vec![
-        (" Preview ", app.active_tab == Tab::Preview),
-        (" Diff ", app.active_tab == Tab::Diff),
+        (" Preview ", app.data.active_tab == Tab::Preview),
+        (" Diff ", app.data.active_tab == Tab::Diff),
     ];
 
     let spans: Vec<Span<'static>> = tabs
@@ -177,8 +178,8 @@ fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the preview pane
 pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = &app.ui.preview_content;
-    let is_focused = app.mode == Mode::PreviewFocused;
+    let content = &app.data.ui.preview_content;
+    let is_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
 
     // Parse ANSI escape sequences to preserve terminal colors
     let text = ansi_to_tui::IntoText::into_text(content).unwrap_or_else(|_| {
@@ -215,7 +216,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content_area = chunks[1];
     let visible_height = usize::from(content_area.height);
     let max_scroll = line_count.saturating_sub(visible_height);
-    let scroll = app.ui.preview_scroll.min(max_scroll);
+    let scroll = app.data.ui.preview_scroll.min(max_scroll);
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(text).scroll((scroll_pos, 0));
@@ -258,13 +259,13 @@ fn render_preview_cursor(
     line_count: usize,
     visible_height: usize,
 ) {
-    let Some((cursor_x, cursor_y, cursor_hidden)) = app.ui.preview_cursor_position else {
+    let Some((cursor_x, cursor_y, cursor_hidden)) = app.data.ui.preview_cursor_position else {
         return;
     };
     if cursor_hidden {
         return;
     }
-    let Some((_cols, pane_rows)) = app.ui.preview_pane_size else {
+    let Some((_cols, pane_rows)) = app.data.ui.preview_pane_size else {
         return;
     };
 
@@ -305,7 +306,7 @@ fn render_preview_cursor(
 
 /// Render the diff pane
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = &app.ui.diff_content;
+    let content = &app.data.ui.diff_content;
 
     let block = Block::default()
         .title(" Git Diff ")
@@ -323,13 +324,13 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let content_area = chunks[1];
     let visible_height = usize::from(content_area.height);
-    let total_lines = app.ui.diff_line_ranges.len();
+    let total_lines = app.data.ui.diff_line_ranges.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll = app.ui.diff_scroll.min(max_scroll);
+    let scroll = app.data.ui.diff_scroll.min(max_scroll);
     let end_line = (scroll + visible_height).min(total_lines);
 
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
-    for &(start, end) in &app.ui.diff_line_ranges[scroll..end_line] {
+    for &(start, end) in &app.data.ui.diff_line_ranges[scroll..end_line] {
         let line = &content[start..end];
         let color = if line.starts_with('+') && !line.starts_with("+++") {
             colors::DIFF_ADD
@@ -375,11 +376,11 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Render the status bar
 pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Don't show error in status bar when error modal is displayed
-    let showing_error_modal = matches!(app.mode, Mode::ErrorModal(_));
+    let showing_error_modal = matches!(&app.mode, AppMode::ErrorModal(_));
 
     let left_content = match (
-        &app.ui.last_error,
-        &app.ui.status_message,
+        &app.data.ui.last_error,
+        &app.data.ui.status_message,
         showing_error_modal,
     ) {
         (Some(error), _, false) => Span::styled(
@@ -402,12 +403,12 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
     };
 
-    let key_routing = if app.mode == Mode::PreviewFocused {
+    let key_routing = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
         "Keys → Agent (Ctrl+q detach)"
     } else {
         "Keys → Tenex"
     };
-    let key_routing_style = if app.mode == Mode::PreviewFocused {
+    let key_routing_style = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
         Style::default()
             .fg(colors::TEXT_PRIMARY)
             .add_modifier(Modifier::BOLD)

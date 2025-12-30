@@ -26,8 +26,8 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect_absolute(60, total_height, frame.area());
 
     // Insert cursor marker at cursor position
-    let input = app.input.buffer.as_str();
-    let cursor_pos = app.input.cursor;
+    let input = app.data.input.buffer.as_str();
+    let cursor_pos = app.data.input.cursor;
     let text_with_cursor = if cursor_pos >= input.len() {
         format!("{input}│")
     } else {
@@ -50,6 +50,7 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(""));
 
     let selected_idx = app
+        .data
         .command_palette
         .selected
         .min(total_count.saturating_sub(1));

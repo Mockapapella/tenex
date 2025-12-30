@@ -3,9 +3,9 @@
 use super::{
     DismissAction, ScrollBottomAction, ScrollDownAction, ScrollTopAction, ScrollUpAction, ValidIn,
 };
-use crate::app::{App, AppData};
+use crate::app::AppData;
 use crate::config::{Action as KeyAction, ActionGroup};
-use crate::state::{ErrorModalMode, HelpMode, ModeUnion, SuccessModalMode};
+use crate::state::{AppMode, ErrorModalMode, HelpMode, SuccessModalMode};
 use anyhow::Result;
 
 /// Help-mode action: page up (`PgUp`).
@@ -50,15 +50,15 @@ fn help_total_lines() -> usize {
 /// Compute the maximum scroll offset for the help overlay based on terminal height.
 ///
 /// This mirrors the sizing logic used in `src/tui/render/modals/help.rs`, but uses the most
-/// recently known preview height stored in `app.ui.preview_dimensions` since actions do not have
+/// recently known preview height stored in `data.ui.preview_dimensions` since actions do not have
 /// access to the render `Frame`.
 #[must_use]
-pub fn help_max_scroll(app: &App) -> usize {
+pub fn help_max_scroll(data: &AppData) -> usize {
     let total_lines = help_total_lines();
 
     // The help overlay uses `frame.area().height.saturating_sub(4)` as its max height.
     // `preview_dimensions` stores the preview inner height, which is also `frame_height - 4`.
-    let max_height = usize::from(app.ui.preview_dimensions.map_or(20, |(_, h)| h));
+    let max_height = usize::from(data.ui.preview_dimensions.map_or(20, |(_, h)| h));
     let min_height = 12usize.min(max_height);
     let desired_height = total_lines.saturating_add(2);
     let height = desired_height.min(max_height).max(min_height);
@@ -67,16 +67,16 @@ pub fn help_max_scroll(app: &App) -> usize {
     total_lines.saturating_sub(visible_height)
 }
 
-fn clamp_help_scroll(app_data: &mut AppData<'_>) -> usize {
-    let max_scroll = help_max_scroll(app_data.app);
+fn clamp_help_scroll(app_data: &mut AppData) -> usize {
+    let max_scroll = help_max_scroll(app_data);
     app_data.ui.help_scroll = app_data.ui.help_scroll.min(max_scroll);
     max_scroll
 }
 
 impl ValidIn<HelpMode> for ScrollUpAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_sub(1).min(max_scroll);
         Ok(HelpMode.into())
@@ -84,9 +84,9 @@ impl ValidIn<HelpMode> for ScrollUpAction {
 }
 
 impl ValidIn<HelpMode> for ScrollDownAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_add(1).min(max_scroll);
         Ok(HelpMode.into())
@@ -94,9 +94,9 @@ impl ValidIn<HelpMode> for ScrollDownAction {
 }
 
 impl ValidIn<HelpMode> for PageUpAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_sub(10).min(max_scroll);
         Ok(HelpMode.into())
@@ -104,9 +104,9 @@ impl ValidIn<HelpMode> for PageUpAction {
 }
 
 impl ValidIn<HelpMode> for PageDownAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_add(10).min(max_scroll);
         Ok(HelpMode.into())
@@ -114,9 +114,9 @@ impl ValidIn<HelpMode> for PageDownAction {
 }
 
 impl ValidIn<HelpMode> for HalfPageUpAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_sub(5).min(max_scroll);
         Ok(HelpMode.into())
@@ -124,9 +124,9 @@ impl ValidIn<HelpMode> for HalfPageUpAction {
 }
 
 impl ValidIn<HelpMode> for HalfPageDownAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = app_data.ui.help_scroll.saturating_add(5).min(max_scroll);
         Ok(HelpMode.into())
@@ -134,9 +134,9 @@ impl ValidIn<HelpMode> for HalfPageDownAction {
 }
 
 impl ValidIn<HelpMode> for ScrollTopAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         clamp_help_scroll(app_data);
         app_data.ui.help_scroll = 0;
         Ok(HelpMode.into())
@@ -144,9 +144,9 @@ impl ValidIn<HelpMode> for ScrollTopAction {
 }
 
 impl ValidIn<HelpMode> for ScrollBottomAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: HelpMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let max_scroll = clamp_help_scroll(app_data);
         app_data.ui.help_scroll = max_scroll;
         Ok(HelpMode.into())
@@ -154,35 +154,26 @@ impl ValidIn<HelpMode> for ScrollBottomAction {
 }
 
 impl ValidIn<HelpMode> for DismissAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: HelpMode, _app_data: &mut AppData<'_>) -> Result<Self::NextState> {
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: HelpMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ErrorModalMode> for DismissAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ErrorModalMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.dismiss_error();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: ErrorModalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.ui.clear_error();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<SuccessModalMode> for DismissAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: SuccessModalMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.dismiss_success();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: SuccessModalMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }

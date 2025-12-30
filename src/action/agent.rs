@@ -1,7 +1,11 @@
 use crate::action::ValidIn;
-use crate::app::{AppData, ConfirmAction, Mode};
+use crate::app::{Actions, AppData};
 use crate::git;
-use crate::state::{ConfirmingMode, ErrorModalMode, ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{
+    AppMode, BroadcastingMode, ChildCountMode, ConfirmAction, ConfirmingMode, CreatingMode,
+    ErrorModalMode, NormalMode, PromptingMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode,
+    TerminalPromptMode,
+};
 use anyhow::{Context, Result};
 
 /// Normal-mode action: enter agent creation mode.
@@ -9,22 +13,18 @@ use anyhow::{Context, Result};
 pub struct NewAgentAction;
 
 impl ValidIn<NormalMode> for NewAgentAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, _app_data: &mut AppData<'_>) -> Result<Self::NextState> {
-        Ok(ModeUnion::Legacy(Mode::Creating))
+    fn execute(self, _state: NormalMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(CreatingMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for NewAgentAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ScrollingMode,
-        _app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        Ok(ModeUnion::Legacy(Mode::Creating))
+    fn execute(self, _state: ScrollingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(CreatingMode.into())
     }
 }
 
@@ -33,22 +33,18 @@ impl ValidIn<ScrollingMode> for NewAgentAction {
 pub struct NewAgentWithPromptAction;
 
 impl ValidIn<NormalMode> for NewAgentWithPromptAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, _app_data: &mut AppData<'_>) -> Result<Self::NextState> {
-        Ok(ModeUnion::Legacy(Mode::Prompting))
+    fn execute(self, _state: NormalMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(PromptingMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for NewAgentWithPromptAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ScrollingMode,
-        _app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        Ok(ModeUnion::Legacy(Mode::Prompting))
+    fn execute(self, _state: ScrollingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(PromptingMode.into())
     }
 }
 
@@ -57,24 +53,24 @@ impl ValidIn<ScrollingMode> for NewAgentWithPromptAction {
 pub struct KillAction;
 
 impl ValidIn<NormalMode> for KillAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
             Ok(ConfirmingMode {
                 action: ConfirmAction::Kill,
             }
             .into())
         } else {
-            Ok(ModeUnion::normal())
+            Ok(AppMode::normal())
         }
     }
 }
 
 impl ValidIn<ScrollingMode> for KillAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
             Ok(ConfirmingMode {
                 action: ConfirmAction::Kill,
@@ -91,20 +87,20 @@ impl ValidIn<ScrollingMode> for KillAction {
 pub struct SpawnChildrenAction;
 
 impl ValidIn<NormalMode> for SpawnChildrenAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.spawn.start_spawning_root();
-        Ok(ModeUnion::Legacy(Mode::ChildCount))
+        Ok(ChildCountMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for SpawnChildrenAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.spawn.start_spawning_root();
-        Ok(ModeUnion::Legacy(Mode::ChildCount))
+        Ok(ChildCountMode.into())
     }
 }
 
@@ -113,30 +109,30 @@ impl ValidIn<ScrollingMode> for SpawnChildrenAction {
 pub struct PlanSwarmAction;
 
 impl ValidIn<NormalMode> for PlanSwarmAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent_id) = app_data.selected_agent().map(|a| a.id) else {
             app_data.set_status("Select an agent first (press 'a')");
-            return Ok(ModeUnion::normal());
+            return Ok(AppMode::normal());
         };
 
         app_data.spawn.start_planning_swarm_under(agent_id);
-        Ok(ModeUnion::Legacy(Mode::ChildCount))
+        Ok(ChildCountMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for PlanSwarmAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent_id) = app_data.selected_agent().map(|a| a.id) else {
             app_data.set_status("Select an agent first (press 'a')");
             return Ok(ScrollingMode.into());
         };
 
         app_data.spawn.start_planning_swarm_under(agent_id);
-        Ok(ModeUnion::Legacy(Mode::ChildCount))
+        Ok(ChildCountMode.into())
     }
 }
 
@@ -145,25 +141,25 @@ impl ValidIn<ScrollingMode> for PlanSwarmAction {
 pub struct AddChildrenAction;
 
 impl ValidIn<NormalMode> for AddChildrenAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if let Some(agent_id) = app_data.selected_agent().map(|a| a.id) {
             app_data.spawn.start_spawning_under(agent_id);
-            Ok(ModeUnion::Legacy(Mode::ChildCount))
+            Ok(ChildCountMode.into())
         } else {
-            Ok(ModeUnion::normal())
+            Ok(AppMode::normal())
         }
     }
 }
 
 impl ValidIn<ScrollingMode> for AddChildrenAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if let Some(agent_id) = app_data.selected_agent().map(|a| a.id) {
             app_data.spawn.start_spawning_under(agent_id);
-            Ok(ModeUnion::Legacy(Mode::ChildCount))
+            Ok(ChildCountMode.into())
         } else {
             Ok(ScrollingMode.into())
         }
@@ -175,11 +171,11 @@ impl ValidIn<ScrollingMode> for AddChildrenAction {
 pub struct SynthesizeAction;
 
 impl ValidIn<NormalMode> for SynthesizeAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
-            return Ok(ModeUnion::normal());
+            return Ok(AppMode::normal());
         };
 
         if app_data.storage.has_children(agent.id) {
@@ -197,9 +193,9 @@ impl ValidIn<NormalMode> for SynthesizeAction {
 }
 
 impl ValidIn<ScrollingMode> for SynthesizeAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ScrollingMode.into());
         };
@@ -223,9 +219,9 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
 pub struct ToggleCollapseAction;
 
 impl ValidIn<NormalMode> for ToggleCollapseAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if let Some(agent) = app_data.selected_agent() {
             let agent_id = agent.id;
             if app_data.storage.has_children(agent_id)
@@ -235,14 +231,14 @@ impl ValidIn<NormalMode> for ToggleCollapseAction {
                 app_data.storage.save()?;
             }
         }
-        Ok(ModeUnion::normal())
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ScrollingMode> for ToggleCollapseAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if let Some(agent) = app_data.selected_agent() {
             let agent_id = agent.id;
             if app_data.storage.has_children(agent_id)
@@ -261,23 +257,23 @@ impl ValidIn<ScrollingMode> for ToggleCollapseAction {
 pub struct BroadcastAction;
 
 impl ValidIn<NormalMode> for BroadcastAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::Broadcasting))
+            Ok(BroadcastingMode.into())
         } else {
-            Ok(ModeUnion::normal())
+            Ok(AppMode::normal())
         }
     }
 }
 
 impl ValidIn<ScrollingMode> for BroadcastAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::Broadcasting))
+            Ok(BroadcastingMode.into())
         } else {
             Ok(ScrollingMode.into())
         }
@@ -289,12 +285,12 @@ impl ValidIn<ScrollingMode> for BroadcastAction {
 pub struct ReviewSwarmAction;
 
 impl ValidIn<NormalMode> for ReviewSwarmAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let selected = app_data.selected_agent();
         if selected.is_none() {
-            return Ok(ModeUnion::Legacy(Mode::ReviewInfo));
+            return Ok(ReviewInfoMode.into());
         }
 
         // Store the selected agent's ID for later use.
@@ -310,17 +306,17 @@ impl ValidIn<NormalMode> for ReviewSwarmAction {
         app_data.review.start(branches);
         app_data.spawn.child_count = 3;
 
-        Ok(ModeUnion::Legacy(Mode::ReviewChildCount))
+        Ok(ReviewChildCountMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for ReviewSwarmAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let selected = app_data.selected_agent();
         if selected.is_none() {
-            return Ok(ModeUnion::Legacy(Mode::ReviewInfo));
+            return Ok(ReviewInfoMode.into());
         }
 
         // Store the selected agent's ID for later use.
@@ -336,7 +332,7 @@ impl ValidIn<ScrollingMode> for ReviewSwarmAction {
         app_data.review.start(branches);
         app_data.spawn.child_count = 3;
 
-        Ok(ModeUnion::Legacy(Mode::ReviewChildCount))
+        Ok(ReviewChildCountMode.into())
     }
 }
 
@@ -345,22 +341,22 @@ impl ValidIn<ScrollingMode> for ReviewSwarmAction {
 pub struct SpawnTerminalAction;
 
 impl ValidIn<NormalMode> for SpawnTerminalAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            app_data.actions.spawn_terminal(app_data.app, None)?;
+            Actions::new().spawn_terminal(app_data, None)?;
         }
-        Ok(ModeUnion::normal())
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ScrollingMode> for SpawnTerminalAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            app_data.actions.spawn_terminal(app_data.app, None)?;
+            Actions::new().spawn_terminal(app_data, None)?;
         }
         Ok(ScrollingMode.into())
     }
@@ -371,25 +367,176 @@ impl ValidIn<ScrollingMode> for SpawnTerminalAction {
 pub struct SpawnTerminalPromptedAction;
 
 impl ValidIn<NormalMode> for SpawnTerminalPromptedAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::TerminalPrompt))
+            Ok(TerminalPromptMode.into())
         } else {
-            Ok(ModeUnion::normal())
+            Ok(AppMode::normal())
         }
     }
 }
 
 impl ValidIn<ScrollingMode> for SpawnTerminalPromptedAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::TerminalPrompt))
+            Ok(TerminalPromptMode.into())
         } else {
             Ok(ScrollingMode.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{Agent, ChildConfig, Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+
+    fn create_test_data() -> Result<(AppData, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((
+            AppData::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
+    }
+
+    #[test]
+    fn test_actions_without_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        assert_eq!(
+            NewAgentAction.execute(NormalMode, &mut data)?,
+            AppMode::Creating(CreatingMode)
+        );
+        assert_eq!(
+            NewAgentWithPromptAction.execute(ScrollingMode, &mut data)?,
+            AppMode::Prompting(PromptingMode)
+        );
+        assert_eq!(
+            KillAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(
+            KillAction.execute(ScrollingMode, &mut data)?,
+            AppMode::Scrolling(ScrollingMode)
+        );
+
+        assert_eq!(
+            SpawnChildrenAction.execute(NormalMode, &mut data)?,
+            AppMode::ChildCount(ChildCountMode)
+        );
+
+        assert_eq!(
+            PlanSwarmAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Select an agent first (press 'a')")
+        );
+
+        assert_eq!(
+            AddChildrenAction.execute(ScrollingMode, &mut data)?,
+            AppMode::Scrolling(ScrollingMode)
+        );
+        assert_eq!(
+            BroadcastAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(
+            SpawnTerminalPromptedAction.execute(ScrollingMode, &mut data)?,
+            AppMode::Scrolling(ScrollingMode)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_actions_with_selected_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+
+        assert!(matches!(
+            KillAction.execute(NormalMode, &mut data)?,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Kill
+            })
+        ));
+
+        assert_eq!(
+            AddChildrenAction.execute(NormalMode, &mut data)?,
+            AppMode::ChildCount(ChildCountMode)
+        );
+        assert_eq!(
+            BroadcastAction.execute(NormalMode, &mut data)?,
+            BroadcastingMode.into()
+        );
+        assert_eq!(
+            SpawnTerminalPromptedAction.execute(NormalMode, &mut data)?,
+            TerminalPromptMode.into()
+        );
+        assert!(matches!(
+            SynthesizeAction.execute(NormalMode, &mut data)?,
+            AppMode::ErrorModal(_)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_toggle_collapse_action_toggles_when_agent_has_children()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        let root_id = root.id;
+        root.collapsed = true;
+        let root_session = root.mux_session.clone();
+        data.storage.add(root);
+
+        data.storage.add(Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+            },
+        ));
+
+        assert!(data.storage.has_children(root_id));
+        assert!(data.storage.get(root_id).ok_or("missing root")?.collapsed);
+
+        assert_eq!(
+            ToggleCollapseAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert!(!data.storage.get(root_id).ok_or("missing root")?.collapsed);
+
+        Ok(())
     }
 }

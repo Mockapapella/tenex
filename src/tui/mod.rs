@@ -3,7 +3,8 @@
 mod input;
 mod render;
 
-use crate::app::{Actions, App, Event, Handler, Mode, Tab};
+use crate::app::{Actions, App, Event, Handler, Tab};
+use crate::state::AppMode;
 use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::{
@@ -58,18 +59,18 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     };
 
     // Update the app with keyboard enhancement status
-    app.keyboard_enhancement_supported = keyboard_enhancement_enabled;
+    app.data.keyboard_enhancement_supported = keyboard_enhancement_enabled;
 
     // Show keyboard remap prompt if terminal doesn't support enhancement
     // and user hasn't been asked yet
-    if matches!(app.mode, Mode::Normal) && app.should_show_keyboard_remap_prompt() {
+    if matches!(app.mode, AppMode::Normal(_)) && app.should_show_keyboard_remap_prompt() {
         app.show_keyboard_remap_prompt();
     }
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let event_handler = Handler::new(app.config.poll_interval_ms);
+    let event_handler = Handler::new(app.data.config.poll_interval_ms);
     let action_handler = Actions::new();
 
     let result = run_loop(&mut terminal, &mut app, &event_handler, action_handler);
@@ -114,7 +115,7 @@ fn run_loop(
     action_handler: Actions,
 ) -> Result<Option<UpdateInfo>> {
     // Initialize preview dimensions before first draw
-    if app.ui.preview_dimensions.is_none()
+    if app.data.ui.preview_dimensions.is_none()
         && let Ok(size) = terminal.size()
     {
         let area = Rect::new(0, 0, size.width, size.height);
@@ -125,9 +126,9 @@ fn run_loop(
     }
 
     // Track selection to detect changes
-    let mut last_selected = app.selected;
+    let mut last_selected = app.data.selected;
     // Track active tab so we can refresh content when switching tabs
-    let mut last_tab = app.active_tab;
+    let mut last_tab = app.data.active_tab;
     // Force initial preview/diff update
     let mut needs_content_update = true;
     // Diff refresh is expensive; throttle tick-based updates.
@@ -137,7 +138,7 @@ fn run_loop(
     loop {
         // If we returned to normal mode and still need to show the keyboard prompt,
         // display it now (e.g., after dismissing another startup modal).
-        if matches!(app.mode, Mode::Normal) && app.should_show_keyboard_remap_prompt() {
+        if matches!(app.mode, AppMode::Normal(_)) && app.should_show_keyboard_remap_prompt() {
             app.show_keyboard_remap_prompt();
         }
 
@@ -157,13 +158,7 @@ fn run_loop(
                 }
                 Event::Key(key) => {
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                        input::handle_key_event(
-                            app,
-                            action_handler,
-                            key.code,
-                            key.modifiers,
-                            &mut batched_keys,
-                        )?;
+                        input::handle_key_event(app, key.code, key.modifiers, &mut batched_keys)?;
                     }
                 }
                 Event::Mouse(_) => {
@@ -181,14 +176,15 @@ fn run_loop(
         }
 
         // Send batched keys to the mux in one command (much faster than per-keystroke)
-        let sent_keys_in_preview = !batched_keys.is_empty() && app.mode == Mode::PreviewFocused;
+        let sent_keys_in_preview =
+            !batched_keys.is_empty() && matches!(app.mode, AppMode::PreviewFocused(_));
         send_batched_keys_to_mux(app, &batched_keys);
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
             let (preview_width, preview_height) =
                 render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
-            if app.ui.preview_dimensions != Some((preview_width, preview_height)) {
+            if app.data.ui.preview_dimensions != Some((preview_width, preview_height)) {
                 app.set_preview_dimensions(preview_width, preview_height);
                 action_handler.resize_agent_windows(app);
                 app.ensure_agent_list_scroll();
@@ -196,13 +192,13 @@ fn run_loop(
         }
 
         // Detect selection change
-        if app.selected != last_selected {
-            last_selected = app.selected;
+        if app.data.selected != last_selected {
+            last_selected = app.data.selected;
             needs_content_update = true;
         }
         // Detect tab change
-        if app.active_tab != last_tab {
-            last_tab = app.active_tab;
+        if app.data.active_tab != last_tab {
+            last_tab = app.data.active_tab;
             needs_content_update = true;
         }
 
@@ -211,7 +207,7 @@ fn run_loop(
         if needs_tick || needs_content_update || sent_keys_in_preview {
             let _ = action_handler.update_preview(app);
             // Only update diff on tick (it's slow and not needed while typing)
-            if (needs_tick || needs_content_update) && app.active_tab == Tab::Diff {
+            if (needs_tick || needs_content_update) && app.data.active_tab == Tab::Diff {
                 let should_update_diff =
                     needs_content_update || last_diff_update.elapsed() >= diff_refresh_interval;
                 if should_update_diff {
@@ -230,11 +226,11 @@ fn run_loop(
             let _ = action_handler.sync_agent_status(app);
         }
 
-        if let Mode::UpdateRequested(info) = &app.mode {
-            return Ok(Some(info.clone()));
+        if let AppMode::UpdateRequested(state) = &app.mode {
+            return Ok(Some(state.info.clone()));
         }
 
-        if app.should_quit {
+        if app.data.should_quit {
             break;
         }
     }
@@ -247,8 +243,8 @@ mod tests {
     use super::*;
     use crate::action::keycode_to_input_sequence;
     use crate::agent::Storage;
-    use crate::app::ConfirmAction;
     use crate::config::Config;
+    use crate::state::*;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
 
@@ -356,12 +352,12 @@ mod tests {
     /// Test helper that wraps `input::handle_key_event` with an empty `batched_keys` vec
     fn test_key_event(
         app: &mut App,
-        handler: Actions,
+        _handler: Actions,
         code: KeyCode,
         modifiers: KeyModifiers,
     ) -> Result<()> {
         let mut keys = Vec::new();
-        input::handle_key_event(app, handler, code, modifiers, &mut keys)
+        input::handle_key_event(app, code, modifiers, &mut keys)
     }
 
     #[test]
@@ -371,7 +367,7 @@ mod tests {
 
         // Ctrl+q should trigger quit (since no running agents)
         test_key_event(&mut app, handler, KeyCode::Char('q'), KeyModifiers::CONTROL)?;
-        assert!(app.should_quit);
+        assert!(app.data.should_quit);
         Ok(())
     }
 
@@ -382,7 +378,7 @@ mod tests {
 
         // '?' should open help
         test_key_event(&mut app, handler, KeyCode::Char('?'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
         Ok(())
     }
 
@@ -391,9 +387,9 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Help);
+        app.enter_mode(HelpMode.into());
         test_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -404,7 +400,7 @@ mod tests {
 
         // 'a' should enter creating mode
         test_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Creating);
+        assert_eq!(app.mode, AppMode::Creating(CreatingMode));
         Ok(())
     }
 
@@ -416,7 +412,7 @@ mod tests {
 
         // 'A' should enter prompting mode
         test_key_event(&mut app, handler, KeyCode::Char('A'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Prompting);
+        assert_eq!(app.mode, AppMode::Prompting(PromptingMode));
         Ok(())
     }
 
@@ -425,12 +421,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         test_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('b'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('c'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "abc");
+        assert_eq!(app.data.input.buffer, "abc");
         Ok(())
     }
 
@@ -439,12 +435,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         app.handle_char('a');
         app.handle_char('b');
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "a");
+        assert_eq!(app.data.input.buffer, "a");
         Ok(())
     }
 
@@ -454,7 +450,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         app.handle_char('t');
         app.handle_char('e');
         app.handle_char('s');
@@ -462,8 +458,8 @@ mod tests {
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input.buffer.is_empty());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.input.buffer.is_empty());
         Ok(())
     }
 
@@ -473,13 +469,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         // Enter with empty input should just exit mode
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         // No agent created since input was empty
-        assert_eq!(app.storage.len(), 0);
+        assert_eq!(app.data.storage.len(), 0);
         Ok(())
     }
 
@@ -489,11 +485,16 @@ mod tests {
         let handler = Actions::new();
 
         // Enter confirming quit mode
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
         // 'y' should confirm and quit
         test_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
-        assert!(app.should_quit);
+        assert!(app.data.should_quit);
         Ok(())
     }
 
@@ -502,9 +503,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
         test_key_event(&mut app, handler, KeyCode::Char('Y'), KeyModifiers::NONE)?;
-        assert!(app.should_quit);
+        assert!(app.data.should_quit);
         Ok(())
     }
 
@@ -513,11 +519,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(!app.should_quit);
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(!app.data.should_quit);
         Ok(())
     }
 
@@ -526,11 +537,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(!app.should_quit);
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(!app.data.should_quit);
         Ok(())
     }
 
@@ -540,11 +556,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
         test_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
 
         // Should still be in confirming mode
-        assert!(matches!(app.mode, Mode::Confirming(_)));
+        assert!(matches!(&app.mode, AppMode::Confirming(_)));
         Ok(())
     }
 
@@ -558,7 +579,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
 
         // Should still be in normal mode (no state change visible without agents)
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -567,9 +588,9 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        let initial_tab = app.active_tab;
+        let initial_tab = app.data.active_tab;
         test_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
-        assert_ne!(app.active_tab, initial_tab);
+        assert_ne!(app.data.active_tab, initial_tab);
         Ok(())
     }
 
@@ -584,7 +605,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('g'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('G'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Scrolling);
+        assert_eq!(app.mode, AppMode::Scrolling(ScrollingMode));
         Ok(())
     }
 
@@ -595,8 +616,8 @@ mod tests {
 
         // Unknown key should be ignored
         test_key_event(&mut app, handler, KeyCode::F(12), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(!app.should_quit);
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(!app.data.should_quit);
         Ok(())
     }
 
@@ -605,13 +626,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Prompting);
+        app.enter_mode(PromptingMode.into());
         app.handle_char('t');
         app.handle_char('e');
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -622,7 +643,7 @@ mod tests {
 
         // Escape in normal mode triggers cancel action (does nothing but works)
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -632,7 +653,7 @@ mod tests {
         let handler = Actions::new();
 
         // Enter scrolling mode (happens when scroll keys are pressed)
-        app.enter_mode(Mode::Scrolling);
+        app.enter_mode(ScrollingMode.into());
 
         // Should handle navigation keys in scrolling mode
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
@@ -645,7 +666,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
 
         // Other keys like arrows should be ignored in creating mode
         test_key_event(&mut app, handler, KeyCode::Left, KeyModifiers::NONE)?;
@@ -654,7 +675,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
 
         // Should still be in creating mode
-        assert_eq!(app.mode, Mode::Creating);
+        assert_eq!(app.mode, AppMode::Creating(CreatingMode));
         Ok(())
     }
 
@@ -663,14 +684,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Prompting);
+        app.enter_mode(PromptingMode.into());
 
         // Type some characters
         test_key_event(&mut app, handler, KeyCode::Char('h'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('i'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "hi");
-        assert_eq!(app.mode, Mode::Prompting);
+        assert_eq!(app.data.input.buffer, "hi");
+        assert_eq!(app.mode, AppMode::Prompting(PromptingMode));
         Ok(())
     }
 
@@ -680,13 +701,18 @@ mod tests {
         let handler = Actions::new();
 
         // Enter confirming kill mode (no agents to kill, but mode should change)
-        app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
 
         // 'y' should trigger confirm but no agent to kill
         test_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
 
         // Should exit to normal mode
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -695,11 +721,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Reset,
+            }
+            .into(),
+        );
 
         // 'n' should cancel
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -708,11 +739,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
         // 'N' should also cancel
         test_key_event(&mut app, handler, KeyCode::Char('N'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -722,7 +758,7 @@ mod tests {
         let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         app.handle_char('t');
         app.handle_char('e');
         app.handle_char('s');
@@ -736,9 +772,14 @@ mod tests {
         // 2. Normal mode (agent created successfully)
         // 3. Confirming(WorktreeConflict) if worktree already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_))
-                || app.mode == Mode::Normal
-                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            matches!(&app.mode, AppMode::ErrorModal(_))
+                || app.mode == AppMode::normal()
+                || matches!(
+                    &app.mode,
+                    AppMode::Confirming(ConfirmingMode {
+                        action: ConfirmAction::WorktreeConflict,
+                    })
+                ),
             "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
             app.mode
         );
@@ -747,9 +788,9 @@ mod tests {
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
         assert!(
-            app.ui.last_error.is_some()
-                || app.storage.len() == 1
-                || app.spawn.worktree_conflict.is_some()
+            app.data.ui.last_error.is_some()
+                || app.data.storage.len() == 1
+                || app.data.spawn.worktree_conflict.is_some()
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -761,7 +802,7 @@ mod tests {
         let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Prompting);
+        app.enter_mode(PromptingMode.into());
         app.handle_char('f');
         app.handle_char('i');
         app.handle_char('x');
@@ -774,9 +815,14 @@ mod tests {
         // 2. Normal mode (agent created successfully)
         // 3. Confirming(WorktreeConflict) if worktree already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_))
-                || app.mode == Mode::Normal
-                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            matches!(&app.mode, AppMode::ErrorModal(_))
+                || app.mode == AppMode::normal()
+                || matches!(
+                    &app.mode,
+                    AppMode::Confirming(ConfirmingMode {
+                        action: ConfirmAction::WorktreeConflict,
+                    })
+                ),
             "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
             app.mode
         );
@@ -785,9 +831,9 @@ mod tests {
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
         assert!(
-            app.ui.last_error.is_some()
-                || app.storage.len() == 1
-                || app.spawn.worktree_conflict.is_some()
+            app.data.ui.last_error.is_some()
+                || app.data.storage.len() == 1
+                || app.data.spawn.worktree_conflict.is_some()
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -798,13 +844,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
 
         // Tab key should fall through to action handling in creating mode
         test_key_event(&mut app, handler, KeyCode::Tab, KeyModifiers::NONE)?;
 
         // Mode should remain creating (Tab doesn't exit creating mode)
-        assert_eq!(app.mode, Mode::Creating);
+        assert_eq!(app.mode, AppMode::Creating(CreatingMode));
         Ok(())
     }
 
@@ -813,7 +859,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Scrolling);
+        app.enter_mode(ScrollingMode.into());
 
         // Test scrolling mode handles normal mode keybindings
         test_key_event(&mut app, handler, KeyCode::Char('g'), KeyModifiers::NONE)?;
@@ -828,7 +874,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
 
         // Type some characters
         test_key_event(&mut app, handler, KeyCode::Char('h'), KeyModifiers::NONE)?;
@@ -837,8 +883,8 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('l'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('o'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "hello");
-        assert_eq!(app.mode, Mode::Broadcasting);
+        assert_eq!(app.data.input.buffer, "hello");
+        assert_eq!(app.mode, AppMode::Broadcasting(BroadcastingMode));
         Ok(())
     }
 
@@ -847,13 +893,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
         app.handle_char('t');
         app.handle_char('e');
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -863,13 +909,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
         app.handle_char('a');
         app.handle_char('b');
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "a");
+        assert_eq!(app.data.input.buffer, "a");
         Ok(())
     }
 
@@ -879,7 +925,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
         app.handle_char('t');
         app.handle_char('e');
         app.handle_char('s');
@@ -888,8 +934,8 @@ mod tests {
         // Enter with no agent selected should show error modal
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
-        assert!(app.ui.last_error.is_some());
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+        assert!(app.data.ui.last_error.is_some());
         Ok(())
     }
 
@@ -899,12 +945,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
 
         // Enter with empty input should just exit mode
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -915,13 +961,13 @@ mod tests {
 
         // Set an error (this enters ErrorModal mode)
         app.set_error("Test error message");
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
 
         // Any key should dismiss the error modal
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.ui.last_error.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.ui.last_error.is_none());
         Ok(())
     }
 
@@ -932,11 +978,11 @@ mod tests {
         let handler = Actions::new();
 
         app.set_error("Test error");
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -945,12 +991,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildCount);
+        app.enter_mode(ChildCountMode.into());
 
         // Enter should proceed to child prompt
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::ChildPrompt);
+        assert_eq!(app.mode, AppMode::ChildPrompt(ChildPromptMode));
         Ok(())
     }
 
@@ -959,12 +1005,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildCount);
+        app.enter_mode(ChildCountMode.into());
 
         // Escape should exit mode
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -973,16 +1019,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildCount);
-        let initial_count = app.spawn.child_count;
+        app.enter_mode(ChildCountMode.into());
+        let initial_count = app.data.spawn.child_count;
 
         // Up should increment
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count + 1);
+        assert_eq!(app.data.spawn.child_count, initial_count + 1);
 
         // Down should decrement
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count);
+        assert_eq!(app.data.spawn.child_count, initial_count);
 
         Ok(())
     }
@@ -992,7 +1038,7 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildPrompt);
+        app.enter_mode(ChildPromptMode.into());
 
         // Type some characters
         test_key_event(&mut app, handler, KeyCode::Char('t'), KeyModifiers::NONE)?;
@@ -1000,8 +1046,8 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('s'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('t'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "test");
-        assert_eq!(app.mode, Mode::ChildPrompt);
+        assert_eq!(app.data.input.buffer, "test");
+        assert_eq!(app.mode, AppMode::ChildPrompt(ChildPromptMode));
         Ok(())
     }
 
@@ -1010,14 +1056,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildPrompt);
+        app.enter_mode(ChildPromptMode.into());
         app.handle_char('t');
 
         // Escape should exit mode
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input.buffer.is_empty());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.input.buffer.is_empty());
         Ok(())
     }
 
@@ -1027,7 +1073,7 @@ mod tests {
         let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildPrompt);
+        app.enter_mode(ChildPromptMode.into());
         app.handle_char('t');
         app.handle_char('a');
         app.handle_char('s');
@@ -1039,9 +1085,14 @@ mod tests {
         // On error, should show error modal; on success with no agent, exits normally
         // Could also enter WorktreeConflict mode if the branch already exists
         assert!(
-            matches!(app.mode, Mode::ErrorModal(_))
-                || app.mode == Mode::Normal
-                || matches!(app.mode, Mode::Confirming(ConfirmAction::WorktreeConflict)),
+            matches!(&app.mode, AppMode::ErrorModal(_))
+                || app.mode == AppMode::normal()
+                || matches!(
+                    &app.mode,
+                    AppMode::Confirming(ConfirmingMode {
+                        action: ConfirmAction::WorktreeConflict,
+                    })
+                ),
             "Expected ErrorModal, Normal, or WorktreeConflict mode, got {:?}",
             app.mode
         );
@@ -1055,8 +1106,8 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ChildCount);
-        let initial_count = app.spawn.child_count;
+        app.enter_mode(ChildCountMode.into());
+        let initial_count = app.data.spawn.child_count;
 
         // Other keys should be ignored
         test_key_event(&mut app, handler, KeyCode::Left, KeyModifiers::NONE)?;
@@ -1065,8 +1116,8 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
 
         // Should still be in ChildCount mode with same count
-        assert_eq!(app.mode, Mode::ChildCount);
-        assert_eq!(app.spawn.child_count, initial_count);
+        assert_eq!(app.mode, AppMode::ChildCount(ChildCountMode));
+        assert_eq!(app.data.spawn.child_count, initial_count);
         Ok(())
     }
 
@@ -1076,11 +1127,11 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ReviewInfo);
+        app.enter_mode(ReviewInfoMode.into());
 
         // Any key should dismiss
         test_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1090,10 +1141,10 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ReviewInfo);
+        app.enter_mode(ReviewInfoMode.into());
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1103,16 +1154,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ReviewChildCount);
-        let initial_count = app.spawn.child_count;
+        app.enter_mode(ReviewChildCountMode.into());
+        let initial_count = app.data.spawn.child_count;
 
         // Up should increment
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count + 1);
+        assert_eq!(app.data.spawn.child_count, initial_count + 1);
 
         // Down should decrement
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.spawn.child_count, initial_count);
+        assert_eq!(app.data.spawn.child_count, initial_count);
 
         Ok(())
     }
@@ -1123,11 +1174,11 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ReviewChildCount);
+        app.enter_mode(ReviewChildCountMode.into());
 
         // Enter should proceed to branch selector
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::BranchSelector);
+        assert_eq!(app.mode, AppMode::BranchSelector(BranchSelectorMode));
         Ok(())
     }
 
@@ -1137,10 +1188,10 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ReviewChildCount);
+        app.enter_mode(ReviewChildCountMode.into());
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1168,30 +1219,30 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
         ];
-        app.enter_mode(Mode::BranchSelector);
+        app.enter_mode(BranchSelectorMode.into());
 
-        assert_eq!(app.review.selected, 0);
-
-        // Down should move to next
-        test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.review.selected, 1);
+        assert_eq!(app.data.review.selected, 0);
 
         // Down should move to next
         test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
-        assert_eq!(app.review.selected, 2);
+        assert_eq!(app.data.review.selected, 1);
+
+        // Down should move to next
+        test_key_event(&mut app, handler, KeyCode::Down, KeyModifiers::NONE)?;
+        assert_eq!(app.data.review.selected, 2);
 
         // Up should move to previous
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.review.selected, 1);
+        assert_eq!(app.data.review.selected, 1);
 
         // Up should move to previous
         test_key_event(&mut app, handler, KeyCode::Up, KeyModifiers::NONE)?;
-        assert_eq!(app.review.selected, 0);
+        assert_eq!(app.data.review.selected, 0);
 
         Ok(())
     }
@@ -1202,18 +1253,18 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
         ];
-        app.enter_mode(Mode::BranchSelector);
+        app.enter_mode(BranchSelectorMode.into());
 
         // Type characters for filter
         test_key_event(&mut app, handler, KeyCode::Char('m'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('a'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.review.filter, "ma");
-        assert_eq!(app.mode, Mode::BranchSelector);
+        assert_eq!(app.data.review.filter, "ma");
+        assert_eq!(app.mode, AppMode::BranchSelector(BranchSelectorMode));
         Ok(())
     }
 
@@ -1223,12 +1274,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review.branches = vec![create_test_branch_info("main", false)];
-        app.review.filter = "main".to_string();
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.branches = vec![create_test_branch_info("main", false)];
+        app.data.review.filter = "main".to_string();
+        app.enter_mode(BranchSelectorMode.into());
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
-        assert_eq!(app.review.filter, "mai");
+        assert_eq!(app.data.review.filter, "mai");
         Ok(())
     }
 
@@ -1238,16 +1289,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::BranchSelector);
-        app.review.branches = vec![create_test_branch_info("main", false)];
-        app.review.filter = "test".to_string();
+        app.enter_mode(BranchSelectorMode.into());
+        app.data.review.branches = vec![create_test_branch_info("main", false)];
+        app.data.review.filter = "test".to_string();
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         // State should be cleared on escape
-        assert!(app.review.branches.is_empty());
-        assert!(app.review.filter.is_empty());
+        assert!(app.data.review.branches.is_empty());
+        assert!(app.data.review.filter.is_empty());
         Ok(())
     }
 
@@ -1257,20 +1308,20 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("develop", false),
         ];
-        app.review.selected = 1;
-        app.spawn.spawning_under = Some(uuid::Uuid::new_v4());
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.selected = 1;
+        app.data.spawn.spawning_under = Some(uuid::Uuid::new_v4());
+        app.enter_mode(BranchSelectorMode.into());
 
         // Enter tries to spawn review agents (will fail without proper agent setup)
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Should have set review_base_branch before attempting spawn
         assert!(
-            app.review.base_branch.is_some() || matches!(app.mode, Mode::ErrorModal(_)),
+            app.data.review.base_branch.is_some() || matches!(&app.mode, AppMode::ErrorModal(_)),
             "Expected review_base_branch to be set or error modal, got {:?}",
             app.mode
         );
@@ -1283,14 +1334,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.review.branches = vec![]; // Empty list
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.branches = vec![]; // Empty list
+        app.enter_mode(BranchSelectorMode.into());
 
         // Enter with empty list exits mode but doesn't set base branch
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.review.base_branch.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.review.base_branch.is_none());
         Ok(())
     }
 
@@ -1303,7 +1354,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('R'), KeyModifiers::NONE)?;
 
         // Should show ReviewInfo mode
-        assert_eq!(app.mode, Mode::ReviewInfo);
+        assert_eq!(app.mode, AppMode::ReviewInfo(ReviewInfoMode));
         Ok(())
     }
 
@@ -1314,15 +1365,15 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPush);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
+        app.enter_mode(ConfirmPushMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
 
         // 'n' should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op.agent_id.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1331,15 +1382,15 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPush);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
+        app.enter_mode(ConfirmPushMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
 
         // Escape should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op.agent_id.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1348,15 +1399,15 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPush);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
+        app.enter_mode(ConfirmPushMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
 
         // 'y' should try to execute push (will fail, no agent in storage)
         test_key_event(&mut app, handler, KeyCode::Char('Y'), KeyModifiers::NONE)?;
 
         // Should show error (no agent in storage)
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -1365,10 +1416,10 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::RenameBranch);
-        app.git_op.branch_name = "feature/old".to_string();
-        app.input.buffer = "feature/old".to_string();
-        app.input.cursor = app.input.buffer.len(); // Cursor at end
+        app.enter_mode(RenameBranchMode.into());
+        app.data.git_op.branch_name = "feature/old".to_string();
+        app.data.input.buffer = "feature/old".to_string();
+        app.data.input.cursor = app.data.input.buffer.len(); // Cursor at end
 
         // Type some characters
         test_key_event(&mut app, handler, KeyCode::Char('-'), KeyModifiers::NONE)?;
@@ -1376,8 +1427,8 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('e'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('w'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "feature/old-new");
-        assert_eq!(app.mode, Mode::RenameBranch);
+        assert_eq!(app.data.input.buffer, "feature/old-new");
+        assert_eq!(app.mode, AppMode::RenameBranch(RenameBranchMode));
         Ok(())
     }
 
@@ -1386,13 +1437,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::RenameBranch);
-        app.input.buffer = "feature/test".to_string();
-        app.input.cursor = app.input.buffer.len(); // Cursor at end
+        app.enter_mode(RenameBranchMode.into());
+        app.data.input.buffer = "feature/test".to_string();
+        app.data.input.cursor = app.data.input.buffer.len(); // Cursor at end
 
         test_key_event(&mut app, handler, KeyCode::Backspace, KeyModifiers::NONE)?;
 
-        assert_eq!(app.input.buffer, "feature/tes");
+        assert_eq!(app.data.input.buffer, "feature/tes");
         Ok(())
     }
 
@@ -1401,14 +1452,14 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::RenameBranch);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.input.buffer = "feature/test".to_string();
+        app.enter_mode(RenameBranchMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.input.buffer = "feature/test".to_string();
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op.agent_id.is_none()); // State cleared
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.git_op.agent_id.is_none()); // State cleared
         Ok(())
     }
 
@@ -1417,19 +1468,19 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::RenameBranch);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.original_branch = "feature/old".to_string();
-        app.git_op.branch_name = "feature/old".to_string();
-        app.input.buffer = "feature/new".to_string();
+        app.enter_mode(RenameBranchMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.original_branch = "feature/old".to_string();
+        app.data.git_op.branch_name = "feature/old".to_string();
+        app.data.input.buffer = "feature/new".to_string();
 
         // Enter tries to confirm rename and execute (will fail without agent)
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Branch name should have been updated before failing
-        assert_eq!(app.git_op.branch_name, "feature/new");
+        assert_eq!(app.data.git_op.branch_name, "feature/new");
         // Should show error (no agent in storage)
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -1438,15 +1489,15 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
+        app.enter_mode(ConfirmPushForPRMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
 
         // 'n' should cancel and exit
         test_key_event(&mut app, handler, KeyCode::Char('n'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op.agent_id.is_none()); // State cleared
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.git_op.agent_id.is_none()); // State cleared
         Ok(())
     }
 
@@ -1456,13 +1507,13 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.enter_mode(ConfirmPushForPRMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         test_key_event(&mut app, handler, KeyCode::Esc, KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.git_op.agent_id.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.git_op.agent_id.is_none());
         Ok(())
     }
 
@@ -1471,16 +1522,16 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPushForPR);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
-        app.git_op.base_branch = "main".to_string();
+        app.enter_mode(ConfirmPushForPRMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
+        app.data.git_op.base_branch = "main".to_string();
 
         // 'y' should try to push and open PR (will fail, no agent in storage)
         test_key_event(&mut app, handler, KeyCode::Char('y'), KeyModifiers::NONE)?;
 
         // Should show error (no agent in storage)
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -1490,8 +1541,8 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::ConfirmPush);
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.enter_mode(ConfirmPushMode.into());
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
 
         // Other keys should be ignored
         test_key_event(&mut app, handler, KeyCode::Char('x'), KeyModifiers::NONE)?;
@@ -1499,7 +1550,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
         // Should still be in ConfirmPush mode
-        assert_eq!(app.mode, Mode::ConfirmPush);
+        assert_eq!(app.mode, AppMode::ConfirmPush(ConfirmPushMode));
         Ok(())
     }
 
@@ -1666,12 +1717,12 @@ mod tests {
         let mut app = create_test_app();
         let handler = Actions::new();
 
-        app.enter_mode(Mode::PreviewFocused);
-        assert_eq!(app.mode, Mode::PreviewFocused);
+        app.enter_mode(PreviewFocusedMode.into());
+        assert_eq!(app.mode, AppMode::PreviewFocused(PreviewFocusedMode));
 
         // Ctrl+q should exit preview focus mode
         test_key_event(&mut app, handler, KeyCode::Char('q'), KeyModifiers::CONTROL)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1679,30 +1730,17 @@ mod tests {
     fn test_handle_key_event_preview_focused_collects_keys()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
-        let handler = Actions::new();
 
-        app.enter_mode(Mode::PreviewFocused);
+        app.enter_mode(PreviewFocusedMode.into());
 
         // Regular keys should be collected for batching (not change mode)
         let mut keys = Vec::new();
-        input::handle_key_event(
-            &mut app,
-            handler,
-            KeyCode::Char('a'),
-            KeyModifiers::NONE,
-            &mut keys,
-        )?;
-        assert_eq!(app.mode, Mode::PreviewFocused);
+        input::handle_key_event(&mut app, KeyCode::Char('a'), KeyModifiers::NONE, &mut keys)?;
+        assert_eq!(app.mode, AppMode::PreviewFocused(PreviewFocusedMode));
         assert_eq!(keys, vec!["a".to_string()]);
 
         // Special keys also collected
-        input::handle_key_event(
-            &mut app,
-            handler,
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-            &mut keys,
-        )?;
+        input::handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE, &mut keys)?;
         assert_eq!(keys, vec!["a".to_string(), "\r".to_string()]);
         Ok(())
     }
@@ -1714,7 +1752,7 @@ mod tests {
 
         // Without agent selected, FocusPreview should not change mode
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 }

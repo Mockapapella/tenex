@@ -7,77 +7,56 @@
 //! - `Confirming` (general yes/no confirmations)
 //! - `UpdatePrompt` (self-update prompt on startup)
 
-use crate::app::{Actions, App, ConfirmAction};
+use crate::app::App;
+use crate::state::ConfirmAction;
 use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::crossterm::event::KeyCode;
 
 /// Handle key events in `ConfirmPush` mode
-pub fn handle_confirm_push_mode(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_confirm_push_mode(app, action_handler, code)
+pub fn handle_confirm_push_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_confirm_push_mode(app, code)
 }
 
 /// Handle key events in `ConfirmPushForPR` mode
-pub fn handle_confirm_push_for_pr_mode(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_confirm_push_for_pr_mode(app, action_handler, code)
+pub fn handle_confirm_push_for_pr_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_confirm_push_for_pr_mode(app, code)
 }
 
 /// Handle key events in `RenameBranch` mode
-pub fn handle_rename_branch_mode(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_rename_branch_mode(app, action_handler, code)
+pub fn handle_rename_branch_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_rename_branch_mode(app, code)
 }
 
 /// Handle key events in Confirming mode (general yes/no confirmations)
-pub fn handle_confirming_mode(
-    app: &mut App,
-    action_handler: Actions,
-    action: ConfirmAction,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_confirming_mode(app, action_handler, action, code)
+pub fn handle_confirming_mode(app: &mut App, action: ConfirmAction, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_confirming_mode(app, action, code)
 }
 
 /// Handle key events in `KeyboardRemapPrompt` mode
 /// Asks user if they want to remap Ctrl+M to Ctrl+N due to terminal incompatibility
-pub fn handle_keyboard_remap_mode(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_keyboard_remap_prompt_mode(app, action_handler, code)
+pub fn handle_keyboard_remap_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_keyboard_remap_prompt_mode(app, code)
 }
 
 /// Handle key events in `UpdatePrompt` mode.
 ///
 /// If the user accepts, switch to `UpdateRequested` so the TUI can exit
 /// and the binary can run the updater.
-pub fn handle_update_prompt_mode(
-    app: &mut App,
-    action_handler: Actions,
-    info: UpdateInfo,
-    code: KeyCode,
-) -> Result<()> {
-    crate::action::dispatch_update_prompt_mode(app, action_handler, info, code)
+pub fn handle_update_prompt_mode(app: &mut App, info: &UpdateInfo, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_update_prompt_mode(app, info, code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::{Mode, Settings, WorktreeConflictInfo};
+    use crate::app::{Settings, WorktreeConflictInfo};
     use crate::config::Config;
+    use crate::state::{
+        AppMode, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, KeyboardRemapPromptMode,
+        ReconnectPromptMode, RenameBranchMode, UpdatePromptMode,
+    };
     use crate::update::UpdateInfo;
     use ratatui::crossterm::event::KeyCode;
     use semver::Version;
@@ -112,27 +91,27 @@ mod tests {
     #[test]
     fn test_handle_confirm_push_mode_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Char('n'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Char('n'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_confirm_push_mode_uppercase_n() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Char('N'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Char('N'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_confirm_push_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Esc)?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -140,29 +119,29 @@ mod tests {
     fn test_handle_confirm_push_mode_yes_sets_error_without_git()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Char('y'))?;
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Char('y'))?;
         // Should set an error since there's no git repo
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
     #[test]
     fn test_handle_confirm_push_mode_uppercase_y() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Char('Y'))?;
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Char('Y'))?;
         // Should set an error since there's no git repo
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
     #[test]
     fn test_handle_confirm_push_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        handle_confirm_push_mode(&mut app, Actions::new(), KeyCode::Char('x'))?;
-        assert_eq!(app.mode, Mode::ConfirmPush);
+        app.apply_mode(ConfirmPushMode.into());
+        handle_confirm_push_mode(&mut app, KeyCode::Char('x'))?;
+        assert_eq!(app.mode, ConfirmPushMode.into());
         Ok(())
     }
 
@@ -171,9 +150,9 @@ mod tests {
     #[test]
     fn test_handle_confirm_push_for_pr_mode_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Char('n'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('n'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -181,18 +160,18 @@ mod tests {
     fn test_handle_confirm_push_for_pr_mode_uppercase_n() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Char('N'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('N'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_confirm_push_for_pr_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Esc)?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -200,10 +179,10 @@ mod tests {
     fn test_handle_confirm_push_for_pr_mode_yes_sets_error_without_git()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Char('y'))?;
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('y'))?;
         // Should set an error since there's no git repo
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -211,9 +190,9 @@ mod tests {
     fn test_handle_confirm_push_for_pr_mode_uppercase_y() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Char('Y'))?;
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('Y'))?;
+        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -221,9 +200,9 @@ mod tests {
     fn test_handle_confirm_push_for_pr_mode_other_key_ignored()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        handle_confirm_push_for_pr_mode(&mut app, Actions::new(), KeyCode::Char('x'))?;
-        assert_eq!(app.mode, Mode::ConfirmPushForPR);
+        app.apply_mode(ConfirmPushForPRMode.into());
+        handle_confirm_push_for_pr_mode(&mut app, KeyCode::Char('x'))?;
+        assert_eq!(app.mode, ConfirmPushForPRMode.into());
         Ok(())
     }
 
@@ -232,29 +211,29 @@ mod tests {
     #[test]
     fn test_handle_rename_branch_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        handle_rename_branch_mode(&mut app, Actions::new(), KeyCode::Esc)?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(RenameBranchMode.into());
+        handle_rename_branch_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_rename_branch_mode_char() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        handle_rename_branch_mode(&mut app, Actions::new(), KeyCode::Char('a'))?;
-        assert_eq!(app.input.buffer, "a");
+        app.apply_mode(RenameBranchMode.into());
+        handle_rename_branch_mode(&mut app, KeyCode::Char('a'))?;
+        assert_eq!(app.data.input.buffer, "a");
         Ok(())
     }
 
     #[test]
     fn test_handle_rename_branch_mode_backspace() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        app.input.buffer = "test".to_string();
-        app.input.cursor = 4;
-        handle_rename_branch_mode(&mut app, Actions::new(), KeyCode::Backspace)?;
-        assert_eq!(app.input.buffer, "tes");
+        app.apply_mode(RenameBranchMode.into());
+        app.data.input.buffer = "test".to_string();
+        app.data.input.cursor = 4;
+        handle_rename_branch_mode(&mut app, KeyCode::Backspace)?;
+        assert_eq!(app.data.input.buffer, "tes");
         Ok(())
     }
 
@@ -262,11 +241,11 @@ mod tests {
     fn test_handle_rename_branch_mode_enter_empty_stays_in_mode()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        app.input.buffer.clear();
-        handle_rename_branch_mode(&mut app, Actions::new(), KeyCode::Enter)?;
+        app.apply_mode(RenameBranchMode.into());
+        app.data.input.buffer.clear();
+        handle_rename_branch_mode(&mut app, KeyCode::Enter)?;
         // Should stay in RenameBranch mode because name is empty
-        assert_eq!(app.mode, Mode::RenameBranch);
+        assert_eq!(app.mode, RenameBranchMode.into());
         Ok(())
     }
 
@@ -274,10 +253,10 @@ mod tests {
     fn test_handle_rename_branch_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        handle_rename_branch_mode(&mut app, Actions::new(), KeyCode::Tab)?;
-        assert_eq!(app.mode, Mode::RenameBranch);
-        assert!(app.input.buffer.is_empty());
+        app.apply_mode(RenameBranchMode.into());
+        handle_rename_branch_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, RenameBranchMode.into());
+        assert!(app.data.input.buffer.is_empty());
         Ok(())
     }
 
@@ -286,50 +265,50 @@ mod tests {
     #[test]
     fn test_handle_keyboard_remap_mode_yes() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Char('y'))?;
-        assert!(app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('y'))?;
+        assert!(app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_keyboard_remap_mode_uppercase_yes() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Char('Y'))?;
-        assert!(app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('Y'))?;
+        assert!(app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_keyboard_remap_mode_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Char('n'))?;
-        assert!(!app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('n'))?;
+        assert!(!app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_keyboard_remap_mode_uppercase_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Char('N'))?;
-        assert!(!app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('N'))?;
+        assert!(!app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_keyboard_remap_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Esc)?;
-        assert!(!app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Esc)?;
+        assert!(!app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -337,10 +316,10 @@ mod tests {
     fn test_handle_keyboard_remap_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        handle_keyboard_remap_mode(&mut app, Actions::new(), KeyCode::Char('x'))?;
-        assert!(!app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::KeyboardRemapPrompt);
+        app.apply_mode(KeyboardRemapPromptMode.into());
+        handle_keyboard_remap_mode(&mut app, KeyCode::Char('x'))?;
+        assert!(!app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, KeyboardRemapPromptMode.into());
         Ok(())
     }
 
@@ -353,12 +332,12 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info.clone(), KeyCode::Char('y'))?;
-        assert!(matches!(app.mode, Mode::UpdateRequested(_)));
-        if let Mode::UpdateRequested(req_info) = &app.mode {
-            assert_eq!(req_info.current_version, info.current_version);
-            assert_eq!(req_info.latest_version, info.latest_version);
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Char('y'))?;
+        assert!(matches!(app.mode, AppMode::UpdateRequested(_)));
+        if let AppMode::UpdateRequested(state) = &app.mode {
+            assert_eq!(state.info.current_version, info.current_version);
+            assert_eq!(state.info.latest_version, info.latest_version);
         }
         Ok(())
     }
@@ -370,9 +349,9 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info, KeyCode::Char('Y'))?;
-        assert!(matches!(app.mode, Mode::UpdateRequested(_)));
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Char('Y'))?;
+        assert!(matches!(app.mode, AppMode::UpdateRequested(_)));
         Ok(())
     }
 
@@ -383,9 +362,9 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info, KeyCode::Char('n'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Char('n'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -396,9 +375,9 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info, KeyCode::Char('N'))?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Char('N'))?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -409,9 +388,9 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info, KeyCode::Esc)?;
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -423,9 +402,9 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info.clone());
-        handle_update_prompt_mode(&mut app, Actions::new(), info, KeyCode::Char('x'))?;
-        assert!(matches!(app.mode, Mode::UpdatePrompt(_)));
+        app.apply_mode(UpdatePromptMode { info: info.clone() }.into());
+        handle_update_prompt_mode(&mut app, &info, KeyCode::Char('x'))?;
+        assert!(matches!(app.mode, AppMode::UpdatePrompt(_)));
         Ok(())
     }
 
@@ -435,18 +414,22 @@ mod tests {
     fn test_handle_worktree_conflict_mode_reconnect() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         let conflict = create_worktree_conflict_info();
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         handle_confirming_mode(
             &mut app,
-            Actions::new(),
             ConfirmAction::WorktreeConflict,
             KeyCode::Char('r'),
         )?;
 
-        assert_eq!(app.mode, Mode::ReconnectPrompt);
-        assert_eq!(app.input.buffer, "test prompt");
+        assert_eq!(app.mode, ReconnectPromptMode.into());
+        assert_eq!(app.data.input.buffer, "test prompt");
         Ok(())
     }
 
@@ -455,17 +438,21 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         let conflict = create_worktree_conflict_info();
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         handle_confirming_mode(
             &mut app,
-            Actions::new(),
             ConfirmAction::WorktreeConflict,
             KeyCode::Char('R'),
         )?;
 
-        assert_eq!(app.mode, Mode::ReconnectPrompt);
+        assert_eq!(app.mode, ReconnectPromptMode.into());
         Ok(())
     }
 
@@ -475,18 +462,22 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
         let mut conflict = create_worktree_conflict_info();
         conflict.prompt = None;
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         handle_confirming_mode(
             &mut app,
-            Actions::new(),
             ConfirmAction::WorktreeConflict,
             KeyCode::Char('r'),
         )?;
 
-        assert_eq!(app.mode, Mode::ReconnectPrompt);
-        assert!(app.input.buffer.is_empty());
+        assert_eq!(app.mode, ReconnectPromptMode.into());
+        assert!(app.data.input.buffer.is_empty());
         Ok(())
     }
 
@@ -494,18 +485,18 @@ mod tests {
     fn test_handle_worktree_conflict_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         let conflict = create_worktree_conflict_info();
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::WorktreeConflict,
-            KeyCode::Esc,
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::WorktreeConflict, KeyCode::Esc)?;
 
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.spawn.worktree_conflict.is_none());
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.spawn.worktree_conflict.is_none());
         Ok(())
     }
 
@@ -514,19 +505,25 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         let conflict = create_worktree_conflict_info();
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         handle_confirming_mode(
             &mut app,
-            Actions::new(),
             ConfirmAction::WorktreeConflict,
             KeyCode::Char('x'),
         )?;
 
         assert!(matches!(
             app.mode,
-            Mode::Confirming(ConfirmAction::WorktreeConflict)
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict
+            })
         ));
         Ok(())
     }
@@ -536,43 +533,48 @@ mod tests {
     #[test]
     fn test_handle_general_confirm_mode_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Quit,
-            KeyCode::Char('n'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Quit, KeyCode::Char('n'))?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_general_confirm_mode_uppercase_no() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Quit,
-            KeyCode::Char('N'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Quit, KeyCode::Char('N'))?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_general_confirm_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(&mut app, Actions::new(), ConfirmAction::Quit, KeyCode::Esc)?;
+        handle_confirming_mode(&mut app, ConfirmAction::Quit, KeyCode::Esc)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -580,16 +582,21 @@ mod tests {
     fn test_handle_general_confirm_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Quit,
-            KeyCode::Char('x'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Quit, KeyCode::Char('x'))?;
 
-        assert!(matches!(app.mode, Mode::Confirming(ConfirmAction::Quit)));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Quit
+            })
+        ));
         Ok(())
     }
 
@@ -600,17 +607,17 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         let conflict = create_worktree_conflict_info();
-        app.spawn.worktree_conflict = Some(conflict);
-        app.mode = Mode::Confirming(ConfirmAction::WorktreeConflict);
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::WorktreeConflict,
-            KeyCode::Esc,
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::WorktreeConflict, KeyCode::Esc)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -618,16 +625,16 @@ mod tests {
     fn test_handle_confirming_mode_routes_to_general_quit() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Quit,
-            KeyCode::Char('n'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Quit, KeyCode::Char('n'))?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -635,16 +642,16 @@ mod tests {
     fn test_handle_confirming_mode_routes_to_general_kill() -> Result<(), Box<dyn std::error::Error>>
     {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Kill);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Kill,
-            KeyCode::Char('n'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Kill, KeyCode::Char('n'))?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -652,16 +659,16 @@ mod tests {
     fn test_handle_confirming_mode_routes_to_general_reset()
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Reset);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Reset,
+            }
+            .into(),
+        );
 
-        handle_confirming_mode(
-            &mut app,
-            Actions::new(),
-            ConfirmAction::Reset,
-            KeyCode::Char('n'),
-        )?;
+        handle_confirming_mode(&mut app, ConfirmAction::Reset, KeyCode::Char('n'))?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 }

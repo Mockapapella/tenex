@@ -2,110 +2,168 @@
 
 use tracing::{debug, warn};
 
-use super::{App, Mode};
+use super::App;
+use crate::state::{
+    AppMode, CommandPaletteMode, ErrorModalMode, KeyboardRemapPromptMode, ModelSelectorMode,
+    SuccessModalMode,
+};
 
 impl App {
-    /// Enter a new application mode
-    pub fn enter_mode(&mut self, mode: Mode) {
-        debug!(new_mode = ?mode, old_mode = ?self.mode, "Entering mode");
-        // Don't clear for PushRenameBranch - we pre-fill it with the branch name
-        let should_clear = matches!(
-            mode,
-            Mode::Creating
-                | Mode::Prompting
-                | Mode::Confirming(_)
-                | Mode::CommandPalette
-                | Mode::ChildPrompt
-                | Mode::Broadcasting
-                | Mode::TerminalPrompt
-                | Mode::CustomAgentCommand
-        );
-        self.mode = mode;
-        if should_clear {
-            self.input.clear();
+    /// Apply a mode transition to the application, running any required
+    /// entry/exit hooks.
+    pub fn apply_mode(&mut self, next: AppMode) {
+        if self.mode == next {
+            return;
+        }
+
+        debug!(new_mode = ?next, old_mode = ?self.mode, "Applying mode transition");
+
+        match next {
+            AppMode::Normal(_) => {
+                self.mode = AppMode::normal();
+                self.data.input.clear();
+            }
+            AppMode::CommandPalette(_) => {
+                self.data.command_palette.reset();
+                self.data.input.buffer = "/".to_string();
+                self.data.input.cursor = 1;
+                self.data.input.scroll = 0;
+                self.mode = CommandPaletteMode.into();
+            }
+            AppMode::ModelSelector(_) => {
+                self.data
+                    .model_selector
+                    .start(self.data.settings.agent_program);
+                self.mode = ModelSelectorMode.into();
+            }
+            AppMode::Creating(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::Creating(state);
+            }
+            AppMode::Prompting(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::Prompting(state);
+            }
+            AppMode::Confirming(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::Confirming(state);
+            }
+            AppMode::ChildPrompt(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::ChildPrompt(state);
+            }
+            AppMode::Broadcasting(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::Broadcasting(state);
+            }
+            AppMode::TerminalPrompt(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::TerminalPrompt(state);
+            }
+            AppMode::CustomAgentCommand(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::CustomAgentCommand(state);
+            }
+            AppMode::ErrorModal(state) => {
+                self.data.ui.set_error(state.message.clone());
+                self.mode = AppMode::ErrorModal(state);
+            }
+            AppMode::SuccessModal(state) => {
+                self.mode = AppMode::SuccessModal(state);
+            }
+            other => {
+                self.mode = other;
+            }
         }
     }
 
-    /// Exit the current mode and return to normal mode
+    /// Enter a new application mode.
+    pub fn enter_mode(&mut self, mode: AppMode) {
+        self.apply_mode(mode);
+    }
+
+    /// Exit the current mode and return to normal mode.
     pub fn exit_mode(&mut self) {
-        debug!(old_mode = ?self.mode, "Exiting mode");
-        self.mode = Mode::Normal;
-        self.input.clear();
+        self.apply_mode(AppMode::normal());
     }
 
-    /// Set an error message and show the error modal
+    /// Set an error message and show the error modal.
     pub fn set_error(&mut self, message: impl Into<String>) {
-        let msg = message.into();
-        self.ui.set_error(msg.clone());
-        self.mode = Mode::ErrorModal(msg);
+        self.apply_mode(
+            ErrorModalMode {
+                message: message.into(),
+            }
+            .into(),
+        );
     }
 
-    /// Clear the current error message
+    /// Clear the current error message.
     pub fn clear_error(&mut self) {
-        self.ui.clear_error();
+        self.data.ui.clear_error();
     }
 
-    /// Dismiss the error modal (returns to normal mode)
+    /// Dismiss the error modal and clear the stored error message.
     pub fn dismiss_error(&mut self) {
-        if matches!(self.mode, Mode::ErrorModal(_)) {
-            self.mode = Mode::Normal;
-        }
-        self.ui.clear_error();
+        self.data.ui.clear_error();
+        self.apply_mode(AppMode::normal());
     }
 
-    /// Set a status message to display
+    /// Set a status message to display.
     pub fn set_status(&mut self, message: impl Into<String>) {
-        self.ui.set_status(message);
+        self.data.ui.set_status(message);
     }
 
-    /// Clear the current status message
+    /// Clear the current status message.
     pub fn clear_status(&mut self) {
-        self.ui.clear_status();
+        self.data.ui.clear_status();
     }
 
-    /// Show success modal with message
+    /// Show success modal with message.
     pub fn show_success(&mut self, message: impl Into<String>) {
-        self.mode = Mode::SuccessModal(message.into());
+        self.apply_mode(
+            SuccessModalMode {
+                message: message.into(),
+            }
+            .into(),
+        );
     }
 
-    /// Dismiss success modal
+    /// Dismiss success modal.
     pub fn dismiss_success(&mut self) {
-        if matches!(self.mode, Mode::SuccessModal(_)) {
-            self.mode = Mode::Normal;
-        }
+        self.apply_mode(AppMode::normal());
     }
 
     /// Check if keyboard remap prompt should be shown at startup
     /// Returns true if terminal doesn't support enhancement AND user hasn't been asked yet
     #[must_use]
     pub const fn should_show_keyboard_remap_prompt(&self) -> bool {
-        !self.keyboard_enhancement_supported && !self.settings.keyboard_remap_asked
+        !self.data.keyboard_enhancement_supported && !self.data.settings.keyboard_remap_asked
     }
 
     /// Show the keyboard remap prompt modal
     pub fn show_keyboard_remap_prompt(&mut self) {
-        self.mode = Mode::KeyboardRemapPrompt;
+        self.apply_mode(KeyboardRemapPromptMode.into());
     }
 
     /// Accept the keyboard remap (Ctrl+M -> Ctrl+N)
     pub fn accept_keyboard_remap(&mut self) {
-        if let Err(e) = self.settings.enable_merge_remap() {
+        if let Err(e) = self.data.settings.enable_merge_remap() {
             warn!("Failed to save keyboard remap setting: {}", e);
         }
-        self.mode = Mode::Normal;
+        self.apply_mode(AppMode::normal());
     }
 
     /// Decline the keyboard remap
     pub fn decline_keyboard_remap(&mut self) {
-        if let Err(e) = self.settings.decline_merge_remap() {
+        if let Err(e) = self.data.settings.decline_merge_remap() {
             warn!("Failed to save keyboard remap setting: {}", e);
         }
-        self.mode = Mode::Normal;
+        self.apply_mode(AppMode::normal());
     }
 
     /// Check if merge key should use Ctrl+N instead of Ctrl+M
     #[must_use]
     pub const fn is_merge_key_remapped(&self) -> bool {
-        self.settings.merge_key_remapped
+        self.data.settings.merge_key_remapped
     }
 }

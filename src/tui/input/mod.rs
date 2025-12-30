@@ -9,7 +9,8 @@ mod normal;
 mod picker;
 mod text_input;
 
-use crate::app::{Actions, App, Mode};
+use crate::app::App;
+use crate::state::AppMode;
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -18,109 +19,103 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 /// Returns Ok(()) if the key was handled or ignored, or an error if something went wrong.
 pub fn handle_key_event(
     app: &mut App,
-    action_handler: Actions,
     code: KeyCode,
     modifiers: KeyModifiers,
     batched_keys: &mut Vec<String>,
 ) -> Result<()> {
     match &app.mode {
         // Text input modes
-        Mode::Creating
-        | Mode::Prompting
-        | Mode::ChildPrompt
-        | Mode::Broadcasting
-        | Mode::ReconnectPrompt
-        | Mode::TerminalPrompt
-        | Mode::CustomAgentCommand => {
-            text_input::handle_text_input_mode(app, action_handler, code, modifiers)?;
+        AppMode::Creating(_)
+        | AppMode::Prompting(_)
+        | AppMode::ChildPrompt(_)
+        | AppMode::Broadcasting(_)
+        | AppMode::ReconnectPrompt(_)
+        | AppMode::TerminalPrompt(_)
+        | AppMode::CustomAgentCommand(_) => {
+            text_input::handle_text_input_mode(app, code, modifiers)?;
         }
 
         // Count picker modes
-        Mode::ChildCount => {
-            picker::handle_child_count_mode(app, action_handler, code)?;
+        AppMode::ChildCount(_) => {
+            picker::handle_child_count_mode(app, code)?;
         }
-        Mode::ReviewChildCount => {
-            picker::handle_review_child_count_mode(app, action_handler, code)?;
+        AppMode::ReviewChildCount(_) => {
+            picker::handle_review_child_count_mode(app, code)?;
         }
-        Mode::ReviewInfo => {
-            picker::handle_review_info_mode(app, action_handler)?;
+        AppMode::ReviewInfo(_) => {
+            picker::handle_review_info_mode(app)?;
         }
 
         // Branch selector mode
-        Mode::BranchSelector => {
-            picker::handle_branch_selector_mode(app, action_handler, code)?;
+        AppMode::BranchSelector(_) => {
+            picker::handle_branch_selector_mode(app, code)?;
         }
 
         // Git operation confirmation modes
-        Mode::ConfirmPush => {
-            confirm::handle_confirm_push_mode(app, action_handler, code)?;
+        AppMode::ConfirmPush(_) => {
+            confirm::handle_confirm_push_mode(app, code)?;
         }
-        Mode::ConfirmPushForPR => {
-            confirm::handle_confirm_push_for_pr_mode(app, action_handler, code)?;
+        AppMode::ConfirmPushForPR(_) => {
+            confirm::handle_confirm_push_for_pr_mode(app, code)?;
         }
-        Mode::RenameBranch => {
-            confirm::handle_rename_branch_mode(app, action_handler, code)?;
+        AppMode::RenameBranch(_) => {
+            confirm::handle_rename_branch_mode(app, code)?;
         }
 
         // General confirmation mode
-        Mode::Confirming(action) => {
-            confirm::handle_confirming_mode(app, action_handler, *action, code)?;
+        AppMode::Confirming(state) => {
+            confirm::handle_confirming_mode(app, state.action, code)?;
         }
 
         // Rebase/Merge branch selector modes
-        Mode::RebaseBranchSelector => {
-            picker::handle_rebase_branch_selector_mode(app, action_handler, code)?;
+        AppMode::RebaseBranchSelector(_) => {
+            picker::handle_rebase_branch_selector_mode(app, code)?;
         }
-        Mode::MergeBranchSelector => {
-            picker::handle_merge_branch_selector_mode(app, action_handler, code)?;
+        AppMode::MergeBranchSelector(_) => {
+            picker::handle_merge_branch_selector_mode(app, code)?;
         }
 
         // Keyboard remap prompt
-        Mode::KeyboardRemapPrompt => {
-            confirm::handle_keyboard_remap_mode(app, action_handler, code)?;
+        AppMode::KeyboardRemapPrompt(_) => {
+            confirm::handle_keyboard_remap_mode(app, code)?;
         }
         // Self-update prompt on startup
-        Mode::UpdatePrompt(info) => {
-            confirm::handle_update_prompt_mode(app, action_handler, info.clone(), code)?;
+        AppMode::UpdatePrompt(state) => {
+            let info = state.info.clone();
+            confirm::handle_update_prompt_mode(app, &info, code)?;
         }
         // Update requested - ignore input while exiting
-        Mode::UpdateRequested(_) => {}
+        AppMode::UpdateRequested(_) => {}
 
         // Help, error, and success modes
-        Mode::Help => {
-            crate::action::dispatch_help_mode(app, action_handler, code, modifiers)?;
+        AppMode::Help(_) => {
+            crate::action::dispatch_help_mode(app, code, modifiers)?;
         }
-        Mode::ErrorModal(message) => {
-            crate::action::dispatch_error_modal_mode(app, action_handler, message.clone())?;
+        AppMode::ErrorModal(state) => {
+            crate::action::dispatch_error_modal_mode(app, state.message.clone())?;
         }
-        Mode::SuccessModal(message) => {
-            crate::action::dispatch_success_modal_mode(app, action_handler, message.clone())?;
+        AppMode::SuccessModal(state) => {
+            crate::action::dispatch_success_modal_mode(app, state.message.clone())?;
         }
 
         // Slash commands
-        Mode::CommandPalette => {
-            command::handle_command_palette_mode(app, action_handler, code)?;
+        AppMode::CommandPalette(_) => {
+            command::handle_command_palette_mode(app, code)?;
         }
 
         // Slash command modal/pickers
-        Mode::ModelSelector => {
-            command::handle_model_selector_mode(app, action_handler, code)?;
+        AppMode::ModelSelector(_) => {
+            command::handle_model_selector_mode(app, code)?;
         }
 
         // Preview focused mode (forwards keys to the mux backend)
-        Mode::PreviewFocused => {
-            crate::action::dispatch_preview_focused_mode(
-                app,
-                action_handler,
-                code,
-                modifiers,
-                batched_keys,
-            )?;
+        AppMode::PreviewFocused(_) => {
+            crate::action::dispatch_preview_focused_mode(app, code, modifiers, batched_keys)?;
         }
 
         // Normal and scrolling modes
-        Mode::Normal | Mode::Scrolling => {
-            normal::handle_normal_mode(app, action_handler, code, modifiers)?;
+        AppMode::Normal(_) | AppMode::Scrolling(_) => {
+            normal::handle_normal_mode(app, code, modifiers)?;
         }
     }
     Ok(())
@@ -130,8 +125,9 @@ pub fn handle_key_event(
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::{ConfirmAction, Settings};
+    use crate::app::Settings;
     use crate::config::Config;
+    use crate::state::*;
     use crate::update::UpdateInfo;
     use ratatui::crossterm::event::KeyCode;
     use semver::Version;
@@ -151,135 +147,121 @@ mod tests {
     #[test]
     fn test_handle_key_event_help_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('q'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_error_modal_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ErrorModal("test error".to_string());
-        let action_handler = Actions::new();
+        app.set_error("test error");
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Enter,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_success_modal_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::SuccessModal("success!".to_string());
-        let action_handler = Actions::new();
+        app.show_success("success!");
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char(' '),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_confirm_push_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPush;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ConfirmPush(ConfirmPushMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('n'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_confirm_push_for_pr_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ConfirmPushForPR;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ConfirmPushForPR(ConfirmPushForPRMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_rename_branch_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RenameBranch;
-        let action_handler = Actions::new();
+        app.mode = AppMode::RenameBranch(RenameBranchMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('a'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::RenameBranch);
-        assert_eq!(app.input.buffer, "a");
+        assert_eq!(app.mode, AppMode::RenameBranch(RenameBranchMode));
+        assert_eq!(app.data.input.buffer, "a");
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_keyboard_remap_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::KeyboardRemapPrompt;
-        let action_handler = Actions::new();
+        app.mode = AppMode::KeyboardRemapPrompt(KeyboardRemapPromptMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('y'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert!(app.settings.merge_key_remapped);
-        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.data.settings.merge_key_remapped);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -290,19 +272,17 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdatePrompt(info);
-        let action_handler = Actions::new();
+        app.mode = AppMode::UpdatePrompt(UpdatePromptMode { info });
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('n'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -313,546 +293,489 @@ mod tests {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
-        app.mode = Mode::UpdateRequested(info);
-        let action_handler = Actions::new();
+        app.mode = AppMode::UpdateRequested(UpdateRequestedMode { info });
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('q'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
         // Should remain in UpdateRequested mode - input is ignored
-        assert!(matches!(app.mode, Mode::UpdateRequested(_)));
+        assert!(matches!(&app.mode, AppMode::UpdateRequested(_)));
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_confirming_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Confirming(ConfirmAction::Quit);
-        let action_handler = Actions::new();
+        app.mode = AppMode::Confirming(ConfirmingMode {
+            action: ConfirmAction::Quit,
+        });
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('n'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_creating_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Creating;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Creating(CreatingMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('t'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Creating);
-        assert_eq!(app.input.buffer, "t");
+        assert_eq!(app.mode, AppMode::Creating(CreatingMode));
+        assert_eq!(app.data.input.buffer, "t");
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_prompting_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Prompting;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Prompting(PromptingMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_child_count_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ChildCount(ChildCountMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_review_child_count_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ReviewChildCount(ReviewChildCountMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_review_info_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewInfo;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ReviewInfo(ReviewInfoMode);
         let mut batched_keys = Vec::new();
 
         // ReviewInfo mode exits on any key
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Enter,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
         // Should exit to Normal mode
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_branch_selector_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::BranchSelector;
-        let action_handler = Actions::new();
+        app.mode = AppMode::BranchSelector(BranchSelectorMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_rebase_branch_selector_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RebaseBranchSelector;
-        let action_handler = Actions::new();
+        app.mode = AppMode::RebaseBranchSelector(RebaseBranchSelectorMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_merge_branch_selector_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::MergeBranchSelector;
-        let action_handler = Actions::new();
+        app.mode = AppMode::MergeBranchSelector(MergeBranchSelectorMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_broadcasting_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Broadcasting;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Broadcasting(BroadcastingMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('h'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Broadcasting);
-        assert_eq!(app.input.buffer, "h");
+        assert_eq!(app.mode, AppMode::Broadcasting(BroadcastingMode));
+        assert_eq!(app.data.input.buffer, "h");
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_reconnect_prompt_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReconnectPrompt;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ReconnectPrompt(ReconnectPromptMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_child_prompt_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildPrompt;
-        let action_handler = Actions::new();
+        app.mode = AppMode::ChildPrompt(ChildPromptMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('x'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::ChildPrompt);
-        assert_eq!(app.input.buffer, "x");
+        assert_eq!(app.mode, AppMode::ChildPrompt(ChildPromptMode));
+        assert_eq!(app.data.input.buffer, "x");
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_terminal_prompt_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::TerminalPrompt;
-        let action_handler = Actions::new();
+        app.mode = AppMode::TerminalPrompt(TerminalPromptMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_scrolling_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Scrolling;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Scrolling(ScrollingMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Esc,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_normal_mode_help() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Normal;
-        let action_handler = Actions::new();
+        app.mode = AppMode::normal();
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('?'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_scroll_does_not_exit() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Down,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 1);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, 1);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_scroll_up_from_bottom_is_immediate() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = usize::MAX;
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = usize::MAX;
 
-        let max_scroll = crate::action::help_max_scroll(&app);
+        let max_scroll = crate::action::help_max_scroll(&app.data);
         assert_ne!(max_scroll, 0, "help should be scrollable for this test");
 
-        let action_handler = Actions::new();
         let mut batched_keys = Vec::new();
 
-        handle_key_event(
-            &mut app,
-            action_handler,
-            KeyCode::Up,
-            KeyModifiers::NONE,
-            &mut batched_keys,
-        )?;
+        handle_key_event(&mut app, KeyCode::Up, KeyModifiers::NONE, &mut batched_keys)?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, max_scroll.saturating_sub(1));
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, max_scroll.saturating_sub(1));
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_page_down() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::PageDown,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert!(app.ui.help_scroll > 0);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert!(app.data.ui.help_scroll > 0);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_page_up() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 10;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 10;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::PageUp,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 0);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, 0);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_ctrl_d() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('d'),
             KeyModifiers::CONTROL,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert!(app.ui.help_scroll > 0);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert!(app.data.ui.help_scroll > 0);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_ctrl_u() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 10;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 10;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('u'),
             KeyModifiers::CONTROL,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 5);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, 5);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_go_to_top() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 10;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 10;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('g'),
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 0);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, 0);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_go_to_bottom() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Char('G'),
             KeyModifiers::SHIFT,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        let max_scroll = crate::action::help_max_scroll(&app);
-        assert_eq!(app.ui.help_scroll, max_scroll);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        let max_scroll = crate::action::help_max_scroll(&app.data);
+        assert_eq!(app.data.ui.help_scroll, max_scroll);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_home_key() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 10;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 10;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Home,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        assert_eq!(app.ui.help_scroll, 0);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        assert_eq!(app.data.ui.help_scroll, 0);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_end_key() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::End,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Help);
-        let max_scroll = crate::action::help_max_scroll(&app);
-        assert_eq!(app.ui.help_scroll, max_scroll);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
+        let max_scroll = crate::action::help_max_scroll(&app.data);
+        assert_eq!(app.data.ui.help_scroll, max_scroll);
         Ok(())
     }
 
     #[test]
     fn test_handle_key_event_help_mode_any_other_key_exits() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Help;
-        app.ui.help_scroll = 0;
-        let action_handler = Actions::new();
+        app.mode = AppMode::Help(HelpMode);
+        app.data.ui.help_scroll = 0;
         let mut batched_keys = Vec::new();
 
         handle_key_event(
             &mut app,
-            action_handler,
             KeyCode::Enter,
             KeyModifiers::NONE,
             &mut batched_keys,
         )?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 }

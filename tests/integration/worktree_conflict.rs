@@ -33,13 +33,16 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
 
     // Now try to create an agent with the same name
     // This should detect the conflict and enter Confirming mode
-    handler.create_agent(&mut app, "existing-agent", Some("test prompt"))?;
+    let next = handler.create_agent(&mut app.data, "existing-agent", Some("test prompt"))?;
+    app.apply_mode(next);
 
     // Should be in Confirming(WorktreeConflict) mode
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
@@ -47,6 +50,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
 
     // Conflict info should be populated
     let conflict = app
+        .data
         .spawn
         .worktree_conflict
         .as_ref()
@@ -91,28 +95,37 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Trigger conflict detection
-    handler.create_agent(&mut app, "reconnect-test", Some("original prompt"))?;
+    let next = handler.create_agent(&mut app.data, "reconnect-test", Some("original prompt"))?;
+    app.apply_mode(next);
 
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::state::ConfirmAction::WorktreeConflict
+        })
     ));
 
     // Modify the prompt before reconnecting (simulating user editing)
-    if let Some(ref mut conflict) = app.spawn.worktree_conflict {
+    if let Some(ref mut conflict) = app.data.spawn.worktree_conflict {
         conflict.prompt = Some("modified prompt".to_string());
     }
 
     // Now reconnect
     app.exit_mode();
     let handler2 = Actions::new();
-    handler2.reconnect_to_worktree(&mut app)?;
+    let next = handler2.reconnect_to_worktree(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should have created an agent
-    assert_eq!(app.storage.len(), 1, "Should have one agent");
+    assert_eq!(app.data.storage.len(), 1, "Should have one agent");
 
-    let agent = app.storage.iter().next().expect("Should have an agent");
+    let agent = app
+        .data
+        .storage
+        .iter()
+        .next()
+        .expect("Should have an agent");
     assert_eq!(agent.title, "reconnect-test");
     assert_eq!(agent.initial_prompt, Some("modified prompt".to_string()));
 
@@ -157,23 +170,32 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
     );
 
     // Trigger conflict detection
-    handler.create_agent(&mut app, "recreate-test", Some("new prompt"))?;
+    let next = handler.create_agent(&mut app.data, "recreate-test", Some("new prompt"))?;
+    app.apply_mode(next);
 
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::state::ConfirmAction::WorktreeConflict
+        })
     ));
 
     // Now recreate (delete and create fresh)
     app.exit_mode();
     let handler2 = Actions::new();
-    handler2.recreate_worktree(&mut app)?;
+    let next = handler2.recreate_worktree(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should have created an agent
-    assert_eq!(app.storage.len(), 1, "Should have one agent");
+    assert_eq!(app.data.storage.len(), 1, "Should have one agent");
 
-    let agent = app.storage.iter().next().expect("Should have an agent");
+    let agent = app
+        .data
+        .storage
+        .iter()
+        .next()
+        .expect("Should have an agent");
     assert_eq!(agent.title, "recreate-test");
     assert_eq!(agent.initial_prompt, Some("new prompt".to_string()));
 
@@ -215,18 +237,21 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning (simulating S key flow)
-    app.spawn.spawning_under = None; // No parent = new root swarm
-    app.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None; // No parent = new root swarm
+    app.data.spawn.child_count = 3;
 
     // Try to spawn children - should detect conflict
     let handler = Actions::new();
-    handler.spawn_children(&mut app, Some("swarm-task"))?;
+    let next = handler.spawn_children(&mut app.data, Some("swarm-task"))?;
+    app.apply_mode(next);
 
     // Should be in Confirming(WorktreeConflict) mode
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
@@ -234,6 +259,7 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 
     // Conflict info should indicate this is a swarm
     let conflict = app
+        .data
         .spawn
         .worktree_conflict
         .as_ref()
@@ -277,29 +303,33 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let task = "swarm-reconnect-task";
-    let branch_name = app.config.generate_branch_name(task);
-    let worktree_path = app.config.worktree_dir.join(&branch_name);
+    let branch_name = app.data.config.generate_branch_name(task);
+    let worktree_path = app.data.config.worktree_dir.join(&branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning
-    app.spawn.spawning_under = None;
-    app.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    app.data.spawn.child_count = 2;
 
     // Trigger conflict detection - use the same task so branch names match
     let handler = Actions::new();
-    handler.spawn_children(&mut app, Some(task))?;
+    let next = handler.spawn_children(&mut app.data, Some(task))?;
+    app.apply_mode(next);
 
     // Verify we're in conflict mode with swarm info
     assert!(
         matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
         ),
         "Expected Confirming(WorktreeConflict) mode, got {:?}",
         app.mode
     );
     assert_eq!(
-        app.spawn
+        app.data
+            .spawn
             .worktree_conflict
             .as_ref()
             .unwrap()
@@ -307,31 +337,33 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
         Some(2)
     );
     assert_eq!(
-        app.spawn.worktree_conflict.as_ref().unwrap().prompt,
+        app.data.spawn.worktree_conflict.as_ref().unwrap().prompt,
         Some(task.to_string())
     );
 
     // Modify the prompt before reconnecting (simulating user editing in ReconnectPrompt mode)
     let updated_task = "updated task for children";
-    if let Some(ref mut conflict) = app.spawn.worktree_conflict {
+    if let Some(ref mut conflict) = app.data.spawn.worktree_conflict {
         conflict.prompt = Some(updated_task.to_string());
     }
 
     // Now reconnect
     app.exit_mode();
     let handler2 = Actions::new();
-    handler2.reconnect_to_worktree(&mut app)?;
+    let next = handler2.reconnect_to_worktree(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should have created root + 2 children = 3 agents
-    assert_eq!(app.storage.len(), 3, "Should have root + 2 children");
+    assert_eq!(app.data.storage.len(), 3, "Should have root + 2 children");
 
     // Find the root and children
     let root = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
         .expect("Should have a root agent");
-    let children: Vec<_> = app.storage.iter().filter(|a| !a.is_root()).collect();
+    let children: Vec<_> = app.data.storage.iter().filter(|a| !a.is_root()).collect();
 
     assert_eq!(children.len(), 2, "Should have 2 children");
 
@@ -391,26 +423,30 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     fs::write(&marker_path, "old swarm worktree")?;
 
     // Set up for swarm spawning
-    app.spawn.spawning_under = None;
-    app.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    app.data.spawn.child_count = 2;
 
     // Trigger conflict detection
     let handler = Actions::new();
-    handler.spawn_children(&mut app, Some("swarm-recreate"))?;
+    let next = handler.spawn_children(&mut app.data, Some("swarm-recreate"))?;
+    app.apply_mode(next);
 
     // Verify we're in conflict mode
     assert!(matches!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::state::ConfirmAction::WorktreeConflict
+        })
     ));
 
     // Now recreate
     app.exit_mode();
     let handler2 = Actions::new();
-    handler2.recreate_worktree(&mut app)?;
+    let next = handler2.recreate_worktree(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should have created root + 2 children = 3 agents
-    assert_eq!(app.storage.len(), 3, "Should have root + 2 children");
+    assert_eq!(app.data.storage.len(), 3, "Should have root + 2 children");
 
     // The old marker file should be gone
     assert!(
@@ -419,8 +455,8 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     );
 
     // Verify we have correct structure
-    let root_count = app.storage.iter().filter(|a| a.is_root()).count();
-    let child_count = app.storage.iter().filter(|a| !a.is_root()).count();
+    let root_count = app.data.storage.iter().filter(|a| a.is_root()).count();
+    let child_count = app.data.storage.iter().filter(|a| !a.is_root()).count();
 
     assert_eq!(root_count, 1, "Should have exactly 1 root");
     assert_eq!(child_count, 2, "Should have exactly 2 children");
@@ -454,29 +490,33 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
 
     // First create a root agent normally
     let handler = Actions::new();
-    handler.create_agent(&mut app, "parent-agent", None)?;
+    let next = handler.create_agent(&mut app.data, "parent-agent", None)?;
+    app.apply_mode(next);
 
-    assert_eq!(app.storage.len(), 1, "Should have parent agent");
-    let parent_id = app.storage.iter().next().unwrap().id;
+    assert_eq!(app.data.storage.len(), 1, "Should have parent agent");
+    let parent_id = app.data.storage.iter().next().unwrap().id;
 
     // Now add children to the existing agent (A key flow)
-    app.spawn.spawning_under = Some(parent_id);
-    app.spawn.child_count = 2;
+    app.data.spawn.spawning_under = Some(parent_id);
+    app.data.spawn.child_count = 2;
 
     let handler2 = Actions::new();
-    handler2.spawn_children(&mut app, Some("child task"))?;
+    let next = handler2.spawn_children(&mut app.data, Some("child task"))?;
+    app.apply_mode(next);
 
     // Should NOT be in conflict mode - should have spawned directly
     assert!(
         !matches!(
             app.mode,
-            tenex::app::Mode::Confirming(tenex::app::ConfirmAction::WorktreeConflict)
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
         ),
         "Adding children to existing agent should not trigger conflict"
     );
 
     // Should have parent + 2 children
-    assert_eq!(app.storage.len(), 3, "Should have parent + 2 children");
+    assert_eq!(app.data.storage.len(), 3, "Should have parent + 2 children");
 
     // Cleanup
     fixture.cleanup_sessions();

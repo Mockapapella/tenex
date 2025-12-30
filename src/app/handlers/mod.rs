@@ -14,9 +14,13 @@ mod window;
 use crate::config::Action;
 use crate::git::{self, WorktreeManager};
 use crate::mux::{OutputCapture, SessionManager};
-use anyhow::{Context, Result};
+use crate::state::{
+    AppMode, ConfirmPushForPRMode, ConfirmPushMode, PreviewFocusedMode, RenameBranchMode,
+};
+use anyhow::Result;
 
-use super::state::{App, ConfirmAction, Mode, Tab};
+use super::{App, AppData};
+use crate::action::{CancelAction, ConfirmYesAction, SubmitAction, UnfocusPreviewAction, ValidIn};
 
 /// Handler for application actions
 #[derive(Debug, Clone, Copy)]
@@ -43,209 +47,61 @@ impl Actions {
     ///
     /// Returns an error if the action fails
     pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
-        if app.mode == Mode::Normal {
-            return crate::action::dispatch_normal_mode(app, self, action);
-        }
-        if app.mode == Mode::Scrolling {
-            return crate::action::dispatch_scrolling_mode(app, self, action);
-        }
-
-        match action {
-            // Mode entry actions
-            Action::NewAgent => app.enter_mode(Mode::Creating),
-            Action::NewAgentWithPrompt => app.enter_mode(Mode::Prompting),
-            Action::Help => {
-                app.ui.help_scroll = 0;
-                app.enter_mode(Mode::Help);
+        match (&app.mode, action) {
+            (AppMode::Normal(_), action) => crate::action::dispatch_normal_mode(app, action)?,
+            (AppMode::Scrolling(_), action) => {
+                crate::action::dispatch_scrolling_mode(app, action)?;
             }
-            Action::CommandPalette => app.start_command_palette(),
-            Action::Cancel => app.exit_mode(),
-            Action::Confirm => self.handle_confirm(app)?,
-
-            // Navigation actions
-            Action::SwitchTab => app.switch_tab(),
-            Action::NextAgent => app.select_next(),
-            Action::PrevAgent => app.select_prev(),
-
-            // Scroll actions
-            Action::ScrollUp => app.scroll_up(5),
-            Action::ScrollDown => app.scroll_down(5),
-            Action::ScrollTop => app.scroll_to_top(),
-            Action::ScrollBottom => app.scroll_to_bottom(10000, 0),
-
-            // Preview actions
-            Action::FocusPreview => Self::handle_focus_preview(app),
-            Action::UnfocusPreview => Self::handle_unfocus_preview(app),
-
-            // Agent lifecycle actions
-            Action::Kill => Self::handle_kill_action(app),
-            Action::Quit => Self::handle_quit_action(app),
-            Action::ToggleCollapse => self.toggle_collapse(app)?,
-
-            // Spawning actions
-            Action::SpawnChildren => app.start_spawning_root(),
-            Action::PlanSwarm => app.start_planning_swarm(),
-            Action::AddChildren => Self::handle_add_children(app),
-            Action::Synthesize => Self::handle_synthesize(app),
-            Action::ReviewSwarm => Self::start_review_swarm(app)?,
-            Action::SpawnTerminal => self.handle_spawn_terminal(app)?,
-            Action::SpawnTerminalPrompted => Self::handle_spawn_terminal_prompted(app),
-            Action::Broadcast => Self::handle_broadcast(app),
-
-            // Git operations
-            Action::Push => Self::push_branch(app)?,
-            Action::RenameBranch => Self::rename_agent(app)?,
-            Action::OpenPR => Self::open_pr_flow(app)?,
-            Action::Rebase => Self::rebase_branch(app)?,
-            Action::Merge => Self::merge_branch(app)?,
-        }
-        Ok(())
-    }
-
-    fn handle_focus_preview(app: &mut App) {
-        if app.selected_agent().is_some() {
-            app.active_tab = Tab::Preview;
-            app.enter_mode(Mode::PreviewFocused);
-        }
-    }
-
-    fn handle_unfocus_preview(app: &mut App) {
-        if app.mode == Mode::PreviewFocused {
-            app.exit_mode();
-        }
-    }
-
-    fn handle_kill_action(app: &mut App) {
-        if app.selected_agent().is_some() {
-            app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
-        }
-    }
-
-    fn handle_quit_action(app: &mut App) {
-        if app.has_running_agents() {
-            app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
-        } else {
-            app.should_quit = true;
-        }
-    }
-
-    fn handle_add_children(app: &mut App) {
-        if let Some(agent) = app.selected_agent() {
-            let agent_id = agent.id;
-            app.start_spawning_under(agent_id);
-        }
-    }
-
-    fn handle_synthesize(app: &mut App) {
-        if let Some(agent) = app.selected_agent() {
-            if app.storage.has_children(agent.id) {
-                app.enter_mode(Mode::Confirming(ConfirmAction::Synthesize));
-            } else {
-                app.set_error("Selected agent has no children to synthesize");
+            (AppMode::Confirming(state), Action::Confirm) => {
+                let next = ConfirmYesAction.execute(*state, &mut app.data)?;
+                app.apply_mode(next);
             }
-        }
-    }
-
-    fn handle_spawn_terminal(self, app: &mut App) -> Result<()> {
-        if app.selected_agent().is_some() {
-            self.spawn_terminal(app, None)?;
-        }
-        Ok(())
-    }
-
-    fn handle_spawn_terminal_prompted(app: &mut App) {
-        if app.selected_agent().is_some() {
-            app.start_terminal_prompt();
-        }
-    }
-
-    fn handle_broadcast(app: &mut App) {
-        if app.selected_agent().is_some() {
-            app.enter_mode(Mode::Broadcasting);
-        }
-    }
-
-    /// Handle confirmation of an action
-    fn handle_confirm(self, app: &mut App) -> Result<()> {
-        if let Mode::Confirming(action) = &app.mode {
-            match action {
-                ConfirmAction::Kill => {
-                    self.kill_agent(app)?;
-                }
-                ConfirmAction::Reset => {
-                    self.reset_all(app)?;
-                }
-                ConfirmAction::Quit => {
-                    app.should_quit = true;
-                }
-                ConfirmAction::Synthesize => {
-                    self.synthesize(app)?;
-                }
-                ConfirmAction::WorktreeConflict => {
-                    // This is handled separately in the TUI with R/D keys
-                    // If we get here, just exit mode (like pressing Esc)
-                }
+            (AppMode::Confirming(state), Action::Cancel) => {
+                let next = CancelAction.execute(*state, &mut app.data)?;
+                app.apply_mode(next);
             }
-        }
-        // Only exit mode if we're not showing an error modal
-        // (error modal is set by operations like synthesize when they fail)
-        if !matches!(app.mode, Mode::ErrorModal(_)) {
-            app.exit_mode();
-        }
-        Ok(())
-    }
-
-    /// Start the review swarm flow
-    ///
-    /// If no agent is selected, shows an info popup.
-    /// If an agent is selected, fetches branches and enters review mode.
-    fn start_review_swarm(app: &mut App) -> Result<()> {
-        // Check if an agent with a worktree is selected
-        let selected = app.selected_agent();
-        if selected.is_none() {
-            app.show_review_info();
-            return Ok(());
-        }
-
-        // Store the selected agent's ID for later use
-        let agent_id = selected.map(|a| a.id);
-        app.spawn.spawning_under = agent_id;
-
-        // Fetch branches for the selector
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
-        let branch_mgr = git::BranchManager::new(&repo);
-        let branches = branch_mgr.list_for_selector()?;
-
-        // Convert from git::BranchInfo to app::BranchInfo (they're the same type via re-export)
-        app.start_review(branches);
-        Ok(())
-    }
-
-    /// Toggle collapse state of the selected agent
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if toggle fails
-    pub fn toggle_collapse(self, app: &mut App) -> Result<()> {
-        if let Some(agent) = app.selected_agent() {
-            let agent_id = agent.id;
-            if app.storage.has_children(agent_id)
-                && let Some(agent) = app.storage.get_mut(agent_id)
-            {
-                agent.collapsed = !agent.collapsed;
-                app.storage.save()?;
+            (AppMode::ConfirmPush(_), Action::Confirm) => {
+                let next = ConfirmYesAction.execute(ConfirmPushMode, &mut app.data)?;
+                app.apply_mode(next);
             }
+            (AppMode::ConfirmPush(_), Action::Cancel) => {
+                let next = CancelAction.execute(ConfirmPushMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (AppMode::ConfirmPushForPR(_), Action::Confirm) => {
+                let next = ConfirmYesAction.execute(ConfirmPushForPRMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (AppMode::ConfirmPushForPR(_), Action::Cancel) => {
+                let next = CancelAction.execute(ConfirmPushForPRMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (AppMode::RenameBranch(_), Action::Confirm) => {
+                let next = SubmitAction.execute(RenameBranchMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (AppMode::RenameBranch(_), Action::Cancel) => {
+                let next = CancelAction.execute(RenameBranchMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (AppMode::PreviewFocused(_), Action::UnfocusPreview) => {
+                let next = UnfocusPreviewAction.execute(PreviewFocusedMode, &mut app.data)?;
+                app.apply_mode(next);
+            }
+            (_, Action::Cancel) => {
+                app.exit_mode();
+            }
+            _ => {}
         }
         Ok(())
     }
 
     /// Reset all agents and state
-    fn reset_all(self, app: &mut App) -> Result<()> {
+    pub(crate) fn reset_all(self, app_data: &mut AppData) -> Result<()> {
         let repo_path = std::env::current_dir()?;
         let repo = git::open_repository(&repo_path).ok();
 
-        for agent in app.storage.iter() {
+        for agent in app_data.storage.iter() {
             let _ = self.session_manager.kill(&agent.mux_session);
 
             if let Some(ref repo) = repo {
@@ -254,11 +110,11 @@ impl Actions {
             }
         }
 
-        app.storage.clear();
-        app.storage.save()?;
-        app.validate_selection();
+        app_data.storage.clear();
+        app_data.storage.save()?;
+        app_data.validate_selection();
 
-        app.set_status("All agents reset");
+        app_data.set_status("All agents reset");
         Ok(())
     }
 }
@@ -275,6 +131,7 @@ mod tests {
     use crate::agent::{Status, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::state::*;
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
@@ -304,7 +161,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::NewAgent)?;
-        assert_eq!(app.mode, Mode::Creating);
+        assert_eq!(app.mode, AppMode::Creating(CreatingMode));
         Ok(())
     }
 
@@ -314,7 +171,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::NewAgentWithPrompt)?;
-        assert_eq!(app.mode, Mode::Prompting);
+        assert_eq!(app.mode, AppMode::Prompting(PromptingMode));
         Ok(())
     }
 
@@ -324,7 +181,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Help)?;
-        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.mode, AppMode::Help(HelpMode));
         Ok(())
     }
 
@@ -334,7 +191,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Quit)?;
-        assert!(app.should_quit);
+        assert!(app.data.should_quit);
         Ok(())
     }
 
@@ -344,7 +201,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::SwitchTab)?;
-        assert_eq!(app.active_tab, super::super::state::Tab::Diff);
+        assert_eq!(app.data.active_tab, super::super::state::Tab::Diff);
         Ok(())
     }
 
@@ -357,7 +214,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         for i in 0..3 {
-            app.storage.add(Agent::new(
+            app.data.storage.add(Agent::new(
                 format!("agent{i}"),
                 "claude".to_string(),
                 format!("muster/agent{i}"),
@@ -366,11 +223,11 @@ mod tests {
             ));
         }
 
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.data.selected, 0);
         handler.handle_action(&mut app, Action::NextAgent)?;
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.data.selected, 1);
         handler.handle_action(&mut app, Action::PrevAgent)?;
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.data.selected, 0);
         Ok(())
     }
 
@@ -380,13 +237,13 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::ScrollDown)?;
-        assert_eq!(app.ui.preview_scroll, 5);
+        assert_eq!(app.data.ui.preview_scroll, 5);
 
         handler.handle_action(&mut app, Action::ScrollUp)?;
-        assert_eq!(app.ui.preview_scroll, 0);
+        assert_eq!(app.data.ui.preview_scroll, 0);
 
         handler.handle_action(&mut app, Action::ScrollTop)?;
-        assert_eq!(app.ui.preview_scroll, 0);
+        assert_eq!(app.data.ui.preview_scroll, 0);
         Ok(())
     }
 
@@ -395,9 +252,9 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         handler.handle_action(&mut app, Action::Cancel)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -407,7 +264,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::Kill)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -419,7 +276,7 @@ mod tests {
         // FocusPreview does nothing when no agent is selected (stays in Normal mode)
         let result = handler.handle_action(&mut app, Action::FocusPreview);
         assert!(result.is_ok());
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -440,11 +297,16 @@ mod tests {
             None,
         );
         agent.set_status(Status::Running);
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
         // Quit should enter confirming mode
         handler.handle_action(&mut app, Action::Quit)?;
-        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Quit));
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Quit,
+            })
+        );
         Ok(())
     }
 
@@ -457,7 +319,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -467,7 +329,12 @@ mod tests {
 
         // Kill should enter confirming mode
         handler.handle_action(&mut app, Action::Kill)?;
-        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Kill));
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Kill,
+            })
+        );
         Ok(())
     }
 
@@ -477,11 +344,16 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Enter confirming mode for quit
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
         handler.handle_action(&mut app, Action::Confirm)?;
-        assert!(app.should_quit);
-        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.data.should_quit);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -495,7 +367,7 @@ mod tests {
 
         // Add agents
         for i in 0..3 {
-            app.storage.add(Agent::new(
+            app.data.storage.add(Agent::new(
                 format!("agent{i}"),
                 "claude".to_string(),
                 format!("muster/agent{i}"),
@@ -505,11 +377,16 @@ mod tests {
         }
 
         // Enter confirming mode for reset
-        app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Reset,
+            }
+            .into(),
+        );
 
         handler.handle_action(&mut app, Action::Confirm)?;
-        assert_eq!(app.storage.len(), 0);
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.data.storage.len(), 0);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -522,7 +399,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "test-session".to_string(),
@@ -533,12 +410,12 @@ mod tests {
         // FocusPreview should enter PreviewFocused mode
         let result = handler.handle_action(&mut app, Action::FocusPreview);
         assert!(result.is_ok());
-        assert_eq!(app.mode, Mode::PreviewFocused);
+        assert_eq!(app.mode, AppMode::PreviewFocused(PreviewFocusedMode));
 
         // UnfocusPreview should exit to Normal mode
         let result = handler.handle_action(&mut app, Action::UnfocusPreview);
         assert!(result.is_ok());
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -548,7 +425,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Should not error with no agent selected
-        handler.toggle_collapse(&mut app)?;
+        handler.handle_action(&mut app, Action::ToggleCollapse)?;
         Ok(())
     }
 
@@ -560,7 +437,7 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -569,7 +446,7 @@ mod tests {
         ));
 
         // Should not error when agent has no children
-        handler.toggle_collapse(&mut app)?;
+        handler.handle_action(&mut app, Action::ToggleCollapse)?;
         Ok(())
     }
 
@@ -579,8 +456,8 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.handle_action(&mut app, Action::SpawnChildren)?;
-        assert_eq!(app.mode, Mode::ChildCount);
-        assert!(app.spawn.spawning_under.is_none());
+        assert_eq!(app.mode, AppMode::ChildCount(ChildCountMode));
+        assert!(app.data.spawn.spawning_under.is_none());
         Ok(())
     }
 
@@ -600,11 +477,11 @@ mod tests {
             None,
         );
         let agent_id = agent.id;
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
         handler.handle_action(&mut app, Action::AddChildren)?;
-        assert_eq!(app.mode, Mode::ChildCount);
-        assert_eq!(app.spawn.spawning_under, Some(agent_id));
+        assert_eq!(app.mode, AppMode::ChildCount(ChildCountMode));
+        assert_eq!(app.data.spawn.spawning_under, Some(agent_id));
         Ok(())
     }
 
@@ -615,7 +492,7 @@ mod tests {
 
         // No agent - should not enter confirming mode
         handler.handle_action(&mut app, Action::Synthesize)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -636,7 +513,7 @@ mod tests {
             None,
         );
         let parent_id = parent.id;
-        app.storage.add(parent);
+        app.data.storage.add(parent);
 
         // Add child agent
         let mut child = Agent::new(
@@ -647,11 +524,16 @@ mod tests {
             None,
         );
         child.parent_id = Some(parent_id);
-        app.storage.add(child);
+        app.data.storage.add(child);
 
         // With children - should enter confirming mode
         handler.handle_action(&mut app, Action::Synthesize)?;
-        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Synthesize));
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            })
+        );
         Ok(())
     }
 
@@ -664,7 +546,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add agent with no children
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "parent".to_string(),
             "claude".to_string(),
             "tenex/parent".to_string(),
@@ -674,7 +556,7 @@ mod tests {
 
         // No children - should show error modal, not enter confirming mode
         handler.handle_action(&mut app, Action::Synthesize)?;
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -695,7 +577,7 @@ mod tests {
 
         // No agent - should not enter mode
         handler.handle_action(&mut app, Action::Broadcast)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -707,7 +589,7 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -716,7 +598,7 @@ mod tests {
         ));
 
         handler.handle_action(&mut app, Action::Broadcast)?;
-        assert_eq!(app.mode, Mode::Broadcasting);
+        assert_eq!(app.mode, AppMode::Broadcasting(BroadcastingMode));
         Ok(())
     }
 
@@ -727,7 +609,7 @@ mod tests {
 
         handler.handle_action(&mut app, Action::ScrollBottom)?;
         // ScrollBottom calls scroll_to_bottom(10000, 0) so preview_scroll becomes 10000
-        assert_eq!(app.ui.preview_scroll, 10000);
+        assert_eq!(app.data.ui.preview_scroll, 10000);
         Ok(())
     }
 
@@ -738,7 +620,7 @@ mod tests {
 
         // No agent - should show ReviewInfo
         handler.handle_action(&mut app, Action::ReviewSwarm)?;
-        assert_eq!(app.mode, Mode::ReviewInfo);
+        assert_eq!(app.mode, AppMode::ReviewInfo(ReviewInfoMode));
         Ok(())
     }
 
@@ -747,23 +629,23 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Set up some review state
-        app.review.branches = vec![crate::git::BranchInfo {
+        app.data.review.branches = vec![crate::git::BranchInfo {
             name: "test".to_string(),
             full_name: "refs/heads/test".to_string(),
             is_remote: false,
             remote: None,
             last_commit_time: None,
         }];
-        app.review.filter = "filter".to_string();
-        app.review.selected = 1;
+        app.data.review.filter = "filter".to_string();
+        app.data.review.selected = 1;
 
         // Clear the state
         app.clear_review_state();
 
-        assert!(app.review.branches.is_empty());
-        assert!(app.review.filter.is_empty());
-        assert_eq!(app.review.selected, 0);
-        assert!(app.review.base_branch.is_none());
+        assert!(app.data.review.branches.is_empty());
+        assert!(app.data.review.filter.is_empty());
+        assert_eq!(app.data.review.selected, 0);
+        assert!(app.data.review.base_branch.is_none());
         Ok(())
     }
 
@@ -774,11 +656,11 @@ mod tests {
 
         // Enter ReviewInfo mode
         app.show_review_info();
-        assert_eq!(app.mode, Mode::ReviewInfo);
+        assert_eq!(app.mode, AppMode::ReviewInfo(ReviewInfoMode));
 
         // Cancel should exit
         handler.handle_action(&mut app, Action::Cancel)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -787,23 +669,23 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Set up git op state
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test-branch".to_string();
-        app.git_op.original_branch = "original".to_string();
-        app.git_op.base_branch = "main".to_string();
-        app.git_op.has_unpushed = true;
-        app.git_op.is_root_rename = true;
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test-branch".to_string();
+        app.data.git_op.original_branch = "original".to_string();
+        app.data.git_op.base_branch = "main".to_string();
+        app.data.git_op.has_unpushed = true;
+        app.data.git_op.is_root_rename = true;
 
         // Clear the state
         app.clear_git_op_state();
 
         // Verify all fields are cleared
-        assert!(app.git_op.agent_id.is_none());
-        assert!(app.git_op.branch_name.is_empty());
-        assert!(app.git_op.original_branch.is_empty());
-        assert!(app.git_op.base_branch.is_empty());
-        assert!(!app.git_op.has_unpushed);
-        assert!(!app.git_op.is_root_rename);
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.original_branch.is_empty());
+        assert!(app.data.git_op.base_branch.is_empty());
+        assert!(!app.data.git_op.has_unpushed);
+        assert!(!app.data.git_op.is_root_rename);
         Ok(())
     }
 
@@ -814,7 +696,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Set up conflict info manually
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test".to_string(),
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test".to_string(),
@@ -828,10 +710,11 @@ mod tests {
 
         // Verify the conflict info is set
         assert!(
-            app.spawn.worktree_conflict.is_some(),
+            app.data.spawn.worktree_conflict.is_some(),
             "Expected worktree_conflict to be set"
         );
         let info = app
+            .data
             .spawn
             .worktree_conflict
             .as_ref()
@@ -848,7 +731,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Set up conflict info for a swarm
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "swarm".to_string(),
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm".to_string(),
@@ -861,10 +744,11 @@ mod tests {
         });
 
         assert!(
-            app.spawn.worktree_conflict.is_some(),
+            app.data.spawn.worktree_conflict.is_some(),
             "Expected worktree_conflict to be set"
         );
         let info = app
+            .data
             .spawn
             .worktree_conflict
             .as_ref()
@@ -882,8 +766,8 @@ mod tests {
 
         // No agent selected - SpawnTerminal should do nothing
         handler.handle_action(&mut app, Action::SpawnTerminal)?;
-        assert_eq!(app.storage.len(), 0);
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.data.storage.len(), 0);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -895,7 +779,7 @@ mod tests {
 
         // No agent selected - SpawnTerminalPrompted should not enter mode
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -909,7 +793,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
@@ -919,7 +803,7 @@ mod tests {
 
         // With agent selected - should enter TerminalPrompt mode
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
-        assert_eq!(app.mode, Mode::TerminalPrompt);
+        assert_eq!(app.mode, AppMode::TerminalPrompt(TerminalPromptMode));
         Ok(())
     }
 
@@ -931,7 +815,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "root".to_string(),
             "claude".to_string(),
             "tenex/root".to_string(),
@@ -940,17 +824,17 @@ mod tests {
         ));
 
         // Counter starts at 0
-        assert_eq!(app.spawn.terminal_counter, 0);
+        assert_eq!(app.data.spawn.terminal_counter, 0);
 
         // Get first terminal name
         let name1 = app.next_terminal_name();
         assert_eq!(name1, "Terminal 1");
-        assert_eq!(app.spawn.terminal_counter, 1);
+        assert_eq!(app.data.spawn.terminal_counter, 1);
 
         // Get second terminal name
         let name2 = app.next_terminal_name();
         assert_eq!(name2, "Terminal 2");
-        assert_eq!(app.spawn.terminal_counter, 2);
+        assert_eq!(app.data.spawn.terminal_counter, 2);
         Ok(())
     }
 
@@ -988,14 +872,14 @@ mod tests {
 
         // 1. Without agent - [t] does nothing
         handler.handle_action(&mut app, Action::SpawnTerminal)?;
-        assert_eq!(app.storage.len(), 0);
+        assert_eq!(app.data.storage.len(), 0);
 
         // 2. Without agent - [T] does nothing
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
 
         // 3. Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "root".to_string(),
             "claude".to_string(),
             "tenex/root".to_string(),
@@ -1005,11 +889,11 @@ mod tests {
 
         // 4. With agent - [T] enters prompt mode
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
-        assert_eq!(app.mode, Mode::TerminalPrompt);
+        assert_eq!(app.mode, AppMode::TerminalPrompt(TerminalPromptMode));
 
         // 5. Cancel and verify we're back to normal
         app.exit_mode();
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
 
         Ok(())
     }
@@ -1017,32 +901,36 @@ mod tests {
     // === New Handler Helper Function Tests ===
 
     #[test]
-    fn test_handle_unfocus_preview() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_handle_action_unfocus_preview() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::PreviewFocused;
+        app.mode = AppMode::PreviewFocused(PreviewFocusedMode);
 
-        Actions::handle_unfocus_preview(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::UnfocusPreview)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_unfocus_preview_not_in_preview() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_handle_action_unfocus_preview_not_in_preview() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::Normal;
+        app.mode = AppMode::normal();
 
         // Should not change mode if not in PreviewFocused
-        Actions::handle_unfocus_preview(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::UnfocusPreview)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_kill_action_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_kill_action(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::Kill)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1051,8 +939,9 @@ mod tests {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
@@ -1060,17 +949,23 @@ mod tests {
             None,
         ));
 
-        Actions::handle_kill_action(&mut app);
-        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Kill));
+        handler.handle_action(&mut app, Action::Kill)?;
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Kill,
+            })
+        );
         Ok(())
     }
 
     #[test]
     fn test_handle_quit_action_no_running_agents() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_quit_action(&mut app);
-        assert!(app.should_quit);
+        handler.handle_action(&mut app, Action::Quit)?;
+        assert!(app.data.should_quit);
         Ok(())
     }
 
@@ -1079,6 +974,7 @@ mod tests {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
         let mut agent = Agent::new(
             "test".to_string(),
@@ -1088,29 +984,36 @@ mod tests {
             None,
         );
         agent.status = Status::Running;
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
-        Actions::handle_quit_action(&mut app);
-        assert!(!app.should_quit);
-        assert_eq!(app.mode, Mode::Confirming(ConfirmAction::Quit));
+        handler.handle_action(&mut app, Action::Quit)?;
+        assert!(!app.data.should_quit);
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::Quit,
+            })
+        );
         Ok(())
     }
 
     #[test]
     fn test_handle_add_children_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_add_children(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::AddChildren)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
     fn test_handle_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_synthesize(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::Synthesize)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1119,8 +1022,9 @@ mod tests {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
@@ -1128,18 +1032,19 @@ mod tests {
             None,
         ));
 
-        Actions::handle_synthesize(&mut app);
+        handler.handle_action(&mut app, Action::Synthesize)?;
         // Should show error, not enter mode
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
         Ok(())
     }
 
     #[test]
     fn test_handle_broadcast_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_broadcast(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::Broadcast)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1148,8 +1053,9 @@ mod tests {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
@@ -1157,17 +1063,18 @@ mod tests {
             None,
         ));
 
-        Actions::handle_broadcast(&mut app);
-        assert_eq!(app.mode, Mode::Broadcasting);
+        handler.handle_action(&mut app, Action::Broadcast)?;
+        assert_eq!(app.mode, AppMode::Broadcasting(BroadcastingMode));
         Ok(())
     }
 
     #[test]
     fn test_handle_spawn_terminal_prompted_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        Actions::handle_spawn_terminal_prompted(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -1176,8 +1083,9 @@ mod tests {
         use crate::agent::Agent;
         use std::path::PathBuf;
 
+        let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "tenex/test".to_string(),
@@ -1185,8 +1093,8 @@ mod tests {
             None,
         ));
 
-        Actions::handle_spawn_terminal_prompted(&mut app);
-        assert_eq!(app.mode, Mode::TerminalPrompt);
+        handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
+        assert_eq!(app.mode, AppMode::TerminalPrompt(TerminalPromptMode));
         Ok(())
     }
 }

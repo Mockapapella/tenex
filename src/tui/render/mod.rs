@@ -9,7 +9,8 @@ pub mod colors;
 pub mod main_layout;
 pub mod modals;
 
-use crate::app::{App, ConfirmAction, Mode};
+use crate::app::App;
+use crate::state::{AppMode, ConfirmAction};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -35,41 +36,42 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     main_layout::render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
-        Mode::Help => modals::render_help_overlay(frame, app),
-        Mode::CommandPalette => modals::render_command_palette_overlay(frame, app),
-        Mode::Creating => {
+        AppMode::Help(_) => modals::render_help_overlay(frame, app),
+        AppMode::CommandPalette(_) => modals::render_command_palette_overlay(frame, app),
+        AppMode::Creating(_) => {
             modals::render_input_overlay(
                 frame,
                 "New Agent",
                 "Enter agent name:",
-                &app.input.buffer,
-                app.input.cursor,
+                &app.data.input.buffer,
+                app.data.input.cursor,
             );
         }
-        Mode::Prompting => modals::render_input_overlay(
+        AppMode::Prompting(_) => modals::render_input_overlay(
             frame,
             "New Agent with Prompt",
             "Enter prompt:",
-            &app.input.buffer,
-            app.input.cursor,
+            &app.data.input.buffer,
+            app.data.input.cursor,
         ),
-        Mode::ChildCount => modals::render_count_picker_overlay(frame, app),
-        Mode::ChildPrompt => modals::render_input_overlay(
+        AppMode::ChildCount(_) => modals::render_count_picker_overlay(frame, app),
+        AppMode::ChildPrompt(_) => modals::render_input_overlay(
             frame,
             "Spawn Children",
             "Enter task for children:",
-            &app.input.buffer,
-            app.input.cursor,
+            &app.data.input.buffer,
+            app.data.input.cursor,
         ),
-        Mode::Broadcasting => modals::render_input_overlay(
+        AppMode::Broadcasting(_) => modals::render_input_overlay(
             frame,
             "Broadcast Message",
             "Enter message to broadcast to leaf agents:",
-            &app.input.buffer,
-            app.input.cursor,
+            &app.data.input.buffer,
+            app.data.input.cursor,
         ),
-        Mode::ReconnectPrompt => {
+        AppMode::ReconnectPrompt(_) => {
             let title = app
+                .data
                 .spawn
                 .worktree_conflict
                 .as_ref()
@@ -84,25 +86,26 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 frame,
                 title,
                 "Edit prompt (or leave empty):",
-                &app.input.buffer,
-                app.input.cursor,
+                &app.data.input.buffer,
+                app.data.input.cursor,
             );
         }
-        Mode::TerminalPrompt => modals::render_input_overlay(
+        AppMode::TerminalPrompt(_) => modals::render_input_overlay(
             frame,
             "New Terminal",
             "Enter startup command (or leave empty):",
-            &app.input.buffer,
-            app.input.cursor,
+            &app.data.input.buffer,
+            app.data.input.cursor,
         ),
-        Mode::CustomAgentCommand => modals::render_input_overlay(
+        AppMode::CustomAgentCommand(_) => modals::render_input_overlay(
             frame,
             "Custom Agent Command",
             "Enter the command to run for new agents:",
-            &app.input.buffer,
-            app.input.cursor,
+            &app.data.input.buffer,
+            app.data.input.cursor,
         ),
-        Mode::Confirming(action) => {
+        AppMode::Confirming(state) => {
+            let action = state.action;
             let lines: Vec<Line<'_>> = match action {
                 ConfirmAction::Kill => app.selected_agent().map_or_else(
                     || {
@@ -169,7 +172,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ))]
                     },
                     |agent| {
-                        let descendants_count = app.storage.descendants(agent.id).len();
+                        let descendants_count = app.data.storage.descendants(agent.id).len();
                         let agent_word = if descendants_count == 1 {
                             "agent"
                         } else {
@@ -210,19 +213,21 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 modals::render_confirm_overlay(frame, lines);
             }
         }
-        Mode::ErrorModal(message) => modals::render_error_modal(frame, message),
-        Mode::ReviewInfo => modals::render_review_info_overlay(frame),
-        Mode::ReviewChildCount => modals::render_review_count_picker_overlay(frame, app),
-        Mode::BranchSelector | Mode::RebaseBranchSelector | Mode::MergeBranchSelector => {
+        AppMode::ErrorModal(state) => modals::render_error_modal(frame, &state.message),
+        AppMode::ReviewInfo(_) => modals::render_review_info_overlay(frame),
+        AppMode::ReviewChildCount(_) => modals::render_review_count_picker_overlay(frame, app),
+        AppMode::BranchSelector(_)
+        | AppMode::RebaseBranchSelector(_)
+        | AppMode::MergeBranchSelector(_) => {
             modals::render_branch_selector_overlay(frame, app);
         }
-        Mode::ModelSelector => modals::render_model_selector_overlay(frame, app),
-        Mode::ConfirmPush => modals::render_confirm_push_overlay(frame, app),
-        Mode::RenameBranch => modals::render_rename_overlay(frame, app),
-        Mode::ConfirmPushForPR => modals::render_confirm_push_for_pr_overlay(frame, app),
-        Mode::SuccessModal(message) => modals::render_success_modal(frame, message),
-        Mode::KeyboardRemapPrompt => modals::render_keyboard_remap_overlay(frame),
-        Mode::UpdatePrompt(info) => modals::render_update_prompt_overlay(frame, info),
+        AppMode::ModelSelector(_) => modals::render_model_selector_overlay(frame, app),
+        AppMode::ConfirmPush(_) => modals::render_confirm_push_overlay(frame, app),
+        AppMode::RenameBranch(_) => modals::render_rename_overlay(frame, app),
+        AppMode::ConfirmPushForPR(_) => modals::render_confirm_push_for_pr_overlay(frame, app),
+        AppMode::SuccessModal(state) => modals::render_success_modal(frame, &state.message),
+        AppMode::KeyboardRemapPrompt(_) => modals::render_keyboard_remap_overlay(frame),
+        AppMode::UpdatePrompt(state) => modals::render_update_prompt_overlay(frame, &state.info),
         _ => {}
     }
 }
@@ -231,8 +236,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 mod tests {
     use super::*;
     use crate::agent::{Agent, Status, Storage};
-    use crate::app::ConfirmAction;
     use crate::config::Config;
+    use crate::state::*;
     use ratatui::Terminal;
     use ratatui::backend::Backend;
     use ratatui::backend::TestBackend;
@@ -321,7 +326,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Help);
+        app.enter_mode(HelpMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -337,7 +342,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Creating);
+        app.enter_mode(CreatingMode.into());
         app.handle_char('t');
         app.handle_char('e');
         app.handle_char('s');
@@ -357,7 +362,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Prompting);
+        app.enter_mode(PromptingMode.into());
         app.handle_char('f');
         app.handle_char('i');
         app.handle_char('x');
@@ -376,12 +381,12 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Prompting);
-        app.input.buffer = (0..30)
+        app.enter_mode(PromptingMode.into());
+        app.data.input.buffer = (0..30)
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.input.cursor = app.input.buffer.len();
+        app.data.input.cursor = app.data.input.buffer.len();
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -402,7 +407,12 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Confirming(ConfirmAction::Kill));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -418,7 +428,12 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Confirming(ConfirmAction::Reset));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Reset,
+            }
+            .into(),
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -434,7 +449,12 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Confirming(ConfirmAction::Quit));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -483,8 +503,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.ui.last_error = Some("boom".to_string());
-        app.mode = Mode::Normal;
+        app.data.ui.last_error = Some("boom".to_string());
+        app.mode = AppMode::normal();
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -505,10 +525,10 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
-        assert_eq!(app.active_tab, crate::app::Tab::Diff);
+        assert_eq!(app.data.active_tab, crate::app::Tab::Diff);
 
         // Set diff content with various line types
-        app.ui.set_diff_content(
+        app.data.ui.set_diff_content(
             r"diff --git a/file.txt b/file.txt
 --- a/file.txt
 +++ b/file.txt
@@ -533,7 +553,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.ui.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
+        app.data.ui.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -549,11 +569,11 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.ui.preview_content = (0..100)
+        app.data.ui.preview_content = (0..100)
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.ui.preview_scroll = 50;
+        app.data.ui.preview_scroll = 50;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -572,13 +592,13 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::PreviewFocused);
-        app.ui.preview_content = (0..10)
+        app.enter_mode(PreviewFocusedMode.into());
+        app.data.ui.preview_content = (0..10)
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.ui.preview_cursor_position = Some((3, 4, false));
-        app.ui.preview_pane_size = Some((54, 50));
+        app.data.ui.preview_cursor_position = Some((3, 4, false));
+        app.data.ui.preview_pane_size = Some((54, 50));
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -597,14 +617,14 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::PreviewFocused);
-        app.ui.preview_content = (0..50)
+        app.enter_mode(PreviewFocusedMode.into());
+        app.data.ui.preview_content = (0..50)
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.ui.preview_scroll = 16;
-        app.ui.preview_cursor_position = Some((7, 5, false));
-        app.ui.preview_pane_size = Some((54, 20));
+        app.data.ui.preview_scroll = 16;
+        app.data.ui.preview_cursor_position = Some((7, 5, false));
+        app.data.ui.preview_pane_size = Some((54, 20));
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -621,13 +641,13 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.switch_tab();
-        app.ui.set_diff_content(
+        app.data.ui.set_diff_content(
             (0..100)
                 .map(|i| format!("+Added line {i}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        app.ui.diff_scroll = 50;
+        app.data.ui.diff_scroll = 50;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -709,7 +729,7 @@ mod tests {
         }
 
         let mut app = App::new(config, storage, crate::app::Settings::default(), false);
-        app.ui.agent_list_scroll = 0;
+        app.data.ui.agent_list_scroll = 0;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -766,7 +786,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Scrolling);
+        app.enter_mode(ScrollingMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -782,9 +802,9 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.ui.preview_content = "Line 1\nLine 2".to_string();
+        app.data.ui.preview_content = "Line 1\nLine 2".to_string();
         // Set scroll position beyond content length
-        app.ui.preview_scroll = 1000;
+        app.data.ui.preview_scroll = 1000;
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -803,7 +823,7 @@ mod tests {
         app.set_error("Something went wrong!");
 
         // Verify app is in ErrorModal mode
-        assert!(matches!(app.mode, Mode::ErrorModal(_)));
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -881,7 +901,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test-agent".to_string(),
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
@@ -892,7 +912,12 @@ mod tests {
             current_commit: "def5678".to_string(),
             swarm_child_count: None,
         });
-        app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -912,7 +937,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info for a swarm
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "swarm-root".to_string(),
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm-root".to_string(),
@@ -923,7 +948,12 @@ mod tests {
             current_commit: "def5678".to_string(),
             swarm_child_count: Some(3),
         });
-        app.enter_mode(Mode::Confirming(ConfirmAction::WorktreeConflict));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -943,7 +973,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up for reconnect prompt mode
-        app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "test-agent".to_string(),
             prompt: Some("original prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
@@ -954,7 +984,7 @@ mod tests {
             current_commit: "def5678".to_string(),
             swarm_child_count: None,
         });
-        app.enter_mode(Mode::ReconnectPrompt);
+        app.enter_mode(ReconnectPromptMode.into());
         app.handle_char('t');
         app.handle_char('e');
         app.handle_char('s');
@@ -992,7 +1022,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::ReviewInfo);
+        app.enter_mode(ReviewInfoMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1008,8 +1038,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.spawn.child_count = 5;
-        app.enter_mode(Mode::ReviewChildCount);
+        app.data.spawn.child_count = 5;
+        app.enter_mode(ReviewChildCountMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1027,13 +1057,13 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
             create_test_branch_info("main", true),
         ];
-        app.enter_mode(Mode::BranchSelector);
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1051,13 +1081,13 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches and a filter
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature-abc", false),
             create_test_branch_info("feature-xyz", false),
         ];
-        app.review.filter = "feature".to_string();
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.filter = "feature".to_string();
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1075,13 +1105,13 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set up branches with a selection
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("develop", false),
         ];
-        app.review.selected = 1;
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.selected = 1;
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1099,8 +1129,8 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Empty branch list
-        app.review.branches = vec![];
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.branches = vec![];
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1122,9 +1152,9 @@ mod tests {
         for i in 0..30 {
             branches.push(create_test_branch_info(&format!("branch-{i:02}"), false));
         }
-        app.review.branches = branches;
-        app.review.selected = 20; // Select one that requires scrolling
-        app.enter_mode(Mode::BranchSelector);
+        app.data.review.branches = branches;
+        app.data.review.selected = 20; // Select one that requires scrolling
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1142,13 +1172,13 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Mix of local and remote branches
-        app.review.branches = vec![
+        app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("main", true),
             create_test_branch_info("develop", true),
         ];
-        app.enter_mode(Mode::BranchSelector);
+        app.enter_mode(BranchSelectorMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1164,8 +1194,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.spawn.child_count = 5;
-        app.enter_mode(Mode::ChildCount);
+        app.data.spawn.child_count = 5;
+        app.enter_mode(ChildCountMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1181,8 +1211,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.spawn.child_count = 3;
-        app.enter_mode(Mode::ChildPrompt);
+        app.data.spawn.child_count = 3;
+        app.enter_mode(ChildPromptMode.into());
         app.handle_char('t');
         app.handle_char('a');
         app.handle_char('s');
@@ -1202,7 +1232,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.enter_mode(Mode::Broadcasting);
+        app.enter_mode(BroadcastingMode.into());
         app.handle_char('m');
         app.handle_char('s');
         app.handle_char('g');
@@ -1225,10 +1255,10 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Get first agent's ID
-        let agent_id = app.storage.visible_agent_at(0).map(|a| a.id);
-        app.git_op.agent_id = agent_id;
-        app.git_op.branch_name = "feature/test".to_string();
-        app.enter_mode(Mode::ConfirmPush);
+        let agent_id = app.data.storage.visible_agent_at(0).map(|a| a.id);
+        app.data.git_op.agent_id = agent_id;
+        app.data.git_op.branch_name = "feature/test".to_string();
+        app.enter_mode(ConfirmPushMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1246,9 +1276,9 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Set invalid agent ID
-        app.git_op.agent_id = Some(uuid::Uuid::new_v4());
-        app.git_op.branch_name = "test".to_string();
-        app.enter_mode(Mode::ConfirmPush);
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "test".to_string();
+        app.enter_mode(ConfirmPushMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1265,10 +1295,10 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op.original_branch = "old-name".to_string();
-        app.input.buffer = "new-name".to_string();
-        app.git_op.is_root_rename = true;
-        app.enter_mode(Mode::RenameBranch);
+        app.data.git_op.original_branch = "old-name".to_string();
+        app.data.input.buffer = "new-name".to_string();
+        app.data.git_op.is_root_rename = true;
+        app.enter_mode(RenameBranchMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1285,10 +1315,10 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op.original_branch = "sub-agent".to_string();
-        app.input.buffer = "new-name".to_string();
-        app.git_op.is_root_rename = false;
-        app.enter_mode(Mode::RenameBranch);
+        app.data.git_op.original_branch = "sub-agent".to_string();
+        app.data.input.buffer = "new-name".to_string();
+        app.data.git_op.is_root_rename = false;
+        app.enter_mode(RenameBranchMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1305,9 +1335,9 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op.original_branch = "test-agent".to_string();
-        app.input.buffer.clear();
-        app.enter_mode(Mode::RenameBranch);
+        app.data.git_op.original_branch = "test-agent".to_string();
+        app.data.input.buffer.clear();
+        app.enter_mode(RenameBranchMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1324,10 +1354,10 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
-        app.git_op.branch_name = "feature/new-branch".to_string();
-        app.git_op.base_branch = "main".to_string();
-        app.git_op.has_unpushed = true;
-        app.enter_mode(Mode::ConfirmPushForPR);
+        app.data.git_op.branch_name = "feature/new-branch".to_string();
+        app.data.git_op.base_branch = "main".to_string();
+        app.data.git_op.has_unpushed = true;
+        app.enter_mode(ConfirmPushForPRMode.into());
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1345,7 +1375,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         app.start_command_palette();
-        assert_eq!(app.mode, Mode::CommandPalette);
+        assert_eq!(app.mode, AppMode::CommandPalette(CommandPaletteMode));
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1382,7 +1412,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         app.start_command_palette();
-        app.input.buffer = "/xyz".to_string();
+        app.data.input.buffer = "/xyz".to_string();
         app.reset_slash_command_selection();
 
         terminal.draw(|frame| {
@@ -1401,7 +1431,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
-        assert_eq!(app.mode, Mode::ModelSelector);
+        assert_eq!(app.mode, AppMode::ModelSelector(ModelSelectorMode));
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -1438,7 +1468,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
-        app.model_selector.filter = "xyz".to_string();
+        app.data.model_selector.filter = "xyz".to_string();
 
         terminal.draw(|frame| {
             render(frame, &app);

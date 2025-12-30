@@ -1,9 +1,9 @@
 use crate::action::ValidIn;
-use crate::app::{Actions, AppData, Mode};
+use crate::app::{Actions, AppData};
 use crate::git;
 use crate::state::{
-    ConfirmPushForPRMode, ConfirmPushMode, ErrorModalMode, ModeUnion, NormalMode, RenameBranchMode,
-    ScrollingMode,
+    AppMode, ConfirmPushForPRMode, ConfirmPushMode, ErrorModalMode, MergeBranchSelectorMode,
+    NormalMode, RebaseBranchSelectorMode, RenameBranchMode, ScrollingMode,
 };
 use anyhow::{Context, Result};
 
@@ -12,9 +12,9 @@ use anyhow::{Context, Result};
 pub struct PushAction;
 
 impl ValidIn<NormalMode> for PushAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -28,9 +28,9 @@ impl ValidIn<NormalMode> for PushAction {
 }
 
 impl ValidIn<ScrollingMode> for PushAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -48,9 +48,9 @@ impl ValidIn<ScrollingMode> for PushAction {
 pub struct RenameBranchAction;
 
 impl ValidIn<NormalMode> for RenameBranchAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -70,9 +70,9 @@ impl ValidIn<NormalMode> for RenameBranchAction {
 }
 
 impl ValidIn<ScrollingMode> for RenameBranchAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -96,9 +96,9 @@ impl ValidIn<ScrollingMode> for RenameBranchAction {
 pub struct OpenPRAction;
 
 impl ValidIn<NormalMode> for OpenPRAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -118,15 +118,15 @@ impl ValidIn<NormalMode> for OpenPRAction {
             return Ok(ConfirmPushForPRMode.into());
         }
 
-        Actions::open_pr_in_browser(app_data.app)?;
-        Ok(ModeUnion::normal())
+        Actions::open_pr_in_browser(app_data)?;
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ScrollingMode> for OpenPRAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
@@ -146,7 +146,7 @@ impl ValidIn<ScrollingMode> for OpenPRAction {
             return Ok(ConfirmPushForPRMode.into());
         }
 
-        Actions::open_pr_in_browser(app_data.app)?;
+        Actions::open_pr_in_browser(app_data)?;
         Ok(ScrollingMode.into())
     }
 }
@@ -156,9 +156,9 @@ impl ValidIn<ScrollingMode> for OpenPRAction {
 pub struct RebaseAction;
 
 impl ValidIn<NormalMode> for RebaseAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ErrorModalMode {
                 message: "No agent selected. Select an agent first to rebase.".to_string(),
@@ -178,14 +178,14 @@ impl ValidIn<NormalMode> for RebaseAction {
         app_data.git_op.start_rebase(agent_id, current_branch);
         app_data.review.start(branches);
 
-        Ok(ModeUnion::Legacy(Mode::RebaseBranchSelector))
+        Ok(RebaseBranchSelectorMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for RebaseAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ErrorModalMode {
                 message: "No agent selected. Select an agent first to rebase.".to_string(),
@@ -205,7 +205,7 @@ impl ValidIn<ScrollingMode> for RebaseAction {
         app_data.git_op.start_rebase(agent_id, current_branch);
         app_data.review.start(branches);
 
-        Ok(ModeUnion::Legacy(Mode::RebaseBranchSelector))
+        Ok(RebaseBranchSelectorMode.into())
     }
 }
 
@@ -214,9 +214,9 @@ impl ValidIn<ScrollingMode> for RebaseAction {
 pub struct MergeAction;
 
 impl ValidIn<NormalMode> for MergeAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ErrorModalMode {
                 message: "No agent selected. Select an agent first to merge.".to_string(),
@@ -236,14 +236,14 @@ impl ValidIn<NormalMode> for MergeAction {
         app_data.git_op.start_merge(agent_id, current_branch);
         app_data.review.start(branches);
 
-        Ok(ModeUnion::Legacy(Mode::MergeBranchSelector))
+        Ok(MergeBranchSelectorMode.into())
     }
 }
 
 impl ValidIn<ScrollingMode> for MergeAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ErrorModalMode {
                 message: "No agent selected. Select an agent first to merge.".to_string(),
@@ -263,6 +263,6 @@ impl ValidIn<ScrollingMode> for MergeAction {
         app_data.git_op.start_merge(agent_id, current_branch);
         app_data.review.start(branches);
 
-        Ok(ModeUnion::Legacy(Mode::MergeBranchSelector))
+        Ok(MergeBranchSelectorMode.into())
     }
 }

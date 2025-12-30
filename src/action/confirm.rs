@@ -1,13 +1,14 @@
 //! Confirmation-mode action types (new architecture).
 
 use crate::action::{BackspaceAction, CancelAction, CharInputAction, SubmitAction, ValidIn};
-use crate::app::{Actions, AppData, ConfirmAction};
-use crate::config::Action as KeyAction;
+use crate::app::{Actions, AppData};
 use crate::state::{
-    ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, KeyboardRemapPromptMode, ModeUnion,
-    ReconnectPromptMode, RenameBranchMode, UpdatePromptMode, UpdateRequestedMode,
+    AppMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, ErrorModalMode,
+    KeyboardRemapPromptMode, ReconnectPromptMode, RenameBranchMode, UpdatePromptMode,
+    UpdateRequestedMode,
 };
 use anyhow::Result;
+use tracing::warn;
 
 /// Confirmation action: accept/confirm (Y/y).
 #[derive(Debug, Clone, Copy, Default)]
@@ -26,49 +27,52 @@ pub struct WorktreeReconnectAction;
 pub struct WorktreeRecreateAction;
 
 impl ValidIn<ConfirmingMode> for ConfirmYesAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ConfirmingMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data
-            .actions
-            .handle_action(app_data.app, KeyAction::Confirm)?;
-        Ok(ModeUnion::Legacy(app_data.mode.clone()))
+    fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        match state.action {
+            ConfirmAction::Kill => {
+                Actions::new().kill_agent(app_data)?;
+            }
+            ConfirmAction::Reset => {
+                Actions::new().reset_all(app_data)?;
+            }
+            ConfirmAction::Quit => {
+                app_data.should_quit = true;
+            }
+            ConfirmAction::Synthesize => {
+                return Actions::new().synthesize(app_data);
+            }
+            ConfirmAction::WorktreeConflict => {}
+        }
+
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmingMode> for ConfirmNoAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ConfirmingMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.exit_mode();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: ConfirmingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmingMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, state: ConfirmingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if state.action == ConfirmAction::WorktreeConflict {
             app_data.spawn.worktree_conflict = None;
         }
-        app_data.exit_mode();
-        Ok(ModeUnion::normal())
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmingMode> for WorktreeReconnectAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, state: ConfirmingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if state.action != ConfirmAction::WorktreeConflict {
             return Ok(state.into());
         }
@@ -83,251 +87,192 @@ impl ValidIn<ConfirmingMode> for WorktreeReconnectAction {
 }
 
 impl ValidIn<ConfirmingMode> for WorktreeRecreateAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(self, state: ConfirmingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if state.action != ConfirmAction::WorktreeConflict {
             return Ok(state.into());
         }
 
-        app_data.exit_mode();
-        app_data.actions.recreate_worktree(app_data.app)?;
-        Ok(ModeUnion::Legacy(app_data.mode.clone()))
+        Actions::new().recreate_worktree(app_data)
     }
 }
 
 impl ValidIn<ConfirmPushMode> for ConfirmYesAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        state: ConfirmPushMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        let original_mode = app_data.mode.clone();
-
-        if let Err(err) = Actions::execute_push(app_data.app) {
-            app_data.set_error(format!("Push failed: {err:#}"));
-        }
-
-        if app_data.mode == original_mode {
-            Ok(state.into())
-        } else {
-            Ok(ModeUnion::Legacy(app_data.mode.clone()))
-        }
+    fn execute(self, _state: ConfirmPushMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        Actions::execute_push(app_data)
     }
 }
 
 impl ValidIn<ConfirmPushMode> for ConfirmNoAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ConfirmPushMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.clear_git_op_state();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: ConfirmPushMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmPushMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: ConfirmPushMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.clear_git_op_state();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: ConfirmPushMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmPushForPRMode> for ConfirmYesAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
-        state: ConfirmPushForPRMode,
-        app_data: &mut AppData<'_>,
+        _state: ConfirmPushForPRMode,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        let original_mode = app_data.mode.clone();
-
-        if let Err(err) = Actions::execute_push_and_open_pr(app_data.app) {
-            app_data.set_error(format!("Failed to push and open PR: {err:#}"));
-        }
-
-        if app_data.mode == original_mode {
-            Ok(state.into())
-        } else {
-            Ok(ModeUnion::Legacy(app_data.mode.clone()))
-        }
+        Actions::execute_push_and_open_pr(app_data)
     }
 }
 
 impl ValidIn<ConfirmPushForPRMode> for ConfirmNoAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: ConfirmPushForPRMode,
-        app_data: &mut AppData<'_>,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        app_data.clear_git_op_state();
-        Ok(ModeUnion::normal())
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<ConfirmPushForPRMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: ConfirmPushForPRMode,
-        app_data: &mut AppData<'_>,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        app_data.clear_git_op_state();
-        Ok(ModeUnion::normal())
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<RenameBranchMode> for SubmitAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        state: RenameBranchMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        let original_mode = app_data.mode.clone();
-
-        if app_data.confirm_rename_branch()
-            && let Err(err) = Actions::execute_rename(app_data.app)
-        {
-            app_data.set_error(format!("Rename failed: {err:#}"));
+    fn execute(self, state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        let new_name = app_data.input.buffer.trim().to_string();
+        if new_name.is_empty() {
+            return Ok(state.into());
         }
 
-        if app_data.mode == original_mode {
-            Ok(state.into())
-        } else {
-            Ok(ModeUnion::Legacy(app_data.mode.clone()))
-        }
+        app_data.git_op.set_branch_name(new_name);
+        Actions::execute_rename(app_data).or_else(|err| {
+            Ok(ErrorModalMode {
+                message: format!("Rename failed: {err:#}"),
+            }
+            .into())
+        })
     }
 }
 
 impl ValidIn<RenameBranchMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: RenameBranchMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.clear_git_op_state();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.git_op.clear();
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<RenameBranchMode> for CharInputAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: RenameBranchMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.handle_char(self.0);
+    fn execute(self, _state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.input.insert_char(self.0);
         Ok(RenameBranchMode.into())
     }
 }
 
 impl ValidIn<RenameBranchMode> for BackspaceAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: RenameBranchMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.handle_backspace();
+    fn execute(self, _state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.input.backspace();
         Ok(RenameBranchMode.into())
     }
 }
 
 impl ValidIn<KeyboardRemapPromptMode> for ConfirmYesAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: KeyboardRemapPromptMode,
-        app_data: &mut AppData<'_>,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        app_data.accept_keyboard_remap();
-        Ok(ModeUnion::normal())
+        if let Err(e) = app_data.settings.enable_merge_remap() {
+            warn!("Failed to save keyboard remap setting: {}", e);
+        }
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<KeyboardRemapPromptMode> for ConfirmNoAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: KeyboardRemapPromptMode,
-        app_data: &mut AppData<'_>,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        app_data.decline_keyboard_remap();
-        Ok(ModeUnion::normal())
+        if let Err(e) = app_data.settings.decline_merge_remap() {
+            warn!("Failed to save keyboard remap setting: {}", e);
+        }
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<KeyboardRemapPromptMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
     fn execute(
         self,
         _state: KeyboardRemapPromptMode,
-        app_data: &mut AppData<'_>,
+        app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        app_data.decline_keyboard_remap();
-        Ok(ModeUnion::normal())
+        if let Err(e) = app_data.settings.decline_merge_remap() {
+            warn!("Failed to save keyboard remap setting: {}", e);
+        }
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<UpdatePromptMode> for ConfirmYesAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        state: UpdatePromptMode,
-        _app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
+    fn execute(self, state: UpdatePromptMode, _app_data: &mut AppData) -> Result<Self::NextState> {
         Ok(UpdateRequestedMode { info: state.info }.into())
     }
 }
 
 impl ValidIn<UpdatePromptMode> for ConfirmNoAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: UpdatePromptMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.exit_mode();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: UpdatePromptMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }
 
 impl ValidIn<UpdatePromptMode> for CancelAction {
-    type NextState = ModeUnion;
+    type NextState = AppMode;
 
-    fn execute(
-        self,
-        _state: UpdatePromptMode,
-        app_data: &mut AppData<'_>,
-    ) -> Result<Self::NextState> {
-        app_data.exit_mode();
-        Ok(ModeUnion::normal())
+    fn execute(self, _state: UpdatePromptMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }

@@ -80,21 +80,23 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
-    let create_result = handler.create_agent(&mut app, "killable", None);
-    if create_result.is_err() {
+    let create_result = handler.create_agent(&mut app.data, "killable", None);
+    if let Ok(next) = create_result {
+        app.apply_mode(next);
+    } else {
         let _ = std::env::set_current_dir(&original_dir);
         return Ok(());
     }
 
     // Get agent info for kill command
-    let agent = app.storage.iter().next().ok_or("No agent found")?;
+    let agent = app.data.storage.iter().next().ok_or("No agent found")?;
     let agent_id = agent.id;
     let session = agent.mux_session.clone();
     let branch = agent.branch.clone();
 
     // Save storage so cmd_kill can load it
     let storage_path = fixture.storage_path();
-    app.storage.save_to(&storage_path)?;
+    app.data.storage.save_to(&storage_path)?;
 
     // Simulate kill: kill session, remove worktree, remove from storage
     let manager = SessionManager::new();
@@ -104,12 +106,12 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let _ = worktree_mgr.remove(&branch);
 
-    app.storage.remove(agent_id);
-    app.storage.save_to(&storage_path)?;
+    app.data.storage.remove(agent_id);
+    app.data.storage.save_to(&storage_path)?;
 
     let _ = std::env::set_current_dir(&original_dir);
 
-    assert_eq!(app.storage.len(), 0);
+    assert_eq!(app.data.storage.len(), 0);
 
     Ok(())
 }
@@ -131,14 +133,16 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
     let handler = tenex::app::Actions::new();
 
     // Create an agent
-    let create_result = handler.create_agent(&mut app, "sync-test", None);
-    if create_result.is_err() {
+    let create_result = handler.create_agent(&mut app.data, "sync-test", None);
+    if let Ok(next) = create_result {
+        app.apply_mode(next);
+    } else {
         let _ = std::env::set_current_dir(&original_dir);
         return Ok(());
     }
 
     // Agent starts as Starting
-    if let Some(agent) = app.storage.iter().next() {
+    if let Some(agent) = app.data.storage.iter().next() {
         assert_eq!(agent.status, tenex::Status::Starting);
     }
 
@@ -150,7 +154,7 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
 
     // Kill the session to simulate it stopping
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 

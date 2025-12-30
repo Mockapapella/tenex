@@ -8,7 +8,8 @@ use tracing::{debug, info, warn};
 
 use super::Actions;
 use super::swarm::SpawnConfig;
-use crate::app::state::{App, Mode, WorktreeConflictInfo};
+use crate::app::{AppData, WorktreeConflictInfo};
+use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
 
 impl Actions {
     /// Create a new agent
@@ -19,11 +20,16 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if agent creation fails
-    pub fn create_agent(self, app: &mut App, title: &str, prompt: Option<&str>) -> Result<()> {
+    pub fn create_agent(
+        self,
+        app_data: &mut AppData,
+        title: &str,
+        prompt: Option<&str>,
+    ) -> Result<AppMode> {
         debug!(title, prompt, "Creating new agent");
 
-        let branch = app.config.generate_branch_name(title);
-        let worktree_path = app.config.worktree_dir.join(&branch);
+        let branch = app_data.config.generate_branch_name(title);
+        let worktree_path = app_data.config.worktree_dir.join(&branch);
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
         let repo = git::open_repository(&repo_path)?;
 
@@ -44,7 +50,7 @@ impl Actions {
                 .map(|(b, c)| (Some(b), Some(c)))
                 .unwrap_or((None, None));
 
-            app.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            app_data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
                 title: title.to_string(),
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
@@ -55,19 +61,20 @@ impl Actions {
                 current_commit,
                 swarm_child_count: None, // Not a swarm creation
             });
-            app.enter_mode(Mode::Confirming(
-                crate::app::state::ConfirmAction::WorktreeConflict,
-            ));
-            return Ok(());
+            return Ok(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into());
         }
 
-        self.create_agent_internal(app, title, prompt, &branch, &worktree_path)
+        self.create_agent_internal(app_data, title, prompt, &branch, &worktree_path)?;
+        Ok(AppMode::normal())
     }
 
     /// Internal function to actually create the agent after conflict resolution
     pub(crate) fn create_agent_internal(
         self,
-        app: &mut App,
+        app_data: &mut AppData,
         title: &str,
         prompt: Option<&str>,
         branch: &str,
@@ -79,7 +86,7 @@ impl Actions {
 
         worktree_mgr.create_with_new_branch(worktree_path, branch)?;
 
-        let program = app.agent_spawn_command();
+        let program = app_data.agent_spawn_command();
         let agent = Agent::new(
             title.to_string(),
             program.clone(),
@@ -93,17 +100,17 @@ impl Actions {
             .create(&agent.mux_session, worktree_path, Some(&command))?;
 
         // Resize the new session to match preview dimensions
-        if let Some((width, height)) = app.ui.preview_dimensions {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
             let _ = self
                 .session_manager
                 .resize_window(&agent.mux_session, width, height);
         }
 
-        app.storage.add(agent);
-        app.storage.save()?;
+        app_data.storage.add(agent);
+        app_data.storage.save()?;
 
         info!(title, %branch, "Agent created successfully");
-        app.set_status(format!("Created agent: {title}"));
+        app_data.set_status(format!("Created agent: {title}"));
         Ok(())
     }
 
@@ -112,8 +119,8 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the mux session cannot be created or storage fails
-    pub fn reconnect_to_worktree(self, app: &mut App) -> Result<()> {
-        let conflict = app
+    pub fn reconnect_to_worktree(self, app_data: &mut AppData) -> Result<AppMode> {
+        let conflict = app_data
             .spawn
             .worktree_conflict
             .take()
@@ -121,7 +128,7 @@ impl Actions {
 
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Reconnecting to existing worktree");
 
-        let program = app.agent_spawn_command();
+        let program = app_data.agent_spawn_command();
 
         // Check if this is a swarm creation (has child count)
         if let Some(child_count) = conflict.swarm_child_count {
@@ -143,13 +150,13 @@ impl Actions {
                 .create(&root_session, &conflict.worktree_path, Some(&command))?;
 
             // Resize the session to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
+            if let Some((width, height)) = app_data.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&root_session, width, height);
             }
 
-            app.storage.add(root_agent);
+            app_data.storage.add(root_agent);
 
             // Now spawn the children
             let task = conflict.prompt.as_deref().unwrap_or("");
@@ -159,10 +166,10 @@ impl Actions {
                 branch: conflict.branch.clone(),
                 parent_agent_id: root_id,
             };
-            self.spawn_children_for_root(app, &spawn_config, child_count, task)?;
+            self.spawn_children_for_root(app_data, &spawn_config, child_count, task)?;
 
             info!(title = %conflict.title, branch = %conflict.branch, child_count, "Reconnected swarm to existing worktree");
-            app.set_status(format!("Reconnected swarm: {}", conflict.title));
+            app_data.set_status(format!("Reconnected swarm: {}", conflict.title));
         } else {
             // Single agent reconnect
             let agent = Agent::new(
@@ -182,20 +189,20 @@ impl Actions {
             )?;
 
             // Resize the new session to match preview dimensions
-            if let Some((width, height)) = app.ui.preview_dimensions {
+            if let Some((width, height)) = app_data.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&agent.mux_session, width, height);
             }
 
-            app.storage.add(agent);
+            app_data.storage.add(agent);
 
             info!(title = %conflict.title, branch = %conflict.branch, "Reconnected to existing worktree");
-            app.set_status(format!("Reconnected to: {}", conflict.title));
+            app_data.set_status(format!("Reconnected to: {}", conflict.title));
         }
 
-        app.storage.save()?;
-        Ok(())
+        app_data.storage.save()?;
+        Ok(AppMode::normal())
     }
 
     /// Recreate the worktree (user chose to delete and start fresh)
@@ -203,8 +210,8 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the worktree cannot be removed/recreated or agent creation fails
-    pub fn recreate_worktree(self, app: &mut App) -> Result<()> {
-        let conflict = app
+    pub fn recreate_worktree(self, app_data: &mut AppData) -> Result<AppMode> {
+        let conflict = app_data
             .spawn
             .worktree_conflict
             .take()
@@ -221,26 +228,27 @@ impl Actions {
         // Check if this is a swarm creation
         if let Some(child_count) = conflict.swarm_child_count {
             // Set up app state for spawn_children
-            app.spawn.spawning_under = None;
-            app.spawn.child_count = child_count;
+            app_data.spawn.spawning_under = None;
+            app_data.spawn.child_count = child_count;
 
             // Call spawn_children with the task/prompt (if any)
-            self.spawn_children(app, conflict.prompt.as_deref())
+            self.spawn_children(app_data, conflict.prompt.as_deref())
         } else {
             // Single agent creation
             self.create_agent_internal(
-                app,
+                app_data,
                 &conflict.title,
                 conflict.prompt.as_deref(),
                 &conflict.branch,
                 &conflict.worktree_path,
-            )
+            )?;
+            Ok(AppMode::normal())
         }
     }
 
     /// Kill the selected agent (and all its descendants)
-    pub(crate) fn kill_agent(self, app: &mut App) -> Result<()> {
-        if let Some(agent) = app.selected_agent() {
+    pub(crate) fn kill_agent(self, app_data: &mut AppData) -> Result<()> {
+        if let Some(agent) = app_data.selected_agent() {
             let agent_id = agent.id;
             let is_root = agent.is_root();
             let session = agent.mux_session.clone();
@@ -265,7 +273,7 @@ impl Actions {
 
                 // First kill all descendant windows in descending order
                 // (in case any are in other sessions, and to handle renumbering)
-                let descendants = app.storage.descendants(agent_id);
+                let descendants = app_data.storage.descendants(agent_id);
                 let mut indices: Vec<u32> = descendants
                     .iter()
                     .filter_map(|desc| desc.window_index)
@@ -317,19 +325,19 @@ impl Actions {
                     let worktree_mgr = WorktreeManager::new(&repo);
                     if let Err(e) = worktree_mgr.remove(&worktree_name) {
                         warn!("Failed to remove worktree: {e}");
-                        app.set_status(format!("Warning: {e}"));
+                        app_data.set_status(format!("Warning: {e}"));
                     }
                 }
             } else {
                 // Child agent: kill just this window and its descendants
                 // Get the root's session for killing windows
-                let root = app.storage.root_ancestor(agent_id);
+                let root = app_data.storage.root_ancestor(agent_id);
                 let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
                 let root_id = root.map(|r| r.id);
 
                 // Collect all window indices being deleted
                 let mut deleted_indices: Vec<u32> = Vec::new();
-                let descendants = app.storage.descendants(agent_id);
+                let descendants = app_data.storage.descendants(agent_id);
                 for desc in &descendants {
                     if let Some(idx) = desc.window_index {
                         deleted_indices.push(idx);
@@ -352,7 +360,7 @@ impl Actions {
                 // When the mux renumbers windows, indices shift down
                 if let Some(rid) = root_id {
                     super::window::adjust_window_indices_after_deletion(
-                        app,
+                        app_data,
                         rid,
                         agent_id,
                         &deleted_indices,
@@ -361,16 +369,12 @@ impl Actions {
             }
 
             // Remove agent and all descendants from storage
-            app.storage.remove_with_descendants(agent_id);
+            app_data.storage.remove_with_descendants(agent_id);
 
-            app.validate_selection();
-            app.storage.save()?;
+            app_data.validate_selection();
+            app_data.storage.save()?;
 
-            // Immediately update preview/diff to show the newly selected agent
-            let _ = self.update_preview(app);
-            let _ = self.update_diff(app);
-
-            app.set_status("Agent killed");
+            app_data.set_status("Agent killed");
         }
         Ok(())
     }
@@ -383,15 +387,19 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if terminal creation fails or no agent is selected
-    pub fn spawn_terminal(self, app: &mut App, startup_command: Option<&str>) -> Result<()> {
+    pub fn spawn_terminal(
+        self,
+        app_data: &mut AppData,
+        startup_command: Option<&str>,
+    ) -> Result<AppMode> {
         // Must have a selected agent
-        let selected = app
+        let selected = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
         // Get the root ancestor to use its mux session
         let selected_id = selected.id;
-        let root = app
+        let root = app_data
             .storage
             .root_ancestor(selected_id)
             .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
@@ -401,11 +409,11 @@ impl Actions {
         let branch = root.branch.clone();
         let root_id = root.id;
 
-        let title = app.next_terminal_name();
+        let title = app_data.spawn.next_terminal_name();
         debug!(title, startup_command, "Creating new terminal");
 
         // Reserve a window index
-        let window_index = app.storage.reserve_window_indices(root_id);
+        let window_index = app_data.storage.reserve_window_indices(root_id);
 
         // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
@@ -428,7 +436,7 @@ impl Actions {
                 .create_window(&root_session, &title, &worktree_path, None)?;
 
         // Resize the new window to match preview dimensions
-        if let Some((width, height)) = app.ui.preview_dimensions {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
             let window_target = SessionManager::window_target(&root_session, actual_index);
             let _ = self
                 .session_manager
@@ -445,27 +453,29 @@ impl Actions {
                 .send_keys_and_submit(&window_target, cmd)?;
         }
 
-        app.storage.add(terminal);
+        app_data.storage.add(terminal);
 
         // Expand the parent to show the new terminal
-        if let Some(parent) = app.storage.get_mut(root_id) {
+        if let Some(parent) = app_data.storage.get_mut(root_id) {
             parent.collapsed = false;
         }
 
-        app.storage.save()?;
+        app_data.storage.save()?;
 
         info!(title, "Terminal created successfully");
-        app.set_status(format!("Created terminal: {title}"));
-        Ok(())
+        app_data.set_status(format!("Created terminal: {title}"));
+        Ok(AppMode::normal())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::App;
     use crate::agent::Storage;
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
@@ -484,7 +494,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // No conflict info set - should error
-        let result = handler.reconnect_to_worktree(&mut app);
+        let result = handler.reconnect_to_worktree(&mut app.data);
         assert!(result.is_err());
         Ok(())
     }
@@ -495,7 +505,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // No conflict info set - should error
-        let result = handler.recreate_worktree(&mut app);
+        let result = handler.recreate_worktree(&mut app.data);
         assert!(result.is_err());
         Ok(())
     }
@@ -506,7 +516,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -515,11 +525,16 @@ mod tests {
         ));
 
         // Enter confirming mode for kill
-        app.enter_mode(Mode::Confirming(crate::app::state::ConfirmAction::Kill));
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
 
         // Confirm should kill and exit mode
         handler.handle_action(&mut app, crate::config::Action::Confirm)?;
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
@@ -529,7 +544,7 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         // Add a root agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "root".to_string(),
             "claude".to_string(),
             "muster/root".to_string(),
@@ -538,8 +553,8 @@ mod tests {
         ));
 
         // Kill should work (session doesn't exist, but should not error)
-        handler.kill_agent(&mut app)?;
-        assert_eq!(app.storage.len(), 0);
+        handler.kill_agent(&mut app.data)?;
+        assert_eq!(app.data.storage.len(), 0);
         Ok(())
     }
 
@@ -559,7 +574,7 @@ mod tests {
         root.collapsed = false;
         let root_id = root.id;
         let root_session = root.mux_session.clone();
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Add a child agent
         let child = Agent::new_child(
@@ -574,15 +589,15 @@ mod tests {
                 window_index: 2,
             },
         );
-        app.storage.add(child);
+        app.data.storage.add(child);
 
         // Select the child (it's the second visible agent)
         app.select_next();
 
         // Kill child should remove just the child
-        handler.kill_agent(&mut app)?;
-        assert_eq!(app.storage.len(), 1);
-        assert!(app.storage.get(root_id).is_some());
+        handler.kill_agent(&mut app.data)?;
+        assert_eq!(app.data.storage.len(), 1);
+        assert!(app.data.storage.get(root_id).is_some());
         Ok(())
     }
 
@@ -601,11 +616,11 @@ mod tests {
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Add children
         for i in 0..3 {
-            app.storage.add(Agent::new_child(
+            app.data.storage.add(Agent::new_child(
                 format!("child{i}"),
                 "claude".to_string(),
                 "muster/root".to_string(),
@@ -620,8 +635,8 @@ mod tests {
         }
 
         // Kill root should remove all
-        handler.kill_agent(&mut app)?;
-        assert_eq!(app.storage.len(), 0);
+        handler.kill_agent(&mut app.data)?;
+        assert_eq!(app.data.storage.len(), 0);
         Ok(())
     }
 
@@ -641,7 +656,7 @@ mod tests {
         root.collapsed = false;
         let root_id = root.id;
         let root_session = root.mux_session.clone();
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Add a child agent
         let child = Agent::new_child(
@@ -657,14 +672,14 @@ mod tests {
             },
         );
         let child_id = child.id;
-        app.storage.add(child);
+        app.data.storage.add(child);
 
         // Select the child (second visible agent)
         app.select_next();
         assert_eq!(app.selected_agent().map(|a| a.id), Some(child_id));
 
         // Spawn terminal - should fail because mux session doesn't exist
-        let result = handler.spawn_terminal(&mut app, None);
+        let result = handler.spawn_terminal(&mut app.data, None);
 
         // Should fail because mux session doesn't exist
         assert!(result.is_err());

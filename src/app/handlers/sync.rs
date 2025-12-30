@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::state::App;
+use crate::app::App;
 
 impl Actions {
     /// Check and update agent statuses based on mux sessions
@@ -50,7 +50,7 @@ impl Actions {
         // A successful but empty session list can be a transient mis-observation (e.g. after the
         // mux daemon restarts or if we're connected to a fresh daemon). Avoid turning that into a
         // destructive prune+save.
-        if sessions.is_empty() && !app.storage.is_empty() {
+        if sessions.is_empty() && !app.data.storage.is_empty() {
             debug!("Mux session list empty; skipping agent sync");
             return Ok(());
         }
@@ -59,7 +59,13 @@ impl Actions {
             sessions.into_iter().map(|s| s.name).collect();
 
         // Remove stored agents whose sessions no longer exist.
-        let roots: Vec<Agent> = app.storage.root_agents().into_iter().cloned().collect();
+        let roots: Vec<Agent> = app
+            .data
+            .storage
+            .root_agents()
+            .into_iter()
+            .cloned()
+            .collect();
         if !roots.is_empty()
             && !roots
                 .iter()
@@ -94,12 +100,12 @@ impl Actions {
             }
 
             debug!(title = %root.title, session = %root.mux_session, "Removing agent with missing mux session");
-            app.storage.remove_with_descendants(root.id);
+            app.data.storage.remove_with_descendants(root.id);
             changed = true;
         }
 
         // Update starting agents to running if their session exists
-        for agent in app.storage.iter_mut() {
+        for agent in app.data.storage.iter_mut() {
             if agent.status == Status::Starting && active_sessions.contains(&agent.mux_session) {
                 debug!(title = %agent.title, "Agent status: Starting -> Running");
                 agent.set_status(Status::Running);
@@ -108,7 +114,7 @@ impl Actions {
         }
 
         if changed {
-            app.storage.save()?;
+            app.data.storage.save()?;
             app.validate_selection();
         }
 
@@ -150,13 +156,13 @@ impl Actions {
             };
 
             // Only process worktrees that match our branch prefix
-            if !branch_name.starts_with(&app.config.branch_prefix) {
-                debug!(branch = %branch_name, prefix = %app.config.branch_prefix, "Skipping worktree with different prefix");
+            if !branch_name.starts_with(&app.data.config.branch_prefix) {
+                debug!(branch = %branch_name, prefix = %app.data.config.branch_prefix, "Skipping worktree with different prefix");
                 continue;
             }
 
             // Check if there's already an agent for this branch
-            let agent_exists = app.storage.iter().any(|a| a.branch == branch_name);
+            let agent_exists = app.data.storage.iter().any(|a| a.branch == branch_name);
             if agent_exists {
                 debug!(branch = %branch_name, "Agent already exists for worktree");
                 continue;
@@ -179,18 +185,18 @@ impl Actions {
                 .create(&agent.mux_session, &wt.path, Some(&command))?;
 
             // Resize the session to match preview dimensions if available
-            if let Some((width, height)) = app.ui.preview_dimensions {
+            if let Some((width, height)) = app.data.ui.preview_dimensions {
                 let _ = self
                     .session_manager
                     .resize_window(&agent.mux_session, width, height);
             }
 
-            app.storage.add(agent);
+            app.data.storage.add(agent);
             info!(branch = %branch_name, "Auto-connected to existing worktree");
         }
 
         // Save storage if we added any agents
-        app.storage.save()?;
+        app.data.storage.save()?;
         Ok(())
     }
 }
@@ -235,7 +241,7 @@ mod tests {
             None,
         );
         running.set_status(Status::Running);
-        app.storage.add(running);
+        app.data.storage.add(running);
 
         let mut starting = Agent::new(
             "starting".to_string(),
@@ -245,13 +251,13 @@ mod tests {
             None,
         );
         starting.set_status(Status::Starting);
-        app.storage.add(starting);
+        app.data.storage.add(starting);
 
         // When mux session listing succeeds but reports no sessions, treat it as uncertain and
         // avoid destructive pruning.
         Actions::new().sync_agent_status_with_sessions(&mut app, Ok(vec![]))?;
 
-        assert_eq!(app.storage.len(), 2);
+        assert_eq!(app.data.storage.len(), 2);
         Ok(())
     }
 
@@ -268,7 +274,7 @@ mod tests {
         );
         alive.set_status(Status::Running);
         let alive_session = alive.mux_session.clone();
-        app.storage.add(alive);
+        app.data.storage.add(alive);
 
         let mut missing = Agent::new(
             "missing".to_string(),
@@ -279,7 +285,7 @@ mod tests {
         );
         missing.set_status(Status::Running);
         let missing_id = missing.id;
-        app.storage.add(missing);
+        app.data.storage.add(missing);
 
         Actions::new().sync_agent_status_with_sessions(
             &mut app,
@@ -290,8 +296,8 @@ mod tests {
             }]),
         )?;
 
-        assert_eq!(app.storage.len(), 1);
-        assert!(app.storage.get(missing_id).is_none());
+        assert_eq!(app.data.storage.len(), 1);
+        assert!(app.data.storage.get(missing_id).is_none());
         Ok(())
     }
 
@@ -310,7 +316,7 @@ mod tests {
         agent.set_status(Status::Starting);
         let session = agent.mux_session.clone();
         let agent_id = agent.id;
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
         Actions::new().sync_agent_status_with_sessions(
             &mut app,
@@ -322,7 +328,11 @@ mod tests {
         )?;
 
         assert_eq!(
-            app.storage.get(agent_id).ok_or("Agent missing")?.status,
+            app.data
+                .storage
+                .get(agent_id)
+                .ok_or("Agent missing")?
+                .status,
             Status::Running
         );
         Ok(())
@@ -342,11 +352,11 @@ mod tests {
             None,
         );
         agent.set_status(Status::Running);
-        app.storage.add(agent);
+        app.data.storage.add(agent);
 
         Actions::new()
             .sync_agent_status_with_sessions(&mut app, Err(anyhow::anyhow!("mux down")))?;
-        assert_eq!(app.storage.len(), 1);
+        assert_eq!(app.data.storage.len(), 1);
         Ok(())
     }
 }

@@ -18,5 +18,6 @@ pub mod tui;
 pub mod update;
 
 pub use agent::{Agent, Status};
-pub use app::{App, Mode, Tab};
+pub use app::{App, Tab};
 pub use config::Config;
+pub use state::AppMode;

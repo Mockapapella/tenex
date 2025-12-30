@@ -11,25 +11,30 @@ use crate::mux::SessionManager;
 use anyhow::Result;
 use tracing::{debug, info};
 
-use crate::app::state::App;
+use crate::app::AppData;
+use crate::state::AppMode;
 
 use super::Actions;
 
 impl Actions {
     /// Spawn a terminal for resolving conflicts
-    fn spawn_conflict_terminal(app: &mut App, title: &str, startup_command: &str) -> Result<()> {
-        let agent_id = app
+    pub(crate) fn spawn_conflict_terminal(
+        app_data: &mut AppData,
+        title: &str,
+        startup_command: &str,
+    ) -> Result<AppMode> {
+        let agent_id = app_data
             .git_op
             .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID"))?;
 
         // Verify agent exists
-        if app.storage.get(agent_id).is_none() {
+        if app_data.storage.get(agent_id).is_none() {
             anyhow::bail!("Agent not found");
         }
 
         // Get the root ancestor to use its mux session
-        let root = app
+        let root = app_data
             .storage
             .root_ancestor(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
@@ -42,7 +47,7 @@ impl Actions {
         debug!(title, startup_command, "Creating conflict terminal");
 
         // Reserve a window index
-        let window_index = app.storage.reserve_window_indices(root_id);
+        let window_index = app_data.storage.reserve_window_indices(root_id);
 
         // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
@@ -65,7 +70,7 @@ impl Actions {
             session_manager.create_window(&root_session, title, &worktree_path, None)?;
 
         // Resize the new window to match preview dimensions
-        if let Some((width, height)) = app.ui.preview_dimensions {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
             let window_target = SessionManager::window_target(&root_session, actual_index);
             let _ = session_manager.resize_window(&window_target, width, height);
         }
@@ -77,26 +82,25 @@ impl Actions {
         let window_target = SessionManager::window_target(&root_session, actual_index);
         session_manager.send_keys_and_submit(&window_target, startup_command)?;
 
-        app.storage.add(terminal);
+        app_data.storage.add(terminal);
 
         // Expand the parent to show the new terminal
-        if let Some(parent) = app.storage.get_mut(root_id) {
+        if let Some(parent) = app_data.storage.get_mut(root_id) {
             parent.collapsed = false;
         }
 
-        app.storage.save()?;
+        app_data.storage.save()?;
 
         // Clear git op state and exit mode
-        app.clear_git_op_state();
-        app.clear_review_state();
-        app.exit_mode();
+        app_data.git_op.clear();
+        app_data.review.clear();
 
         info!(
             title,
             "Conflict terminal created - user can resolve conflicts"
         );
-        app.set_status(format!("Opened terminal for conflict resolution: {title}"));
-        Ok(())
+        app_data.set_status(format!("Opened terminal for conflict resolution: {title}"));
+        Ok(AppMode::normal())
     }
 }
 
