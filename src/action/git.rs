@@ -1,7 +1,9 @@
 use crate::action::ValidIn;
 use crate::app::{Actions, AppData, Mode};
 use crate::git;
-use crate::state::{ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{
+    ConfirmPushForPRMode, ConfirmPushMode, ModeUnion, NormalMode, RenameBranchMode, ScrollingMode,
+};
 use anyhow::{Context, Result};
 
 /// Normal-mode action: start the git push flow.
@@ -20,7 +22,7 @@ impl ValidIn<NormalMode> for PushAction {
         let branch_name = agent.branch.clone();
         app_data.git_op.start_push(agent_id, branch_name);
 
-        Ok(ModeUnion::Legacy(Mode::ConfirmPush))
+        Ok(ConfirmPushMode.into())
     }
 }
 
@@ -36,7 +38,7 @@ impl ValidIn<ScrollingMode> for PushAction {
         let branch_name = agent.branch.clone();
         app_data.git_op.start_push(agent_id, branch_name);
 
-        Ok(ModeUnion::Legacy(Mode::ConfirmPush))
+        Ok(ConfirmPushMode.into())
     }
 }
 
@@ -62,7 +64,7 @@ impl ValidIn<NormalMode> for RenameBranchAction {
         app_data.input.buffer = current_name;
         app_data.input.cursor = app_data.input.buffer.len();
 
-        Ok(ModeUnion::Legacy(Mode::RenameBranch))
+        Ok(RenameBranchMode.into())
     }
 }
 
@@ -84,7 +86,7 @@ impl ValidIn<ScrollingMode> for RenameBranchAction {
         app_data.input.buffer = current_name;
         app_data.input.cursor = app_data.input.buffer.len();
 
-        Ok(ModeUnion::Legacy(Mode::RenameBranch))
+        Ok(RenameBranchMode.into())
     }
 }
 
@@ -112,7 +114,7 @@ impl ValidIn<NormalMode> for OpenPRAction {
             .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
         if has_unpushed {
-            return Ok(ModeUnion::Legacy(Mode::ConfirmPushForPR));
+            return Ok(ConfirmPushForPRMode.into());
         }
 
         Actions::open_pr_in_browser(app_data.app)?;
@@ -140,7 +142,7 @@ impl ValidIn<ScrollingMode> for OpenPRAction {
             .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
         if has_unpushed {
-            return Ok(ModeUnion::Legacy(Mode::ConfirmPushForPR));
+            return Ok(ConfirmPushForPRMode.into());
         }
 
         Actions::open_pr_in_browser(app_data.app)?;

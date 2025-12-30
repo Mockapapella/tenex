@@ -5,36 +5,50 @@ mod broadcasting;
 mod child_count;
 mod child_prompt;
 mod command_palette;
+mod confirm_push;
+mod confirm_push_for_pr;
+mod confirming;
 mod creating;
 mod custom_agent_cmd;
+mod keyboard_remap_prompt;
 mod merge_branch_selector;
 mod model_selector;
 mod normal;
 mod prompting;
 mod rebase_branch_selector;
 mod reconnect_prompt;
+mod rename_branch;
 mod review_child_count;
 mod review_info;
 mod scrolling;
 mod terminal_prompt;
+mod update_prompt;
+mod update_requested;
 
 pub use branch_selector::BranchSelectorMode;
 pub use broadcasting::BroadcastingMode;
 pub use child_count::ChildCountMode;
 pub use child_prompt::ChildPromptMode;
 pub use command_palette::CommandPaletteMode;
+pub use confirm_push::ConfirmPushMode;
+pub use confirm_push_for_pr::ConfirmPushForPRMode;
+pub use confirming::ConfirmingMode;
 pub use creating::CreatingMode;
 pub use custom_agent_cmd::CustomAgentCommandMode;
+pub use keyboard_remap_prompt::KeyboardRemapPromptMode;
 pub use merge_branch_selector::MergeBranchSelectorMode;
 pub use model_selector::ModelSelectorMode;
 pub use normal::NormalMode;
 pub use prompting::PromptingMode;
 pub use rebase_branch_selector::RebaseBranchSelectorMode;
 pub use reconnect_prompt::ReconnectPromptMode;
+pub use rename_branch::RenameBranchMode;
 pub use review_child_count::ReviewChildCountMode;
 pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
 pub use terminal_prompt::TerminalPromptMode;
+pub use update_prompt::UpdatePromptMode;
+pub use update_requested::UpdateRequestedMode;
 
 use crate::app::{App, Mode};
 
@@ -78,6 +92,20 @@ pub enum ModeUnion {
     ModelSelector(ModelSelectorMode),
     /// Command palette mode.
     CommandPalette(CommandPaletteMode),
+    /// General confirmation mode (requires carrying the confirmed action).
+    Confirming(ConfirmingMode),
+    /// Confirm push mode.
+    ConfirmPush(ConfirmPushMode),
+    /// Confirm push for PR mode.
+    ConfirmPushForPR(ConfirmPushForPRMode),
+    /// Rename branch mode.
+    RenameBranch(RenameBranchMode),
+    /// Keyboard remap prompt mode.
+    KeyboardRemapPrompt(KeyboardRemapPromptMode),
+    /// Update prompt mode.
+    UpdatePrompt(UpdatePromptMode),
+    /// Update requested mode (input ignored).
+    UpdateRequested(UpdateRequestedMode),
     /// Transition to a legacy runtime `Mode`.
     Legacy(Mode),
 }
@@ -90,6 +118,10 @@ impl ModeUnion {
     }
 
     /// Apply the mode transition to the legacy `App` state.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This is the central match dispatcher for mode transitions during migration."
+    )]
     pub fn apply(self, app: &mut App) {
         match self {
             Self::Normal(_) => {
@@ -177,6 +209,39 @@ impl ModeUnion {
                     app.start_command_palette();
                 }
             }
+            Self::Confirming(state) => {
+                if app.mode != Mode::Confirming(state.action) {
+                    app.enter_mode(Mode::Confirming(state.action));
+                }
+            }
+            Self::ConfirmPush(_) => {
+                if app.mode != Mode::ConfirmPush {
+                    app.enter_mode(Mode::ConfirmPush);
+                }
+            }
+            Self::ConfirmPushForPR(_) => {
+                if app.mode != Mode::ConfirmPushForPR {
+                    app.enter_mode(Mode::ConfirmPushForPR);
+                }
+            }
+            Self::RenameBranch(_) => {
+                if app.mode != Mode::RenameBranch {
+                    app.enter_mode(Mode::RenameBranch);
+                }
+            }
+            Self::KeyboardRemapPrompt(_) => {
+                if app.mode != Mode::KeyboardRemapPrompt {
+                    app.enter_mode(Mode::KeyboardRemapPrompt);
+                }
+            }
+            Self::UpdatePrompt(state) => match &app.mode {
+                Mode::UpdatePrompt(info) if info == &state.info => {}
+                _ => app.enter_mode(Mode::UpdatePrompt(state.info)),
+            },
+            Self::UpdateRequested(state) => match &app.mode {
+                Mode::UpdateRequested(info) if info == &state.info => {}
+                _ => app.enter_mode(Mode::UpdateRequested(state.info)),
+            },
             Self::Legacy(mode) => {
                 if app.mode == mode {
                     return;
@@ -298,5 +363,47 @@ impl From<ModelSelectorMode> for ModeUnion {
 impl From<CommandPaletteMode> for ModeUnion {
     fn from(_: CommandPaletteMode) -> Self {
         Self::CommandPalette(CommandPaletteMode)
+    }
+}
+
+impl From<ConfirmingMode> for ModeUnion {
+    fn from(state: ConfirmingMode) -> Self {
+        Self::Confirming(state)
+    }
+}
+
+impl From<ConfirmPushMode> for ModeUnion {
+    fn from(_: ConfirmPushMode) -> Self {
+        Self::ConfirmPush(ConfirmPushMode)
+    }
+}
+
+impl From<ConfirmPushForPRMode> for ModeUnion {
+    fn from(_: ConfirmPushForPRMode) -> Self {
+        Self::ConfirmPushForPR(ConfirmPushForPRMode)
+    }
+}
+
+impl From<RenameBranchMode> for ModeUnion {
+    fn from(_: RenameBranchMode) -> Self {
+        Self::RenameBranch(RenameBranchMode)
+    }
+}
+
+impl From<KeyboardRemapPromptMode> for ModeUnion {
+    fn from(_: KeyboardRemapPromptMode) -> Self {
+        Self::KeyboardRemapPrompt(KeyboardRemapPromptMode)
+    }
+}
+
+impl From<UpdatePromptMode> for ModeUnion {
+    fn from(state: UpdatePromptMode) -> Self {
+        Self::UpdatePrompt(state)
+    }
+}
+
+impl From<UpdateRequestedMode> for ModeUnion {
+    fn from(state: UpdateRequestedMode) -> Self {
+        Self::UpdateRequested(state)
     }
 }

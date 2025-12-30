@@ -59,13 +59,13 @@ pub fn handle_key_event(
 
         // Git operation confirmation modes
         Mode::ConfirmPush => {
-            confirm::handle_confirm_push_mode(app, code);
+            confirm::handle_confirm_push_mode(app, action_handler, code)?;
         }
         Mode::ConfirmPushForPR => {
-            confirm::handle_confirm_push_for_pr_mode(app, code);
+            confirm::handle_confirm_push_for_pr_mode(app, action_handler, code)?;
         }
         Mode::RenameBranch => {
-            confirm::handle_rename_branch_mode(app, code);
+            confirm::handle_rename_branch_mode(app, action_handler, code)?;
         }
 
         // General confirmation mode
@@ -83,11 +83,11 @@ pub fn handle_key_event(
 
         // Keyboard remap prompt
         Mode::KeyboardRemapPrompt => {
-            confirm::handle_keyboard_remap_mode(app, code);
+            confirm::handle_keyboard_remap_mode(app, action_handler, code)?;
         }
         // Self-update prompt on startup
-        Mode::UpdatePrompt(_) => {
-            confirm::handle_update_prompt_mode(app, code);
+        Mode::UpdatePrompt(info) => {
+            confirm::handle_update_prompt_mode(app, action_handler, info.clone(), code)?;
         }
         // Update requested - ignore input while exiting
         Mode::UpdateRequested(_) => {}

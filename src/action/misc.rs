@@ -1,6 +1,6 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, ConfirmAction, Mode};
-use crate::state::{ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{ConfirmingMode, ModeUnion, NormalMode, ScrollingMode};
 use anyhow::Result;
 
 /// Normal-mode action: open the help overlay.
@@ -34,7 +34,10 @@ impl ValidIn<NormalMode> for QuitAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.has_running_agents() {
-            Ok(ModeUnion::Legacy(Mode::Confirming(ConfirmAction::Quit)))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into())
         } else {
             app_data.should_quit = true;
             Ok(ModeUnion::normal())
@@ -47,7 +50,10 @@ impl ValidIn<ScrollingMode> for QuitAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.has_running_agents() {
-            Ok(ModeUnion::Legacy(Mode::Confirming(ConfirmAction::Quit)))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Quit,
+            }
+            .into())
         } else {
             app_data.should_quit = true;
             Ok(ScrollingMode.into())

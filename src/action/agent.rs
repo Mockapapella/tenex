@@ -1,7 +1,7 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, ConfirmAction, Mode};
 use crate::git;
-use crate::state::{ModeUnion, NormalMode, ScrollingMode};
+use crate::state::{ConfirmingMode, ModeUnion, NormalMode, ScrollingMode};
 use anyhow::{Context, Result};
 
 /// Normal-mode action: enter agent creation mode.
@@ -61,7 +61,10 @@ impl ValidIn<NormalMode> for KillAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::Confirming(ConfirmAction::Kill)))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into())
         } else {
             Ok(ModeUnion::normal())
         }
@@ -73,7 +76,10 @@ impl ValidIn<ScrollingMode> for KillAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            Ok(ModeUnion::Legacy(Mode::Confirming(ConfirmAction::Kill)))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into())
         } else {
             Ok(ScrollingMode.into())
         }
@@ -177,9 +183,10 @@ impl ValidIn<NormalMode> for SynthesizeAction {
         };
 
         if app_data.storage.has_children(agent.id) {
-            Ok(ModeUnion::Legacy(Mode::Confirming(
-                ConfirmAction::Synthesize,
-            )))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into())
         } else {
             Ok(ModeUnion::Legacy(Mode::ErrorModal(
                 "Selected agent has no children to synthesize".to_string(),
@@ -197,9 +204,10 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
         };
 
         if app_data.storage.has_children(agent.id) {
-            Ok(ModeUnion::Legacy(Mode::Confirming(
-                ConfirmAction::Synthesize,
-            )))
+            Ok(ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into())
         } else {
             Ok(ModeUnion::Legacy(Mode::ErrorModal(
                 "Selected agent has no children to synthesize".to_string(),

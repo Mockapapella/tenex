@@ -1,6 +1,7 @@
 //! Compile-time action types (new architecture).
 
 mod agent;
+mod confirm;
 mod git;
 mod misc;
 mod navigation;
@@ -8,20 +9,23 @@ mod picker;
 mod text_input;
 
 pub use agent::*;
+pub use confirm::*;
 pub use git::*;
 pub use misc::*;
 pub use navigation::*;
 pub use picker::*;
 pub use text_input::*;
 
-use crate::app::{Actions, App, AppData};
+use crate::app::{Actions, App, AppData, ConfirmAction};
 use crate::config::Action as KeyAction;
 use crate::state::{
     BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
-    CreatingMode, CustomAgentCommandMode, MergeBranchSelectorMode, ModeUnion, ModelSelectorMode,
-    NormalMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode, ReviewChildCountMode,
-    ReviewInfoMode, ScrollingMode, TerminalPromptMode,
+    ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode, CustomAgentCommandMode,
+    KeyboardRemapPromptMode, MergeBranchSelectorMode, ModeUnion, ModelSelectorMode, NormalMode,
+    PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode,
+    ReviewChildCountMode, ReviewInfoMode, ScrollingMode, TerminalPromptMode, UpdatePromptMode,
 };
+use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -415,6 +419,159 @@ pub fn dispatch_command_palette_mode(app: &mut App, actions: Actions, code: KeyC
         KeyCode::Home => CursorHomeAction.execute(CommandPaletteMode, &mut app_data)?,
         KeyCode::End => CursorEndAction.execute(CommandPaletteMode, &mut app_data)?,
         _ => CommandPaletteMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ConfirmPushMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_confirm_push_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Char('y' | 'Y') => ConfirmYesAction.execute(ConfirmPushMode, &mut app_data)?,
+        KeyCode::Char('n' | 'N') => ConfirmNoAction.execute(ConfirmPushMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(ConfirmPushMode, &mut app_data)?,
+        _ => ConfirmPushMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ConfirmPushForPRMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_confirm_push_for_pr_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Char('y' | 'Y') => {
+            ConfirmYesAction.execute(ConfirmPushForPRMode, &mut app_data)?
+        }
+        KeyCode::Char('n' | 'N') => ConfirmNoAction.execute(ConfirmPushForPRMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(ConfirmPushForPRMode, &mut app_data)?,
+        _ => ConfirmPushForPRMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `RenameBranchMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_rename_branch_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SubmitAction.execute(RenameBranchMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(RenameBranchMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(RenameBranchMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(RenameBranchMode, &mut app_data)?,
+        _ => RenameBranchMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `KeyboardRemapPromptMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_keyboard_remap_prompt_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Char('y' | 'Y') => {
+            ConfirmYesAction.execute(KeyboardRemapPromptMode, &mut app_data)?
+        }
+        KeyCode::Char('n' | 'N') => {
+            ConfirmNoAction.execute(KeyboardRemapPromptMode, &mut app_data)?
+        }
+        KeyCode::Esc => CancelAction.execute(KeyboardRemapPromptMode, &mut app_data)?,
+        _ => KeyboardRemapPromptMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `UpdatePromptMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_update_prompt_mode(
+    app: &mut App,
+    actions: Actions,
+    info: UpdateInfo,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Char('y' | 'Y') => {
+            ConfirmYesAction.execute(UpdatePromptMode { info }, &mut app_data)?
+        }
+        KeyCode::Char('n' | 'N') => {
+            ConfirmNoAction.execute(UpdatePromptMode { info }, &mut app_data)?
+        }
+        KeyCode::Esc => CancelAction.execute(UpdatePromptMode { info }, &mut app_data)?,
+        _ => UpdatePromptMode { info }.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ConfirmingMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_confirming_mode(
+    app: &mut App,
+    actions: Actions,
+    action: ConfirmAction,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+    let state = ConfirmingMode { action };
+
+    let next = if action == ConfirmAction::WorktreeConflict {
+        match code {
+            KeyCode::Char('r' | 'R') => WorktreeReconnectAction.execute(state, &mut app_data)?,
+            KeyCode::Char('d' | 'D') => WorktreeRecreateAction.execute(state, &mut app_data)?,
+            KeyCode::Esc => CancelAction.execute(state, &mut app_data)?,
+            _ => state.into(),
+        }
+    } else {
+        match code {
+            KeyCode::Char('y' | 'Y') => ConfirmYesAction.execute(state, &mut app_data)?,
+            KeyCode::Char('n' | 'N') => ConfirmNoAction.execute(state, &mut app_data)?,
+            KeyCode::Esc => CancelAction.execute(state, &mut app_data)?,
+            _ => state.into(),
+        }
     };
 
     next.apply(app_data.app);
