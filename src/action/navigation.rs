@@ -1,6 +1,6 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, Mode, Tab};
-use crate::state::{ModeUnion, NormalMode};
+use crate::state::{ModeUnion, NormalMode, ScrollingMode};
 use anyhow::Result;
 
 /// Normal-mode action: switch the detail pane tab (Preview/Diff).
@@ -10,9 +10,18 @@ pub struct SwitchTabAction;
 impl ValidIn<NormalMode> for SwitchTabAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.switch_tab();
         Ok(ModeUnion::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for SwitchTabAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.switch_tab();
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -23,9 +32,18 @@ pub struct NextAgentAction;
 impl ValidIn<NormalMode> for NextAgentAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.select_next();
         Ok(ModeUnion::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for NextAgentAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.select_next();
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -36,9 +54,18 @@ pub struct PrevAgentAction;
 impl ValidIn<NormalMode> for PrevAgentAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.select_prev();
         Ok(ModeUnion::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for PrevAgentAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.select_prev();
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -49,9 +76,18 @@ pub struct ScrollUpAction;
 impl ValidIn<NormalMode> for ScrollUpAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.scroll_up(5);
-        Ok(ModeUnion::normal())
+        Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<ScrollingMode> for ScrollUpAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.scroll_up(5);
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -62,9 +98,18 @@ pub struct ScrollDownAction;
 impl ValidIn<NormalMode> for ScrollDownAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.scroll_down(5);
-        Ok(ModeUnion::normal())
+        Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<ScrollingMode> for ScrollDownAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.scroll_down(5);
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -75,9 +120,18 @@ pub struct ScrollTopAction;
 impl ValidIn<NormalMode> for ScrollTopAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.scroll_to_top();
-        Ok(ModeUnion::normal())
+        Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<ScrollingMode> for ScrollTopAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.scroll_to_top();
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -88,9 +142,18 @@ pub struct ScrollBottomAction;
 impl ValidIn<NormalMode> for ScrollBottomAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         app_data.scroll_to_bottom(10000, 0);
-        Ok(ModeUnion::normal())
+        Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<ScrollingMode> for ScrollBottomAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        app_data.scroll_to_bottom(10000, 0);
+        Ok(ScrollingMode.into())
     }
 }
 
@@ -101,12 +164,25 @@ pub struct FocusPreviewAction;
 impl ValidIn<NormalMode> for FocusPreviewAction {
     type NextState = ModeUnion;
 
-    fn execute(_state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+    fn execute(self, _state: NormalMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
             app_data.active_tab = Tab::Preview;
             Ok(ModeUnion::Legacy(Mode::PreviewFocused))
         } else {
             Ok(ModeUnion::normal())
+        }
+    }
+}
+
+impl ValidIn<ScrollingMode> for FocusPreviewAction {
+    type NextState = ModeUnion;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData<'_>) -> Result<Self::NextState> {
+        if app_data.selected_agent().is_some() {
+            app_data.active_tab = Tab::Preview;
+            Ok(ModeUnion::Legacy(Mode::PreviewFocused))
+        } else {
+            Ok(ScrollingMode.into())
         }
     }
 }

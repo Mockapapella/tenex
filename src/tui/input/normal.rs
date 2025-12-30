@@ -17,6 +17,7 @@ pub fn handle_normal_mode(
     if let Some(action) = crate::config::get_action(code, modifiers) {
         match app.mode {
             Mode::Normal => crate::action::dispatch_normal_mode(app, action_handler, action)?,
+            Mode::Scrolling => crate::action::dispatch_scrolling_mode(app, action_handler, action)?,
             _ => action_handler.handle_action(app, action)?,
         }
     }

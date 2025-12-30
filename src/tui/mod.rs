@@ -584,7 +584,7 @@ mod tests {
         test_key_event(&mut app, handler, KeyCode::Char('g'), KeyModifiers::NONE)?;
         test_key_event(&mut app, handler, KeyCode::Char('G'), KeyModifiers::NONE)?;
 
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, Mode::Scrolling);
         Ok(())
     }
 

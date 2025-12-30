@@ -31,6 +31,49 @@ impl InputState {
         self.scroll = 0;
     }
 
+    /// Clear the current input buffer.
+    ///
+    /// This matches typical line-editor behavior for "clear line" in Tenex's
+    /// text input modals.
+    pub fn clear_line(&mut self) {
+        self.clear();
+    }
+
+    /// Delete the previous word (like many shell/readline editors).
+    ///
+    /// This removes any whitespace immediately before the cursor, then removes
+    /// the contiguous non-whitespace "word" segment.
+    pub fn delete_word(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let mut start = self.cursor;
+        let mut found_non_whitespace = false;
+
+        for (index, ch) in self.buffer[..self.cursor].char_indices().rev() {
+            if !found_non_whitespace {
+                if ch.is_whitespace() {
+                    start = index;
+                    continue;
+                }
+                found_non_whitespace = true;
+                start = index;
+                continue;
+            }
+
+            if ch.is_whitespace() {
+                start = index.saturating_add(ch.len_utf8());
+                break;
+            }
+
+            start = index;
+        }
+
+        self.buffer.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
     /// Set the input buffer content and move cursor to end
     pub fn set(&mut self, content: String) {
         self.cursor = content.len();

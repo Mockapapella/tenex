@@ -46,6 +46,9 @@ impl Actions {
         if app.mode == Mode::Normal {
             return crate::action::dispatch_normal_mode(app, self, action);
         }
+        if app.mode == Mode::Scrolling {
+            return crate::action::dispatch_scrolling_mode(app, self, action);
+        }
 
         match action {
             // Mode entry actions

@@ -38,7 +38,7 @@ pub fn handle_key_event(
         | Mode::ReconnectPrompt
         | Mode::TerminalPrompt
         | Mode::CustomAgentCommand => {
-            text_input::handle_text_input_mode(app, action_handler, code, modifiers);
+            text_input::handle_text_input_mode(app, action_handler, code, modifiers)?;
         }
 
         // Count picker modes
