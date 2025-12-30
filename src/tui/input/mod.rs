@@ -43,18 +43,18 @@ pub fn handle_key_event(
 
         // Count picker modes
         Mode::ChildCount => {
-            picker::handle_child_count_mode(app, code);
+            picker::handle_child_count_mode(app, action_handler, code)?;
         }
         Mode::ReviewChildCount => {
-            picker::handle_review_child_count_mode(app, code);
+            picker::handle_review_child_count_mode(app, action_handler, code)?;
         }
         Mode::ReviewInfo => {
-            picker::handle_review_info_mode(app);
+            picker::handle_review_info_mode(app, action_handler)?;
         }
 
         // Branch selector mode
         Mode::BranchSelector => {
-            picker::handle_branch_selector_mode(app, action_handler, code);
+            picker::handle_branch_selector_mode(app, action_handler, code)?;
         }
 
         // Git operation confirmation modes
@@ -75,10 +75,10 @@ pub fn handle_key_event(
 
         // Rebase/Merge branch selector modes
         Mode::RebaseBranchSelector => {
-            picker::handle_rebase_branch_selector_mode(app, code);
+            picker::handle_rebase_branch_selector_mode(app, action_handler, code)?;
         }
         Mode::MergeBranchSelector => {
-            picker::handle_merge_branch_selector_mode(app, code);
+            picker::handle_merge_branch_selector_mode(app, action_handler, code)?;
         }
 
         // Keyboard remap prompt
@@ -137,12 +137,12 @@ pub fn handle_key_event(
 
         // Slash commands
         Mode::CommandPalette => {
-            command::handle_command_palette_mode(app, code);
+            command::handle_command_palette_mode(app, action_handler, code)?;
         }
 
         // Slash command modal/pickers
         Mode::ModelSelector => {
-            command::handle_model_selector_mode(app, code);
+            command::handle_model_selector_mode(app, action_handler, code)?;
         }
 
         // Preview focused mode (forwards keys to the mux backend)

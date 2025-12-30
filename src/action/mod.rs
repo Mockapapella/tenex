@@ -4,19 +4,23 @@ mod agent;
 mod git;
 mod misc;
 mod navigation;
+mod picker;
 mod text_input;
 
 pub use agent::*;
 pub use git::*;
 pub use misc::*;
 pub use navigation::*;
+pub use picker::*;
 pub use text_input::*;
 
 use crate::app::{Actions, App, AppData};
 use crate::config::Action as KeyAction;
 use crate::state::{
-    BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode, ModeUnion, NormalMode,
-    PromptingMode, ReconnectPromptMode, ScrollingMode, TerminalPromptMode,
+    BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
+    CreatingMode, CustomAgentCommandMode, MergeBranchSelectorMode, ModeUnion, ModelSelectorMode,
+    NormalMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode, ReviewChildCountMode,
+    ReviewInfoMode, ScrollingMode, TerminalPromptMode,
 };
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -236,6 +240,185 @@ pub fn dispatch_custom_agent_command_mode(
     modifiers: KeyModifiers,
 ) -> Result<()> {
     dispatch_text_input_mode(app, actions, CustomAgentCommandMode, code, modifiers)
+}
+
+/// Dispatch a raw key event while in `ChildCountMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_child_count_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SelectAction.execute(ChildCountMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(ChildCountMode, &mut app_data)?,
+        KeyCode::Up => IncrementAction.execute(ChildCountMode, &mut app_data)?,
+        KeyCode::Down => DecrementAction.execute(ChildCountMode, &mut app_data)?,
+        _ => ChildCountMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ReviewChildCountMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_review_child_count_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SelectAction.execute(ReviewChildCountMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(ReviewChildCountMode, &mut app_data)?,
+        KeyCode::Up => IncrementAction.execute(ReviewChildCountMode, &mut app_data)?,
+        KeyCode::Down => DecrementAction.execute(ReviewChildCountMode, &mut app_data)?,
+        _ => ReviewChildCountMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ReviewInfoMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_review_info_mode(app: &mut App, actions: Actions) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+    let next = DismissAction.execute(ReviewInfoMode, &mut app_data)?;
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `BranchSelectorMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_branch_selector_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SelectAction.execute(BranchSelectorMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(BranchSelectorMode, &mut app_data)?,
+        KeyCode::Up => NavigateUpAction.execute(BranchSelectorMode, &mut app_data)?,
+        KeyCode::Down => NavigateDownAction.execute(BranchSelectorMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(BranchSelectorMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(BranchSelectorMode, &mut app_data)?,
+        _ => BranchSelectorMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `RebaseBranchSelectorMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_rebase_branch_selector_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SelectAction.execute(RebaseBranchSelectorMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(RebaseBranchSelectorMode, &mut app_data)?,
+        KeyCode::Up => NavigateUpAction.execute(RebaseBranchSelectorMode, &mut app_data)?,
+        KeyCode::Down => NavigateDownAction.execute(RebaseBranchSelectorMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(RebaseBranchSelectorMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(RebaseBranchSelectorMode, &mut app_data)?,
+        _ => RebaseBranchSelectorMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `MergeBranchSelectorMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_merge_branch_selector_mode(
+    app: &mut App,
+    actions: Actions,
+    code: KeyCode,
+) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Enter => SelectAction.execute(MergeBranchSelectorMode, &mut app_data)?,
+        KeyCode::Esc => CancelAction.execute(MergeBranchSelectorMode, &mut app_data)?,
+        KeyCode::Up => NavigateUpAction.execute(MergeBranchSelectorMode, &mut app_data)?,
+        KeyCode::Down => NavigateDownAction.execute(MergeBranchSelectorMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(MergeBranchSelectorMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(MergeBranchSelectorMode, &mut app_data)?,
+        _ => MergeBranchSelectorMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ModelSelectorMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_model_selector_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Esc => CancelAction.execute(ModelSelectorMode, &mut app_data)?,
+        KeyCode::Enter => SelectAction.execute(ModelSelectorMode, &mut app_data)?,
+        KeyCode::Up => NavigateUpAction.execute(ModelSelectorMode, &mut app_data)?,
+        KeyCode::Down => NavigateDownAction.execute(ModelSelectorMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(ModelSelectorMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(ModelSelectorMode, &mut app_data)?,
+        _ => ModelSelectorMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `CommandPaletteMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_command_palette_mode(app: &mut App, actions: Actions, code: KeyCode) -> Result<()> {
+    let mut app_data = AppData::new(app, actions);
+
+    let next = match code {
+        KeyCode::Esc => CancelAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Enter => SelectAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Up => NavigateUpAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Down => NavigateDownAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Char(c) => CharInputAction(c).execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Backspace => BackspaceAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Delete => DeleteAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Left => CursorLeftAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Right => CursorRightAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::Home => CursorHomeAction.execute(CommandPaletteMode, &mut app_data)?,
+        KeyCode::End => CursorEndAction.execute(CommandPaletteMode, &mut app_data)?,
+        _ => CommandPaletteMode.into(),
+    };
+
+    next.apply(app_data.app);
+    Ok(())
 }
 
 #[cfg(test)]

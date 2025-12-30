@@ -1,22 +1,38 @@
 //! Compile-time state types (new architecture).
 
+mod branch_selector;
 mod broadcasting;
+mod child_count;
 mod child_prompt;
+mod command_palette;
 mod creating;
 mod custom_agent_cmd;
+mod merge_branch_selector;
+mod model_selector;
 mod normal;
 mod prompting;
+mod rebase_branch_selector;
 mod reconnect_prompt;
+mod review_child_count;
+mod review_info;
 mod scrolling;
 mod terminal_prompt;
 
+pub use branch_selector::BranchSelectorMode;
 pub use broadcasting::BroadcastingMode;
+pub use child_count::ChildCountMode;
 pub use child_prompt::ChildPromptMode;
+pub use command_palette::CommandPaletteMode;
 pub use creating::CreatingMode;
 pub use custom_agent_cmd::CustomAgentCommandMode;
+pub use merge_branch_selector::MergeBranchSelectorMode;
+pub use model_selector::ModelSelectorMode;
 pub use normal::NormalMode;
 pub use prompting::PromptingMode;
+pub use rebase_branch_selector::RebaseBranchSelectorMode;
 pub use reconnect_prompt::ReconnectPromptMode;
+pub use review_child_count::ReviewChildCountMode;
+pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
 pub use terminal_prompt::TerminalPromptMode;
 
@@ -46,6 +62,22 @@ pub enum ModeUnion {
     TerminalPrompt(TerminalPromptMode),
     /// Custom agent command mode.
     CustomAgentCommand(CustomAgentCommandMode),
+    /// Child count picker mode.
+    ChildCount(ChildCountMode),
+    /// Review child count picker mode.
+    ReviewChildCount(ReviewChildCountMode),
+    /// Review info mode.
+    ReviewInfo(ReviewInfoMode),
+    /// Branch selector mode.
+    BranchSelector(BranchSelectorMode),
+    /// Rebase branch selector mode.
+    RebaseBranchSelector(RebaseBranchSelectorMode),
+    /// Merge branch selector mode.
+    MergeBranchSelector(MergeBranchSelectorMode),
+    /// Model selector mode.
+    ModelSelector(ModelSelectorMode),
+    /// Command palette mode.
+    CommandPalette(CommandPaletteMode),
     /// Transition to a legacy runtime `Mode`.
     Legacy(Mode),
 }
@@ -105,12 +137,53 @@ impl ModeUnion {
                     app.enter_mode(Mode::CustomAgentCommand);
                 }
             }
+            Self::ChildCount(_) => {
+                if app.mode != Mode::ChildCount {
+                    app.enter_mode(Mode::ChildCount);
+                }
+            }
+            Self::ReviewChildCount(_) => {
+                if app.mode != Mode::ReviewChildCount {
+                    app.enter_mode(Mode::ReviewChildCount);
+                }
+            }
+            Self::ReviewInfo(_) => {
+                if app.mode != Mode::ReviewInfo {
+                    app.enter_mode(Mode::ReviewInfo);
+                }
+            }
+            Self::BranchSelector(_) => {
+                if app.mode != Mode::BranchSelector {
+                    app.enter_mode(Mode::BranchSelector);
+                }
+            }
+            Self::RebaseBranchSelector(_) => {
+                if app.mode != Mode::RebaseBranchSelector {
+                    app.enter_mode(Mode::RebaseBranchSelector);
+                }
+            }
+            Self::MergeBranchSelector(_) => {
+                if app.mode != Mode::MergeBranchSelector {
+                    app.enter_mode(Mode::MergeBranchSelector);
+                }
+            }
+            Self::ModelSelector(_) => {
+                if app.mode != Mode::ModelSelector {
+                    app.start_model_selector();
+                }
+            }
+            Self::CommandPalette(_) => {
+                if app.mode != Mode::CommandPalette {
+                    app.start_command_palette();
+                }
+            }
             Self::Legacy(mode) => {
                 if app.mode == mode {
                     return;
                 }
                 match mode {
                     Mode::CommandPalette => app.start_command_palette(),
+                    Mode::ModelSelector => app.start_model_selector(),
                     Mode::ErrorModal(message) => app.set_error(message),
                     Mode::SuccessModal(message) => app.show_success(message),
                     other => app.enter_mode(other),
@@ -177,5 +250,53 @@ impl From<TerminalPromptMode> for ModeUnion {
 impl From<CustomAgentCommandMode> for ModeUnion {
     fn from(_: CustomAgentCommandMode) -> Self {
         Self::CustomAgentCommand(CustomAgentCommandMode)
+    }
+}
+
+impl From<ChildCountMode> for ModeUnion {
+    fn from(_: ChildCountMode) -> Self {
+        Self::ChildCount(ChildCountMode)
+    }
+}
+
+impl From<ReviewChildCountMode> for ModeUnion {
+    fn from(_: ReviewChildCountMode) -> Self {
+        Self::ReviewChildCount(ReviewChildCountMode)
+    }
+}
+
+impl From<ReviewInfoMode> for ModeUnion {
+    fn from(_: ReviewInfoMode) -> Self {
+        Self::ReviewInfo(ReviewInfoMode)
+    }
+}
+
+impl From<BranchSelectorMode> for ModeUnion {
+    fn from(_: BranchSelectorMode) -> Self {
+        Self::BranchSelector(BranchSelectorMode)
+    }
+}
+
+impl From<RebaseBranchSelectorMode> for ModeUnion {
+    fn from(_: RebaseBranchSelectorMode) -> Self {
+        Self::RebaseBranchSelector(RebaseBranchSelectorMode)
+    }
+}
+
+impl From<MergeBranchSelectorMode> for ModeUnion {
+    fn from(_: MergeBranchSelectorMode) -> Self {
+        Self::MergeBranchSelector(MergeBranchSelectorMode)
+    }
+}
+
+impl From<ModelSelectorMode> for ModeUnion {
+    fn from(_: ModelSelectorMode) -> Self {
+        Self::ModelSelector(ModelSelectorMode)
+    }
+}
+
+impl From<CommandPaletteMode> for ModeUnion {
+    fn from(_: CommandPaletteMode) -> Self {
+        Self::CommandPalette(CommandPaletteMode)
     }
 }
