@@ -92,18 +92,32 @@ impl Manager {
             state.sessions.values().cloned().collect::<Vec<_>>()
         };
 
-        sessions
-            .into_iter()
-            .filter(is_session_alive)
-            .map(|session| {
-                let guard = session.lock();
-                Session {
-                    name: guard.name.clone(),
-                    created: guard.created,
-                    attached: false,
-                }
-            })
-            .collect()
+        let mut dead_names = Vec::new();
+        let mut result = Vec::new();
+
+        for session in sessions {
+            if !is_session_alive(&session) {
+                dead_names.push(session.lock().name.clone());
+                continue;
+            }
+
+            let guard = session.lock();
+            result.push(Session {
+                name: guard.name.clone(),
+                created: guard.created,
+                attached: false,
+            });
+        }
+
+        for name in dead_names {
+            if let Err(err) = Self::kill(&name)
+                && !err.to_string().contains("not found")
+            {
+                warn!(session = name, error = %err, "Failed to cleanup dead mux session");
+            }
+        }
+
+        result
     }
 
     /// Send raw input bytes to a target.
@@ -425,6 +439,7 @@ fn is_session_alive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn test_command() -> Vec<String> {
         #[cfg(windows)]
@@ -440,6 +455,39 @@ mod tests {
         #[cfg(not(windows))]
         {
             vec!["sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        }
+    }
+
+    fn test_long_command() -> Vec<String> {
+        #[cfg(windows)]
+        {
+            return vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 10".to_string(),
+            ];
+        }
+
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        }
+    }
+
+    fn test_exit_command() -> Vec<String> {
+        #[cfg(windows)]
+        {
+            return vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
+                "exit 0".to_string(),
+            ];
+        }
+
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
         }
     }
 
@@ -546,5 +594,71 @@ mod tests {
         assert!(Manager::rename_window("tenex-test-nope", 1, "x").is_err());
         assert!(Manager::resize_window("tenex-test-nope", 80, 24).is_err());
         assert!(Manager::send_input("tenex-test-nope", b"").is_err());
+    }
+
+    #[test]
+    fn test_session_alive_when_root_exits_but_child_still_running() -> Result<()> {
+        let session_name = "tenex-test-root-exits-child-alive";
+        let tmp = std::env::temp_dir();
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+
+        Manager::create(session_name, &tmp, Some(&test_exit_command()))?;
+        Manager::create_window(session_name, "child", &tmp, Some(&test_long_command()))?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Manager::exists(session_name) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(
+            !Manager::exists(session_name),
+            "Expected session to be considered dead once the root window exits"
+        );
+
+        let child_running = {
+            let session_ref = {
+                let state = global_state().lock();
+                state.sessions.get(session_name).cloned()
+            };
+
+            let session_ref = session_ref.ok_or_else(|| anyhow::anyhow!("Session vanished"))?;
+            let child_window = {
+                let guard = session_ref.lock();
+                guard
+                    .windows
+                    .get(1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Child window missing"))?
+            };
+
+            let mut guard = child_window.lock();
+            match guard.child.try_wait() {
+                Ok(None) | Err(_) => true,
+                Ok(Some(_)) => false,
+            }
+        };
+        assert!(
+            child_running,
+            "Expected child window process to still be running"
+        );
+
+        assert!(
+            !Manager::list().iter().any(|s| s.name == session_name),
+            "Did not expect session list to include {session_name} after root exit"
+        );
+
+        assert!(Manager::list_pane_pids(session_name).is_err());
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+        Ok(())
     }
 }

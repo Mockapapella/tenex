@@ -59,14 +59,24 @@ impl Manager {
     }
 
     /// Check if a session exists.
-    #[must_use]
-    pub fn exists(&self, name: &str) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the daemon cannot be reached or returns an unexpected response.
+    pub fn try_exists(&self, name: &str) -> Result<bool> {
         match super::client::request(&MuxRequest::SessionExists {
             name: name.to_string(),
-        }) {
-            Ok(MuxResponse::Bool { value }) => value,
-            _ => false,
+        })? {
+            MuxResponse::Bool { value } => Ok(value),
+            MuxResponse::Err { message } => bail!("{message}"),
+            other => bail!("Unexpected response: {other:?}"),
         }
+    }
+
+    /// Check if a session exists.
+    #[must_use]
+    pub fn exists(&self, name: &str) -> bool {
+        self.try_exists(name).unwrap_or(false)
     }
 
     /// List all sessions.

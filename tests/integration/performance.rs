@@ -74,7 +74,7 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
     let handler = Actions::new();
     handler.sync_agent_status(&mut app)?;
 
-    // Only agent1 should remain (the one with a real session)
+    // Only agent1 should remain (the one with a real session).
     assert_eq!(
         app.storage.len(),
         1,
