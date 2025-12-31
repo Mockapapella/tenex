@@ -620,6 +620,7 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
     // Execute rebase - in a real environment, this spawns a conflict terminal
     // In test environment (no active session), it may error when trying to create a window
     let result = Actions::execute_rebase(&mut app.data);
+    let result_is_err = result.is_err();
 
     // The rebase should handle the situation gracefully.
     // Multiple outcomes are valid depending on git state and session availability:
@@ -628,16 +629,19 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
     // 3. No conflict -> success modal shown
     // 4. Error -> error message set
     // The key is that the function handles it without panicking.
-    let conflict_terminal_spawned = app.data.storage.iter().count() > agents_before;
-    let has_error = result.is_err() || app.data.ui.last_error.is_some();
     if let Ok(next) = result {
         app.apply_mode(next);
     }
+
+    let conflict_terminal_spawned = app.data.storage.iter().count() > agents_before;
     let is_success = matches!(app.mode, tenex::AppMode::SuccessModal(_));
+    let is_error_modal = matches!(app.mode, tenex::AppMode::ErrorModal(_));
+    let has_error = result_is_err || app.data.ui.last_error.is_some() || is_error_modal;
 
     assert!(
         conflict_terminal_spawned || has_error || is_success,
-        "Rebase should detect conflict (either spawn terminal or return an error)"
+        "Rebase should detect conflict or error. conflict_spawned={conflict_terminal_spawned}, has_error={has_error}, is_success={is_success}, mode={:?}",
+        app.mode
     );
 
     Ok(())
