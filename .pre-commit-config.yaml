@@ -24,18 +24,14 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --all-targets --all-features --workspace -- --test-threads=1
+        entry: python3 scripts/cargo_with_isolated_state.py test --all-targets --all-features --workspace -- --test-threads=1
         language: system
         types: [rust]
-        env:
-          TENEX_STATE_PATH: /tmp/tenex-pre-commit-state.json
         pass_filenames: false
 
       - id: cargo-coverage
         name: cargo llvm-cov (90% lines + functions)
-        entry: cargo cov
+        entry: python3 scripts/cargo_with_isolated_state.py cov
         language: system
         types: [rust]
-        env:
-          TENEX_STATE_PATH: /tmp/tenex-pre-commit-state.json
         pass_filenames: false
