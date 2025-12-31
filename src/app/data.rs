@@ -544,7 +544,30 @@ impl AppData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Storage;
+    use crate::agent::{Agent, Storage};
+    use crate::git::BranchInfo;
+    use std::path::PathBuf;
+
+    fn make_agent(title: &str) -> Agent {
+        let pid = std::process::id();
+        Agent::new(
+            title.to_string(),
+            "echo".to_string(),
+            format!("tenex-app-data-test-{pid}/{title}"),
+            PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/{title}")),
+            None,
+        )
+    }
+
+    fn make_local_branch(name: &str) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            full_name: format!("refs/heads/{name}"),
+            is_remote: false,
+            remote: None,
+            last_commit_time: None,
+        }
+    }
 
     #[test]
     fn test_agent_spawn_command_codex() {
@@ -596,5 +619,200 @@ mod tests {
 
         let data = AppData::new(Config::default(), Storage::default(), settings, false);
         assert_eq!(data.agent_spawn_command(), "my-agent");
+    }
+
+    #[test]
+    fn test_select_next_no_agents_is_noop() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.selected = 42;
+        data.ui.agent_list_scroll = 7;
+        data.ui.preview_scroll = 0;
+        data.select_next();
+
+        assert_eq!(data.selected, 42);
+        assert_eq!(data.ui.agent_list_scroll, 7);
+        assert_eq!(data.ui.preview_scroll, 0);
+    }
+
+    #[test]
+    fn test_select_next_wraps_and_resets_scroll() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+        storage.add(make_agent("agent-2"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.ui.preview_scroll = 0;
+        data.ui.diff_scroll = 42;
+
+        data.select_next();
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+        assert_eq!(data.ui.diff_scroll, 0);
+
+        data.ui.preview_scroll = 0;
+        data.select_next();
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_select_prev_wraps_and_resets_scroll() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+        storage.add(make_agent("agent-2"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+        data.ui.preview_scroll = 0;
+
+        data.select_prev();
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_validate_selection_clamps_to_last_visible_agent() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+        storage.add(make_agent("agent-2"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 100;
+        data.validate_selection();
+        assert_eq!(data.selected, 1);
+    }
+
+    #[test]
+    fn test_ensure_agent_list_scroll_scrolls_up_when_selected_above_viewport() {
+        let mut storage = Storage::new();
+        for i in 0..10 {
+            storage.add(make_agent(&format!("agent-{i:02}")));
+        }
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.ui.set_preview_dimensions(80, 2);
+        data.ui.agent_list_scroll = 5;
+        data.selected = 3;
+
+        data.ensure_agent_list_scroll();
+        assert_eq!(data.ui.agent_list_scroll, 3);
+    }
+
+    #[test]
+    fn test_ensure_agent_list_scroll_scrolls_down_when_selected_below_viewport() {
+        let mut storage = Storage::new();
+        for i in 0..10 {
+            storage.add(make_agent(&format!("agent-{i:02}")));
+        }
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.ui.set_preview_dimensions(80, 2);
+        data.ui.agent_list_scroll = 0;
+        data.selected = 9;
+
+        data.ensure_agent_list_scroll();
+        assert_eq!(data.ui.agent_list_scroll, 7);
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_sets_target_branch() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.review.branches = vec![make_local_branch("main")];
+        data.review.selected = 0;
+
+        assert!(data.confirm_rebase_merge_branch());
+        assert_eq!(data.git_op.target_branch, "main");
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_returns_false_when_no_branches() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.review.branches = Vec::new();
+
+        assert!(!data.confirm_rebase_merge_branch());
+        assert!(data.git_op.target_branch.is_empty());
+    }
+
+    #[test]
+    fn test_filtered_slash_commands_filters_by_prefix_without_leading_slash() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/he".to_string();
+
+        let filtered = data.filtered_slash_commands();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "/help");
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection_uses_highlighted_entry() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/".to_string();
+        data.command_palette.selected = 1;
+        data.ui.help_scroll = 123;
+
+        let next = data.confirm_slash_command_selection();
+        assert!(matches!(next, AppMode::Help(_)));
+        assert_eq!(data.ui.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection_unknown_sets_status() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/nope".to_string();
+
+        let next = data.confirm_slash_command_selection();
+        assert_eq!(next, AppMode::normal());
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Unknown command"))
+        );
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_help_opens_help() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/help".to_string();
+        data.ui.help_scroll = 123;
+
+        let next = data.submit_slash_command_palette();
+        assert!(matches!(next, AppMode::Help(_)));
+        assert_eq!(data.ui.help_scroll, 0);
     }
 }

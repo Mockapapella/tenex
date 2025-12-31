@@ -266,3 +266,118 @@ impl ValidIn<ScrollingMode> for MergeAction {
         Ok(MergeBranchSelectorMode.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{Agent, Storage};
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn make_agent(title: &str) -> Agent {
+        let pid = std::process::id();
+        Agent::new(
+            title.to_string(),
+            "echo".to_string(),
+            format!("tenex-action-git-test-{pid}/{title}"),
+            PathBuf::from(format!("/tmp/tenex-action-git-test-{pid}/{title}")),
+            None,
+        )
+    }
+
+    fn new_data_with_agent(agent: Agent) -> AppData {
+        let mut storage = Storage::new();
+        storage.add(agent);
+        AppData::new(
+            Config::default(),
+            storage,
+            crate::app::Settings::default(),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_push_action_sets_git_op_state_in_normal_and_scrolling()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let agent = make_agent("agent-1");
+        let agent_id = agent.id;
+        let branch = agent.branch.clone();
+        let mut data = new_data_with_agent(agent);
+
+        let next = PushAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ConfirmPush(_)));
+        assert_eq!(data.git_op.agent_id, Some(agent_id));
+        assert_eq!(data.git_op.branch_name, branch);
+
+        let next = PushAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ConfirmPush(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rename_branch_action_enters_rename_mode_and_populates_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let agent = make_agent("my-branch");
+        let agent_id = agent.id;
+        let title = agent.title.clone();
+        let mut data = new_data_with_agent(agent);
+
+        let next = RenameBranchAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::RenameBranch(_)));
+        assert_eq!(data.git_op.agent_id, Some(agent_id));
+        assert_eq!(data.git_op.branch_name, title);
+        assert_eq!(data.input.cursor, data.input.buffer.len());
+        assert!(!data.input.buffer.is_empty());
+
+        let next = RenameBranchAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::RenameBranch(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_pr_action_errors_without_selected_agent() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            crate::app::Settings::default(),
+            false,
+        );
+
+        assert!(OpenPRAction.execute(NormalMode, &mut data).is_err());
+        assert!(OpenPRAction.execute(ScrollingMode, &mut data).is_err());
+    }
+
+    #[test]
+    fn test_rebase_action_returns_error_modal_without_selected_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            crate::app::Settings::default(),
+            false,
+        );
+
+        let next = RebaseAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = RebaseAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_action_returns_error_modal_without_selected_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            crate::app::Settings::default(),
+            false,
+        );
+
+        let next = MergeAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = MergeAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+}

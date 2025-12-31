@@ -600,3 +600,129 @@ impl ValidIn<CommandPaletteMode> for CursorEndAction {
         Ok(CommandPaletteMode.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::Storage;
+    use crate::app::Settings;
+    use crate::config::Config;
+    use crate::git::BranchInfo;
+
+    fn empty_data() -> AppData {
+        AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        )
+    }
+
+    fn make_local_branch(name: &str) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            full_name: format!("refs/heads/{name}"),
+            is_remote: false,
+            remote: None,
+            last_commit_time: None,
+        }
+    }
+
+    #[test]
+    fn test_increment_and_decrement_actions_update_child_count()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let initial = data.spawn.child_count;
+
+        let next = IncrementAction.execute(ChildCountMode, &mut data)?;
+        assert_eq!(next, ChildCountMode.into());
+        assert_eq!(data.spawn.child_count, initial + 1);
+
+        let next = DecrementAction.execute(ChildCountMode, &mut data)?;
+        assert_eq!(next, ChildCountMode.into());
+        assert_eq!(data.spawn.child_count, initial);
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_action_in_review_child_count_enters_branch_selector()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let next = SelectAction.execute(ReviewChildCountMode, &mut data)?;
+        assert_eq!(next, BranchSelectorMode.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cancel_action_in_branch_selector_clears_review_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = vec![make_local_branch("main")];
+        data.review.filter = "m".to_string();
+        data.review.selected = 1;
+
+        let next = CancelAction.execute(BranchSelectorMode, &mut data)?;
+        assert_eq!(next, AppMode::normal());
+        assert!(data.review.branches.is_empty());
+        assert!(data.review.filter.is_empty());
+        assert_eq!(data.review.selected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_branch_selector_navigation_actions_update_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = vec![make_local_branch("main"), make_local_branch("develop")];
+        data.review.selected = 0;
+
+        let next = NavigateDownAction.execute(BranchSelectorMode, &mut data)?;
+        assert_eq!(next, BranchSelectorMode.into());
+        assert_eq!(data.review.selected, 1);
+
+        let next = NavigateUpAction.execute(BranchSelectorMode, &mut data)?;
+        assert_eq!(next, BranchSelectorMode.into());
+        assert_eq!(data.review.selected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_action_in_rebase_branch_selector_noops_without_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = Vec::new();
+
+        let state = RebaseBranchSelectorMode;
+        let next = SelectAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_action_in_merge_branch_selector_noops_without_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = Vec::new();
+
+        let state = MergeBranchSelectorMode;
+        let next = SelectAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_char_input_in_command_palette_resets_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.command_palette.selected = 1;
+        data.input.buffer = "/".to_string();
+        data.input.cursor = data.input.buffer.len();
+
+        let next = CharInputAction('a').execute(CommandPaletteMode, &mut data)?;
+        assert_eq!(next, CommandPaletteMode.into());
+        assert_eq!(data.command_palette.selected, 0);
+        assert_eq!(data.input.buffer, "/a");
+        assert_eq!(data.input.cursor, 2);
+        Ok(())
+    }
+}

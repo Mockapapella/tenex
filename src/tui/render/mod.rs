@@ -1075,6 +1075,50 @@ mod tests {
     }
 
     #[test]
+    fn test_render_rebase_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.data.git_op.branch_name = "feature/rebase-me".to_string();
+        app.data.review.branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("develop", false),
+            create_test_branch_info("main", true),
+        ];
+        app.enter_mode(RebaseBranchSelectorMode.into());
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_merge_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.data.git_op.branch_name = "feature/merge-me".to_string();
+        app.data.review.branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("feature", false),
+            create_test_branch_info("main", true),
+        ];
+        app.enter_mode(MergeBranchSelectorMode.into());
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn test_render_branch_selector_with_filter() -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
@@ -1162,6 +1206,50 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_scroll_indicator_below_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        let branches = (0..12)
+            .map(|i| create_test_branch_info(&format!("branch-{i:02}"), false))
+            .collect::<Vec<_>>();
+        app.data.review.branches = branches;
+        app.data.review.selected = 0;
+        app.enter_mode(BranchSelectorMode.into());
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_branch_selector_scroll_indicator_above_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        let branches = (0..12)
+            .map(|i| create_test_branch_info(&format!("branch-{i:02}"), false))
+            .collect::<Vec<_>>();
+        app.data.review.branches = branches;
+        app.data.review.selected = 11;
+        app.enter_mode(BranchSelectorMode.into());
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
         Ok(())
     }
 

@@ -276,3 +276,124 @@ impl ValidIn<UpdatePromptMode> for CancelAction {
         Ok(AppMode::normal())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::Storage;
+    use crate::app::{Settings, WorktreeConflictInfo};
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn empty_data() -> AppData {
+        AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        )
+    }
+
+    fn make_conflict(prompt: Option<&str>) -> WorktreeConflictInfo {
+        WorktreeConflictInfo {
+            title: "conflict-title".to_string(),
+            prompt: prompt.map(str::to_string),
+            branch: "tenex/conflict-title".to_string(),
+            worktree_path: PathBuf::from("/tmp/tenex-confirm-action-conflict"),
+            existing_branch: Some("tenex/conflict-title".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        }
+    }
+
+    #[test]
+    fn test_confirm_yes_quit_sets_should_quit() -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::Quit,
+        };
+
+        let next = ConfirmYesAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::normal());
+        assert!(data.should_quit);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cancel_action_clears_worktree_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.spawn.worktree_conflict = Some(make_conflict(Some("prompt")));
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::WorktreeConflict,
+        };
+        let next = CancelAction.execute(state, &mut data)?;
+
+        assert_eq!(next, AppMode::normal());
+        assert!(data.spawn.worktree_conflict.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_worktree_reconnect_action_noop_when_not_in_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::Kill,
+        };
+
+        let next = WorktreeReconnectAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_worktree_reconnect_action_enters_prompt_and_preloads_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.spawn.worktree_conflict = Some(make_conflict(Some("hello world")));
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::WorktreeConflict,
+        };
+        let next = WorktreeReconnectAction.execute(state, &mut data)?;
+
+        assert!(matches!(next, AppMode::ReconnectPrompt(_)));
+        assert_eq!(data.input.buffer, "hello world");
+        assert_eq!(data.input.cursor, data.input.buffer.len());
+        Ok(())
+    }
+
+    #[test]
+    fn test_submit_action_in_rename_branch_mode_noops_on_empty_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.input.buffer = "   ".to_string();
+
+        let state = RenameBranchMode;
+        let next = SubmitAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_char_and_backspace_in_rename_branch_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.input.buffer = String::new();
+        data.input.cursor = 0;
+
+        let state = RenameBranchMode;
+        let next = CharInputAction('a').execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        assert_eq!(data.input.buffer, "a");
+        assert_eq!(data.input.cursor, 1);
+
+        let next = BackspaceAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        assert!(data.input.buffer.is_empty());
+        assert_eq!(data.input.cursor, 0);
+        Ok(())
+    }
+}

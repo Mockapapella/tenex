@@ -507,8 +507,10 @@ mod tests {
     use super::*;
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::update::UpdateInfo;
     use crate::{Agent, App, agent::Storage};
     use ratatui::{Terminal, backend::TestBackend};
+    use semver::Version;
     use std::path::PathBuf;
 
     fn app_with_agent() -> App {
@@ -600,6 +602,24 @@ mod tests {
 
         terminal.draw(|frame| {
             render_keyboard_remap_overlay(frame);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_update_prompt_overlay() -> Result<(), std::io::Error> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+
+        let info = UpdateInfo {
+            current_version: Version::new(1, 0, 0),
+            latest_version: Version::new(2, 0, 0),
+        };
+
+        terminal.draw(|frame| {
+            render_update_prompt_overlay(frame, &info);
         })?;
 
         assert!(!terminal.backend().buffer().content.is_empty());
