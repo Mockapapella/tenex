@@ -73,7 +73,15 @@ impl Actions {
             if agent.worktree_path.exists() {
                 if let Ok(repo) = git::open_repository(&agent.worktree_path) {
                     let diff_gen = DiffGenerator::new(&repo);
-                    let files = diff_gen.uncommitted().unwrap_or_default();
+                    let files = match diff_gen.uncommitted() {
+                        Ok(files) => files,
+                        Err(err) => {
+                            app.data
+                                .ui
+                                .set_diff_content(format!("(Failed to generate diff: {err:#})"));
+                            return Ok(());
+                        }
+                    };
 
                     let mut content = String::new();
                     for file in files {
