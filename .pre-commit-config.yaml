@@ -31,6 +31,13 @@ repos:
         args:
           - |
               set -euo pipefail
+              required_version="$(cat .cargo-llvm-cov-version)"
+              installed_version="$(cargo llvm-cov --version 2>/dev/null | awk '{print $2}' || true)"
+              if [ "${installed_version}" != "${required_version}" ]; then
+                echo "ERROR: Expected cargo-llvm-cov ${required_version}, found ${installed_version:-<missing>}" >&2
+                echo "Install: cargo install cargo-llvm-cov --version ${required_version} --locked --force" >&2
+                exit 1
+              fi
               state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
               trap 'rm -rf "$state_dir"' EXIT
               TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
