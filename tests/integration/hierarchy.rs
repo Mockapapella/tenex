@@ -9,6 +9,10 @@ use tenex::agent::{Agent, Storage};
 use tenex::mux::SessionManager;
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Integration test exercises nested hierarchy + window renumbering end-to-end."
+)]
 fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
@@ -25,18 +29,19 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with 3 children (swarm)
-    app.spawn.child_count = 3;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("test-swarm"));
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("test-swarm"));
     if result.is_err() {
         return Ok(()); // Skip if creation fails
     }
 
     // Should have root + 3 children = 4 agents
-    assert_eq!(app.storage.len(), 4);
+    assert_eq!(app.data.storage.len(), 4);
 
     // Find the root agent
     let root = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
@@ -45,6 +50,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 
     // Find first-level Agent 2 to add grandchildren under
     let child2 = app
+        .data
         .storage
         .children(root_id)
         .into_iter()
@@ -53,35 +59,35 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let child2_id = child2.id;
 
     // Expand root to see children
-    if let Some(root) = app.storage.get_mut(root_id) {
+    if let Some(root) = app.data.storage.get_mut(root_id) {
         root.collapsed = false;
     }
 
     // Add 3 grandchildren under Agent 2
-    app.spawn.child_count = 3;
-    app.spawn.spawning_under = Some(child2_id);
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = Some(child2_id);
 
     // Expand Agent 2 to see grandchildren
-    if let Some(c2) = app.storage.get_mut(child2_id) {
+    if let Some(c2) = app.data.storage.get_mut(child2_id) {
         c2.collapsed = false;
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, Some("grandchild-task"));
+    let result = handler.spawn_children(&mut app.data, Some("grandchild-task"));
     if result.is_err() {
         // Cleanup and skip
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     // Should now have root + 3 children + 3 grandchildren = 7 agents
-    assert_eq!(app.storage.len(), 7);
+    assert_eq!(app.data.storage.len(), 7);
 
     // Get grandchildren window indices
-    let grandchildren: Vec<_> = app.storage.children(child2_id);
+    let grandchildren: Vec<_> = app.data.storage.children(child2_id);
     assert_eq!(grandchildren.len(), 3);
 
     // Find grandchild with highest window index (should be "Agent 3" grandchild)
@@ -101,22 +107,29 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     let grandchild2_window = grandchild2.window_index;
 
     // Select grandchild2 and delete it
-    if let Some(idx) = app.storage.visible_index_of(grandchild2_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(grandchild2_id) {
+        app.data.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Kill,
+        }
+        .into(),
+    );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // Should now have 6 agents
-    assert_eq!(app.storage.len(), 6);
+    assert_eq!(app.data.storage.len(), 6);
 
     // Verify grandchild3's window index was decremented
     // (because the mux renumbers windows when one is deleted)
-    let grandchild3_updated = app.storage.get(grandchild3_id).ok_or("Grandchild3 gone")?;
+    let grandchild3_updated = app
+        .data
+        .storage
+        .get(grandchild3_id)
+        .ok_or("Grandchild3 gone")?;
     let grandchild3_new_window = grandchild3_updated.window_index;
 
     // The window index should have been decremented by 1
@@ -130,6 +143,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
     // Verify first-level Agent 3's window index was NOT changed
     // (its window index should be less than the deleted grandchild's)
     let child3 = app
+        .data
         .storage
         .children(root_id)
         .into_iter()
@@ -145,7 +159,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -169,19 +183,24 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("id-test"));
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("id-test"));
     if result.is_err() {
         return Ok(());
     }
 
     // Find the root
-    let root = app.storage.iter().find(|a| a.is_root()).ok_or("No root")?;
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?;
     let root_id = root.id;
 
     // Check that children have short IDs in their titles
-    let children = app.storage.children(root_id);
+    let children = app.data.storage.children(root_id);
     for child in &children {
         // Title should be like "Child 1 (abc12345)"
         assert!(
@@ -202,7 +221,7 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -226,18 +245,23 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
-    app.spawn.child_count = 3;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("descending-test"));
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("descending-test"));
     if result.is_err() {
         return Ok(());
     }
 
-    let root = app.storage.iter().find(|a| a.is_root()).ok_or("No root")?;
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?;
     let root_id = root.id;
 
     // Get window indices before deletion
-    let children = app.storage.children(root_id);
+    let children = app.data.storage.children(root_id);
     let mut window_indices: Vec<u32> = children.iter().filter_map(|c| c.window_index).collect();
     window_indices.sort_unstable();
 
@@ -247,18 +271,21 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
     assert_eq!(window_indices[2], window_indices[0] + 2);
 
     // Kill the root (which should kill all children in descending order)
-    if let Some(idx) = app.storage.visible_index_of(root_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(root_id) {
+        app.data.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Kill,
+        }
+        .into(),
+    );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // All agents should be gone
-    assert_eq!(app.storage.len(), 0);
+    assert_eq!(app.data.storage.len(), 0);
 
     Ok(())
 }
@@ -292,18 +319,19 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 3 children
-    app.spawn.child_count = 3;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("original-swarm"));
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("original-swarm"));
     if let Err(e) = result {
         return Err(format!("Swarm creation failed: {e:#}").into());
     }
 
     // Should have root + 3 children = 4 agents
-    assert_eq!(app.storage.len(), 4);
+    assert_eq!(app.data.storage.len(), 4);
 
     // Find the root agent and record its session name
     let root = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
@@ -312,7 +340,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     let original_session = root.mux_session.clone();
 
     // Find children and verify they have the same session name as root
-    let children: Vec<_> = app.storage.children(root_id);
+    let children: Vec<_> = app.data.storage.children(root_id);
     assert_eq!(children.len(), 3);
     for child in &children {
         assert_eq!(
@@ -331,29 +359,34 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     drop(children); // Release the borrow
 
     // Expand root so children are visible
-    if let Some(root) = app.storage.get_mut(root_id) {
+    if let Some(root) = app.data.storage.get_mut(root_id) {
         root.collapsed = false;
     }
 
     // Select the root agent and start rename
-    if let Some(idx) = app.storage.visible_index_of(root_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(root_id) {
+        app.data.selected = idx;
     }
 
     // Simulate the rename flow: start rename -> enter new name -> confirm
     // Use a unique name based on test prefix to avoid conflicts with stale sessions
     let new_name = format!("{}-renamed", fixture.session_prefix);
     app.start_rename(root_id, "original-swarm".to_string(), true);
-    app.input.buffer.clone_from(&new_name);
+    app.data.input.buffer.clone_from(&new_name);
     let confirmed = app.confirm_rename_branch();
     assert!(confirmed, "Rename should be confirmed");
 
     // Execute the rename
-    let rename_result = tenex::app::Actions::execute_rename(&mut app);
+    let rename_result = tenex::app::Actions::execute_rename(&mut app.data);
     assert!(rename_result.is_ok(), "Rename should succeed");
+    app.apply_mode(rename_result?);
 
     // Get the new session name from root
-    let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
+    let root_after = app
+        .data
+        .storage
+        .get(root_id)
+        .ok_or("Root gone after rename")?;
     let new_session = root_after.mux_session.clone();
 
     // Verify root's session was renamed (should be "tenex-renamed-swarm")
@@ -376,7 +409,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     // ========================================================================
 
     // Verify children have the NEW session name (the fix)
-    let children_before_sync: Vec<_> = app.storage.children(root_id);
+    let children_before_sync: Vec<_> = app.data.storage.children(root_id);
     for child in &children_before_sync {
         assert_eq!(
             child.mux_session, new_session,
@@ -389,7 +422,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     // the correct (new) session name
     let _ = handler.sync_agent_status(&mut app);
 
-    let agent_count_after_sync = app.storage.len();
+    let agent_count_after_sync = app.data.storage.len();
 
     // Verify children are still in storage after sync
     assert_eq!(
@@ -398,7 +431,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     );
 
     // Verify children are still visible under the root
-    let children_after: Vec<_> = app.storage.children(root_id);
+    let children_after: Vec<_> = app.data.storage.children(root_id);
     assert_eq!(
         children_after.len(),
         3,
@@ -407,7 +440,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
 
     // BUG CHECK: Verify all children also have the new session name
     for child_id in &child_ids {
-        let child = app.storage.get(*child_id);
+        let child = app.data.storage.get(*child_id);
         assert!(
             child.is_some(),
             "Child should still exist in storage after rename"
@@ -464,18 +497,19 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 2 children
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("worktree-rename-test"));
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("worktree-rename-test"));
     if let Err(e) = result {
         return Err(format!("Swarm creation failed: {e:#}").into());
     }
 
     // Should have root + 2 children = 3 agents
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Find the root agent and record its worktree path
     let root = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
@@ -493,7 +527,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     );
 
     // Find children and verify they have the same worktree path as root
-    let children: Vec<_> = app.storage.children(root_id);
+    let children: Vec<_> = app.data.storage.children(root_id);
     assert_eq!(children.len(), 2);
     for child in &children {
         assert_eq!(
@@ -507,28 +541,33 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     drop(children);
 
     // Expand root so children are visible
-    if let Some(root) = app.storage.get_mut(root_id) {
+    if let Some(root) = app.data.storage.get_mut(root_id) {
         root.collapsed = false;
     }
 
     // Select the root agent and start rename
-    if let Some(idx) = app.storage.visible_index_of(root_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(root_id) {
+        app.data.selected = idx;
     }
 
     // Simulate the rename flow
     let new_name = format!("{}-wt-renamed", fixture.session_prefix);
     app.start_rename(root_id, "worktree-rename-test".to_string(), true);
-    app.input.buffer.clone_from(&new_name);
+    app.data.input.buffer.clone_from(&new_name);
     let confirmed = app.confirm_rename_branch();
     assert!(confirmed, "Rename should be confirmed");
 
     // Execute the rename
-    let rename_result = tenex::app::Actions::execute_rename(&mut app);
+    let rename_result = tenex::app::Actions::execute_rename(&mut app.data);
     assert!(rename_result.is_ok(), "Rename should succeed");
+    app.apply_mode(rename_result?);
 
     // Get the updated root agent
-    let root_after = app.storage.get(root_id).ok_or("Root gone after rename")?;
+    let root_after = app
+        .data
+        .storage
+        .get(root_id)
+        .ok_or("Root gone after rename")?;
     let new_worktree_path = root_after.worktree_path.clone();
     let new_branch = root_after.branch.clone();
     let new_session = root_after.mux_session.clone();
@@ -596,6 +635,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     // Verify children's worktree_path was updated
     for child_id in &child_ids {
         let child = app
+            .data
             .storage
             .get(*child_id)
             .ok_or("Child gone after rename")?;
@@ -612,19 +652,22 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     // Now test that killing the agent properly cleans up the worktree
     // (This was the original bug - rename changed the branch but not worktree path,
     // so kill couldn't find the worktree to remove it)
-    if let Some(idx) = app.storage.visible_index_of(root_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(root_id) {
+        app.data.selected = idx;
     }
 
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Kill,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Kill,
+        }
+        .into(),
+    );
     let kill_result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(kill_result.is_ok(), "Kill should succeed");
 
     // Verify all agents were removed
     assert_eq!(
-        app.storage.len(),
+        app.data.storage.len(),
         0,
         "All agents should be removed after kill"
     );

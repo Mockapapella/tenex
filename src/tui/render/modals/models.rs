@@ -17,8 +17,8 @@ pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect_absolute(55, 12, frame.area());
 
     let filtered = app.filtered_model_programs();
-    let selected_idx = app.model_selector.selected;
-    let current = app.settings.agent_program;
+    let selected_idx = app.data.model_selector.selected;
+    let current = app.data.settings.agent_program;
 
     let mut lines: Vec<Line<'_>> = Vec::new();
 
@@ -36,7 +36,7 @@ pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("Filter: ", Style::default().fg(colors::TEXT_DIM)),
         Span::styled(
-            format!("{}_", &app.model_selector.filter),
+            format!("{}_", &app.data.model_selector.filter),
             Style::default().fg(colors::TEXT_PRIMARY),
         ),
     ]));

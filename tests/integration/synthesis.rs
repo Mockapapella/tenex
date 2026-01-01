@@ -22,10 +22,10 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (no children)
-    let result = handler.create_agent(&mut app, "solo-agent", None);
-    if result.is_err() {
+    let Ok(next) = handler.create_agent(&mut app.data, "solo-agent", None) else {
         return Ok(());
-    }
+    };
+    app.apply_mode(next);
 
     app.select_next();
 
@@ -34,11 +34,11 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     assert!(result.is_ok());
 
     // Should be in error modal mode
-    assert!(matches!(app.mode, tenex::app::Mode::ErrorModal(_)));
+    assert!(matches!(app.mode, tenex::AppMode::ErrorModal(_)));
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -62,27 +62,29 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("synth-confirm-test"));
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-confirm-test"));
     if result.is_err() {
         return Ok(());
     }
 
     // Select root agent
-    app.selected = 0;
+    app.data.selected = 0;
 
     // Synthesize action should enter confirmation mode
     let result = handler.handle_action(&mut app, tenex::config::Action::Synthesize);
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::Synthesize)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        })
     );
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -106,26 +108,32 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
-    app.spawn.child_count = 3;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("synth-desc-test"));
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-desc-test"));
     if result.is_err() {
         return Ok(());
     }
 
     // Should have 4 agents (root + 3 children)
-    assert_eq!(app.storage.len(), 4);
+    assert_eq!(app.data.storage.len(), 4);
 
     // Find root and Child 2
-    let root = app.storage.iter().find(|a| a.is_root()).ok_or("No root")?;
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?;
     let root_id = root.id;
 
     // Expand root to show children
-    if let Some(root) = app.storage.get_mut(root_id) {
+    if let Some(root) = app.data.storage.get_mut(root_id) {
         root.collapsed = false;
     }
 
     let child2 = app
+        .data
         .storage
         .children(root_id)
         .into_iter()
@@ -134,42 +142,45 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let child2_id = child2.id;
 
     // Add 2 grandchildren under Child 2
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = Some(child2_id);
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = Some(child2_id);
 
     // Expand Child 2
-    if let Some(c2) = app.storage.get_mut(child2_id) {
+    if let Some(c2) = app.data.storage.get_mut(child2_id) {
         c2.collapsed = false;
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, Some("grandchild-task"));
+    let result = handler.spawn_children(&mut app.data, Some("grandchild-task"));
     if result.is_err() {
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     // Should now have 6 agents (root + 3 children + 2 grandchildren)
-    assert_eq!(app.storage.len(), 6);
+    assert_eq!(app.data.storage.len(), 6);
 
     // Select root and synthesize
-    app.selected = 0;
+    app.data.selected = 0;
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // Should only have root remaining (all 5 descendants removed)
-    assert_eq!(app.storage.len(), 1);
+    assert_eq!(app.data.storage.len(), 1);
 
     // Verify synthesis file was created
-    let root = app.storage.iter().next().ok_or("Root gone")?;
+    let root = app.data.storage.iter().next().ok_or("Root gone")?;
     let tenex_dir = root.worktree_path.join(".tenex");
     assert!(tenex_dir.exists(), ".tenex directory should exist");
 
@@ -182,7 +193,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -206,39 +217,41 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children (non-terminal agents)
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("synth-term-test"));
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-term-test"));
     if result.is_err() {
         return Ok(());
     }
 
     // Should have 3 agents (root + 2 children)
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Select root and spawn a terminal
-    app.selected = 0;
+    app.data.selected = 0;
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_terminal(&mut app, None);
+    let result = handler.spawn_terminal(&mut app.data, None);
     if result.is_err() {
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     // Should now have 4 agents (root + 2 children + 1 terminal)
-    assert_eq!(app.storage.len(), 4);
+    assert_eq!(app.data.storage.len(), 4);
 
     // Verify we have exactly 1 terminal child
     let root_id = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
         .ok_or("No root")?
         .id;
     let terminal_count = app
+        .data
         .storage
         .children(root_id)
         .into_iter()
@@ -247,22 +260,25 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     assert_eq!(terminal_count, 1, "Should have exactly 1 terminal");
 
     // Select root and synthesize
-    app.selected = 0;
+    app.data.selected = 0;
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
     let handler = tenex::app::Actions::new();
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // Should have 2 agents remaining (root + terminal)
     // The 2 non-terminal children should be removed, terminal preserved
-    assert_eq!(app.storage.len(), 2);
+    assert_eq!(app.data.storage.len(), 2);
 
     // Verify the terminal is still there
-    let remaining_children = app.storage.children(root_id);
+    let remaining_children = app.data.storage.children(root_id);
     assert_eq!(remaining_children.len(), 1);
     assert!(
         remaining_children[0].is_terminal,
@@ -271,6 +287,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
 
     // Verify synthesis file was created
     let root = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
@@ -280,7 +297,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -304,45 +321,46 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (root)
-    let result = handler.create_agent(&mut app, "term-only-root", None);
-    if result.is_err() {
+    let Ok(next) = handler.create_agent(&mut app.data, "term-only-root", None) else {
         return Ok(());
-    }
+    };
+    app.apply_mode(next);
 
     app.select_next();
 
     // Spawn two terminals as children
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_terminal(&mut app, None);
+    let result = handler.spawn_terminal(&mut app.data, None);
     if result.is_err() {
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_terminal(&mut app, None);
+    let result = handler.spawn_terminal(&mut app.data, None);
     if result.is_err() {
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     // Should have 3 agents (root + 2 terminals)
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Verify all children are terminals
     let root_id = app
+        .data
         .storage
         .iter()
         .find(|a| a.is_root())
         .ok_or("No root")?
         .id;
-    let children = app.storage.children(root_id);
+    let children = app.data.storage.children(root_id);
     assert_eq!(children.len(), 2);
     assert!(
         children.iter().all(|c| c.is_terminal),
@@ -350,7 +368,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     );
 
     // Select root
-    app.selected = 0;
+    app.data.selected = 0;
 
     // has_children check passes, so we should enter confirmation mode
     let handler = tenex::app::Actions::new();
@@ -358,7 +376,9 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
-        tenex::app::Mode::Confirming(tenex::app::ConfirmAction::Synthesize)
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        })
     );
 
     // Now confirm - this should fail because all children are terminals
@@ -367,14 +387,14 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     assert!(result.is_ok());
 
     // Should show error modal
-    assert!(matches!(app.mode, tenex::app::Mode::ErrorModal(_)));
+    assert!(matches!(app.mode, tenex::AppMode::ErrorModal(_)));
 
     // All agents should still exist (nothing was removed)
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 
@@ -398,22 +418,28 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = None;
-    let result = handler.spawn_children(&mut app, Some("synth-gc-test"));
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-gc-test"));
     if result.is_err() {
         return Ok(());
     }
 
-    let root = app.storage.iter().find(|a| a.is_root()).ok_or("No root")?;
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?;
     let root_id = root.id;
 
     // Expand root
-    if let Some(root) = app.storage.get_mut(root_id) {
+    if let Some(root) = app.data.storage.get_mut(root_id) {
         root.collapsed = false;
     }
 
     let child1 = app
+        .data
         .storage
         .children(root_id)
         .into_iter()
@@ -422,51 +448,54 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     let child1_id = child1.id;
 
     // Add 2 grandchildren under Agent 1
-    app.spawn.child_count = 2;
-    app.spawn.spawning_under = Some(child1_id);
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = Some(child1_id);
 
-    if let Some(c1) = app.storage.get_mut(child1_id) {
+    if let Some(c1) = app.data.storage.get_mut(child1_id) {
         c1.collapsed = false;
     }
 
     let handler = tenex::app::Actions::new();
-    let result = handler.spawn_children(&mut app, Some("gc-task"));
+    let result = handler.spawn_children(&mut app.data, Some("gc-task"));
     if result.is_err() {
         let manager = SessionManager::new();
-        for agent in app.storage.iter() {
+        for agent in app.data.storage.iter() {
             let _ = manager.kill(&agent.mux_session);
         }
         return Ok(());
     }
 
     // Should have 5 agents (root + 2 children + 2 grandchildren)
-    assert_eq!(app.storage.len(), 5);
+    assert_eq!(app.data.storage.len(), 5);
 
     // Select Agent 1 (which has grandchildren) and synthesize just its children
-    if let Some(idx) = app.storage.visible_index_of(child1_id) {
-        app.selected = idx;
+    if let Some(idx) = app.data.storage.visible_index_of(child1_id) {
+        app.data.selected = idx;
     }
 
     // Enter confirmation mode and confirm
-    app.enter_mode(tenex::app::Mode::Confirming(
-        tenex::app::ConfirmAction::Synthesize,
-    ));
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // Should have 3 agents remaining (root + Agent 1 + Agent 2)
     // The 2 grandchildren under Agent 1 should be removed
-    assert_eq!(app.storage.len(), 3);
+    assert_eq!(app.data.storage.len(), 3);
 
     // Root should still have 2 children
-    assert_eq!(app.storage.children(root_id).len(), 2);
+    assert_eq!(app.data.storage.children(root_id).len(), 2);
 
     // Agent 1 should have no children now
-    assert_eq!(app.storage.children(child1_id).len(), 0);
+    assert_eq!(app.data.storage.children(child1_id).len(), 0);
 
     // Cleanup
     let manager = SessionManager::new();
-    for agent in app.storage.iter() {
+    for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
 

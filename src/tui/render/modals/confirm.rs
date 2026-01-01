@@ -58,7 +58,7 @@ pub fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
     reason = "UI layout requires verbose styling code"
 )]
 pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
-    let Some(conflict) = &app.spawn.worktree_conflict else {
+    let Some(conflict) = &app.data.spawn.worktree_conflict else {
         return;
     };
 
@@ -88,14 +88,14 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
     if let Some(ref branch) = conflict.existing_branch {
         lines.push(Line::from(vec![
             Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
-            Span::styled(branch.clone(), Style::default().fg(colors::TEXT_PRIMARY)),
+            Span::styled(branch.as_str(), Style::default().fg(colors::TEXT_PRIMARY)),
         ]));
     }
 
     if let Some(ref commit) = conflict.existing_commit {
         lines.push(Line::from(vec![
             Span::styled("  Commit: ", Style::default().fg(colors::TEXT_DIM)),
-            Span::styled(commit.clone(), Style::default().fg(colors::TEXT_MUTED)),
+            Span::styled(commit.as_str(), Style::default().fg(colors::TEXT_MUTED)),
         ]));
     }
 
@@ -194,7 +194,11 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
 
 /// Render the confirm push overlay
 pub fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
-    let agent = app.git_op.agent_id.and_then(|id| app.storage.get(id));
+    let agent = app
+        .data
+        .git_op
+        .agent_id
+        .and_then(|id| app.data.storage.get(id));
 
     let mut lines: Vec<Line<'_>> = vec![
         Line::from(Span::styled(
@@ -219,7 +223,7 @@ pub fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
         lines.push(Line::from(vec![
             Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
             Span::styled(
-                &app.git_op.branch_name,
+                &app.data.git_op.branch_name,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
         ]));
@@ -452,12 +456,12 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
         Line::from(vec![
             Span::styled("Branch: ", Style::default().fg(colors::TEXT_DIM)),
             Span::styled(
-                &app.git_op.branch_name,
+                &app.data.git_op.branch_name,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
             Span::styled(" → ", Style::default().fg(colors::TEXT_MUTED)),
             Span::styled(
-                &app.git_op.base_branch,
+                &app.data.git_op.base_branch,
                 Style::default().fg(colors::TEXT_PRIMARY),
             ),
         ]),
@@ -503,8 +507,10 @@ mod tests {
     use super::*;
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::update::UpdateInfo;
     use crate::{Agent, App, agent::Storage};
     use ratatui::{Terminal, backend::TestBackend};
+    use semver::Version;
     use std::path::PathBuf;
 
     fn app_with_agent() -> App {
@@ -522,9 +528,9 @@ mod tests {
             None,
         );
         let id = agent.id;
-        app.storage.add(agent);
-        app.git_op.agent_id = Some(id);
-        app.git_op.branch_name = "tenex/render-agent".to_string();
+        app.data.storage.add(agent);
+        app.data.git_op.agent_id = Some(id);
+        app.data.git_op.branch_name = "tenex/render-agent".to_string();
         app
     }
 
@@ -579,7 +585,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = app_with_agent();
-        app.git_op.base_branch = "main".to_string();
+        app.data.git_op.base_branch = "main".to_string();
 
         terminal.draw(|frame| {
             render_confirm_push_for_pr_overlay(frame, &app);
@@ -596,6 +602,24 @@ mod tests {
 
         terminal.draw(|frame| {
             render_keyboard_remap_overlay(frame);
+        })?;
+
+        assert!(!terminal.backend().buffer().content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_update_prompt_overlay() -> Result<(), std::io::Error> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+
+        let info = UpdateInfo {
+            current_version: Version::new(1, 0, 0),
+            latest_version: Version::new(2, 0, 0),
+        };
+
+        terminal.draw(|frame| {
+            render_update_prompt_overlay(frame, &info);
         })?;
 
         assert!(!terminal.backend().buffer().content.is_empty());

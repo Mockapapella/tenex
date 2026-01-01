@@ -6,117 +6,51 @@
 //! - `ReviewInfo` (info popup before review)
 //! - `BranchSelector` (selecting a branch)
 
-use crate::app::{Actions, App};
+use crate::app::App;
+use anyhow::Result;
 use ratatui::crossterm::event::KeyCode;
 
 /// Handle key events in `ChildCount` mode
-pub fn handle_child_count_mode(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Enter => app.proceed_to_child_prompt(),
-        KeyCode::Esc => app.exit_mode(),
-        KeyCode::Up => app.increment_child_count(),
-        KeyCode::Down => app.decrement_child_count(),
-        _ => {}
-    }
+pub fn handle_child_count_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_child_count_mode(app, code)
 }
 
 /// Handle key events in `ReviewChildCount` mode
-pub fn handle_review_child_count_mode(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Enter => app.proceed_to_branch_selector(),
-        KeyCode::Esc => app.exit_mode(),
-        KeyCode::Up => app.increment_child_count(),
-        KeyCode::Down => app.decrement_child_count(),
-        _ => {}
-    }
+pub fn handle_review_child_count_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_review_child_count_mode(app, code)
 }
 
 /// Handle key events in `ReviewInfo` mode (any key dismisses)
-pub fn handle_review_info_mode(app: &mut App) {
-    app.exit_mode();
+pub fn handle_review_info_mode(app: &mut App) -> Result<()> {
+    crate::action::dispatch_review_info_mode(app)
 }
 
 /// Handle key events in `BranchSelector` mode
-pub fn handle_branch_selector_mode(app: &mut App, action_handler: Actions, code: KeyCode) {
-    match code {
-        KeyCode::Enter => {
-            if app.confirm_branch_selection()
-                && let Err(e) = action_handler.spawn_review_agents(app)
-            {
-                app.set_error(format!("Failed to spawn review agents: {e:#}"));
-            }
-            app.exit_mode();
-        }
-        KeyCode::Esc => {
-            app.clear_review_state();
-            app.exit_mode();
-        }
-        KeyCode::Up => app.select_prev_branch(),
-        KeyCode::Down => app.select_next_branch(),
-        KeyCode::Char(c) => app.handle_branch_filter_char(c),
-        KeyCode::Backspace => app.handle_branch_filter_backspace(),
-        _ => {}
-    }
+pub fn handle_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_branch_selector_mode(app, code)
 }
 
 /// Handle key events in `RebaseBranchSelector` mode
-pub fn handle_rebase_branch_selector_mode(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Enter => {
-            if app.confirm_rebase_merge_branch()
-                && let Err(e) = Actions::execute_rebase(app)
-            {
-                app.set_error(format!("Rebase failed: {e:#}"));
-            }
-        }
-        KeyCode::Esc => {
-            app.clear_git_op_state();
-            app.clear_review_state();
-            app.exit_mode();
-        }
-        KeyCode::Up => app.select_prev_branch(),
-        KeyCode::Down => app.select_next_branch(),
-        KeyCode::Char(c) => app.handle_branch_filter_char(c),
-        KeyCode::Backspace => app.handle_branch_filter_backspace(),
-        _ => {}
-    }
+pub fn handle_rebase_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_rebase_branch_selector_mode(app, code)
 }
 
 /// Handle key events in `MergeBranchSelector` mode
-pub fn handle_merge_branch_selector_mode(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Enter => {
-            if app.confirm_rebase_merge_branch()
-                && let Err(e) = Actions::execute_merge(app)
-            {
-                app.set_error(format!("Merge failed: {e:#}"));
-            }
-        }
-        KeyCode::Esc => {
-            app.clear_git_op_state();
-            app.clear_review_state();
-            app.exit_mode();
-        }
-        KeyCode::Up => app.select_prev_branch(),
-        KeyCode::Down => app.select_next_branch(),
-        KeyCode::Char(c) => app.handle_branch_filter_char(c),
-        KeyCode::Backspace => app.handle_branch_filter_backspace(),
-        _ => {}
-    }
-}
-
-/// Handle key events in `SuccessModal` mode (any key dismisses)
-pub fn handle_success_modal_mode(app: &mut App) {
-    app.dismiss_success();
+pub fn handle_merge_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_merge_branch_selector_mode(app, code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::Storage;
-    use crate::app::{Mode, Settings};
+    use crate::app::Settings;
     use crate::config::Config;
     use crate::git::BranchInfo;
+    use crate::state::{
+        AppMode, BranchSelectorMode, ChildCountMode, ChildPromptMode, MergeBranchSelectorMode,
+        RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode,
+    };
     use ratatui::crossterm::event::KeyCode;
     use tempfile::NamedTempFile;
 
@@ -151,288 +85,295 @@ mod tests {
     // ========== ChildCount mode tests ==========
 
     #[test]
-    fn test_handle_child_count_mode_up() -> Result<(), std::io::Error> {
+    fn test_handle_child_count_mode_up() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 1;
-        handle_child_count_mode(&mut app, KeyCode::Up);
-        assert_eq!(app.spawn.child_count, 2);
+        app.apply_mode(ChildCountMode.into());
+        app.data.spawn.child_count = 1;
+        handle_child_count_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.spawn.child_count, 2);
         Ok(())
     }
 
     #[test]
-    fn test_handle_child_count_mode_down() -> Result<(), std::io::Error> {
+    fn test_handle_child_count_mode_down() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 2;
-        handle_child_count_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.spawn.child_count, 1);
+        app.apply_mode(ChildCountMode.into());
+        app.data.spawn.child_count = 2;
+        handle_child_count_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.spawn.child_count, 1);
         Ok(())
     }
 
     #[test]
-    fn test_handle_child_count_mode_esc() -> Result<(), std::io::Error> {
+    fn test_handle_child_count_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
-        handle_child_count_mode(&mut app, KeyCode::Esc);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ChildCountMode.into());
+        handle_child_count_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_child_count_mode_enter() -> Result<(), std::io::Error> {
+    fn test_handle_child_count_mode_enter() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
-        app.spawn.child_count = 2;
-        handle_child_count_mode(&mut app, KeyCode::Enter);
+        app.apply_mode(ChildCountMode.into());
+        app.data.spawn.child_count = 2;
+        handle_child_count_mode(&mut app, KeyCode::Enter)?;
         // Should proceed to ChildPrompt mode
-        assert_eq!(app.mode, Mode::ChildPrompt);
+        assert_eq!(app.mode, ChildPromptMode.into());
         Ok(())
     }
 
     #[test]
-    fn test_handle_child_count_mode_other_key_ignored() -> Result<(), std::io::Error> {
+    fn test_handle_child_count_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ChildCount;
-        app.spawn.child_count = 2;
-        handle_child_count_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::ChildCount);
-        assert_eq!(app.spawn.child_count, 2);
+        app.apply_mode(ChildCountMode.into());
+        app.data.spawn.child_count = 2;
+        handle_child_count_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, ChildCountMode.into());
+        assert_eq!(app.data.spawn.child_count, 2);
         Ok(())
     }
 
     // ========== ReviewChildCount mode tests ==========
 
     #[test]
-    fn test_handle_review_child_count_mode_up() -> Result<(), std::io::Error> {
+    fn test_handle_review_child_count_mode_up() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 1;
-        handle_review_child_count_mode(&mut app, KeyCode::Up);
-        assert_eq!(app.spawn.child_count, 2);
+        app.apply_mode(ReviewChildCountMode.into());
+        app.data.spawn.child_count = 1;
+        handle_review_child_count_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.spawn.child_count, 2);
         Ok(())
     }
 
     #[test]
-    fn test_handle_review_child_count_mode_down() -> Result<(), std::io::Error> {
+    fn test_handle_review_child_count_mode_down() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.spawn.child_count = 2;
-        handle_review_child_count_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.spawn.child_count, 1);
+        app.apply_mode(ReviewChildCountMode.into());
+        app.data.spawn.child_count = 2;
+        handle_review_child_count_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.spawn.child_count, 1);
         Ok(())
     }
 
     #[test]
-    fn test_handle_review_child_count_mode_esc() -> Result<(), std::io::Error> {
+    fn test_handle_review_child_count_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
-        handle_review_child_count_mode(&mut app, KeyCode::Esc);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ReviewChildCountMode.into());
+        handle_review_child_count_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_review_child_count_mode_enter() -> Result<(), std::io::Error> {
+    fn test_handle_review_child_count_mode_enter() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
-        handle_review_child_count_mode(&mut app, KeyCode::Enter);
+        app.apply_mode(ReviewChildCountMode.into());
+        handle_review_child_count_mode(&mut app, KeyCode::Enter)?;
         // Should proceed to BranchSelector mode
-        assert_eq!(app.mode, Mode::BranchSelector);
+        assert_eq!(app.mode, BranchSelectorMode.into());
         Ok(())
     }
 
     #[test]
-    fn test_handle_review_child_count_mode_other_key_ignored() -> Result<(), std::io::Error> {
+    fn test_handle_review_child_count_mode_other_key_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewChildCount;
-        app.spawn.child_count = 2;
-        handle_review_child_count_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::ReviewChildCount);
-        assert_eq!(app.spawn.child_count, 2);
+        app.apply_mode(ReviewChildCountMode.into());
+        app.data.spawn.child_count = 2;
+        handle_review_child_count_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, ReviewChildCountMode.into());
+        assert_eq!(app.data.spawn.child_count, 2);
         Ok(())
     }
 
     // ========== ReviewInfo mode tests ==========
 
     #[test]
-    fn test_handle_review_info_mode() -> Result<(), std::io::Error> {
+    fn test_handle_review_info_mode() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::ReviewInfo;
-        handle_review_info_mode(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(ReviewInfoMode.into());
+        handle_review_info_mode(&mut app)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     // ========== BranchSelector mode tests ==========
 
     #[test]
-    fn test_handle_branch_selector_mode_esc() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::BranchSelector;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Esc);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(BranchSelectorMode.into());
+        handle_branch_selector_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_filter_char() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_filter_char() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Char('m'));
-        assert_eq!(app.review.filter, "m");
+        app.apply_mode(BranchSelectorMode.into());
+        handle_branch_selector_mode(&mut app, KeyCode::Char('m'))?;
+        assert_eq!(app.data.review.filter, "m");
         Ok(())
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_filter_backspace() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_filter_backspace() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (mut app, _temp) = create_test_app()?;
-        app.review.filter = "ma".to_string();
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Backspace);
-        assert_eq!(app.review.filter, "m");
+        app.apply_mode(BranchSelectorMode.into());
+        app.data.review.filter = "ma".to_string();
+        handle_branch_selector_mode(&mut app, KeyCode::Backspace)?;
+        assert_eq!(app.data.review.filter, "m");
         Ok(())
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_navigation_up() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_navigation_up() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Up);
-        assert_eq!(app.review.selected, 0);
+        app.apply_mode(BranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 1;
+        handle_branch_selector_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.review.selected, 0);
         Ok(())
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_navigation_down() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
+        app.apply_mode(BranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 0;
+        handle_branch_selector_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.review.selected, 1);
         Ok(())
     }
 
     #[test]
-    fn test_handle_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
+    fn test_handle_branch_selector_mode_other_key_ignored() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::BranchSelector;
-        let action_handler = Actions::new();
-        handle_branch_selector_mode(&mut app, action_handler, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::BranchSelector);
+        app.apply_mode(BranchSelectorMode.into());
+        handle_branch_selector_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, BranchSelectorMode.into());
         Ok(())
     }
 
     // ========== RebaseBranchSelector mode tests ==========
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_esc() -> Result<(), std::io::Error> {
+    fn test_handle_rebase_branch_selector_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RebaseBranchSelector;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Esc);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(RebaseBranchSelectorMode.into());
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_filter() -> Result<(), std::io::Error> {
+    fn test_handle_rebase_branch_selector_mode_filter() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Char('m'));
-        assert_eq!(app.review.filter, "m");
+        app.apply_mode(RebaseBranchSelectorMode.into());
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Char('m'))?;
+        assert_eq!(app.data.review.filter, "m");
 
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Backspace);
-        assert_eq!(app.review.filter, "");
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Backspace)?;
+        assert_eq!(app.data.review.filter, "");
         Ok(())
     }
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_navigation_up() -> Result<(), std::io::Error> {
+    fn test_handle_rebase_branch_selector_mode_navigation_up()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Up);
-        assert_eq!(app.review.selected, 0);
+        app.apply_mode(RebaseBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 1;
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.review.selected, 0);
         Ok(())
     }
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
+    fn test_handle_rebase_branch_selector_mode_navigation_down()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
+        app.apply_mode(RebaseBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 0;
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.review.selected, 1);
         Ok(())
     }
 
     #[test]
-    fn test_handle_rebase_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
+    fn test_handle_rebase_branch_selector_mode_other_key_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::RebaseBranchSelector;
-        handle_rebase_branch_selector_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::RebaseBranchSelector);
+        app.apply_mode(RebaseBranchSelectorMode.into());
+        handle_rebase_branch_selector_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, RebaseBranchSelectorMode.into());
         Ok(())
     }
 
     // ========== MergeBranchSelector mode tests ==========
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_esc() -> Result<(), std::io::Error> {
+    fn test_handle_merge_branch_selector_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::MergeBranchSelector;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Esc);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(MergeBranchSelectorMode.into());
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
         Ok(())
     }
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_filter() -> Result<(), std::io::Error> {
+    fn test_handle_merge_branch_selector_mode_filter() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Char('f'));
-        assert_eq!(app.review.filter, "f");
+        app.apply_mode(MergeBranchSelectorMode.into());
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Char('f'))?;
+        assert_eq!(app.data.review.filter, "f");
 
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Backspace);
-        assert_eq!(app.review.filter, "");
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Backspace)?;
+        assert_eq!(app.data.review.filter, "");
         Ok(())
     }
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_navigation_up() -> Result<(), std::io::Error> {
+    fn test_handle_merge_branch_selector_mode_navigation_up()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 1;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Up);
-        assert_eq!(app.review.selected, 0);
+        app.apply_mode(MergeBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 1;
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.review.selected, 0);
         Ok(())
     }
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_navigation_down() -> Result<(), std::io::Error> {
+    fn test_handle_merge_branch_selector_mode_navigation_down()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.review.branches = test_branches();
-        app.review.selected = 0;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Down);
-        assert_eq!(app.review.selected, 1);
+        app.apply_mode(MergeBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 0;
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.review.selected, 1);
         Ok(())
     }
 
     #[test]
-    fn test_handle_merge_branch_selector_mode_other_key_ignored() -> Result<(), std::io::Error> {
+    fn test_handle_merge_branch_selector_mode_other_key_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::MergeBranchSelector;
-        handle_merge_branch_selector_mode(&mut app, KeyCode::Tab);
-        assert_eq!(app.mode, Mode::MergeBranchSelector);
-        Ok(())
-    }
-
-    // ========== SuccessModal mode tests ==========
-
-    #[test]
-    fn test_handle_success_modal_mode() -> Result<(), std::io::Error> {
-        let (mut app, _temp) = create_test_app()?;
-        app.mode = Mode::SuccessModal("Test".to_string());
-        handle_success_modal_mode(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
+        app.apply_mode(MergeBranchSelectorMode.into());
+        handle_merge_branch_selector_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, MergeBranchSelectorMode.into());
         Ok(())
     }
 }

@@ -5,7 +5,8 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use super::Actions;
-use crate::app::state::App;
+use crate::app::AppData;
+use crate::state::{AppMode, ErrorModalMode};
 
 impl Actions {
     /// Broadcast a message to the selected agent and all its leaf descendants
@@ -16,28 +17,31 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if broadcasting fails
-    pub fn broadcast_to_leaves(self, app: &mut App, message: &str) -> Result<()> {
-        let agent = app
-            .selected_agent()
-            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+    pub fn broadcast_to_leaves(self, app_data: &mut AppData, message: &str) -> Result<AppMode> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected".to_string(),
+            }
+            .into());
+        };
 
         let agent_id = agent.id;
         let mut sent_count = 0;
 
         // Collect all agents to broadcast to (selected + descendants)
         let mut targets: Vec<uuid::Uuid> = vec![agent_id];
-        targets.extend(app.storage.descendant_ids(agent_id));
+        targets.extend(app_data.storage.descendant_ids(agent_id));
 
         // Filter to only leaf agents (excluding terminals) and send message
         for target_id in targets {
-            if !app.storage.has_children(target_id)
-                && let Some(target_agent) = app.storage.get(target_id)
+            if !app_data.storage.has_children(target_id)
+                && let Some(target_agent) = app_data.storage.get(target_id)
                 && !target_agent.is_terminal
             {
                 // Determine the mux target (session or window)
                 let target = if let Some(window_idx) = target_agent.window_index {
                     // Child agent: use window target within root's session
-                    let root = app.storage.root_ancestor(target_id);
+                    let root = app_data.storage.root_ancestor(target_id);
                     let root_session = root.map_or_else(
                         || target_agent.mux_session.clone(),
                         |r| r.mux_session.clone(),
@@ -65,13 +69,14 @@ impl Actions {
                 message_len = message.len(),
                 "Broadcast sent to leaf agents"
             );
-            app.set_status(format!("Broadcast sent to {sent_count} agent(s)"));
-        } else {
-            warn!(%agent_id, "No leaf agents found to broadcast to");
-            app.set_error("No leaf agents found to broadcast to");
+            app_data.set_status(format!("Broadcast sent to {sent_count} agent(s)"));
+            return Ok(AppMode::normal());
         }
-
-        Ok(())
+        warn!(%agent_id, "No leaf agents found to broadcast to");
+        Ok(ErrorModalMode {
+            message: "No leaf agents found to broadcast to".to_string(),
+        }
+        .into())
     }
 }
 
@@ -79,6 +84,7 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::agent::{Agent, ChildConfig, Storage};
+    use crate::app::App;
     use crate::app::Settings;
     use crate::config::Config;
     use std::path::PathBuf;
@@ -93,13 +99,14 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcast_to_leaves_no_agent() {
+    fn test_broadcast_to_leaves_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        // No agent selected - should return error
-        let result = handler.broadcast_to_leaves(&mut app, "test message");
-        assert!(result.is_err());
+        // No agent selected - should return error modal mode
+        let next = handler.broadcast_to_leaves(&mut app.data, "test message")?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
     }
 
     #[test]
@@ -108,7 +115,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Add an agent with no children
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "root".to_string(),
             "claude".to_string(),
             "muster/root".to_string(),
@@ -116,9 +123,8 @@ mod tests {
             None,
         ));
 
-        // Broadcast should set error when no children
-        handler.broadcast_to_leaves(&mut app, "test message")?;
-        assert!(app.ui.last_error.is_some());
+        let next = handler.broadcast_to_leaves(&mut app.data, "test message")?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -138,11 +144,11 @@ mod tests {
         root.collapsed = false;
         let root_id = root.id;
         let root_session = root.mux_session.clone();
-        app.storage.add(root);
+        app.data.storage.add(root);
 
         // Add children (leaves)
         for i in 0..2 {
-            app.storage.add(Agent::new_child(
+            app.data.storage.add(Agent::new_child(
                 format!("child{i}"),
                 "claude".to_string(),
                 "muster/root".to_string(),
@@ -158,9 +164,8 @@ mod tests {
 
         // Broadcast when sessions don't exist - send_keys fails, so no messages sent
         // This exercises the "No leaf agents found" path since send_keys fails
-        handler.broadcast_to_leaves(&mut app, "test message")?;
-        // Since sessions don't exist, send_keys fails and error is set
-        assert!(app.ui.last_error.is_some());
+        let next = handler.broadcast_to_leaves(&mut app.data, "test message")?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
         Ok(())
     }
 }

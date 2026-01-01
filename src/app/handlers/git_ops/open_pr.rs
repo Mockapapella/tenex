@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
-use crate::app::state::App;
+use crate::app::AppData;
+use crate::state::{AppMode, ConfirmPushForPRMode, ErrorModalMode};
 
 use super::super::Actions;
 
@@ -11,8 +12,12 @@ impl Actions {
     /// Open a PR for the selected agent's branch (Ctrl+o)
     ///
     /// Detects the base branch, checks for unpushed commits, and opens a PR.
-    pub(crate) fn open_pr_flow(app: &mut App) -> Result<()> {
-        let agent = app
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no agent is selected or base branch detection fails.
+    pub fn open_pr_flow(app_data: &mut AppData) -> Result<AppMode> {
+        let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
@@ -33,14 +38,23 @@ impl Actions {
             "Starting open PR flow"
         );
 
-        app.start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
+        app_data
+            .git_op
+            .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
         // If no unpushed commits, open PR immediately
-        if !has_unpushed {
-            Self::open_pr_in_browser(app)?;
+        if has_unpushed {
+            return Ok(ConfirmPushForPRMode.into());
         }
 
-        Ok(())
+        if let Err(err) = Self::open_pr_in_browser(app_data) {
+            return Ok(ErrorModalMode {
+                message: format!("Failed to open PR: {err:#}"),
+            }
+            .into());
+        }
+
+        Ok(AppMode::normal())
     }
 
     /// Detect the base branch that this branch was created from
@@ -130,19 +144,25 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the push or PR open fails
-    pub fn execute_push_and_open_pr(app: &mut App) -> Result<()> {
-        let agent_id = app
-            .git_op
-            .agent_id
-            .ok_or_else(|| anyhow::anyhow!("No agent ID for push"))?;
+    pub fn execute_push_and_open_pr(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent_id) = app_data.git_op.agent_id else {
+            app_data.git_op.clear();
+            return Ok(ErrorModalMode {
+                message: "No agent ID for push".to_string(),
+            }
+            .into());
+        };
 
-        let agent = app
-            .storage
-            .get(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
+        let Some(agent) = app_data.storage.get(agent_id) else {
+            app_data.git_op.clear();
+            return Ok(ErrorModalMode {
+                message: "Agent not found".to_string(),
+            }
+            .into());
+        };
 
         let worktree_path = agent.worktree_path.clone();
-        let branch_name = app.git_op.branch_name.clone();
+        let branch_name = app_data.git_op.branch_name.clone();
 
         debug!(branch = %branch_name, "Executing push before opening PR");
 
@@ -155,32 +175,41 @@ impl Actions {
 
         if !push_output.status.success() {
             let stderr = String::from_utf8_lossy(&push_output.stderr);
-            app.set_error(format!("Push failed: {}", stderr.trim()));
-            app.clear_git_op_state();
-            return Ok(());
+            app_data.git_op.clear();
+            return Ok(ErrorModalMode {
+                message: format!("Push failed: {}", stderr.trim()),
+            }
+            .into());
         }
 
         info!(branch = %branch_name, "Push successful, opening PR");
 
         // Now open the PR
-        Self::open_pr_in_browser(app)
+        if let Err(err) = Self::open_pr_in_browser(app_data) {
+            return Ok(ErrorModalMode {
+                message: format!("Failed to open PR: {err:#}"),
+            }
+            .into());
+        }
+
+        Ok(AppMode::normal())
     }
 
     /// Open PR in browser using gh CLI
-    pub(crate) fn open_pr_in_browser(app: &mut App) -> Result<()> {
-        let agent_id = app
+    pub(crate) fn open_pr_in_browser(app_data: &mut AppData) -> Result<()> {
+        let agent_id = app_data
             .git_op
             .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID for PR"))?;
 
-        let agent = app
+        let agent = app_data
             .storage
             .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let worktree_path = agent.worktree_path.clone();
-        let branch = app.git_op.branch_name.clone();
-        let base_branch = app.git_op.base_branch.clone();
+        let branch = app_data.git_op.branch_name.clone();
+        let base_branch = app_data.git_op.base_branch.clone();
 
         debug!(
             branch = %branch,
@@ -197,21 +226,22 @@ impl Actions {
         match output {
             Ok(result) if result.status.success() => {
                 info!(branch = %branch, base = %base_branch, "Opened PR creation page in browser");
-                app.set_status(format!("Opening PR: {branch} → {base_branch}"));
+                app_data.set_status(format!("Opening PR: {branch} → {base_branch}"));
             }
             Ok(result) => {
                 let stderr = String::from_utf8_lossy(&result.stderr);
                 warn!(error = %stderr, "gh pr create failed");
-                app.set_error(format!("Failed to open PR: {}", stderr.trim()));
+                app_data.git_op.clear();
+                anyhow::bail!("{}", stderr.trim());
             }
             Err(e) => {
                 warn!(error = %e, "gh CLI not found");
-                app.set_error("gh CLI not found. Install it with: brew install gh");
+                app_data.git_op.clear();
+                anyhow::bail!("gh CLI not found. Install it with: brew install gh");
             }
         }
 
-        app.clear_git_op_state();
-        app.exit_mode();
+        app_data.git_op.clear();
         Ok(())
     }
 }

@@ -121,13 +121,17 @@ impl GitOpState {
     }
 }
 
-use super::{App, BranchInfo, Mode};
+use super::{App, BranchInfo};
+use crate::state::{
+    ConfirmPushForPRMode, ConfirmPushMode, MergeBranchSelectorMode, RebaseBranchSelectorMode,
+    RenameBranchMode,
+};
 
 impl App {
     /// Start the push flow - show confirmation dialog
     pub fn start_push(&mut self, agent_id: uuid::Uuid, branch_name: String) {
-        self.git_op.start_push(agent_id, branch_name);
-        self.enter_mode(Mode::ConfirmPush);
+        self.data.git_op.start_push(agent_id, branch_name);
+        self.apply_mode(ConfirmPushMode.into());
     }
 
     /// Start the rename flow
@@ -135,20 +139,21 @@ impl App {
     /// For root agents (`is_root=true`): Renames branch + agent title + session
     /// For sub-agents (`is_root=false`): Renames agent title + window only
     pub fn start_rename(&mut self, agent_id: uuid::Uuid, current_name: String, is_root: bool) {
-        self.git_op
+        self.data
+            .git_op
             .start_rename(agent_id, current_name.clone(), is_root);
-        self.input.buffer = current_name;
-        self.input.cursor = self.input.buffer.len(); // Cursor at end
-        self.enter_mode(Mode::RenameBranch);
+        self.data.input.buffer = current_name;
+        self.data.input.cursor = self.data.input.buffer.len(); // Cursor at end
+        self.apply_mode(RenameBranchMode.into());
     }
 
     /// Confirm the branch rename (update `branch_name` from `input_buffer`)
     pub fn confirm_rename_branch(&mut self) -> bool {
-        let new_name = self.input.buffer.trim().to_string();
+        let new_name = self.data.input.buffer.trim().to_string();
         if new_name.is_empty() {
             return false;
         }
-        self.git_op.set_branch_name(new_name);
+        self.data.git_op.set_branch_name(new_name);
         true
     }
 
@@ -160,11 +165,12 @@ impl App {
         base_branch: String,
         has_unpushed: bool,
     ) {
-        self.git_op
+        self.data
+            .git_op
             .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
         if has_unpushed {
-            self.enter_mode(Mode::ConfirmPushForPR);
+            self.apply_mode(ConfirmPushForPRMode.into());
         } else {
             // No unpushed commits, will open PR directly (handled in handler)
         }
@@ -172,7 +178,7 @@ impl App {
 
     /// Clear all git operation state
     pub fn clear_git_op_state(&mut self) {
-        self.git_op.clear();
+        self.data.git_op.clear();
     }
 
     /// Start the rebase flow - show branch selector to choose target branch
@@ -182,9 +188,9 @@ impl App {
         current_branch: String,
         branches: Vec<BranchInfo>,
     ) {
-        self.git_op.start_rebase(agent_id, current_branch);
-        self.review.start(branches);
-        self.enter_mode(Mode::RebaseBranchSelector);
+        self.data.git_op.start_rebase(agent_id, current_branch);
+        self.data.review.start(branches);
+        self.apply_mode(RebaseBranchSelectorMode.into());
     }
 
     /// Start the merge flow - show branch selector to choose source branch
@@ -194,15 +200,15 @@ impl App {
         current_branch: String,
         branches: Vec<BranchInfo>,
     ) {
-        self.git_op.start_merge(agent_id, current_branch);
-        self.review.start(branches);
-        self.enter_mode(Mode::MergeBranchSelector);
+        self.data.git_op.start_merge(agent_id, current_branch);
+        self.data.review.start(branches);
+        self.apply_mode(MergeBranchSelectorMode.into());
     }
 
     /// Confirm branch selection for rebase/merge and set target branch
     pub fn confirm_rebase_merge_branch(&mut self) -> bool {
-        if let Some(branch) = self.review.selected_branch() {
-            self.git_op.set_target_branch(branch.name.clone());
+        if let Some(branch) = self.data.review.selected_branch() {
+            self.data.git_op.set_target_branch(branch.name.clone());
             true
         } else {
             false

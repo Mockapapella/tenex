@@ -1,6 +1,7 @@
 //! Branch selector modal rendering
 
-use crate::app::{App, Mode};
+use crate::app::App;
+use crate::state::AppMode;
 use ratatui::{
     Frame,
     style::{Modifier, Style},
@@ -18,12 +19,12 @@ use crate::tui::render::colors;
 )]
 pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     // Get current branch for context
-    let current_branch = &app.git_op.branch_name;
+    let current_branch = &app.data.git_op.branch_name;
 
     // Determine title based on mode
     let title = match &app.mode {
-        Mode::RebaseBranchSelector => " Rebase onto Branch ",
-        Mode::MergeBranchSelector => " Merge Branch ",
+        AppMode::RebaseBranchSelector(_) => " Rebase onto Branch ",
+        AppMode::MergeBranchSelector(_) => " Merge Branch ",
         _ => " Select Base Branch ",
     };
 
@@ -40,7 +41,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect_absolute(60, total_height, frame.area());
 
     let filtered = app.filtered_review_branches();
-    let selected_idx = app.review.selected;
+    let selected_idx = app.data.review.selected;
     let total_count = filtered.len();
 
     // Calculate scroll offset to keep selection visible
@@ -55,7 +56,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
 
     // Show merge/rebase direction instruction
     match &app.mode {
-        Mode::MergeBranchSelector => {
+        AppMode::MergeBranchSelector(_) => {
             lines.push(Line::from(vec![
                 Span::styled(
                     "Select branch to merge ",
@@ -70,7 +71,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
                 Span::styled(" into", Style::default().fg(colors::TEXT_DIM)),
             ]));
         }
-        Mode::RebaseBranchSelector => {
+        AppMode::RebaseBranchSelector(_) => {
             lines.push(Line::from(vec![
                 Span::styled("Rebase ", Style::default().fg(colors::TEXT_DIM)),
                 Span::styled(
@@ -98,7 +99,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("Search: ", Style::default().fg(colors::TEXT_DIM)),
         Span::styled(
-            format!("{}_", &app.review.filter),
+            format!("{}_", &app.data.review.filter),
             Style::default().fg(colors::TEXT_PRIMARY),
         ),
     ]));

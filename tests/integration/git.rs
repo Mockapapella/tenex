@@ -78,20 +78,22 @@ fn test_execute_rename_same_name() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rename state with same name
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = "test-agent".to_string();
-    app.git_op.original_branch = "test-agent".to_string();
-    app.git_op.is_root_rename = true;
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "test-agent".to_string();
+    app.data.git_op.original_branch = "test-agent".to_string();
+    app.data.git_op.is_root_rename = true;
 
     // Execute rename
-    Actions::execute_rename(&mut app)?;
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should set status "Name unchanged"
     assert!(
-        app.ui
+        app.data
+            .ui
             .status_message
             .as_ref()
             .is_some_and(|s| s.contains("unchanged")),
@@ -125,19 +127,20 @@ fn test_execute_push_with_valid_agent() -> Result<(), Box<dyn std::error::Error>
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up push state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
 
     // Execute push - will fail because there's no remote, but should handle gracefully
-    let result = Actions::execute_push(&mut app);
+    let result = Actions::execute_push(&mut app.data);
     assert!(result.is_ok(), "Push should handle no remote gracefully");
+    app.apply_mode(result?);
 
     // Should have set an error message about push failure
     assert!(
-        app.ui.last_error.is_some(),
+        app.data.ui.last_error.is_some(),
         "Should have error about push failure"
     );
 
@@ -179,21 +182,22 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rebase state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
-    app.git_op.target_branch = "master".to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.target_branch = "master".to_string();
 
     // Execute rebase - should succeed since there are no conflicts
-    let result = Actions::execute_rebase(&mut app);
+    let result = Actions::execute_rebase(&mut app.data);
     assert!(result.is_ok(), "Rebase should succeed: {result:?}");
+    app.apply_mode(result?);
 
     // Should either show success or set an error (depends on git state)
     // The key test is that the function doesn't panic and handles the result
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
-    let has_error = app.ui.last_error.is_some();
+    let is_success = matches!(app.mode, tenex::AppMode::SuccessModal(_));
+    let has_error = app.data.ui.last_error.is_some();
     assert!(
         is_success || has_error,
         "Should be in SuccessModal mode or have an error after rebase"
@@ -237,22 +241,23 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Change to repo directory for the merge to work (with DirGuard for cleanup on panic)
     let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     // Set up merge state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
-    app.git_op.target_branch = "master".to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.target_branch = "master".to_string();
 
     // Execute merge
-    let result = Actions::execute_merge(&mut app);
+    let result = Actions::execute_merge(&mut app.data);
 
     // DirGuard will restore directory on drop
     assert!(result.is_ok(), "Merge should succeed: {result:?}");
+    app.apply_mode(result?);
 
     Ok(())
 }
@@ -274,16 +279,19 @@ fn test_push_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Use handle_action to initiate push flow
     let handler = Actions::new();
     handler.handle_action(&mut app, Action::Push)?;
 
     // Should set up git_op state
-    assert_eq!(app.git_op.agent_id, Some(agent_id));
-    assert_eq!(app.git_op.branch_name, "feature/test");
-    assert_eq!(app.mode, tenex::app::Mode::ConfirmPush);
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.data.git_op.branch_name, "feature/test");
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::ConfirmPush(tenex::state::ConfirmPushMode)
+    );
 
     Ok(())
 }
@@ -305,17 +313,20 @@ fn test_rename_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Use handle_action to initiate rename flow
     let handler = Actions::new();
     handler.handle_action(&mut app, Action::RenameBranch)?;
 
     // Should set up git_op state
-    assert_eq!(app.git_op.agent_id, Some(agent_id));
-    assert_eq!(app.git_op.original_branch, "rename-action-test");
-    assert!(app.git_op.is_root_rename);
-    assert_eq!(app.mode, tenex::app::Mode::RenameBranch);
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.data.git_op.original_branch, "rename-action-test");
+    assert!(app.data.git_op.is_root_rename);
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::RenameBranch(tenex::state::RenameBranchMode)
+    );
 
     Ok(())
 }
@@ -340,7 +351,7 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         fixture.repo_path.clone(),
         None,
     );
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Use handle_action to initiate rebase flow
     let handler = Actions::new();
@@ -348,7 +359,10 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     // DirGuard will restore directory on drop
     assert!(result.is_ok());
-    assert_eq!(app.mode, tenex::app::Mode::RebaseBranchSelector);
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::RebaseBranchSelector(tenex::state::RebaseBranchSelectorMode)
+    );
 
     Ok(())
 }
@@ -373,7 +387,7 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         fixture.repo_path.clone(),
         None,
     );
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Use handle_action to initiate merge flow
     let handler = Actions::new();
@@ -381,7 +395,10 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
 
     // DirGuard will restore directory on drop
     assert!(result.is_ok());
-    assert_eq!(app.mode, tenex::app::Mode::MergeBranchSelector);
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::MergeBranchSelector(tenex::state::MergeBranchSelectorMode)
+    );
 
     Ok(())
 }
@@ -409,17 +426,20 @@ fn test_open_pr_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Use handle_action to initiate open PR flow
     let handler = Actions::new();
     handler.handle_action(&mut app, Action::OpenPR)?;
 
     // Should set up git_op state
-    assert_eq!(app.git_op.agent_id, Some(agent_id));
-    assert_eq!(app.git_op.branch_name, branch_name);
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert_eq!(app.data.git_op.branch_name, branch_name);
     // Should have detected a base branch or be in the right mode
-    assert_eq!(app.mode, tenex::app::Mode::ConfirmPushForPR);
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::ConfirmPushForPR(tenex::state::ConfirmPushForPRMode)
+    );
 
     Ok(())
 }
@@ -448,19 +468,20 @@ fn test_execute_root_rename_with_real_worktree() -> Result<(), Box<dyn std::erro
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rename state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = "new-name".to_string();
-    app.git_op.original_branch = "old-name".to_string();
-    app.git_op.is_root_rename = true;
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "new-name".to_string();
+    app.data.git_op.original_branch = "old-name".to_string();
+    app.data.git_op.is_root_rename = true;
 
     // Execute rename
-    Actions::execute_rename(&mut app)?;
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
 
     // Verify the agent title was updated
-    let renamed_agent = app.storage.get(agent_id);
+    let renamed_agent = app.data.storage.get(agent_id);
     assert!(renamed_agent.is_some(), "Agent should exist after rename");
     if let Some(agent) = renamed_agent {
         assert_eq!(agent.title, "new-name");
@@ -489,7 +510,7 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
     );
     let root_id = root.id;
     let root_session = root.mux_session.clone();
-    app.storage.add(root);
+    app.data.storage.add(root);
 
     // Create a child agent
     let child = tenex::agent::Agent::new_child(
@@ -505,19 +526,20 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     let child_id = child.id;
-    app.storage.add(child);
+    app.data.storage.add(child);
 
     // Set up rename state for child (not root)
-    app.git_op.agent_id = Some(child_id);
-    app.git_op.branch_name = "new-child-name".to_string();
-    app.git_op.original_branch = "old-child-name".to_string();
-    app.git_op.is_root_rename = false;
+    app.data.git_op.agent_id = Some(child_id);
+    app.data.git_op.branch_name = "new-child-name".to_string();
+    app.data.git_op.original_branch = "old-child-name".to_string();
+    app.data.git_op.is_root_rename = false;
 
     // Execute rename
-    Actions::execute_rename(&mut app)?;
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
 
     // Verify the agent title was updated
-    let renamed_agent = app.storage.get(child_id);
+    let renamed_agent = app.data.storage.get(child_id);
     assert!(
         renamed_agent.is_some(),
         "Child agent should exist after rename"
@@ -528,7 +550,8 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify status message
     assert!(
-        app.ui
+        app.data
+            .ui
             .status_message
             .as_ref()
             .is_some_and(|s| s.contains("Renamed")),
@@ -584,19 +607,20 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rebase state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
-    app.git_op.target_branch = "master".to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.target_branch = "master".to_string();
 
     // Count agents before
-    let agents_before = app.storage.iter().count();
+    let agents_before = app.data.storage.iter().count();
 
     // Execute rebase - in a real environment, this spawns a conflict terminal
     // In test environment (no active session), it may error when trying to create a window
-    let result = Actions::execute_rebase(&mut app);
+    let result = Actions::execute_rebase(&mut app.data);
+    let result_is_err = result.is_err();
 
     // The rebase should handle the situation gracefully.
     // Multiple outcomes are valid depending on git state and session availability:
@@ -605,13 +629,19 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
     // 3. No conflict -> success modal shown
     // 4. Error -> error message set
     // The key is that the function handles it without panicking.
-    let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
-    let has_error = result.is_err() || app.ui.last_error.is_some();
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    if let Ok(next) = result {
+        app.apply_mode(next);
+    }
+
+    let conflict_terminal_spawned = app.data.storage.iter().count() > agents_before;
+    let is_success = matches!(app.mode, tenex::AppMode::SuccessModal(_));
+    let is_error_modal = matches!(app.mode, tenex::AppMode::ErrorModal(_));
+    let has_error = result_is_err || app.data.ui.last_error.is_some() || is_error_modal;
 
     assert!(
         conflict_terminal_spawned || has_error || is_success,
-        "Rebase should detect conflict (either spawn terminal or return an error)"
+        "Rebase should detect conflict or error. conflict_spawned={conflict_terminal_spawned}, has_error={has_error}, is_success={is_success}, mode={:?}",
+        app.mode
     );
 
     Ok(())
@@ -678,19 +708,19 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up merge state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
-    app.git_op.target_branch = "master".to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.target_branch = "master".to_string();
 
     // Count agents before
-    let agents_before = app.storage.iter().count();
+    let agents_before = app.data.storage.iter().count();
 
     // Execute merge - in real mux environment, this spawns a conflict terminal
     // In test environment (no mux), it may error when trying to create window
-    let result = Actions::execute_merge(&mut app);
+    let result = Actions::execute_merge(&mut app.data);
 
     // DirGuard will restore directory on drop
 
@@ -701,25 +731,27 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
     // 3. Error -> error message set
     // 4. No conflict -> success modal shown
     // The key is that the function handles it without panicking.
-    let conflict_terminal_spawned = app.storage.iter().count() > agents_before;
-    let has_error = result.is_err() || app.ui.last_error.is_some();
-    let is_success = matches!(app.mode, tenex::app::Mode::SuccessModal(_));
+    let conflict_terminal_spawned = app.data.storage.iter().count() > agents_before;
+    let has_error = result.is_err() || app.data.ui.last_error.is_some();
+    assert!(
+        result.is_ok(),
+        "Merge should complete without error: {result:?}"
+    );
+    if let Ok(next) = result {
+        app.apply_mode(next);
+    }
+    let is_success = matches!(app.mode, tenex::AppMode::SuccessModal(_));
 
     // The merge function should complete without panicking.
     // In different environments, the outcome varies:
     // - Conflict detected -> terminal spawned or error set
     // - No conflict (fast-forward possible) -> success or mode stays normal
     // The key assertion is that result.is_ok() - the function handled it gracefully.
-    assert!(
-        result.is_ok(),
-        "Merge should complete without error: {result:?}"
-    );
-
     // Additional check: if not in success mode and no error, mode should be Normal (no-op)
     let handled_correctly = conflict_terminal_spawned
         || has_error
         || is_success
-        || app.mode == tenex::app::Mode::Normal;
+        || app.mode == tenex::AppMode::normal();
     assert!(
         handled_correctly,
         "Merge should handle result. conflict_spawned={conflict_terminal_spawned}, has_error={has_error}, is_success={is_success}, mode={:?}",
@@ -753,20 +785,21 @@ fn test_execute_push_and_open_pr_no_remote() -> Result<(), Box<dyn std::error::E
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up push state
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = branch_name.to_string();
-    app.git_op.base_branch = "master".to_string();
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.base_branch = "master".to_string();
 
     // Execute push and open PR - will fail because there's no remote
-    let result = Actions::execute_push_and_open_pr(&mut app);
+    let result = Actions::execute_push_and_open_pr(&mut app.data);
     assert!(result.is_ok(), "Should handle no remote gracefully");
+    app.apply_mode(result?);
 
     // Should have set an error message about push failure
     assert!(
-        app.ui.last_error.is_some(),
+        app.data.ui.last_error.is_some(),
         "Should have error about push failure"
     );
 
@@ -790,24 +823,26 @@ fn test_rename_unchanged_name() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rename state with same name
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = "same-name".to_string();
-    app.git_op.original_branch = "same-name".to_string();
-    app.git_op.is_root_rename = true;
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "same-name".to_string();
+    app.data.git_op.original_branch = "same-name".to_string();
+    app.data.git_op.is_root_rename = true;
 
     // Start in rename mode
-    app.mode = tenex::app::Mode::RenameBranch;
+    app.mode = tenex::AppMode::RenameBranch(tenex::state::RenameBranchMode);
 
     // Execute rename
-    Actions::execute_rename(&mut app)?;
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
 
     // Should exit mode and set "unchanged" status
-    assert_eq!(app.mode, tenex::app::Mode::Normal);
+    assert_eq!(app.mode, tenex::AppMode::normal());
     assert!(
-        app.ui
+        app.data
+            .ui
             .status_message
             .as_ref()
             .is_some_and(|s| s.contains("unchanged")),
@@ -834,18 +869,22 @@ fn test_execute_rebase_no_target_branch() -> Result<(), Box<dyn std::error::Erro
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up rebase state without target branch
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = "tenex-feature".to_string();
-    app.git_op.target_branch = String::new(); // Empty target
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "tenex-feature".to_string();
+    app.data.git_op.target_branch = String::new(); // Empty target
 
     // Execute rebase - should fail gracefully
-    let result = Actions::execute_rebase(&mut app);
-
-    // Should either error or handle gracefully
-    assert!(result.is_ok() || result.is_err());
+    let result = Actions::execute_rebase(&mut app.data);
+    assert!(
+        result.is_ok(),
+        "Should handle missing target branch gracefully"
+    );
+    app.apply_mode(result?);
+    assert!(matches!(app.mode, tenex::AppMode::ErrorModal(_)));
+    assert!(app.data.ui.last_error.is_some());
 
     Ok(())
 }
@@ -871,20 +910,24 @@ fn test_execute_merge_no_target_branch() -> Result<(), Box<dyn std::error::Error
         None,
     );
     let agent_id = agent.id;
-    app.storage.add(agent);
+    app.data.storage.add(agent);
 
     // Set up merge state without target branch
-    app.git_op.agent_id = Some(agent_id);
-    app.git_op.branch_name = "tenex-feature".to_string();
-    app.git_op.target_branch = String::new(); // Empty target
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "tenex-feature".to_string();
+    app.data.git_op.target_branch = String::new(); // Empty target
 
     // Execute merge - should fail gracefully
-    let result = Actions::execute_merge(&mut app);
+    let result = Actions::execute_merge(&mut app.data);
 
     // DirGuard will restore directory on drop
-
-    // Should either error or handle gracefully
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Should handle missing target branch gracefully"
+    );
+    app.apply_mode(result?);
+    assert!(matches!(app.mode, tenex::AppMode::ErrorModal(_)));
+    assert!(app.data.ui.last_error.is_some());
 
     Ok(())
 }
@@ -914,7 +957,7 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
     );
     let root_id = root.id;
     let root_session = root.mux_session.clone();
-    app.storage.add(root);
+    app.data.storage.add(root);
 
     // Add child agents
     for i in 0..3 {
@@ -930,20 +973,21 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
                 window_index: i + 2,
             },
         );
-        app.storage.add(child);
+        app.data.storage.add(child);
     }
 
     // Set up rename state
-    app.git_op.agent_id = Some(root_id);
-    app.git_op.branch_name = "parent-new".to_string();
-    app.git_op.original_branch = "parent-old".to_string();
-    app.git_op.is_root_rename = true;
+    app.data.git_op.agent_id = Some(root_id);
+    app.data.git_op.branch_name = "parent-new".to_string();
+    app.data.git_op.original_branch = "parent-old".to_string();
+    app.data.git_op.is_root_rename = true;
 
     // Execute rename
-    Actions::execute_rename(&mut app)?;
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
 
     // Verify the root agent title was updated
-    let renamed_root = app.storage.get(root_id);
+    let renamed_root = app.data.storage.get(root_id);
     assert!(
         renamed_root.is_some(),
         "Root agent should exist after rename"
@@ -953,7 +997,7 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
     }
 
     // Verify descendants' worktree paths were updated
-    let descendants = app.storage.descendants(root_id);
+    let descendants = app.data.storage.descendants(root_id);
     assert_eq!(descendants.len(), 3);
     for desc in descendants {
         // All descendants should have the new worktree path

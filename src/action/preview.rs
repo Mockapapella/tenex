@@ -1,31 +1,55 @@
-//! Preview focused mode key handling
-//!
-//! Handles key events when the preview pane is focused, forwarding
-//! keystrokes to the PTY backend.
+//! Preview-focused mode action types (new architecture).
 
-use crate::app::App;
+use crate::action::ValidIn;
+use crate::app::AppData;
+use crate::state::{AppMode, PreviewFocusedMode};
+use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-/// Handle key events in `PreviewFocused` mode
-pub fn handle_preview_focused_mode(
-    app: &mut App,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    batched_keys: &mut Vec<String>,
-) {
-    // Ctrl+q exits preview focus mode (same key quits app when not focused)
-    if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
-        app.exit_mode();
-        return;
-    }
+/// Preview-focused action: exit preview focus mode (detach from mux input).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnfocusPreviewAction;
 
-    // Collect keys for batched sending (done after event drain loop)
-    if let Some(sequence) = keycode_to_input_sequence(code, modifiers) {
-        batched_keys.push(sequence);
+/// Preview-focused action: translate and queue a keystroke for batched mux forwarding.
+#[derive(Debug)]
+pub struct ForwardKeystrokeAction<'a> {
+    /// Raw key code to translate into an input sequence.
+    pub code: KeyCode,
+    /// Modifier keys applied to the key event.
+    pub modifiers: KeyModifiers,
+    /// Buffer of input sequences to send to the mux after draining events.
+    pub batched_keys: &'a mut Vec<String>,
+}
+
+impl ValidIn<PreviewFocusedMode> for UnfocusPreviewAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: PreviewFocusedMode,
+        _app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
     }
 }
 
-/// Convert a `KeyCode` and modifiers to input escape sequences.
+impl ValidIn<PreviewFocusedMode> for ForwardKeystrokeAction<'_> {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: PreviewFocusedMode,
+        _app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        if let Some(sequence) = keycode_to_input_sequence(self.code, self.modifiers) {
+            self.batched_keys.push(sequence);
+        }
+        Ok(PreviewFocusedMode.into())
+    }
+}
+
+/// Convert a `KeyCode` and `KeyModifiers` to an input escape sequence string.
+#[must_use]
 pub fn keycode_to_input_sequence(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
     let is_ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let is_alt = modifiers.contains(KeyModifiers::ALT);
@@ -133,31 +157,7 @@ fn apply_modifier(base: &[u8], param: u8) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Storage;
-    use crate::app::{App, Mode, Settings};
-    use crate::config::Config;
-
-    #[test]
-    fn test_handle_preview_focused_mode_ctrl_q_exits() {
-        let mut app = App::new(
-            Config::default(),
-            Storage::new(),
-            Settings::default(),
-            false,
-        );
-        app.mode = Mode::PreviewFocused;
-        let mut batched_keys = Vec::new();
-
-        handle_preview_focused_mode(
-            &mut app,
-            KeyCode::Char('q'),
-            KeyModifiers::CONTROL,
-            &mut batched_keys,
-        );
-
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(batched_keys.is_empty());
-    }
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn test_keycode_to_input_sequence_char_variants() {

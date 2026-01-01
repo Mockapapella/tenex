@@ -1,6 +1,27 @@
 //! Spawn state: child agent spawning configuration
 
-use crate::app::state::WorktreeConflictInfo;
+/// Information about an existing worktree that conflicts with a new agent.
+#[derive(Debug, Clone)]
+pub struct WorktreeConflictInfo {
+    /// The title the user entered for the new agent.
+    pub title: String,
+    /// Optional prompt for the new agent.
+    pub prompt: Option<String>,
+    /// The generated branch name.
+    pub branch: String,
+    /// The path to the existing worktree.
+    pub worktree_path: std::path::PathBuf,
+    /// The branch the existing worktree is based on (if available).
+    pub existing_branch: Option<String>,
+    /// The commit hash of the existing worktree's HEAD (short form).
+    pub existing_commit: Option<String>,
+    /// The current HEAD branch that would be used for a new worktree.
+    pub current_branch: String,
+    /// The current HEAD commit hash (short form).
+    pub current_commit: String,
+    /// If this is a swarm creation, the number of children to spawn.
+    pub swarm_child_count: Option<usize>,
+}
 
 /// State for spawning child agents
 #[derive(Debug, Default)]
@@ -91,55 +112,56 @@ impl SpawnState {
     }
 }
 
-use super::{App, Mode};
+use super::App;
+use crate::state::{ChildCountMode, ChildPromptMode, TerminalPromptMode};
 
 impl App {
     /// Increment child count (for `ChildCount` mode)
     pub const fn increment_child_count(&mut self) {
-        self.spawn.increment_child_count();
+        self.data.spawn.increment_child_count();
     }
 
     /// Decrement child count (minimum 1)
     pub const fn decrement_child_count(&mut self) {
-        self.spawn.decrement_child_count();
+        self.data.spawn.decrement_child_count();
     }
 
     /// Start spawning children under a specific agent
     pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
-        self.spawn.start_spawning_under(parent_id);
-        self.enter_mode(Mode::ChildCount);
+        self.data.spawn.start_spawning_under(parent_id);
+        self.apply_mode(ChildCountMode.into());
     }
 
     /// Start spawning a new root agent with children (no plan prompt)
     pub fn start_spawning_root(&mut self) {
-        self.spawn.start_spawning_root();
-        self.enter_mode(Mode::ChildCount);
+        self.data.spawn.start_spawning_root();
+        self.apply_mode(ChildCountMode.into());
     }
 
     /// Start spawning a planning swarm under the selected agent
     pub fn start_planning_swarm(&mut self) {
-        let Some(agent) = self.selected_agent() else {
+        let Some(agent) = self.data.selected_agent() else {
             self.set_status("Select an agent first (press 'a')");
             return;
         };
 
-        self.spawn.start_planning_swarm_under(agent.id);
-        self.enter_mode(Mode::ChildCount);
+        self.data.spawn.start_planning_swarm_under(agent.id);
+        self.apply_mode(ChildCountMode.into());
     }
 
     /// Proceed from `ChildCount` to `ChildPrompt` mode
     pub fn proceed_to_child_prompt(&mut self) {
-        self.enter_mode(Mode::ChildPrompt);
+        self.apply_mode(ChildPromptMode.into());
     }
 
     /// Get the next terminal name and increment the counter
     pub fn next_terminal_name(&mut self) -> String {
-        self.spawn.next_terminal_name()
+        self.data.spawn.next_terminal_name()
     }
 
     /// Start prompting for a terminal startup command
     pub fn start_terminal_prompt(&mut self) {
-        self.enter_mode(Mode::TerminalPrompt);
+        self.apply_mode(TerminalPromptMode.into());
     }
 }
 

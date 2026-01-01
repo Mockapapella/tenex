@@ -5,37 +5,34 @@ repos:
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
         language: system
-        types: [rust]
         pass_filenames: false
 
       - id: cargo-clippy
         name: cargo clippy (all targets, all features, deny warnings)
-        entry: cargo clippy --all-targets --all-features --workspace -- -D warnings
+        entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: cargo-check
-        name: cargo check (all targets, all features)
-        entry: cargo check --all-targets --all-features --workspace
-        language: system
-        types: [rust]
         pass_filenames: false
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --all-targets --all-features --workspace -- --test-threads=1
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
+              trap 'rm -rf "$state_dir"' EXIT
+              TENEX_STATE_PATH="$state_dir/state.json" cargo test --all-targets --all-features -- --test-threads=1
         language: system
-        types: [rust]
-        env:
-          TENEX_STATE_PATH: /tmp/tenex-pre-commit-state.json
         pass_filenames: false
 
       - id: cargo-coverage
         name: cargo llvm-cov (90% lines + functions)
-        entry: cargo cov
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
+              trap 'rm -rf "$state_dir"' EXIT
+              TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
         language: system
-        types: [rust]
-        env:
-          TENEX_STATE_PATH: /tmp/tenex-pre-commit-state.json
         pass_filenames: false

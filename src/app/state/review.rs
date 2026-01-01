@@ -103,66 +103,67 @@ impl ReviewState {
     }
 }
 
-use super::{App, Mode};
+use super::App;
+use crate::state::{BranchSelectorMode, ReviewChildCountMode, ReviewInfoMode};
 
 impl App {
     /// Start the review flow - show info if no agent selected, otherwise proceed to count
     pub fn start_review(&mut self, branches: Vec<BranchInfo>) {
-        self.review.start(branches);
-        self.spawn.child_count = 3; // Reset to default
-        self.enter_mode(Mode::ReviewChildCount);
+        self.data.review.start(branches);
+        self.data.spawn.child_count = 3; // Reset to default
+        self.apply_mode(ReviewChildCountMode.into());
     }
 
     /// Show the review info modal (when no agent is selected)
     pub fn show_review_info(&mut self) {
-        self.enter_mode(Mode::ReviewInfo);
+        self.apply_mode(ReviewInfoMode.into());
     }
 
     /// Proceed from review count to branch selector
     pub fn proceed_to_branch_selector(&mut self) {
-        self.enter_mode(Mode::BranchSelector);
+        self.apply_mode(BranchSelectorMode.into());
     }
 
     /// Get filtered branches based on current filter
     #[must_use]
     pub fn filtered_review_branches(&self) -> Vec<&BranchInfo> {
-        self.review.filtered_branches()
+        self.data.review.filtered_branches()
     }
 
     /// Select next branch in filtered list
     pub fn select_next_branch(&mut self) {
-        self.review.select_next();
+        self.data.review.select_next();
     }
 
     /// Select previous branch in filtered list
     pub fn select_prev_branch(&mut self) {
-        self.review.select_prev();
+        self.data.review.select_prev();
     }
 
     /// Get the currently selected branch
     #[must_use]
     pub fn selected_branch(&self) -> Option<&BranchInfo> {
-        self.review.selected_branch()
+        self.data.review.selected_branch()
     }
 
     /// Handle character input in branch filter
     pub fn handle_branch_filter_char(&mut self, c: char) {
-        self.review.handle_filter_char(c);
+        self.data.review.handle_filter_char(c);
     }
 
     /// Handle backspace in branch filter
     pub fn handle_branch_filter_backspace(&mut self) {
-        self.review.handle_filter_backspace();
+        self.data.review.handle_filter_backspace();
     }
 
     /// Confirm branch selection and set `review_base_branch`
     pub fn confirm_branch_selection(&mut self) -> bool {
-        self.review.confirm_selection()
+        self.data.review.confirm_selection()
     }
 
     /// Clear all review-related state
     pub fn clear_review_state(&mut self) {
-        self.review.clear();
+        self.data.review.clear();
     }
 }
 

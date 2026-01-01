@@ -3,19 +3,19 @@
 //! Handles key events in the default application modes where
 //! keybindings are mapped to actions via the config system.
 
-use crate::app::{Actions, App};
+use crate::app::App;
+use crate::state::AppMode;
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 /// Handle key events in Normal or Scrolling mode
-pub fn handle_normal_mode(
-    app: &mut App,
-    action_handler: Actions,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-) -> Result<()> {
+pub fn handle_normal_mode(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
     if let Some(action) = crate::config::get_action(code, modifiers) {
-        action_handler.handle_action(app, action)?;
+        match app.mode {
+            AppMode::Normal(_) => crate::action::dispatch_normal_mode(app, action)?,
+            AppMode::Scrolling(_) => crate::action::dispatch_scrolling_mode(app, action)?,
+            _ => {}
+        }
     }
     Ok(())
 }

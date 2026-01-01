@@ -1,12 +1,12 @@
 //! Preview operations: update preview and diff content
 
-use crate::app::Mode;
 use crate::git::{self, DiffGenerator};
 use crate::mux::SessionManager;
+use crate::state::AppMode;
 use anyhow::Result;
 
 use super::Actions;
-use crate::app::state::App;
+use crate::app::App;
 
 impl Actions {
     /// Update preview content for the selected agent
@@ -20,7 +20,7 @@ impl Actions {
             let target = if let Some(window_idx) = agent.window_index {
                 // Child agent: target specific window within root's session
                 let agent_id = agent.id;
-                let root = app.storage.root_ancestor(agent_id);
+                let root = app.data.storage.root_ancestor(agent_id);
                 let root_session =
                     root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
                 SessionManager::window_target(&root_session, window_idx)
@@ -30,7 +30,7 @@ impl Actions {
             };
 
             if self.session_manager.exists(&agent.mux_session) {
-                let content = if app.mode == Mode::PreviewFocused {
+                let content = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
                     self.output_capture
                         .capture_pane(&target)
                         .unwrap_or_default()
@@ -39,24 +39,25 @@ impl Actions {
                         .capture_pane_with_history(&target, 1000)
                         .unwrap_or_default()
                 };
-                app.ui.preview_content = content;
-                app.ui.preview_cursor_position = self.output_capture.cursor_position(&target).ok();
-                app.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
+                app.data.ui.preview_content = content;
+                app.data.ui.preview_cursor_position =
+                    self.output_capture.cursor_position(&target).ok();
+                app.data.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
             } else {
-                app.ui.preview_content = String::from("(Session not running)");
-                app.ui.preview_cursor_position = None;
-                app.ui.preview_pane_size = None;
+                app.data.ui.preview_content = String::from("(Session not running)");
+                app.data.ui.preview_cursor_position = None;
+                app.data.ui.preview_pane_size = None;
             }
         } else {
-            app.ui.preview_content = String::from("(No agent selected)");
-            app.ui.preview_cursor_position = None;
-            app.ui.preview_pane_size = None;
+            app.data.ui.preview_content = String::from("(No agent selected)");
+            app.data.ui.preview_cursor_position = None;
+            app.data.ui.preview_pane_size = None;
         }
 
         // Auto-scroll to bottom only if follow mode is enabled
         // (disabled when user manually scrolls up, re-enabled when they scroll to bottom)
-        if app.ui.preview_follow {
-            app.ui.preview_scroll = usize::MAX;
+        if app.data.ui.preview_follow {
+            app.data.ui.preview_scroll = usize::MAX;
         }
 
         Ok(())
@@ -72,7 +73,15 @@ impl Actions {
             if agent.worktree_path.exists() {
                 if let Ok(repo) = git::open_repository(&agent.worktree_path) {
                     let diff_gen = DiffGenerator::new(&repo);
-                    let files = diff_gen.uncommitted().unwrap_or_default();
+                    let files = match diff_gen.uncommitted() {
+                        Ok(files) => files,
+                        Err(err) => {
+                            app.data
+                                .ui
+                                .set_diff_content(format!("(Failed to generate diff: {err:#})"));
+                            return Ok(());
+                        }
+                    };
 
                     let mut content = String::new();
                     for file in files {
@@ -84,15 +93,15 @@ impl Actions {
                         content = String::from("(No changes)");
                     }
 
-                    app.ui.set_diff_content(content);
+                    app.data.ui.set_diff_content(content);
                 } else {
-                    app.ui.set_diff_content("(Not a git repository)");
+                    app.data.ui.set_diff_content("(Not a git repository)");
                 }
             } else {
-                app.ui.set_diff_content("(Worktree not found)");
+                app.data.ui.set_diff_content("(Worktree not found)");
             }
         } else {
-            app.ui.set_diff_content("(No agent selected)");
+            app.data.ui.set_diff_content("(No agent selected)");
         }
         Ok(())
     }
@@ -121,7 +130,7 @@ mod tests {
         let mut app = create_test_app();
 
         handler.update_preview(&mut app)?;
-        assert!(app.ui.preview_content.contains("No agent selected"));
+        assert!(app.data.ui.preview_content.contains("No agent selected"));
         Ok(())
     }
 
@@ -131,7 +140,7 @@ mod tests {
         let mut app = create_test_app();
 
         handler.update_diff(&mut app)?;
-        assert!(app.ui.diff_content.contains("No agent selected"));
+        assert!(app.data.ui.diff_content.contains("No agent selected"));
         Ok(())
     }
 
@@ -141,7 +150,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Add an agent
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "nonexistent-session".to_string(),
@@ -150,7 +159,7 @@ mod tests {
         ));
 
         handler.update_preview(&mut app)?;
-        assert!(app.ui.preview_content.contains("Session not running"));
+        assert!(app.data.ui.preview_content.contains("Session not running"));
         Ok(())
     }
 
@@ -160,7 +169,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Add an agent with non-existent worktree
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -169,7 +178,7 @@ mod tests {
         ));
 
         handler.update_diff(&mut app)?;
-        assert!(app.ui.diff_content.contains("Worktree not found"));
+        assert!(app.data.ui.diff_content.contains("Worktree not found"));
         Ok(())
     }
 
@@ -184,7 +193,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
 
         // Add an agent with valid worktree path (but not git repo)
-        app.storage.add(Agent::new(
+        app.data.storage.add(Agent::new(
             "test".to_string(),
             "claude".to_string(),
             "muster/test".to_string(),
@@ -193,7 +202,7 @@ mod tests {
         ));
 
         handler.update_diff(&mut app)?;
-        assert!(app.ui.diff_content.contains("Not a git repository"));
+        assert!(app.data.ui.diff_content.contains("Not a git repository"));
         Ok(())
     }
 }

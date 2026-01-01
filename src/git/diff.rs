@@ -32,6 +32,8 @@ impl<'a> Generator<'a> {
     pub fn unstaged(&self) -> Result<Vec<FileChange>> {
         let mut opts = DiffOptions::new();
         opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.show_untracked_content(true);
 
         let diff = self
             .repo
@@ -69,6 +71,8 @@ impl<'a> Generator<'a> {
 
         let mut opts = DiffOptions::new();
         opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.show_untracked_content(true);
 
         let diff = self
             .repo
@@ -415,6 +419,42 @@ mod tests {
 
         let uncommitted = generator.uncommitted()?;
         assert!(!uncommitted.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_untracked_file_included_in_uncommitted() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let untracked_path = temp_dir.path().join("untracked.txt");
+        fs::write(&untracked_path, "hello\n")?;
+
+        let files = generator.uncommitted()?;
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Untracked);
+        assert_eq!(files[0].path.as_path(), Path::new("untracked.txt"));
+        assert!(files[0].additions > 0);
+        assert!(generator.has_changes()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_untracked_file_in_directory_included_in_uncommitted()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let dir = temp_dir.path().join("newdir");
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join("nested.txt"), "nested\n")?;
+
+        let files = generator.uncommitted()?;
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path.as_path() == Path::new("newdir/nested.txt"))
+        );
         Ok(())
     }
 

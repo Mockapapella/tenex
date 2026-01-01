@@ -1,18 +1,26 @@
 //! Rebase flow (branch selector + rebase execution).
 
-use crate::app::state::App;
 use crate::git;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
+
+use crate::app::AppData;
+use crate::state::{AppMode, ErrorModalMode, RebaseBranchSelectorMode, SuccessModalMode};
 
 use super::super::Actions;
 
 impl Actions {
     /// Start the rebase flow - show branch selector (Ctrl+r)
-    pub(crate) fn rebase_branch(app: &mut App) -> Result<()> {
-        let Some(agent) = app.selected_agent() else {
-            app.set_error("No agent selected. Select an agent first to rebase.");
-            return Ok(());
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the git repository cannot be opened or branches cannot be listed.
+    pub fn rebase_branch(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to rebase.".to_string(),
+            }
+            .into());
         };
 
         let agent_id = agent.id;
@@ -26,8 +34,9 @@ impl Actions {
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
-        app.start_rebase(agent_id, current_branch, branches);
-        Ok(())
+        app_data.git_op.start_rebase(agent_id, current_branch);
+        app_data.review.start(branches);
+        Ok(RebaseBranchSelectorMode.into())
     }
 
     /// Execute the rebase operation
@@ -35,20 +44,28 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the rebase operation fails
-    pub fn execute_rebase(app: &mut App) -> Result<()> {
-        let agent_id = app
-            .git_op
-            .agent_id
-            .ok_or_else(|| anyhow::anyhow!("No agent ID for rebase"))?;
+    pub fn execute_rebase(app_data: &mut AppData) -> Result<AppMode> {
+        let Some(agent_id) = app_data.git_op.agent_id else {
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: "No agent ID for rebase".to_string(),
+            }
+            .into());
+        };
 
-        let agent = app
-            .storage
-            .get(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
+        let Some(agent) = app_data.storage.get(agent_id) else {
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: "Agent not found".to_string(),
+            }
+            .into());
+        };
 
         let worktree_path = agent.worktree_path.clone();
-        let current_branch = app.git_op.branch_name.clone();
-        let target_branch = app.git_op.target_branch.clone();
+        let current_branch = app_data.git_op.branch_name.clone();
+        let target_branch = app_data.git_op.target_branch.clone();
 
         debug!(
             current = %current_branch,
@@ -76,8 +93,7 @@ impl Actions {
                     "Rebase has conflicts - spawning terminal"
                 );
                 // Spawn terminal for conflict resolution
-                Self::spawn_conflict_terminal(app, "Rebase Conflict", "git status")?;
-                return Ok(());
+                return Self::spawn_conflict_terminal(app_data, "Rebase Conflict", "git status");
             }
 
             // Show error with both stdout and stderr for context
@@ -88,10 +104,12 @@ impl Actions {
             } else {
                 "Unknown error".to_string()
             };
-            app.set_error(format!("Rebase failed: {error_msg}"));
-            app.clear_git_op_state();
-            app.clear_review_state();
-            return Ok(());
+            app_data.git_op.clear();
+            app_data.review.clear();
+            return Ok(ErrorModalMode {
+                message: format!("Rebase failed: {error_msg}"),
+            }
+            .into());
         }
 
         info!(
@@ -99,10 +117,11 @@ impl Actions {
             target = %target_branch,
             "Rebase successful"
         );
-        app.show_success(format!("Rebased {current_branch} onto {target_branch}"));
-        app.clear_git_op_state();
-        app.clear_review_state();
-
-        Ok(())
+        app_data.git_op.clear();
+        app_data.review.clear();
+        Ok(SuccessModalMode {
+            message: format!("Rebased {current_branch} onto {target_branch}"),
+        }
+        .into())
     }
 }
