@@ -396,6 +396,19 @@ mod tests {
     }
 
     #[test]
+    fn test_current_branch_detached_head_errors() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let head = repo.head()?.peel_to_commit()?;
+        repo.set_head_detached(head.id())?;
+
+        let result = manager.current();
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
     fn test_list_branches() -> Result<(), Box<dyn std::error::Error>> {
         let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
@@ -418,6 +431,16 @@ mod tests {
         assert!(!manager.exists("nonexistent"));
         manager.create("new-branch")?;
         assert!(manager.exists("new-branch"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_commit_count_nonexistent_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let result = manager.commit_count("nonexistent");
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -595,6 +618,58 @@ mod tests {
             .ok_or("Expected remote branch")?;
         assert_eq!(remote_branch.remote.as_deref(), Some("origin"));
         assert!(remote_branch.full_name.starts_with("refs/remotes/origin/"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_for_selector_skips_remote_head_ref() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let remote_dir = TempDir::new()?;
+        Repository::init_bare(remote_dir.path())?;
+
+        let remote_path = remote_dir
+            .path()
+            .to_str()
+            .ok_or("Remote path is not valid UTF-8")?;
+        repo.remote("origin", remote_path)?;
+
+        let current = manager.current()?;
+        let push_ref = format!("refs/heads/{current}:refs/heads/{current}");
+        {
+            let mut remote = repo.find_remote("origin")?;
+            remote.push(&[push_ref.as_str()], None)?;
+        }
+
+        let fetch_ref = format!("refs/heads/{current}:refs/remotes/origin/{current}");
+        {
+            let mut remote = repo.find_remote("origin")?;
+            remote.fetch(&[fetch_ref.as_str()], None, None)?;
+        }
+
+        let head_target = format!("refs/remotes/origin/{current}");
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            &head_target,
+            true,
+            "Add origin/HEAD",
+        )?;
+
+        let branches = manager.list_for_selector()?;
+        assert!(
+            branches
+                .iter()
+                .all(|branch| !(branch.is_remote && branch.name == "HEAD"))
+        );
+
+        // Ensure the real remote branch is still present.
+        let remote_branch = branches
+            .iter()
+            .find(|branch| branch.is_remote && branch.name == current)
+            .ok_or("Expected remote branch")?;
+        assert_eq!(remote_branch.remote.as_deref(), Some("origin"));
 
         Ok(())
     }
