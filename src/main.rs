@@ -1,12 +1,13 @@
 //! Tenex - Terminal multiplexer for AI coding agents
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
 use tenex::AppMode;
 use tenex::agent::Storage;
 use tenex::app::Settings;
 use tenex::config::Config;
+use tenex::mux::SessionManager;
 use tenex::state::UpdatePromptMode;
 
 /// Terminal multiplexer for AI coding agents
@@ -31,18 +32,37 @@ enum Commands {
     Muxd,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetScope {
+    ThisInstance,
+    AllInstances,
+}
+
 fn main() -> Result<()> {
     init_logging();
 
     let cli = parse_cli()?;
-    let config = Config::default();
-    let (storage, storage_load_error) = load_storage_with_error();
-    let settings = Settings::load();
 
     match cli.command {
-        Some(Commands::Reset { force }) => cmd_reset(force),
+        Some(Commands::Reset { force }) => {
+            if let Err(err) = tenex::migration::migrate_default_state_dir() {
+                eprintln!("Warning: Failed to migrate Tenex state directory: {err}");
+            }
+            cmd_reset(force)
+        }
         Some(Commands::Muxd) => tenex::mux::run_mux_daemon(),
-        None => run_interactive(config, storage, settings, storage_load_error),
+        None => {
+            if let Err(err) = tenex::migration::migrate_default_state_dir() {
+                eprintln!("Warning: Failed to migrate Tenex state directory: {err}");
+            }
+
+            let config = Config::default();
+            let (mut storage, storage_load_error) = load_storage_with_error();
+            ensure_instance_initialized(&config, &mut storage)?;
+            let settings = Settings::load();
+
+            run_interactive(config, storage, settings, storage_load_error)
+        }
     }
 }
 
@@ -143,6 +163,27 @@ fn load_storage_with_error() -> (Storage, Option<String>) {
             (Storage::new(), Some(message))
         }
     }
+}
+
+fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result<()> {
+    std::fs::create_dir_all(&config.worktree_dir).with_context(|| {
+        format!(
+            "Failed to create worktrees directory {}",
+            config.worktree_dir.display()
+        )
+    })?;
+
+    let state_path = Config::state_path();
+    let state_existed = state_path.exists();
+    let previous_instance_id = storage.instance_id.clone();
+
+    let _ = storage.ensure_instance_id();
+
+    if !state_existed || storage.instance_id != previous_instance_id {
+        storage.save()?;
+    }
+
+    Ok(())
 }
 
 fn run_interactive(
@@ -261,67 +302,28 @@ fn restart_current_process() -> Result<()> {
 
 fn cmd_reset(force: bool) -> Result<()> {
     use std::collections::HashSet;
-    use std::io::{self, Write};
     use tenex::git::WorktreeManager;
-    use tenex::mux::SessionManager;
 
-    let storage = Storage::load().unwrap_or_default();
+    let mut storage = Storage::load().unwrap_or_default();
     let mux = SessionManager::new();
 
-    // Skip orphan detection when using isolated state (TENEX_STATE_PATH set).
-    // Otherwise we'd kill real tenex sessions that aren't in the isolated state.
-    let using_isolated_state = std::env::var("TENEX_STATE_PATH").is_ok();
+    let instance_prefix = storage.instance_session_prefix();
+    let scope = prompt_reset_scope(force)?;
 
     // Find orphaned Tenex mux sessions (not in storage)
     let storage_sessions: HashSet<_> = storage.iter().map(|a| a.mux_session.clone()).collect();
-    let orphaned_sessions: Vec<_> = if using_isolated_state {
-        Vec::new() // Don't scan for orphans when using isolated state
-    } else {
-        mux.list()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|s| s.name.starts_with("tenex-") && !storage_sessions.contains(&s.name))
-            .collect()
-    };
+    let orphaned_sessions = list_orphaned_sessions(mux, scope, &instance_prefix, &storage_sessions);
 
     if storage.is_empty() && orphaned_sessions.is_empty() {
         println!("No agents to reset.");
         return Ok(());
     }
 
-    // List what will be reset
-    if !storage.is_empty() {
-        println!("Agents to kill:\n");
-        for agent in storage.iter() {
-            println!(
-                "  - {} ({}) [{}]",
-                agent.title,
-                agent.short_id(),
-                agent.branch
-            );
-        }
-        println!();
-    }
+    print_reset_plan(&storage, &orphaned_sessions);
 
-    if !orphaned_sessions.is_empty() {
-        println!("Orphaned mux sessions to kill:\n");
-        for session in &orphaned_sessions {
-            println!("  - {}", session.name);
-        }
-        println!();
-    }
-
-    if !force {
-        print!("Continue? [y/N] ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Aborted.");
-            return Ok(());
-        }
+    if !confirm_reset(force)? {
+        println!("Aborted.");
+        return Ok(());
     }
 
     // Kill mux sessions and remove worktrees/branches
@@ -352,21 +354,103 @@ fn cmd_reset(force: bool) -> Result<()> {
 
     // Kill orphaned sessions
     for session in &orphaned_sessions {
-        if let Err(e) = mux.kill(&session.name) {
-            eprintln!(
-                "Warning: Failed to kill orphaned mux session {}: {e}",
-                session.name
-            );
+        if let Err(e) = mux.kill(session) {
+            eprintln!("Warning: Failed to kill orphaned mux session {session}: {e}");
         }
     }
 
     // Clear storage
-    let mut storage = storage;
     storage.clear();
     storage.save()?;
 
     println!("Reset complete.");
     Ok(())
+}
+
+fn prompt_reset_scope(force: bool) -> Result<ResetScope> {
+    use std::io::{self, Write};
+
+    if force {
+        return Ok(ResetScope::ThisInstance);
+    }
+
+    println!("Reset scope:");
+    println!(
+        "  1) This Tenex instance only ({})",
+        Config::state_path().display()
+    );
+    println!("  2) All Tenex sessions on this machine");
+    print!("Select [1/2] (default 1): ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    let trimmed = input.trim();
+    if trimmed == "2" || trimmed.eq_ignore_ascii_case("all") {
+        return Ok(ResetScope::AllInstances);
+    }
+
+    Ok(ResetScope::ThisInstance)
+}
+
+fn list_orphaned_sessions(
+    mux: SessionManager,
+    scope: ResetScope,
+    instance_prefix: &str,
+    storage_sessions: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let prefix = match scope {
+        ResetScope::ThisInstance => instance_prefix,
+        ResetScope::AllInstances => "tenex-",
+    };
+
+    mux.list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.name.starts_with(prefix))
+        .filter(|s| !storage_sessions.contains(&s.name))
+        .map(|s| s.name)
+        .collect()
+}
+
+fn print_reset_plan(storage: &Storage, orphaned_sessions: &[String]) {
+    if !storage.is_empty() {
+        println!("Agents to kill:\n");
+        for agent in storage.iter() {
+            println!(
+                "  - {} ({}) [{}]",
+                agent.title,
+                agent.short_id(),
+                agent.branch
+            );
+        }
+        println!();
+    }
+
+    if !orphaned_sessions.is_empty() {
+        println!("Orphaned mux sessions to kill:\n");
+        for session in orphaned_sessions {
+            println!("  - {session}");
+        }
+        println!();
+    }
+}
+
+fn confirm_reset(force: bool) -> Result<bool> {
+    use std::io::{self, Write};
+
+    if force {
+        return Ok(true);
+    }
+
+    print!("Continue? [y/N] ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
 
 #[cfg(test)]

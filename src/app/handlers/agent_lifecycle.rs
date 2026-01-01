@@ -87,13 +87,15 @@ impl Actions {
         worktree_mgr.create_with_new_branch(worktree_path, branch)?;
 
         let program = app_data.agent_spawn_command();
-        let agent = Agent::new(
+        let mut agent = Agent::new(
             title.to_string(),
             program.clone(),
             branch.to_string(),
             worktree_path.to_path_buf(),
             prompt.map(String::from),
         );
+        let session_prefix = app_data.storage.instance_session_prefix();
+        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
         let command = crate::command::build_command_argv(&program, prompt)?;
         self.session_manager
@@ -133,13 +135,15 @@ impl Actions {
         // Check if this is a swarm creation (has child count)
         if let Some(child_count) = conflict.swarm_child_count {
             // Create root agent for swarm
-            let root_agent = Agent::new(
+            let mut root_agent = Agent::new(
                 conflict.title.clone(),
                 program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
                 None, // Root doesn't get the prompt
             );
+            let session_prefix = app_data.storage.instance_session_prefix();
+            root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
 
             let root_session = root_agent.mux_session.clone();
             let root_id = root_agent.id;
@@ -172,13 +176,15 @@ impl Actions {
             app_data.set_status(format!("Reconnected swarm: {}", conflict.title));
         } else {
             // Single agent reconnect
-            let agent = Agent::new(
+            let mut agent = Agent::new(
                 conflict.title.clone(),
                 program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
                 conflict.prompt.clone(),
             );
+            let session_prefix = app_data.storage.instance_session_prefix();
+            agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
             let command = crate::command::build_command_argv(&program, conflict.prompt.as_deref())?;
 

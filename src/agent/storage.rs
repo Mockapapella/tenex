@@ -192,6 +192,10 @@ pub struct Storage {
     #[serde(default = "default_version")]
     pub version: u32,
 
+    /// Unique identifier for this Tenex instance (used for mux session namespacing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+
     /// Custom state file path (if set, overrides default location)
     /// When None, uses `Config::state_path()`
     #[serde(skip)]
@@ -215,6 +219,7 @@ impl Storage {
         Self {
             agents: Vec::new(),
             version: default_version(),
+            instance_id: None,
             state_path: None,
         }
     }
@@ -226,8 +231,61 @@ impl Storage {
         Self {
             agents: Vec::new(),
             version: 1, // Can't call default_version() in const context
+            instance_id: None,
             state_path: Some(path),
         }
+    }
+
+    fn generate_instance_id() -> String {
+        Uuid::new_v4().to_string()[..8].to_string()
+    }
+
+    fn normalize_instance_id(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.len() != 8 {
+            return None;
+        }
+
+        let mut normalized = String::with_capacity(8);
+        for ch in trimmed.chars() {
+            let lower = ch.to_ascii_lowercase();
+            if !lower.is_ascii_hexdigit() {
+                return None;
+            }
+            normalized.push(lower);
+        }
+
+        Some(normalized)
+    }
+
+    /// Get (or generate) this instance's ID.
+    ///
+    /// If the ID is missing or invalid, a new one is generated and stored in memory.
+    /// Persisting it is the caller's responsibility (by saving storage).
+    #[must_use]
+    pub fn ensure_instance_id(&mut self) -> &str {
+        match self
+            .instance_id
+            .as_deref()
+            .and_then(Self::normalize_instance_id)
+        {
+            Some(normalized) => {
+                if self.instance_id.as_deref() != Some(normalized.as_str()) {
+                    self.instance_id = Some(normalized);
+                }
+            }
+            None => {
+                self.instance_id = Some(Self::generate_instance_id());
+            }
+        }
+
+        self.instance_id.as_deref().unwrap_or("00000000")
+    }
+
+    /// Prefix for mux sessions belonging to this instance.
+    #[must_use]
+    pub fn instance_session_prefix(&mut self) -> String {
+        format!("tenex-{}-", self.ensure_instance_id())
     }
 
     /// Load state from the default location
