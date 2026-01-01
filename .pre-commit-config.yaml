@@ -9,24 +9,30 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy (all targets, all features, deny warnings)
-        entry: cargo clippy --all-targets --all-features --workspace -- -D warnings
-        language: system
-        pass_filenames: false
-
-      - id: cargo-check
-        name: cargo check (all targets, all features)
-        entry: cargo check --all-targets --all-features --workspace
+        entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
 
       - id: cargo-test
         name: cargo test
-        entry: python3 scripts/cargo_with_isolated_state.py test --all-targets --all-features --workspace -- --test-threads=1
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
+              trap 'rm -rf "$state_dir"' EXIT
+              TENEX_STATE_PATH="$state_dir/state.json" cargo test --all-targets --all-features -- --test-threads=1
         language: system
         pass_filenames: false
 
       - id: cargo-coverage
         name: cargo llvm-cov (90% lines + functions)
-        entry: python3 scripts/cargo_with_isolated_state.py cov
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
+              trap 'rm -rf "$state_dir"' EXIT
+              TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
         language: system
         pass_filenames: false
