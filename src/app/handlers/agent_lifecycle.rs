@@ -255,6 +255,7 @@ impl Actions {
     /// Kill the selected agent (and all its descendants)
     pub(crate) fn kill_agent(self, app_data: &mut AppData) -> Result<()> {
         if let Some(agent) = app_data.selected_agent() {
+            let mux_running = crate::mux::is_server_running();
             let agent_id = agent.id;
             let is_root = agent.is_root();
             let session = agent.mux_session.clone();
@@ -271,107 +272,9 @@ impl Actions {
             );
 
             if is_root {
-                // Root agent: kill entire session and worktree
-                let pane_pids = self
-                    .session_manager
-                    .list_pane_pids(&session)
-                    .unwrap_or_default();
-
-                // First kill all descendant windows in descending order
-                // (in case any are in other sessions, and to handle renumbering)
-                let descendants = app_data.storage.descendants(agent_id);
-                let mut indices: Vec<u32> = descendants
-                    .iter()
-                    .filter_map(|desc| desc.window_index)
-                    .collect();
-                indices.sort_unstable_by(|a, b| b.cmp(a));
-                for idx in indices {
-                    let _ = self.session_manager.kill_window(&session, idx);
-                }
-
-                // Kill the session
-                let _ = self.session_manager.kill(&session);
-
-                // Ensure any remaining pane processes are terminated so the worktree directory can
-                // be removed on platforms with strict file locking (like Windows).
-                for pid in pane_pids {
-                    #[cfg(windows)]
-                    {
-                        let _ = std::process::Command::new("taskkill")
-                            .arg("/PID")
-                            .arg(pid.to_string())
-                            .arg("/T")
-                            .arg("/F")
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                    }
-
-                    #[cfg(unix)]
-                    {
-                        let _ = std::process::Command::new("kill")
-                            .arg("-TERM")
-                            .arg(pid.to_string())
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                    }
-                }
-
-                // Brief delay to allow mux-managed processes to terminate
-                // mux kill-session sends SIGTERM and returns immediately,
-                // but processes may still be running and have files open
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // Remove worktree
-                let repo_path = std::env::current_dir()?;
-                if let Ok(repo) = git::open_repository(&repo_path) {
-                    let worktree_mgr = WorktreeManager::new(&repo);
-                    if let Err(e) = worktree_mgr.remove(&worktree_name) {
-                        warn!("Failed to remove worktree: {e}");
-                        app_data.set_status(format!("Warning: {e}"));
-                    }
-                }
+                self.kill_root_agent(app_data, agent_id, &session, &worktree_name, mux_running)?;
             } else {
-                // Child agent: kill just this window and its descendants
-                // Get the root's session for killing windows
-                let root = app_data.storage.root_ancestor(agent_id);
-                let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
-                let root_id = root.map(|r| r.id);
-
-                // Collect all window indices being deleted
-                let mut deleted_indices: Vec<u32> = Vec::new();
-                let descendants = app_data.storage.descendants(agent_id);
-                for desc in &descendants {
-                    if let Some(idx) = desc.window_index {
-                        deleted_indices.push(idx);
-                    }
-                }
-
-                // Add this agent's window
-                if let Some(idx) = window_index {
-                    deleted_indices.push(idx);
-                }
-
-                // Sort in descending order and kill windows from highest to lowest
-                // This prevents window renumbering from affecting indices we haven't killed yet
-                deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
-                for idx in &deleted_indices {
-                    let _ = self.session_manager.kill_window(&root_session, *idx);
-                }
-
-                // Update window indices for remaining agents under the same root
-                // When the mux renumbers windows, indices shift down
-                if let Some(rid) = root_id {
-                    super::window::adjust_window_indices_after_deletion(
-                        app_data,
-                        rid,
-                        agent_id,
-                        &deleted_indices,
-                    );
-                }
+                self.kill_child_agent(app_data, agent_id, &session, window_index, mux_running);
             }
 
             // Remove agent and all descendants from storage
@@ -383,6 +286,133 @@ impl Actions {
             app_data.set_status("Agent killed");
         }
         Ok(())
+    }
+
+    pub(crate) fn kill_root_agent(
+        self,
+        app_data: &mut AppData,
+        agent_id: uuid::Uuid,
+        session: &str,
+        worktree_name: &str,
+        mux_running: bool,
+    ) -> Result<()> {
+        if mux_running {
+            let pane_pids = self
+                .session_manager
+                .list_pane_pids(session)
+                .unwrap_or_default();
+
+            // First kill all descendant windows in descending order
+            // (in case any are in other sessions, and to handle renumbering)
+            let descendants = app_data.storage.descendants(agent_id);
+            let mut indices: Vec<u32> = descendants
+                .iter()
+                .filter_map(|desc| desc.window_index)
+                .collect();
+            indices.sort_unstable_by(|a, b| b.cmp(a));
+            for idx in indices {
+                let _ = self.session_manager.kill_window(session, idx);
+            }
+
+            // Kill the session
+            let _ = self.session_manager.kill(session);
+
+            // Ensure any remaining pane processes are terminated so the worktree directory can
+            // be removed on platforms with strict file locking (like Windows).
+            for pid in pane_pids {
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .arg("/PID")
+                        .arg(pid.to_string())
+                        .arg("/T")
+                        .arg("/F")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+
+                #[cfg(unix)]
+                {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+
+            // Brief delay to allow mux-managed processes to terminate
+            // mux kill-session sends SIGTERM and returns immediately,
+            // but processes may still be running and have files open
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Remove worktree
+        let repo_path = std::env::current_dir()?;
+        if let Ok(repo) = git::open_repository(&repo_path) {
+            let worktree_mgr = WorktreeManager::new(&repo);
+            if let Err(e) = worktree_mgr.remove(worktree_name) {
+                warn!("Failed to remove worktree: {e}");
+                app_data.set_status(format!("Warning: {e}"));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn kill_child_agent(
+        self,
+        app_data: &mut AppData,
+        agent_id: uuid::Uuid,
+        session: &str,
+        window_index: Option<u32>,
+        mux_running: bool,
+    ) {
+        if !mux_running {
+            return;
+        }
+
+        let root = app_data.storage.root_ancestor(agent_id);
+        let (root_session, root_id) = root.map_or_else(
+            || (session.to_string(), None),
+            |root| (root.mux_session.clone(), Some(root.id)),
+        );
+
+        // Collect all window indices being deleted
+        let mut deleted_indices: Vec<u32> = Vec::new();
+        let descendants = app_data.storage.descendants(agent_id);
+        for desc in &descendants {
+            if let Some(idx) = desc.window_index {
+                deleted_indices.push(idx);
+            }
+        }
+
+        // Add this agent's window
+        if let Some(idx) = window_index {
+            deleted_indices.push(idx);
+        }
+
+        // Sort in descending order and kill windows from highest to lowest
+        // This prevents window renumbering from affecting indices we haven't killed yet
+        deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in &deleted_indices {
+            let _ = self.session_manager.kill_window(&root_session, *idx);
+        }
+
+        // Update window indices for remaining agents under the same root
+        // When the mux renumbers windows, indices shift down
+        if let Some(rid) = root_id {
+            super::window::adjust_window_indices_after_deletion(
+                app_data,
+                rid,
+                agent_id,
+                &deleted_indices,
+            );
+        }
     }
 
     /// Spawn a new terminal (standalone shell, not a Claude agent)
@@ -647,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_spawn_terminal_creates_child_of_root() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
