@@ -100,9 +100,12 @@ impl Actions {
     pub(crate) fn reset_all(self, app_data: &mut AppData) -> Result<()> {
         let repo_path = std::env::current_dir()?;
         let repo = git::open_repository(&repo_path).ok();
+        let mux_running = crate::mux::is_server_running();
 
         for agent in app_data.storage.iter() {
-            let _ = self.session_manager.kill(&agent.mux_session);
+            if mux_running {
+                let _ = self.session_manager.kill(&agent.mux_session);
+            }
 
             if let Some(ref repo) = repo {
                 let worktree_mgr = WorktreeManager::new(repo);
