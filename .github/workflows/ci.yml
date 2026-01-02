@@ -39,15 +39,15 @@ jobs:
       - name: Read cargo-llvm-cov version
         run: echo "CARGO_LLVM_COV_VERSION=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_ENV"
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@v2
         with:
-          version: ${{ env.CARGO_LLVM_COV_VERSION }}
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Run coverage
         env:
           TENEX_STATE_PATH: ${{ runner.temp }}/tenex-ci-state.json
-        run: cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
+        run: cargo cov
 
   test:
     name: Test (${{ matrix.os }})
