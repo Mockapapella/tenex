@@ -307,12 +307,17 @@ fn cmd_reset(force: bool) -> Result<()> {
     let mut storage = Storage::load().unwrap_or_default();
     let mux = SessionManager::new();
 
-    let instance_prefix = storage.instance_session_prefix();
     let scope = prompt_reset_scope(force)?;
 
-    // Find orphaned Tenex mux sessions (not in storage)
-    let storage_sessions: HashSet<_> = storage.iter().map(|a| a.mux_session.clone()).collect();
-    let orphaned_sessions = list_orphaned_sessions(mux, scope, &instance_prefix, &storage_sessions);
+    let mux_running = tenex::mux::is_server_running();
+
+    let orphaned_sessions = if mux_running {
+        let instance_prefix = storage.instance_session_prefix();
+        let storage_sessions: HashSet<_> = storage.iter().map(|a| a.mux_session.clone()).collect();
+        list_orphaned_sessions(mux, scope, &instance_prefix, &storage_sessions)
+    } else {
+        Vec::new()
+    };
 
     if storage.is_empty() && orphaned_sessions.is_empty() {
         println!("No agents to reset.");
@@ -333,7 +338,7 @@ fn cmd_reset(force: bool) -> Result<()> {
     let branch_mgr = repo.as_ref().map(tenex::git::BranchManager::new);
 
     for agent in storage.iter() {
-        if let Err(e) = mux.kill(&agent.mux_session) {
+        if mux_running && let Err(e) = mux.kill(&agent.mux_session) {
             eprintln!(
                 "Warning: Failed to kill mux session {}: {e}",
                 agent.mux_session
@@ -354,7 +359,7 @@ fn cmd_reset(force: bool) -> Result<()> {
 
     // Kill orphaned sessions
     for session in &orphaned_sessions {
-        if let Err(e) = mux.kill(session) {
+        if mux_running && let Err(e) = mux.kill(session) {
             eprintln!("Warning: Failed to kill orphaned mux session {session}: {e}");
         }
     }
