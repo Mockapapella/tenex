@@ -436,7 +436,7 @@ fn is_session_alive(
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};

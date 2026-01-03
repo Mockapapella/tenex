@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 //! Worktree conflict detection and resolution tests
 
 use std::fs;

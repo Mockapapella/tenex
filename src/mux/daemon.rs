@@ -275,7 +275,7 @@ fn handle_list_pids(session: &str) -> Result<MuxResponse> {
     Ok(MuxResponse::Pids { pids })
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

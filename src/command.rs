@@ -142,7 +142,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

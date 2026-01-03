@@ -379,7 +379,7 @@ fn push_u8_decimal(out: &mut String, value: u8) {
     out.push((b'0' + value) as char);
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::super::SessionManager;
     use super::*;
