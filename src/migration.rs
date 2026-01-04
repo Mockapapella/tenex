@@ -109,18 +109,15 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
 fn is_cross_device_link_error(err: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    {
-        // On Unix platforms, EXDEV indicates an invalid cross-device rename.
-        err.raw_os_error() == Some(18)
-    }
+    // On Unix platforms, EXDEV indicates an invalid cross-device rename.
+    err.raw_os_error() == Some(18)
+}
 
-    #[cfg(not(unix))]
-    {
-        let _ = err;
-        false
-    }
+#[cfg(not(unix))]
+const fn is_cross_device_link_error(_err: &std::io::Error) -> bool {
+    false
 }
 
 #[cfg(test)]
