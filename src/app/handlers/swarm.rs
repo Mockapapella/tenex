@@ -111,13 +111,15 @@ impl Actions {
         worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
         let program = app_data.agent_spawn_command();
-        let root_agent = Agent::new(
+        let mut root_agent = Agent::new(
             root_title,
             program.clone(),
             branch.clone(),
             worktree_path.clone(),
             None,
         );
+        let session_prefix = app_data.storage.instance_session_prefix();
+        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
 
         let root_session = root_agent.mux_session.clone();
         let root_id = root_agent.id;

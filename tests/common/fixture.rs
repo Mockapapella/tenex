@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, Signature};
+use git2::{BranchType, Repository, Signature};
 use tempfile::TempDir;
 use tenex::agent::Storage;
 use tenex::config::Config;
@@ -35,6 +35,17 @@ impl TestFixture {
 
         // Initialize git repo with initial commit
         let repo = Repository::init(&repo_path)?;
+
+        // Make git CLI operations deterministic across environments.
+        // Many integration tests call `git commit` / `git rebase` / `git merge` via the `git`
+        // binary; those commands require author/committer identity and may be affected by
+        // global config (e.g. `commit.gpgsign=true`).
+        {
+            let mut config = repo.config()?;
+            config.set_str("user.name", "Tenex Test")?;
+            config.set_str("user.email", "tenex@test.invalid")?;
+            config.set_bool("commit.gpgsign", false)?;
+        }
         let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
@@ -48,6 +59,15 @@ impl TestFixture {
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        // Ensure a consistent default branch name for tests.
+        // Some environments default to "main", but many tests assume "master".
+        if repo.find_branch("master", BranchType::Local).is_err() {
+            let head = repo.head()?.peel_to_commit()?;
+            repo.branch("master", &head, true)?;
+        }
+        repo.set_head("refs/heads/master")?;
+        repo.checkout_head(None)?;
 
         let worktree_dir = TempDir::new()?;
         let state_dir = TempDir::new()?;

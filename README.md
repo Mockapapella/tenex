@@ -126,9 +126,12 @@ The default agent command is `claude --allow-dangerously-skip-permissions`. Pres
 
 | File | Location | Description |
 |------|----------|-------------|
-| State | `~/.local/share/tenex/state.json` | Agent list and hierarchy |
-| Settings | `~/.local/share/tenex/settings.json` | Tenex settings |
+| State | `~/.tenex/state.json` | Agent list and hierarchy |
+| Settings | `~/.tenex/settings.json` | Tenex settings |
+| Worktrees | `~/.tenex/worktrees/` | Git worktrees for agents |
 | Logs | OS temp dir (e.g. `/tmp/tenex.log`) | Debug logs (when enabled) |
+
+On startup, Tenex migrates legacy data from `~/.local/share/tenex/` to `~/.tenex/`.
 
 ### Environment Variables
 
@@ -136,7 +139,9 @@ The default agent command is `claude --allow-dangerously-skip-permissions`. Pres
 |----------|-------------|
 | `DEBUG` | Log level: `0` off, `1` warn, `2` info, `3` debug |
 | `TENEX_MUX_SOCKET` | Override mux daemon socket name/path |
-| `TENEX_STATE_PATH` | Override state file location |
+| `TENEX_STATE_PATH` | Override state file location (also derives `settings.json` and `worktrees/` next to it) |
+
+If `TENEX_STATE_PATH` is relative, it resolves from the current working directory.
 
 ### CLI Commands
 

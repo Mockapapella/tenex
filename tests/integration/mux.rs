@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 //! Tests for mux session operations and capture functions
 
 use crate::common::{TestFixture, skip_if_no_mux};

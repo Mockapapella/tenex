@@ -32,10 +32,18 @@ pub fn is_server_running() -> bool {
 
     match interprocess::local_socket::Stream::connect(endpoint.name) {
         Ok(mut stream) => {
-            if ipc::write_json(&mut stream, &protocol::MuxRequest::Ping).is_err() {
+            if stream.set_nonblocking(true).is_err() {
                 return false;
             }
-            ipc::read_json::<_, protocol::MuxResponse>(&mut stream).is_ok()
+
+            let timeout = std::time::Duration::from_millis(250);
+            if ipc::write_json_with_timeout(&mut stream, &protocol::MuxRequest::Ping, timeout)
+                .is_err()
+            {
+                return false;
+            }
+
+            ipc::read_json_with_timeout::<_, protocol::MuxResponse>(&mut stream, timeout).is_ok()
         }
         Err(_) => false,
     }

@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 //! Tests for full CLI workflow, agent creation, and kill success paths
 
 use crate::common::{TestFixture, skip_if_no_mux};

@@ -315,12 +315,30 @@ mod tests {
         }
     }
 
+    struct CurrentDirGuard {
+        pub previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn change_to(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
+            let previous = std::env::current_dir()?;
+            std::env::set_current_dir(path)?;
+            Ok(Self { previous })
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
+
     fn create_test_config() -> Config {
         // Use a unique temp directory for each test process to avoid conflicts
         // and prevent tests from creating worktrees in the real ~/.tenex directory
         let pid = std::process::id();
         Config {
-            worktree_dir: PathBuf::from(format!("/tmp/tenex-test-{pid}")),
+            worktree_dir: std::env::temp_dir().join(format!("tenex-test-{pid}")),
             branch_prefix: format!("tenex-test-{pid}/"),
             ..Config::default()
         }
@@ -757,6 +775,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
+        let temp_dir = tempfile::tempdir()?;
+        let _cwd = CurrentDirGuard::change_to(temp_dir.path())?;
 
         app.enter_mode(CreatingMode.into());
         app.handle_char('t');
@@ -767,31 +787,9 @@ mod tests {
         // Enter with input tries to create agent (will fail without git repo, but sets error)
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // Possible outcomes:
-        // 1. Error modal (no git repo)
-        // 2. Normal mode (agent created successfully)
-        // 3. Confirming(WorktreeConflict) if worktree already exists
-        assert!(
-            matches!(&app.mode, AppMode::ErrorModal(_))
-                || app.mode == AppMode::normal()
-                || matches!(
-                    &app.mode,
-                    AppMode::Confirming(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    })
-                ),
-            "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
-            app.mode
-        );
-        // One of these should be true:
-        // - Error was set (no git repo or other failure)
-        // - Agent was created
-        // - Worktree conflict detected (waiting for user input)
-        assert!(
-            app.data.ui.last_error.is_some()
-                || app.data.storage.len() == 1
-                || app.data.spawn.worktree_conflict.is_some()
-        );
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+        assert!(app.data.ui.last_error.is_some());
+        assert_eq!(app.data.storage.len(), 0);
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
     }
@@ -801,6 +799,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _cleanup) = create_test_app_with_cleanup();
         let handler = Actions::new();
+        let temp_dir = tempfile::tempdir()?;
+        let _cwd = CurrentDirGuard::change_to(temp_dir.path())?;
 
         app.enter_mode(PromptingMode.into());
         app.handle_char('f');
@@ -810,31 +810,9 @@ mod tests {
         // Enter with input tries to create agent with prompt (will fail without git repo)
         test_key_event(&mut app, handler, KeyCode::Enter, KeyModifiers::NONE)?;
 
-        // Possible outcomes (same as creating mode test):
-        // 1. Error modal (no git repo)
-        // 2. Normal mode (agent created successfully)
-        // 3. Confirming(WorktreeConflict) if worktree already exists
-        assert!(
-            matches!(&app.mode, AppMode::ErrorModal(_))
-                || app.mode == AppMode::normal()
-                || matches!(
-                    &app.mode,
-                    AppMode::Confirming(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    })
-                ),
-            "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
-            app.mode
-        );
-        // One of these should be true:
-        // - Error was set (no git repo or other failure)
-        // - Agent was created
-        // - Worktree conflict detected (waiting for user input)
-        assert!(
-            app.data.ui.last_error.is_some()
-                || app.data.storage.len() == 1
-                || app.data.spawn.worktree_conflict.is_some()
-        );
+        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+        assert!(app.data.ui.last_error.is_some());
+        assert_eq!(app.data.storage.len(), 0);
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
     }

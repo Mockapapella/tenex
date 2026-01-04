@@ -4,5 +4,7 @@
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+state.json
+settings.json
 CLAUDE.md
 AGENTS.md

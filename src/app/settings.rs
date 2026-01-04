@@ -3,7 +3,7 @@
 //! Stores user preferences that persist across sessions, such as
 //! keyboard remapping choices.
 
-use crate::paths;
+use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
@@ -60,10 +60,7 @@ impl Settings {
     /// Get the settings file path
     #[must_use]
     pub fn path() -> PathBuf {
-        paths::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("tenex")
-            .join("settings.json")
+        Config::settings_path()
     }
 
     /// Load settings from disk, returning defaults if file doesn't exist
@@ -177,8 +174,10 @@ mod tests {
     #[test]
     fn test_settings_path_returns_path() {
         let path = Settings::path();
-        assert!(path.to_string_lossy().contains("tenex"));
-        assert!(path.to_string_lossy().contains("settings.json"));
+        assert_eq!(
+            path.file_name().and_then(|p| p.to_str()),
+            Some("settings.json")
+        );
     }
 
     #[test]

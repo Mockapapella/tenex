@@ -15,24 +15,12 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: bash -c
-        args:
-          - |
-              set -euo pipefail
-              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" cargo test --all-targets --all-features -- --test-threads=1
+        entry: cargo test --all-targets --all-features
         language: system
         pass_filenames: false
 
       - id: cargo-coverage
         name: cargo llvm-cov (90% lines + functions)
-        entry: bash -c
-        args:
-          - |
-              set -euo pipefail
-              state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 -- --test-threads=1
+        entry: cargo cov
         language: system
         pass_filenames: false

@@ -3,6 +3,7 @@
 use crate::agent::{Agent, Status};
 use crate::git::{self, WorktreeManager};
 use anyhow::{Context, Result};
+use std::path::Path;
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -141,10 +142,38 @@ impl Actions {
         let worktree_mgr = WorktreeManager::new(&repo);
         let worktrees = worktree_mgr.list()?;
         let program = app.agent_spawn_command();
+        let session_prefix = app.data.storage.instance_session_prefix();
+        let instance_worktree_dir = app
+            .data
+            .config
+            .worktree_dir
+            .canonicalize()
+            .unwrap_or_else(|_| app.data.config.worktree_dir.clone());
 
         debug!(count = worktrees.len(), "Found worktrees for auto-connect");
 
         for wt in worktrees {
+            let worktree_path = wt.path.canonicalize().unwrap_or_else(|_| wt.path.clone());
+
+            if !worktree_path.starts_with(&instance_worktree_dir) {
+                debug!(
+                    worktree = %wt.name,
+                    path = %worktree_path.display(),
+                    instance_worktree_dir = %instance_worktree_dir.display(),
+                    "Skipping worktree outside instance worktree directory"
+                );
+                continue;
+            }
+
+            if has_isolated_state_marker(&worktree_path, &instance_worktree_dir) {
+                debug!(
+                    worktree = %wt.name,
+                    path = %worktree_path.display(),
+                    "Skipping worktree belonging to another Tenex instance"
+                );
+                continue;
+            }
+
             // Get the actual branch name from the worktree's HEAD
             // This is more reliable than trying to reverse-engineer from worktree name
             let branch_name = match worktree_mgr.worktree_head_info(&wt.name) {
@@ -171,13 +200,14 @@ impl Actions {
             info!(branch = %branch_name, path = ?wt.path, "Auto-connecting to existing worktree");
 
             // Create an agent for this worktree
-            let agent = Agent::new(
+            let mut agent = Agent::new(
                 branch_name.clone(), // Use branch name as title
                 program.clone(),
                 branch_name.clone(),
                 wt.path.clone(),
                 None, // No initial prompt
             );
+            agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
             // Create mux session and start the agent program
             let command = crate::command::build_command_argv(&program, None)?;
@@ -198,6 +228,24 @@ impl Actions {
         // Save storage if we added any agents
         app.data.storage.save()?;
         Ok(())
+    }
+}
+
+fn has_isolated_state_marker(worktree_path: &Path, stop_at: &Path) -> bool {
+    let mut current = worktree_path;
+    loop {
+        if current.join("state.json").exists() {
+            return true;
+        }
+
+        if current == stop_at {
+            return false;
+        }
+
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        current = parent;
     }
 }
 

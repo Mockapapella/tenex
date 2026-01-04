@@ -40,11 +40,11 @@ pub fn build_command_argv(program: &str, prompt: Option<&str>) -> Result<Vec<Str
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|s| s.to_ascii_lowercase());
+                .map(str::to_ascii_lowercase);
             let mut replacement: Option<String> = None;
 
             match ext.as_deref() {
-                Some("cmd") | Some("bat") => {
+                Some("cmd" | "bat") => {
                     should_wrap = true;
                 }
                 Some(_) => {}
@@ -120,7 +120,7 @@ pub fn build_command_argv(program: &str, prompt: Option<&str>) -> Result<Vec<Str
 }
 
 #[cfg(all(test, windows))]
-mod tests {
+mod windows_tests {
     use super::*;
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -315,7 +315,8 @@ impl Actions {
         new_name: &str,
     ) -> Result<()> {
         let session_manager = SessionManager::new();
-        let new_session_name = format!("tenex-{new_name}");
+        let session_prefix = app_data.storage.instance_session_prefix();
+        let new_session_name = format!("{session_prefix}{new_name}");
 
         if let Err(e) = session_manager.rename(old_session, &new_session_name) {
             warn!(error = %e, "Failed to rename mux session");
