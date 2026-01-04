@@ -105,8 +105,7 @@ fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
         let _ = fs::remove_file(&backup_path);
     }
 
-    let mut moved_old = false;
-    if path.exists() {
+    let moved_old = if path.exists() {
         fs::rename(path, &backup_path).with_context(|| {
             format!(
                 "Failed to move old state file {} to {}",
@@ -114,8 +113,10 @@ fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
                 backup_path.display()
             )
         })?;
-        moved_old = true;
-    }
+        true
+    } else {
+        false
+    };
 
     if let Err(err) = fs::rename(tmp_path, path) {
         if moved_old {
