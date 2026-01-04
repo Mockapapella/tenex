@@ -44,7 +44,7 @@ pub fn build_command_argv(program: &str, prompt: Option<&str>) -> Result<Vec<Str
             let mut replacement: Option<String> = None;
 
             match ext.as_deref() {
-                Some("cmd") | Some("bat") => {
+                Some("cmd" | "bat") => {
                     should_wrap = true;
                 }
                 Some(_) => {}
