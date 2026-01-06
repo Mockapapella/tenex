@@ -207,31 +207,13 @@ impl Actions {
         }
 
         // Move the worktree directory
-        if let Err(e) = std::fs::rename(old_path, new_path) {
-            let is_in_use = cfg!(windows)
-                && (e.kind() == std::io::ErrorKind::PermissionDenied
-                    || matches!(e.raw_os_error(), Some(5 | 32)));
-            if is_in_use {
-                warn!(
-                    error = %e,
-                    "Worktree directory appears in use; keeping existing path"
-                );
-                return Ok(false);
-            }
-            return Err(e).context("Failed to move worktree directory");
-        }
+        std::fs::rename(old_path, new_path).context("Failed to move worktree directory")?;
 
         // Update git worktree metadata
         let gitdir_file = new_path.join(".git");
         if gitdir_file.exists() {
-            let git_path_string = |path: &std::path::Path| -> String {
-                let raw = path.to_string_lossy().to_string();
-                if cfg!(windows) {
-                    raw.strip_prefix(r"\\?\").unwrap_or(&raw).replace('\\', "/")
-                } else {
-                    raw
-                }
-            };
+            let git_path_string =
+                |path: &std::path::Path| -> String { path.to_string_lossy().to_string() };
 
             let old_worktree_name = old_branch.replace('/', "-");
             let repo_path = std::env::current_dir()?;

@@ -479,7 +479,6 @@ mod tests {
         assert!(unix_timestamp() >= 0);
     }
 
-    #[cfg(all(not(windows), target_os = "linux"))]
     #[test]
     fn test_terminal_query_responses_end_to_end() -> Result<()> {
         let session_name = format!("tenex-test-backend-{}", uuid::Uuid::new_v4());

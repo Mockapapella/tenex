@@ -27,10 +27,11 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 - **git** — Required for worktree isolation
 - **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
 - **An agent CLI** — `claude` (default) or `codex` (or configure a custom command)
+- **Linux** — Tenex currently supports Linux only
 - **Rust 1.91+** — For building from source
 - **cargo** — Required for auto-update functionality
 
-## Linux/Mac Installation
+## Linux Installation
 
 ```bash
 # Install from crates.io
@@ -41,16 +42,6 @@ cargo install tenex --locked
 git clone https://github.com/Mockapapella/tenex
 cd tenex
 cargo install --path .
-```
-
-### Windows Installation
-
-To install via Cargo, you need Rust plus the MSVC C++ build tools.
-
-```powershell
-winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-winget install -e --id Rustlang.Rustup
-cargo install tenex --locked
 ```
 
 ## Quick Start

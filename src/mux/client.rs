@@ -141,11 +141,7 @@ fn resolve_tenex_executable() -> Result<PathBuf> {
         .and_then(std::path::Path::parent)
         .context("Failed to resolve build output directory")?;
 
-    let exe_name = if cfg!(windows) {
-        format!("{}.exe", env!("CARGO_PKG_NAME"))
-    } else {
-        env!("CARGO_PKG_NAME").to_string()
-    };
+    let exe_name = env!("CARGO_PKG_NAME").to_string();
 
     let candidate = candidate_dir.join(exe_name);
     if candidate.exists() {
@@ -166,7 +162,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn test_mux_client_reconnects_after_failed_request() -> Result<()> {
         use interprocess::local_socket::traits::ListenerExt;

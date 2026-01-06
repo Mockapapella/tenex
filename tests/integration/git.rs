@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 //! Tests for git worktree operations
 
 use crate::common::{DirGuard, TestFixture, git_command};

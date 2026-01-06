@@ -27,7 +27,7 @@ pub struct TestFixture {
 impl TestFixture {
     pub fn new(test_name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
-        // Canonicalize to handle macOS symlink (/var -> /private/var)
+        // Canonicalize to handle symlinked temp dirs.
         let repo_path = temp_dir
             .path()
             .canonicalize()
@@ -65,7 +65,7 @@ impl TestFixture {
     }
 
     pub fn config(&self) -> Config {
-        // Canonicalize worktree_dir to handle macOS symlink (/var -> /private/var)
+        // Canonicalize worktree_dir to handle symlinked temp dirs.
         let worktree_dir = self
             .worktree_dir
             .path()
@@ -90,7 +90,7 @@ impl TestFixture {
     }
 
     /// Returns the canonicalized worktree directory path.
-    /// This handles macOS symlink (/var -> /private/var).
+    /// This handles symlinked temp dirs.
     pub fn worktree_path(&self) -> PathBuf {
         self.worktree_dir
             .path()

@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 //! Performance optimization tests
 
 use std::path::PathBuf;

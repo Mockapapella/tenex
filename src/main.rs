@@ -252,52 +252,38 @@ fn preserve_corrupt_state_file(path: &std::path::Path) -> Option<std::path::Path
 }
 
 fn restart_current_process() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::path::PathBuf;
+    use tenex::paths;
+
+    fn find_installed_binary(name: &str) -> PathBuf {
+        // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
+        let candidates = [
+            std::env::var("CARGO_HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join("bin").join(name)),
+            paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+
+        PathBuf::from(name)
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     // After `cargo install --force`, spawning a new process and exiting can leave the
     // restarted Tenex in the background (job control), causing terminal I/O errors.
-    // On Unix, prefer `exec` to replace the current process in-place.
+    // Prefer `exec` to replace the current process in-place.
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        use std::path::PathBuf;
-        use tenex::paths;
+    let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
 
-        fn find_installed_binary(name: &str) -> PathBuf {
-            // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
-            let candidates = [
-                std::env::var("CARGO_HOME")
-                    .ok()
-                    .map(|h| PathBuf::from(h).join("bin").join(name)),
-                paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
-            ];
-
-            for candidate in candidates.into_iter().flatten() {
-                if candidate.exists() {
-                    return candidate;
-                }
-            }
-
-            PathBuf::from(name)
-        }
-
-        let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
-
-        // `exec` replaces the current process on success; on failure it returns an io::Error.
-        let err = std::process::Command::new(installed).args(&args).exec();
-        Err(anyhow::Error::new(err).context("Failed to restart Tenex"))
-    }
-
-    #[cfg(not(unix))]
-    {
-        use anyhow::Context;
-        // On non-Unix platforms, fall back to spawning via PATH.
-        std::process::Command::new(env!("CARGO_PKG_NAME"))
-            .args(&args)
-            .spawn()
-            .context("Failed to restart Tenex")?;
-        std::process::exit(0);
-    }
+    // `exec` replaces the current process on success; on failure it returns an io::Error.
+    let err = std::process::Command::new(installed).args(&args).exec();
+    Err(anyhow::Error::new(err).context("Failed to restart Tenex"))
 }
 
 fn cmd_reset(force: bool) -> Result<()> {

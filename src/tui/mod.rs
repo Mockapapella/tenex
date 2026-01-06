@@ -261,7 +261,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
     impl Drop for TestCleanup {
         fn drop(&mut self) {
             // Clean up any worktrees/branches created by this test
@@ -305,13 +304,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[cfg(windows)]
-    impl Drop for TestCleanup {
-        fn drop(&mut self) {
-            self.branch_prefix.shrink_to_fit();
         }
     }
 

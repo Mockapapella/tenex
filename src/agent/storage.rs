@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use tracing::warn;
 use uuid::Uuid;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const STATE_FILE_MODE: u32 = 0o600;
 
 fn resolve_state_path(path: &Path) -> std::path::PathBuf {
@@ -59,7 +59,7 @@ fn temp_state_path(path: &Path) -> std::path::PathBuf {
 fn write_temp_state_file(path: &Path, contents: &str) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         // Create the temp file with restrictive permissions immediately to avoid a brief
         // window where sensitive contents are world-readable.
@@ -88,7 +88,7 @@ fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permission
         return Ok(());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).with_context(|| {
         format!(
             "Failed to set permissions for temp state file {}",
@@ -98,46 +98,6 @@ fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permission
     Ok(())
 }
 
-#[cfg(windows)]
-fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
-    let backup_path = backup_state_path(path);
-    if backup_path.exists() {
-        let _ = fs::remove_file(&backup_path);
-    }
-
-    let mut moved_old = false;
-    if path.exists() {
-        fs::rename(path, &backup_path).with_context(|| {
-            format!(
-                "Failed to move old state file {} to {}",
-                path.display(),
-                backup_path.display()
-            )
-        })?;
-        moved_old = true;
-    }
-
-    if let Err(err) = fs::rename(tmp_path, path) {
-        if moved_old {
-            let _ = fs::rename(&backup_path, path);
-        }
-        return Err(err).with_context(|| {
-            format!(
-                "Failed to replace state file {} with {}",
-                path.display(),
-                tmp_path.display()
-            )
-        });
-    }
-
-    if moved_old {
-        let _ = fs::remove_file(&backup_path);
-    }
-
-    Ok(())
-}
-
-#[cfg(not(windows))]
 fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
     fs::rename(tmp_path, path).with_context(|| {
         format!(
@@ -316,8 +276,8 @@ impl Storage {
                 }
             }
         } else if backup_path.exists() {
-            // Best-effort recovery for interrupted Windows writes where the old state was moved
-            // aside but the new state wasn't written into place.
+            // Best-effort recovery for interrupted writes where the state file was moved aside
+            // but the new state wasn't written into place.
             match fs::rename(&backup_path, &path) {
                 Ok(()) => {
                     warn!(
@@ -380,8 +340,6 @@ impl Storage {
         let contents = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
 
         // Write atomically to avoid corrupting the state file if we're interrupted mid-write.
-        // On Windows this is best-effort; Tenex will attempt to recover from a `.bak` file on
-        // startup if the main file is missing.
         write_state_atomically(&path, &contents)?;
         Ok(())
     }

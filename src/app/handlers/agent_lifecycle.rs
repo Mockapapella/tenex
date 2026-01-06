@@ -292,32 +292,15 @@ impl Actions {
                 // Kill the session
                 let _ = self.session_manager.kill(&session);
 
-                // Ensure any remaining pane processes are terminated so the worktree directory can
-                // be removed on platforms with strict file locking (like Windows).
+                // Ensure any remaining pane processes are terminated before removing the worktree.
                 for pid in pane_pids {
-                    #[cfg(windows)]
-                    {
-                        let _ = std::process::Command::new("taskkill")
-                            .arg("/PID")
-                            .arg(pid.to_string())
-                            .arg("/T")
-                            .arg("/F")
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                    }
-
-                    #[cfg(unix)]
-                    {
-                        let _ = std::process::Command::new("kill")
-                            .arg("-TERM")
-                            .arg(pid.to_string())
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                    }
+                    let _ = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
                 }
 
                 // Brief delay to allow mux-managed processes to terminate
