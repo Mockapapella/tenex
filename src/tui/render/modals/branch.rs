@@ -211,7 +211,8 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 

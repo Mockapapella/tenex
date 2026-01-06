@@ -44,7 +44,8 @@ pub fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
             Block::default()
                 .title(" Confirm ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING)),
+                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -184,7 +185,8 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Worktree Conflict ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING)),
+                .border_style(Style::default().fg(colors::MODAL_BORDER_WARNING))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -260,7 +262,8 @@ pub fn render_confirm_push_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Push Branch ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -353,7 +356,8 @@ pub fn render_keyboard_remap_overlay(frame: &mut Frame<'_>) {
             Block::default()
                 .title(" Keyboard Settings ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::ACCENT_WARNING)),
+                .border_style(Style::default().fg(colors::ACCENT_WARNING))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -427,7 +431,8 @@ pub fn render_update_prompt_overlay(frame: &mut Frame<'_>, info: &UpdateInfo) {
             Block::default()
                 .title(" Update Tenex ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::ACCENT_POSITIVE)),
+                .border_style(Style::default().fg(colors::ACCENT_POSITIVE))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -494,7 +499,8 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Open PR ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::ACCENT_POSITIVE)),
+                .border_style(Style::default().fg(colors::ACCENT_POSITIVE))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
