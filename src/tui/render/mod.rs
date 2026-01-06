@@ -316,8 +316,8 @@ mod tests {
             .cell((width.saturating_sub(1), 0))
             .map(ratatui::buffer::Cell::symbol);
 
-        assert_eq!(top_left, Some("┌"));
-        assert_eq!(top_right, Some("┐"));
+        assert_eq!(top_left, Some("╔"));
+        assert_eq!(top_right, Some("╗"));
         Ok(())
     }
 

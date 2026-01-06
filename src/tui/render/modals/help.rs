@@ -148,7 +148,8 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Help ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 

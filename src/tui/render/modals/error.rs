@@ -66,7 +66,8 @@ pub fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
             Block::default()
                 .title(" Error ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::MODAL_BORDER_ERROR)),
+                .border_style(Style::default().fg(colors::MODAL_BORDER_ERROR))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG))
         .wrap(Wrap { trim: false });
@@ -131,7 +132,8 @@ pub fn render_success_modal(frame: &mut Frame<'_>, message: &str) {
             Block::default()
                 .title(" Success ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::ACCENT_POSITIVE)),
+                .border_style(Style::default().fg(colors::ACCENT_POSITIVE))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG))
         .wrap(Wrap { trim: false });

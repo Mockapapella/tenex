@@ -60,7 +60,8 @@ pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Spawn Children ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -104,7 +105,8 @@ pub fn render_review_info_overlay(frame: &mut Frame<'_>) {
             Block::default()
                 .title(" Review ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -158,7 +160,8 @@ pub fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Review Agents ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 

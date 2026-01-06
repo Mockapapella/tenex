@@ -105,7 +105,8 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(" Commands ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 

@@ -92,11 +92,12 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let title = format!(" Agents ({}) ", app.data.storage.len());
 
-    // Highlight agents list border when it has focus (not in PreviewFocused mode)
-    let border_color = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
-        colors::BORDER
-    } else {
+    // Highlight agents list border only when it has focus.
+    // When a modal is open, the modal should be the highlighted element instead.
+    let border_color = if matches!(&app.mode, AppMode::Normal(_) | AppMode::Scrolling(_)) {
         colors::SELECTED
+    } else {
+        colors::BORDER
     };
 
     let list = List::new(items)
@@ -104,7 +105,9 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
+                .border_style(Style::default().fg(border_color))
+                .border_type(colors::BORDER_TYPE)
+                .style(Style::default().bg(colors::SURFACE)),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -155,7 +158,7 @@ fn tab_bar_line(app: &App) -> Line<'static> {
                 Span::styled(
                     name,
                     Style::default()
-                        .fg(colors::TEXT_PRIMARY)
+                        .fg(colors::SELECTED)
                         .bg(colors::SURFACE_HIGHLIGHT)
                         .add_modifier(Modifier::BOLD),
                 )
@@ -202,7 +205,9 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(border_color))
+        .border_type(colors::BORDER_TYPE)
+        .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(block.clone(), area);
 
     let inner = block.inner(area);
@@ -219,7 +224,9 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = app.data.ui.preview_scroll.min(max_scroll);
     let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
 
-    let paragraph = Paragraph::new(text).scroll((scroll_pos, 0));
+    let paragraph = Paragraph::new(text)
+        .scroll((scroll_pos, 0))
+        .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, content_area);
 
     if is_focused {
@@ -311,7 +318,9 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::default()
         .title(" Git Diff ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(colors::BORDER));
+        .border_style(Style::default().fg(colors::BORDER))
+        .border_type(colors::BORDER_TYPE)
+        .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(block.clone(), area);
 
     let inner = block.inner(area);
@@ -345,7 +354,9 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines.push(Line::styled(line, Style::default().fg(color)));
     }
 
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, content_area);
 
     if total_lines > visible_height && area.width != 0 {

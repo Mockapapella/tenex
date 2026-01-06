@@ -154,7 +154,8 @@ pub fn render_input_overlay(
             Block::default()
                 .title(format!(" {title} "))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
@@ -257,7 +258,8 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
             Block::default()
                 .title(block_title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors::BORDER)),
+                .border_style(Style::default().fg(colors::SELECTED))
+                .border_type(colors::BORDER_TYPE),
         )
         .style(Style::default().bg(colors::MODAL_BG));
 
