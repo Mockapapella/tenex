@@ -7,6 +7,7 @@ pub use keys::{
 };
 
 use crate::paths;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Application configuration (uses hardcoded defaults)
@@ -35,28 +36,84 @@ impl Default for Config {
             branch_prefix: "tenex/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
-            worktree_dir: paths::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".tenex")
-                .join("worktrees"),
+            worktree_dir: Self::default_worktree_dir(),
         }
     }
 }
 
 impl Config {
+    fn resolve_state_path_override(raw: &str) -> PathBuf {
+        let candidate = PathBuf::from(raw);
+        if candidate.is_absolute() {
+            return candidate;
+        }
+
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(candidate);
+        }
+
+        candidate
+    }
+
+    /// Root directory for Tenex's default instance.
+    #[must_use]
+    pub fn default_instance_root() -> PathBuf {
+        paths::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".tenex")
+    }
+
+    /// Default location of Tenex's persistent state file.
+    #[must_use]
+    pub fn default_state_path() -> PathBuf {
+        Self::default_instance_root().join("state.json")
+    }
+
     /// Get the state file path (for agent persistence)
     ///
-    /// Respects the `TENEX_STATE_PATH` environment variable if set,
-    /// allowing tests to use an isolated state file.
+    /// Respects the `TENEX_STATE_PATH` environment variable if set. When it is set,
+    /// Tenex derives all instance-specific paths (settings, worktrees, mux socket
+    /// fallback) relative to the resulting state file path.
     #[must_use]
     pub fn state_path() -> PathBuf {
-        if let Ok(path) = std::env::var("TENEX_STATE_PATH") {
-            return PathBuf::from(path);
+        if let Ok(raw) = std::env::var("TENEX_STATE_PATH") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return Self::resolve_state_path_override(trimmed);
+            }
         }
-        paths::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("tenex")
-            .join("state.json")
+
+        Self::default_state_path()
+    }
+
+    /// Root directory for the current Tenex instance.
+    ///
+    /// - Default: `~/.tenex/`
+    /// - With `TENEX_STATE_PATH`: the parent directory of the resolved state path
+    #[must_use]
+    pub fn instance_root() -> PathBuf {
+        Self::state_path()
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    }
+
+    /// Path to the settings file for the current Tenex instance.
+    ///
+    /// - Default: `~/.tenex/settings.json`
+    /// - With `TENEX_STATE_PATH`: `settings.json` next to the state file
+    #[must_use]
+    pub fn settings_path() -> PathBuf {
+        Self::instance_root().join("settings.json")
+    }
+
+    /// Default worktrees directory for the current Tenex instance.
+    ///
+    /// - Default: `~/.tenex/worktrees/`
+    /// - With `TENEX_STATE_PATH`: `worktrees/` under the instance root
+    #[must_use]
+    pub fn default_worktree_dir() -> PathBuf {
+        Self::instance_root().join("worktrees")
     }
 
     /// Generate a branch name for a new agent
@@ -123,8 +180,20 @@ mod tests {
 
     #[test]
     fn test_state_path() {
-        let state_path = Config::state_path();
-        assert!(state_path.to_string_lossy().contains("tenex"));
+        let state_path = Config::default_state_path();
+        assert_eq!(
+            state_path.file_name().and_then(|p| p.to_str()),
+            Some("state.json")
+        );
+        assert!(state_path.to_string_lossy().contains(".tenex"));
+    }
+
+    #[test]
+    fn test_state_path_relative_env_resolves_from_cwd() {
+        let expected = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("state.json");
+        assert_eq!(Config::resolve_state_path_override("state.json"), expected);
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod agent;
 pub mod app;
 pub mod config;
 pub mod git;
+pub mod migration;
 pub mod mux;
 pub mod paths;
 pub mod prompts;

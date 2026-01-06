@@ -36,8 +36,12 @@ jobs:
         uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: llvm-tools-preview
+      - name: Read cargo-llvm-cov version
+        run: echo "CARGO_LLVM_COV_VERSION=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_ENV"
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+        with:
+          version: ${{ env.CARGO_LLVM_COV_VERSION }}
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Run coverage
