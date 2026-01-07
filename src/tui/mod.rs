@@ -12,8 +12,8 @@ use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
         event::{
-            self as crossterm_event, DisableMouseCapture, EnableMouseCapture, KeyEventKind,
-            KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+            self as crossterm_event, KeyEventKind, KeyboardEnhancementFlags,
+            PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{
@@ -27,6 +27,14 @@ use std::io;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+const UI_FRAME_INTERVAL_MS: u64 = 33;
+const PREVIEW_SMOOTH_REFRESH_MS: u64 = 33;
+const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
+const MIN_OUTPUT_REFRESH_MS: u64 = 16;
+
+type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
+type DrainedEvents = (Vec<String>, Option<(u16, u16)>);
+
 /// Run the TUI application
 ///
 /// Returns `Ok(Some(UpdateInfo))` if the user accepted an update prompt and the
@@ -34,12 +42,12 @@ use tracing::{info, warn};
 ///
 /// # Errors
 /// Returns an error if the terminal cannot be initialized or restored (raw mode,
-/// alternate screen, mouse capture), or if the main event loop fails to poll input
+/// alternate screen), or if the main event loop fails to poll input
 /// or render frames.
 pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
 
     // Enable Kitty keyboard protocol to disambiguate Ctrl+M from Enter
     // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
@@ -70,7 +78,7 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let event_handler = Handler::new(app.data.config.poll_interval_ms);
+    let event_handler = Handler::new(UI_FRAME_INTERVAL_MS);
     let action_handler = Actions::new();
 
     let result = run_loop(&mut terminal, &mut app, &event_handler, action_handler);
@@ -83,11 +91,7 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     }
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
@@ -108,22 +112,70 @@ fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
     }
 }
 
+fn init_preview_dimensions(terminal: &TuiTerminal, app: &mut App, action_handler: Actions) {
+    if app.data.ui.preview_dimensions.is_some() {
+        return;
+    }
+
+    let Ok(size) = terminal.size() else {
+        return;
+    };
+
+    let area = Rect::new(0, 0, size.width, size.height);
+    let (width, height) = render::calculate_preview_dimensions(area);
+    app.set_preview_dimensions(width, height);
+    action_handler.resize_agent_windows(app);
+    app.ensure_agent_list_scroll();
+}
+
+fn drain_events(app: &mut App, event_handler: &Handler) -> Result<DrainedEvents> {
+    let mut last_resize: Option<(u16, u16)> = None;
+    let mut batched_keys: Vec<String> = Vec::new();
+
+    loop {
+        match event_handler.next()? {
+            Event::Tick => {
+                break;
+            }
+            Event::Key(key) => {
+                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                    input::handle_key_event(app, key.code, key.modifiers, &mut batched_keys)?;
+                }
+            }
+            Event::Mouse(_) => {}
+            Event::Resize(w, h) => {
+                last_resize = Some((w, h));
+            }
+        }
+
+        if !crossterm_event::poll(Duration::ZERO)? {
+            break;
+        }
+    }
+
+    Ok((batched_keys, last_resize))
+}
+
+fn compute_preview_refresh_interval(
+    config_poll_interval_ms: u64,
+    active_tab: Tab,
+    preview_follow: bool,
+) -> Duration {
+    let base_refresh = Duration::from_millis(config_poll_interval_ms.max(MIN_OUTPUT_REFRESH_MS));
+    if active_tab == Tab::Preview && preview_follow {
+        base_refresh.min(Duration::from_millis(PREVIEW_SMOOTH_REFRESH_MS))
+    } else {
+        base_refresh
+    }
+}
+
 fn run_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut TuiTerminal,
     app: &mut App,
     event_handler: &Handler,
     action_handler: Actions,
 ) -> Result<Option<UpdateInfo>> {
-    // Initialize preview dimensions before first draw
-    if app.data.ui.preview_dimensions.is_none()
-        && let Ok(size) = terminal.size()
-    {
-        let area = Rect::new(0, 0, size.width, size.height);
-        let (width, height) = render::calculate_preview_dimensions(area);
-        app.set_preview_dimensions(width, height);
-        action_handler.resize_agent_windows(app);
-        app.ensure_agent_list_scroll();
-    }
+    init_preview_dimensions(terminal, app, action_handler);
 
     // Track selection to detect changes
     let mut last_selected = app.data.selected;
@@ -131,9 +183,12 @@ fn run_loop(
     let mut last_tab = app.data.active_tab;
     // Force initial preview/diff update
     let mut needs_content_update = true;
+    let mut last_preview_follow = app.data.ui.preview_follow;
+    let mut last_preview_update = Instant::now();
     // Diff refresh is expensive; throttle tick-based updates.
     let diff_refresh_interval = Duration::from_millis(1000);
     let mut last_diff_update = Instant::now();
+    let mut last_status_sync = Instant::now();
 
     loop {
         // If we returned to normal mode and still need to show the keyboard prompt,
@@ -142,38 +197,7 @@ fn run_loop(
             app.show_keyboard_remap_prompt();
         }
 
-        // Drain all queued events first (without drawing)
-        // This prevents lag when returning focus after being away,
-        // since mouse events queue up while the app is unfocused
-        let mut needs_tick = false;
-        let mut last_resize: Option<(u16, u16)> = None;
-        // Batch keys for PreviewFocused mode to avoid per-keystroke process spawning
-        let mut batched_keys: Vec<String> = Vec::new();
-
-        loop {
-            match event_handler.next()? {
-                Event::Tick => {
-                    needs_tick = true;
-                    break; // Timeout - exit inner loop
-                }
-                Event::Key(key) => {
-                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                        input::handle_key_event(app, key.code, key.modifiers, &mut batched_keys)?;
-                    }
-                }
-                Event::Mouse(_) => {
-                    // Ignore mouse events (we don't use them)
-                }
-                Event::Resize(w, h) => {
-                    last_resize = Some((w, h)); // Only keep final resize
-                }
-            }
-
-            // Check if more events are immediately available
-            if !crossterm_event::poll(Duration::ZERO)? {
-                break; // Queue empty, exit inner loop
-            }
-        }
+        let (batched_keys, last_resize) = drain_events(app, event_handler)?;
 
         // Send batched keys to the mux in one command (much faster than per-keystroke)
         let sent_keys_in_preview =
@@ -201,29 +225,46 @@ fn run_loop(
             last_tab = app.data.active_tab;
             needs_content_update = true;
         }
-
-        // Update preview/diff only on tick, selection change, or after sending keys
-        // This avoids spawning mux/git subprocesses every frame
-        if needs_tick || needs_content_update || sent_keys_in_preview {
-            let _ = action_handler.update_preview(app);
-            // Only update diff on tick (it's slow and not needed while typing)
-            if (needs_tick || needs_content_update) && app.data.active_tab == Tab::Diff {
-                let should_update_diff =
-                    needs_content_update || last_diff_update.elapsed() >= diff_refresh_interval;
-                if should_update_diff {
-                    let _ = action_handler.update_diff(app);
-                    last_diff_update = Instant::now();
-                }
-            }
-            needs_content_update = false;
+        // Detect follow-mode changes so we can adjust refresh strategy immediately.
+        if app.data.ui.preview_follow != last_preview_follow {
+            last_preview_follow = app.data.ui.preview_follow;
+            needs_content_update = true;
         }
+
+        // Update preview more frequently when the user is actively watching it and following output.
+        let preview_refresh_interval = compute_preview_refresh_interval(
+            app.data.config.poll_interval_ms,
+            app.data.active_tab,
+            app.data.ui.preview_follow,
+        );
+
+        let preview_visible =
+            app.data.active_tab == Tab::Preview || matches!(&app.mode, AppMode::PreviewFocused(_));
+
+        let preview_due = last_preview_update.elapsed() >= preview_refresh_interval;
+        if preview_visible && (needs_content_update || sent_keys_in_preview || preview_due) {
+            let _ = action_handler.update_preview(app);
+            last_preview_update = Instant::now();
+        }
+
+        // Diff refresh is expensive; throttle it while still updating promptly on selection/tab changes.
+        if app.data.active_tab == Tab::Diff {
+            let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;
+            if needs_content_update || diff_due {
+                let _ = action_handler.update_diff(app);
+                last_diff_update = Instant::now();
+            }
+        }
+
+        needs_content_update = false;
 
         // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
 
-        // Sync agent status only on tick (less frequent operation)
-        if needs_tick {
+        // Sync agent status less frequently (session listing is relatively expensive).
+        if last_status_sync.elapsed() >= Duration::from_millis(AGENT_STATUS_SYNC_INTERVAL_MS) {
             let _ = action_handler.sync_agent_status(app);
+            last_status_sync = Instant::now();
         }
 
         if let AppMode::UpdateRequested(state) = &app.mode {
@@ -242,6 +283,7 @@ fn run_loop(
 mod tests {
     use super::*;
     use crate::action::keycode_to_input_sequence;
+    use crate::agent::Agent;
     use crate::agent::Storage;
     use crate::config::Config;
     use crate::state::*;
@@ -350,6 +392,41 @@ mod tests {
     ) -> Result<()> {
         let mut keys = Vec::new();
         input::handle_key_event(app, code, modifiers, &mut keys)
+    }
+
+    #[test]
+    fn test_compute_preview_refresh_interval() {
+        assert_eq!(
+            compute_preview_refresh_interval(100, Tab::Preview, true),
+            Duration::from_millis(PREVIEW_SMOOTH_REFRESH_MS)
+        );
+        assert_eq!(
+            compute_preview_refresh_interval(10, Tab::Preview, true),
+            Duration::from_millis(MIN_OUTPUT_REFRESH_MS)
+        );
+        assert_eq!(
+            compute_preview_refresh_interval(100, Tab::Diff, true),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            compute_preview_refresh_interval(100, Tab::Preview, false),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn test_send_batched_keys_to_mux_with_selected_agent() {
+        let mut app = create_test_app();
+        app.data.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+        app.data.selected = 0;
+
+        send_batched_keys_to_mux(&app, &[String::from("a")]);
     }
 
     #[test]
