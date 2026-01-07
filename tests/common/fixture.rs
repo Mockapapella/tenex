@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, Signature};
+use git2::{Repository, RepositoryInitOptions, Signature};
 use tempfile::TempDir;
 use tenex::agent::Storage;
 use tenex::config::Config;
@@ -33,8 +33,12 @@ impl TestFixture {
             .canonicalize()
             .unwrap_or_else(|_| temp_dir.path().to_path_buf());
 
-        // Initialize git repo with initial commit
-        let repo = Repository::init(&repo_path)?;
+        // Initialize git repo with a stable default branch name.
+        // Git's default branch is user-configurable (e.g., main vs master) which can
+        // cause integration tests to take different paths across environments/CI.
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(&repo_path, &init_opts)?;
         let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
