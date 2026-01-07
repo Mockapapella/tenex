@@ -27,10 +27,8 @@ pub enum Action {
     DiffCursorUp,
     /// Move the diff cursor down (Diff tab)
     DiffCursorDown,
-    /// Delete the selected diff line/hunk (Diff tab)
+    /// Delete the selected diff hunk/file (Diff tab)
     DiffDeleteLine,
-    /// Delete the selected diff hunk (Diff tab)
-    DiffDeleteHunk,
     /// Undo the last diff edit (Diff tab)
     DiffUndo,
     /// Redo the last undone diff edit (Diff tab)
@@ -254,11 +252,6 @@ const BINDINGS: &[Binding] = &[
         action: Action::DiffDeleteLine,
     },
     Binding {
-        code: KeyCode::Char('X'),
-        modifiers: KeyModifiers::NONE,
-        action: Action::DiffDeleteHunk,
-    },
-    Binding {
         code: KeyCode::Char('z'),
         modifiers: KeyModifiers::CONTROL,
         action: Action::DiffUndo,
@@ -375,8 +368,7 @@ impl Action {
             Self::SwitchTab => "[Tab] switch preview/diff",
             Self::DiffCursorUp => "[↑] diff cursor up (diff focus)",
             Self::DiffCursorDown => "[↓] diff cursor down (diff focus)",
-            Self::DiffDeleteLine => "[x] delete diff line/hunk",
-            Self::DiffDeleteHunk => "[X] delete diff hunk",
+            Self::DiffDeleteLine => "[x] delete diff hunk/file",
             Self::DiffUndo => "[Ctrl+z] undo diff edit",
             Self::DiffRedo => "[Ctrl+Shift+z] redo diff edit (Ctrl+y fallback)",
             Self::NextAgent => "[↓] next agent",
@@ -416,7 +408,6 @@ impl Action {
             Self::DiffCursorUp => "↑ (diff focus)",
             Self::DiffCursorDown => "↓ (diff focus)",
             Self::DiffDeleteLine => "x",
-            Self::DiffDeleteHunk => "X",
             Self::DiffUndo => "Ctrl+z",
             Self::DiffRedo => "Ctrl+Shift+z",
             Self::NextAgent => "↓",
@@ -474,7 +465,6 @@ impl Action {
             | Self::DiffCursorUp
             | Self::DiffCursorDown
             | Self::DiffDeleteLine
-            | Self::DiffDeleteHunk
             | Self::DiffUndo
             | Self::DiffRedo
             | Self::ScrollUp
@@ -517,7 +507,6 @@ impl Action {
         Self::DiffCursorUp,
         Self::DiffCursorDown,
         Self::DiffDeleteLine,
-        Self::DiffDeleteHunk,
         Self::DiffUndo,
         Self::DiffRedo,
         Self::ScrollUp,

@@ -336,7 +336,7 @@ impl UiState {
         meta.push(DiffLineMeta::Info);
 
         lines.push(
-            "Enter focus diff  (focused: Esc/Ctrl+q exit  ↑/↓ move  x delete line  X delete hunk  Ctrl+z undo  Ctrl+y/Ctrl+Shift+z redo  Space fold)"
+            "Enter focus diff  (focused: Esc/Ctrl+q exit  ↑/↓ move  x delete hunk/file  Ctrl+z undo  Ctrl+y/Ctrl+Shift+z redo  Space fold)"
                 .to_string(),
         );
         meta.push(DiffLineMeta::Info);

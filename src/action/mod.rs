@@ -103,7 +103,6 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         | KeyAction::DiffCursorUp
         | KeyAction::DiffCursorDown
         | KeyAction::DiffDeleteLine
-        | KeyAction::DiffDeleteHunk
         | KeyAction::DiffUndo
         | KeyAction::DiffRedo => NormalMode.into(),
     };
@@ -160,7 +159,6 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         | KeyAction::DiffCursorUp
         | KeyAction::DiffCursorDown
         | KeyAction::DiffDeleteLine
-        | KeyAction::DiffDeleteHunk
         | KeyAction::DiffUndo
         | KeyAction::DiffRedo => ScrollingMode.into(),
     };
@@ -297,9 +295,6 @@ pub fn dispatch_diff_focused_mode(
         let next = match action {
             KeyAction::DiffDeleteLine => {
                 DiffDeleteLineAction.execute(DiffFocusedMode, &mut app.data)?
-            }
-            KeyAction::DiffDeleteHunk => {
-                DiffDeleteHunkAction.execute(DiffFocusedMode, &mut app.data)?
             }
             KeyAction::DiffUndo => DiffUndoAction.execute(DiffFocusedMode, &mut app.data)?,
             KeyAction::DiffRedo => DiffRedoAction.execute(DiffFocusedMode, &mut app.data)?,

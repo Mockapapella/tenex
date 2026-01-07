@@ -50,7 +50,7 @@ impl ValidIn<DiffFocusedMode> for DiffCursorDownAction {
     }
 }
 
-/// Normal-mode action: delete (revert) the selected diff line.
+/// Normal-mode action: delete (revert) the selected diff hunk/file.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DiffDeleteLineAction;
 
@@ -64,24 +64,13 @@ impl ValidIn<DiffFocusedMode> for DiffDeleteLineAction {
             .get(app_data.ui.diff_cursor)
             .copied();
 
-        if matches!(meta, Some(DiffLineMeta::Hunk { .. })) {
-            delete_selected_hunk(app_data)?;
-        } else {
-            delete_selected_line(app_data)?;
+        match meta {
+            Some(DiffLineMeta::File { .. }) => delete_selected_file(app_data)?,
+            Some(DiffLineMeta::Hunk { .. } | DiffLineMeta::Line { .. }) => {
+                delete_selected_hunk(app_data)?;
+            }
+            _ => {}
         }
-        Ok(DiffFocusedMode.into())
-    }
-}
-
-/// Normal-mode action: delete (revert) the selected diff hunk.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DiffDeleteHunkAction;
-
-impl ValidIn<DiffFocusedMode> for DiffDeleteHunkAction {
-    type NextState = AppMode;
-
-    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        delete_selected_hunk(app_data)?;
         Ok(DiffFocusedMode.into())
     }
 }
@@ -110,75 +99,6 @@ impl ValidIn<DiffFocusedMode> for DiffRedoAction {
         undo_redo(app_data, false)?;
         Ok(DiffFocusedMode.into())
     }
-}
-
-fn delete_selected_line(app_data: &mut AppData) -> Result<()> {
-    if app_data.active_tab != Tab::Diff {
-        return Ok(());
-    }
-
-    let Some(agent) = app_data.selected_agent() else {
-        app_data.set_status("No agent selected");
-        return Ok(());
-    };
-    let worktree_path = agent.worktree_path.clone();
-
-    let Some(model) = app_data.ui.diff_model.clone() else {
-        app_data.set_status("Diff not loaded yet");
-        return Ok(());
-    };
-
-    let Some(meta) = app_data
-        .ui
-        .diff_line_meta
-        .get(app_data.ui.diff_cursor)
-        .copied()
-    else {
-        return Ok(());
-    };
-
-    let DiffLineMeta::Line {
-        file_idx,
-        hunk_idx,
-        line_idx,
-    } = meta
-    else {
-        return Ok(());
-    };
-
-    let Some(file) = model.files.get(file_idx) else {
-        return Ok(());
-    };
-
-    if file.status == FileStatus::Deleted {
-        app_data
-            .set_status("Cannot delete a line from a deleted file (select hunk header to restore)");
-        return Ok(());
-    }
-
-    let Some(hunk) = file.hunks.get(hunk_idx) else {
-        return Ok(());
-    };
-    let Some(line) = hunk.lines.get(line_idx) else {
-        return Ok(());
-    };
-
-    if !matches!(line.origin, '+' | '-') {
-        app_data.set_status("Select a changed line (+/-) to delete");
-        return Ok(());
-    }
-
-    let patch = build_line_revert_patch(file, hunk, line_idx);
-    apply_git_patch(&worktree_path, &patch, false)?;
-
-    app_data.ui.diff_undo.push(DiffEdit {
-        patch,
-        applied_reverse: false,
-    });
-    app_data.ui.diff_redo.clear();
-    app_data.ui.diff_force_refresh = true;
-    app_data.set_status("Deleted diff line");
-    Ok(())
 }
 
 fn delete_selected_hunk(app_data: &mut AppData) -> Result<()> {
@@ -247,6 +167,59 @@ fn delete_selected_hunk(app_data: &mut AppData) -> Result<()> {
     app_data.ui.diff_redo.clear();
     app_data.ui.diff_force_refresh = true;
     app_data.set_status("Deleted diff hunk");
+    Ok(())
+}
+
+fn delete_selected_file(app_data: &mut AppData) -> Result<()> {
+    if app_data.active_tab != Tab::Diff {
+        return Ok(());
+    }
+
+    let Some(agent) = app_data.selected_agent() else {
+        app_data.set_status("No agent selected");
+        return Ok(());
+    };
+    let worktree_path = agent.worktree_path.clone();
+
+    let Some(model) = app_data.ui.diff_model.clone() else {
+        app_data.set_status("Diff not loaded yet");
+        return Ok(());
+    };
+
+    let Some(meta) = app_data
+        .ui
+        .diff_line_meta
+        .get(app_data.ui.diff_cursor)
+        .copied()
+    else {
+        return Ok(());
+    };
+
+    let DiffLineMeta::File { file_idx } = meta else {
+        return Ok(());
+    };
+
+    let Some(file) = model.files.get(file_idx) else {
+        return Ok(());
+    };
+
+    // The file patch corresponds to the current diff. Reverse-applying it reverts the file change.
+    let patch = build_file_patch(file);
+    apply_git_patch(&worktree_path, &patch, true)?;
+
+    app_data.ui.diff_undo.push(DiffEdit {
+        patch,
+        applied_reverse: true,
+    });
+    app_data.ui.diff_redo.clear();
+    app_data.ui.diff_force_refresh = true;
+
+    match file.status {
+        FileStatus::Deleted => app_data.set_status("Restored deleted file"),
+        FileStatus::Added | FileStatus::Untracked => app_data.set_status("Deleted file"),
+        _ => app_data.set_status("Reverted file changes"),
+    }
+
     Ok(())
 }
 
@@ -353,53 +326,6 @@ fn build_hunk_revert_patch(file: &DiffFile, hunk: &DiffHunk) -> String {
     patch
 }
 
-fn build_line_revert_patch(file: &DiffFile, hunk: &DiffHunk, target_line_idx: usize) -> String {
-    let file_path = diff_path(&file.path);
-    let mut patch = String::new();
-    let _ = writeln!(patch, "diff --git a/{file_path} b/{file_path}");
-    let _ = writeln!(patch, "--- a/{file_path}");
-    let _ = writeln!(patch, "+++ b/{file_path}");
-
-    let suffix = hunk_header_suffix(&hunk.header);
-
-    let old_start = hunk.new_start;
-    let old_count = u32::try_from(hunk_old_count_from_current(hunk)).unwrap_or(0);
-
-    let mut out_lines: Vec<String> = Vec::new();
-    for (idx, line) in hunk.lines.iter().enumerate() {
-        match line.origin {
-            ' ' => out_lines.push(format!(" {}", line.content)),
-            '+' => {
-                if idx == target_line_idx {
-                    out_lines.push(format!("-{}", line.content));
-                } else {
-                    out_lines.push(format!(" {}", line.content));
-                }
-            }
-            '-' => {
-                if idx == target_line_idx {
-                    out_lines.push(format!("+{}", line.content));
-                }
-            }
-            '\\' => out_lines.push(format!("\\{}", line.content)),
-            _ => {}
-        }
-    }
-
-    let new_count = u32::try_from(count_new_lines(&out_lines)).unwrap_or(0);
-    let new_start = old_start;
-
-    let _ = writeln!(
-        patch,
-        "@@ -{old_start},{old_count} +{new_start},{new_count} @@{suffix}"
-    );
-    for line in out_lines {
-        let _ = writeln!(patch, "{line}");
-    }
-
-    patch
-}
-
 fn diff_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -428,13 +354,6 @@ fn hunk_old_count_from_current(hunk: &DiffHunk) -> usize {
 
 fn hunk_new_count_after_revert(hunk: &DiffHunk) -> usize {
     usize::try_from(hunk.old_lines).unwrap_or(0)
-}
-
-fn count_new_lines(lines: &[String]) -> usize {
-    lines
-        .iter()
-        .filter(|l| l.starts_with(' ') || l.starts_with('+'))
-        .count()
 }
 
 fn apply_git_patch(worktree_path: &Path, patch: &str, reverse: bool) -> Result<()> {
@@ -636,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_line_and_undo_redo_on_unstaged_change() -> Result<(), Box<dyn std::error::Error>>
+    fn test_delete_hunk_and_undo_redo_on_unstaged_change() -> Result<(), Box<dyn std::error::Error>>
     {
         let original = "one\ntwo\n";
         let modified = "one\ntwo\nthree\n";
@@ -662,7 +581,7 @@ mod tests {
         assert_eq!(data.ui.diff_undo.len(), 1);
         assert!(data.ui.diff_redo.is_empty());
         assert!(data.ui.diff_force_refresh);
-        assert_eq!(data.ui.status_message.as_deref(), Some("Deleted diff line"));
+        assert_eq!(data.ui.status_message.as_deref(), Some("Deleted diff hunk"));
 
         DiffUndoAction.execute(DiffFocusedMode, &mut data)?;
         assert_eq!(fs::read_to_string(&file_path)?, modified);
@@ -677,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_line_requires_changed_line() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_delete_hunk_from_context_line() -> Result<(), Box<dyn std::error::Error>> {
         let original = "one\ntwo\n";
         let modified = "one\ntwo\nthree\n";
         let (temp_dir, repo) = init_test_repo_with_commit(original)?;
@@ -698,12 +617,9 @@ mod tests {
         select_first_context_line(&mut data)?;
 
         DiffDeleteLineAction.execute(DiffFocusedMode, &mut data)?;
-        assert_eq!(fs::read_to_string(&file_path)?, modified);
-        assert_eq!(
-            data.ui.status_message.as_deref(),
-            Some("Select a changed line (+/-) to delete")
-        );
-        assert!(data.ui.diff_undo.is_empty());
+        assert_eq!(fs::read_to_string(&file_path)?, original);
+        assert_eq!(data.ui.status_message.as_deref(), Some("Deleted diff hunk"));
+        assert_eq!(data.ui.diff_undo.len(), 1);
         Ok(())
     }
 
@@ -800,7 +716,8 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_line_noops_for_deleted_file() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_delete_action_restores_deleted_file_when_on_line()
+    -> Result<(), Box<dyn std::error::Error>> {
         let original = "keep\nme\n";
         let (temp_dir, repo) = init_test_repo_with_commit(original)?;
         let file_path = temp_dir.path().join("test.txt");
@@ -825,11 +742,66 @@ mod tests {
         select_first_changed_line(&mut data)?;
 
         DiffDeleteLineAction.execute(DiffFocusedMode, &mut data)?;
-        assert!(!file_path.exists());
+        assert_eq!(fs::read_to_string(&file_path)?, original);
         assert_eq!(
             data.ui.status_message.as_deref(),
-            Some("Cannot delete a line from a deleted file (select hunk header to restore)")
+            Some("Restored deleted file")
         );
+        Ok(())
+    }
+
+    fn select_first_file_header(data: &mut AppData) -> Result<()> {
+        let cursor = data
+            .ui
+            .diff_line_meta
+            .iter()
+            .position(|m| matches!(m, DiffLineMeta::File { .. }))
+            .context("file header present in diff view")?;
+        data.ui.diff_cursor = cursor;
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_file_from_file_header_reverts_all_hunks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut lines = Vec::new();
+        for idx in 1..=30 {
+            lines.push(format!("line{idx}\n"));
+        }
+        let original = lines.join("");
+
+        lines[1] = "line2 modified\n".to_string();
+        lines[19] = "line20 modified\n".to_string();
+        let modified = lines.join("");
+
+        let (temp_dir, repo) = init_test_repo_with_commit(&original)?;
+        let file_path = temp_dir.path().join("test.txt");
+        fs::write(&file_path, &modified)?;
+
+        let (mut data, _temp) = create_test_data()?;
+        data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+        data.active_tab = Tab::Diff;
+        set_diff_view_from_repo(&mut data, &repo)?;
+        select_first_file_header(&mut data)?;
+
+        DiffDeleteLineAction.execute(DiffFocusedMode, &mut data)?;
+        assert_eq!(fs::read_to_string(&file_path)?, original);
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Reverted file changes")
+        );
+        assert_eq!(data.ui.diff_undo.len(), 1);
+        assert!(data.ui.diff_undo[0].applied_reverse);
+
+        DiffUndoAction.execute(DiffFocusedMode, &mut data)?;
+        assert_eq!(fs::read_to_string(&file_path)?, modified);
+        assert_eq!(data.ui.status_message.as_deref(), Some("Undo"));
         Ok(())
     }
 
