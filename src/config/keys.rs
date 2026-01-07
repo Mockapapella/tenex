@@ -9,7 +9,7 @@ pub enum Action {
     NewAgent,
     /// Create a new agent with a prompt
     NewAgentWithPrompt,
-    /// Attach to the selected agent terminal (keystrokes forwarded)
+    /// Focus the active detail pane (Preview attaches terminal, Diff enters diff focus)
     FocusPreview,
     /// Detach from the agent terminal (return to Tenex controls)
     UnfocusPreview,
@@ -23,6 +23,18 @@ pub enum Action {
     OpenPR,
     /// Switch between preview/diff tabs
     SwitchTab,
+    /// Move the diff cursor up (Diff tab)
+    DiffCursorUp,
+    /// Move the diff cursor down (Diff tab)
+    DiffCursorDown,
+    /// Delete the selected diff line (Diff tab)
+    DiffDeleteLine,
+    /// Delete the selected diff hunk (Diff tab)
+    DiffDeleteHunk,
+    /// Undo the last diff edit (Diff tab)
+    DiffUndo,
+    /// Redo the last undone diff edit (Diff tab)
+    DiffRedo,
     /// Select next agent
     NextAgent,
     /// Select previous agent
@@ -235,6 +247,27 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::NONE,
         action: Action::SwitchTab,
     },
+    // Diff (interactive)
+    Binding {
+        code: KeyCode::Char('x'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::DiffDeleteLine,
+    },
+    Binding {
+        code: KeyCode::Char('X'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::DiffDeleteHunk,
+    },
+    Binding {
+        code: KeyCode::Char('z'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::DiffUndo,
+    },
+    Binding {
+        code: KeyCode::Char('y'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::DiffRedo,
+    },
     Binding {
         code: KeyCode::Char('u'),
         modifiers: KeyModifiers::CONTROL,
@@ -333,13 +366,19 @@ impl Action {
         match self {
             Self::NewAgent => "[a]dd agent",
             Self::NewAgentWithPrompt => "[A]dd agent with prompt",
-            Self::FocusPreview => "[Enter] attach terminal",
+            Self::FocusPreview => "[Enter] focus preview (Preview tab) / diff (Diff tab)",
             Self::UnfocusPreview => "[Ctrl+q] detach terminal / quit app",
             Self::Kill => "[d]elete agent and sub-agents",
             Self::Push => "[Ctrl+p]ush branch to remote",
             Self::RenameBranch => "[r]ename branch",
             Self::OpenPR => "[Ctrl+o]pen pull request",
             Self::SwitchTab => "[Tab] switch preview/diff",
+            Self::DiffCursorUp => "[↑] diff cursor up (diff focus)",
+            Self::DiffCursorDown => "[↓] diff cursor down (diff focus)",
+            Self::DiffDeleteLine => "[x] delete diff line",
+            Self::DiffDeleteHunk => "[X] delete diff hunk",
+            Self::DiffUndo => "[Ctrl+z] undo diff edit",
+            Self::DiffRedo => "[Ctrl+Shift+z] redo diff edit (Ctrl+y fallback)",
             Self::NextAgent => "[↓] next agent",
             Self::PrevAgent => "[↑] prev agent",
             Self::Help => "[?] help",
@@ -374,6 +413,12 @@ impl Action {
             Self::FocusPreview => "Enter",
             Self::Kill => "d",
             Self::SwitchTab => "Tab",
+            Self::DiffCursorUp => "↑ (diff focus)",
+            Self::DiffCursorDown => "↓ (diff focus)",
+            Self::DiffDeleteLine => "x",
+            Self::DiffDeleteHunk => "X",
+            Self::DiffUndo => "Ctrl+z",
+            Self::DiffRedo => "Ctrl+Shift+z",
             Self::NextAgent => "↓",
             Self::PrevAgent => "↑",
             Self::Help => "?",
@@ -426,6 +471,12 @@ impl Action {
             | Self::NextAgent
             | Self::PrevAgent
             | Self::SwitchTab
+            | Self::DiffCursorUp
+            | Self::DiffCursorDown
+            | Self::DiffDeleteLine
+            | Self::DiffDeleteHunk
+            | Self::DiffUndo
+            | Self::DiffRedo
             | Self::ScrollUp
             | Self::ScrollDown
             | Self::ScrollTop
@@ -463,6 +514,12 @@ impl Action {
         Self::NextAgent,
         Self::PrevAgent,
         Self::SwitchTab,
+        Self::DiffCursorUp,
+        Self::DiffCursorDown,
+        Self::DiffDeleteLine,
+        Self::DiffDeleteHunk,
+        Self::DiffUndo,
+        Self::DiffRedo,
         Self::ScrollUp,
         Self::ScrollDown,
         Self::ScrollTop,
@@ -476,6 +533,14 @@ impl Action {
 /// Get the action for a key event
 #[must_use]
 pub fn get_action(code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+    // Special-case: allow Ctrl+Shift+z for redo on terminals that distinguish it.
+    if matches!(code, KeyCode::Char('z' | 'Z'))
+        && modifiers.contains(KeyModifiers::CONTROL)
+        && modifiers.contains(KeyModifiers::SHIFT)
+    {
+        return Some(Action::DiffRedo);
+    }
+
     let (code, modifiers) = normalize_key_event(code, modifiers);
 
     for binding in BINDINGS {
@@ -667,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_unknown_key() {
-        assert_eq!(get_action(KeyCode::Char('x'), KeyModifiers::NONE), None);
+        assert_eq!(get_action(KeyCode::Char('v'), KeyModifiers::NONE), None);
     }
 
     #[test]

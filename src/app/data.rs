@@ -134,6 +134,7 @@ impl AppData {
 
         self.selected = (self.selected + 1) % visible_count;
         self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
     }
 
@@ -146,6 +147,7 @@ impl AppData {
 
         self.selected = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
         self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
     }
 

@@ -1,5 +1,9 @@
 //! UI-related state: scroll positions, preview content, dimensions
 
+use uuid::Uuid;
+
+use std::path::PathBuf;
+
 /// UI-related state for the application
 #[derive(Debug, Default)]
 pub struct UiState {
@@ -11,6 +15,9 @@ pub struct UiState {
 
     /// Scroll position in diff pane
     pub diff_scroll: usize,
+
+    /// Cursor position (selected line index) in diff pane
+    pub diff_cursor: usize,
 
     /// Scroll position in help overlay
     pub help_scroll: usize,
@@ -34,6 +41,36 @@ pub struct UiState {
     /// Cached byte ranges for each diff line (matches `diff_content.lines()`)
     pub diff_line_ranges: Vec<(usize, usize)>,
 
+    /// Cached metadata for each diff line (matches `diff_content.lines()`)
+    pub diff_line_meta: Vec<DiffLineMeta>,
+
+    /// Current structured diff model for interactive operations
+    pub diff_model: Option<crate::git::DiffModel>,
+
+    /// Folded file paths in the diff view
+    pub diff_folded_files: Vec<PathBuf>,
+
+    /// Folded hunks in the diff view
+    pub diff_folded_hunks: Vec<DiffHunkKey>,
+
+    /// Undo stack for diff edits
+    pub diff_undo: Vec<DiffEdit>,
+
+    /// Redo stack for diff edits
+    pub diff_redo: Vec<DiffEdit>,
+
+    /// Current diff hash (0 when no changes)
+    pub diff_hash: u64,
+
+    /// Diff hash the user last saw in the diff tab per agent (0 if never viewed)
+    pub diff_last_seen_hash_by_agent: Vec<(Uuid, u64)>,
+
+    /// Whether the diff has unseen changes since last view
+    pub diff_has_unseen_changes: bool,
+
+    /// Request an immediate diff refresh after an edit action
+    pub diff_force_refresh: bool,
+
     /// Cached preview pane dimensions (width, height) for mux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
@@ -52,6 +89,7 @@ impl UiState {
             agent_list_scroll: 0,
             preview_scroll: 0,
             diff_scroll: 0,
+            diff_cursor: 0,
             help_scroll: 0,
             preview_follow: true,
             preview_content: String::new(),
@@ -59,6 +97,16 @@ impl UiState {
             preview_pane_size: None,
             diff_content: String::new(),
             diff_line_ranges: Vec::new(),
+            diff_line_meta: Vec::new(),
+            diff_model: None,
+            diff_folded_files: Vec::new(),
+            diff_folded_hunks: Vec::new(),
+            diff_undo: Vec::new(),
+            diff_redo: Vec::new(),
+            diff_hash: 0,
+            diff_last_seen_hash_by_agent: Vec::new(),
+            diff_has_unseen_changes: false,
+            diff_force_refresh: false,
             preview_dimensions: None,
             last_error: None,
             status_message: None,
@@ -70,7 +118,28 @@ impl UiState {
         let content = content.into();
         self.diff_line_ranges = compute_line_ranges(&content);
         self.diff_content = content;
+        self.diff_line_meta = vec![DiffLineMeta::Unknown; self.diff_line_ranges.len()];
         self.normalize_diff_scroll();
+        self.normalize_diff_cursor();
+    }
+
+    /// Set diff content, line metadata, and refresh cached line ranges.
+    pub fn set_diff_view(&mut self, content: impl Into<String>, meta: Vec<DiffLineMeta>) {
+        let content = content.into();
+        self.diff_line_ranges = compute_line_ranges(&content);
+        self.diff_content = content;
+        self.diff_line_meta = if meta.len() == self.diff_line_ranges.len() {
+            meta
+        } else {
+            tracing::warn!(
+                meta_len = meta.len(),
+                ranges_len = self.diff_line_ranges.len(),
+                "diff line metadata length mismatch; falling back to Unknown"
+            );
+            vec![DiffLineMeta::Unknown; self.diff_line_ranges.len()]
+        };
+        self.normalize_diff_scroll();
+        self.normalize_diff_cursor();
     }
 
     /// Reset scroll positions for both panes
@@ -81,6 +150,42 @@ impl UiState {
         self.preview_follow = true;
         // Diff: set to 0 to show from top
         self.diff_scroll = 0;
+        self.diff_cursor = 0;
+    }
+
+    /// Reset interactive diff state when switching agents/worktrees.
+    pub fn reset_diff_interaction(&mut self) {
+        self.diff_cursor = 0;
+        self.diff_model = None;
+        self.diff_folded_files.clear();
+        self.diff_folded_hunks.clear();
+        self.diff_undo.clear();
+        self.diff_redo.clear();
+        self.diff_hash = 0;
+        self.diff_has_unseen_changes = false;
+        self.diff_force_refresh = false;
+        self.diff_line_meta.clear();
+    }
+
+    #[must_use]
+    pub fn diff_last_seen_hash_for_agent(&self, agent_id: Uuid) -> u64 {
+        self.diff_last_seen_hash_by_agent
+            .iter()
+            .find(|(id, _)| *id == agent_id)
+            .map_or(0, |(_, hash)| *hash)
+    }
+
+    pub fn set_diff_last_seen_hash_for_agent(&mut self, agent_id: Uuid, hash: u64) {
+        if let Some((_, existing)) = self
+            .diff_last_seen_hash_by_agent
+            .iter_mut()
+            .find(|(id, _)| *id == agent_id)
+        {
+            *existing = hash;
+            return;
+        }
+
+        self.diff_last_seen_hash_by_agent.push((agent_id, hash));
     }
 
     /// Scroll up in the preview pane by the given amount
@@ -103,12 +208,16 @@ impl UiState {
     pub fn scroll_diff_up(&mut self, amount: usize) {
         self.normalize_diff_scroll();
         self.diff_scroll = self.diff_scroll.saturating_sub(amount);
+        self.diff_cursor = self.diff_cursor.saturating_sub(amount);
+        self.normalize_diff_cursor();
     }
 
     /// Scroll down in the diff pane by the given amount
     pub fn scroll_diff_down(&mut self, amount: usize) {
         self.normalize_diff_scroll();
         self.diff_scroll = self.diff_scroll.saturating_add(amount);
+        self.diff_cursor = self.diff_cursor.saturating_add(amount);
+        self.normalize_diff_cursor();
     }
 
     /// Check if preview scroll is at bottom and re-enable follow mode if so
@@ -144,6 +253,38 @@ impl UiState {
         }
     }
 
+    fn normalize_diff_cursor(&mut self) {
+        let diff_lines = self.diff_line_ranges.len();
+        if diff_lines == 0 {
+            self.diff_cursor = 0;
+            return;
+        }
+
+        let max = diff_lines.saturating_sub(1);
+        if self.diff_cursor > max {
+            self.diff_cursor = max;
+        }
+
+        self.ensure_diff_cursor_visible();
+    }
+
+    fn ensure_diff_cursor_visible(&mut self) {
+        let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
+        if visible_height == 0 {
+            return;
+        }
+
+        if self.diff_cursor < self.diff_scroll {
+            self.diff_scroll = self.diff_cursor;
+        } else if self.diff_cursor >= self.diff_scroll.saturating_add(visible_height) {
+            self.diff_scroll = self
+                .diff_cursor
+                .saturating_sub(visible_height.saturating_sub(1));
+        }
+
+        self.normalize_diff_scroll();
+    }
+
     /// Scroll preview to the top
     pub const fn preview_to_top(&mut self) {
         self.preview_scroll = 0;
@@ -153,6 +294,7 @@ impl UiState {
     /// Scroll diff to the top
     pub const fn diff_to_top(&mut self) {
         self.diff_scroll = 0;
+        self.diff_cursor = 0;
     }
 
     /// Scroll preview to the bottom
@@ -164,6 +306,153 @@ impl UiState {
     /// Scroll diff to the bottom
     pub const fn diff_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
         self.diff_scroll = content_lines.saturating_sub(visible_lines);
+        self.diff_cursor = content_lines.saturating_sub(1);
+    }
+
+    /// Move the diff cursor up by the given amount.
+    pub fn diff_cursor_up(&mut self, amount: usize) {
+        self.diff_cursor = self.diff_cursor.saturating_sub(amount);
+        self.normalize_diff_cursor();
+    }
+
+    /// Move the diff cursor down by the given amount.
+    pub fn diff_cursor_down(&mut self, amount: usize) {
+        self.diff_cursor = self.diff_cursor.saturating_add(amount);
+        self.normalize_diff_cursor();
+    }
+
+    /// Build the diff view content and metadata from a structured diff model.
+    #[must_use]
+    pub fn build_diff_view(&self, model: &crate::git::DiffModel) -> (String, Vec<DiffLineMeta>) {
+        let mut lines: Vec<String> = Vec::new();
+        let mut meta: Vec<DiffLineMeta> = Vec::new();
+
+        let undo_len = self.diff_undo.len();
+        let redo_len = self.diff_redo.len();
+        lines.push(format!(
+            "{} | edits: {undo_len} undo / {redo_len} redo",
+            model.summary
+        ));
+        meta.push(DiffLineMeta::Info);
+
+        lines.push(
+            "Enter focus diff  (focused: Esc/Ctrl+q exit  ↑/↓ move  x delete line  X delete hunk  Ctrl+z undo  Ctrl+y/Ctrl+Shift+z redo  Space fold)"
+                .to_string(),
+        );
+        meta.push(DiffLineMeta::Info);
+
+        if model.files.is_empty() {
+            lines.push("(No changes)".to_string());
+            meta.push(DiffLineMeta::Info);
+        }
+
+        for (file_idx, file) in model.files.iter().enumerate() {
+            let is_file_folded = self.diff_folded_files.iter().any(|p| p == &file.path);
+            let file_indicator = if is_file_folded { "▶" } else { "▼" };
+            lines.push(format!(
+                "{file_indicator} [{}] {} (+{} -{})",
+                file.status,
+                file.path.display(),
+                file.additions,
+                file.deletions
+            ));
+            meta.push(DiffLineMeta::File { file_idx });
+
+            if is_file_folded {
+                continue;
+            }
+
+            for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+                let key = DiffHunkKey {
+                    file_path: file.path.clone(),
+                    old_start: hunk.old_start,
+                    new_start: hunk.new_start,
+                };
+                let is_hunk_folded = self.diff_folded_hunks.iter().any(|k| k == &key);
+                let hunk_indicator = if is_hunk_folded { "▶" } else { "▼" };
+                lines.push(format!("  {hunk_indicator} {}", hunk.header));
+                meta.push(DiffLineMeta::Hunk { file_idx, hunk_idx });
+
+                if is_hunk_folded {
+                    continue;
+                }
+
+                for (line_idx, hline) in hunk.lines.iter().enumerate() {
+                    let raw = match hline.origin {
+                        '+' | '-' | ' ' => format!("{}{}", hline.origin, hline.content),
+                        '\\' => format!("\\{}", hline.content),
+                        _ => hline.content.clone(),
+                    };
+                    lines.push(format!("    {raw}"));
+                    meta.push(DiffLineMeta::Line {
+                        file_idx,
+                        hunk_idx,
+                        line_idx,
+                    });
+                }
+            }
+        }
+
+        (lines.join("\n"), meta)
+    }
+
+    /// Toggle fold state in the diff view at the current cursor.
+    ///
+    /// Returns `true` if a foldable diff element was toggled.
+    pub fn toggle_diff_fold_at_cursor(&mut self) -> bool {
+        let Some(model) = self.diff_model.take() else {
+            return false;
+        };
+
+        let Some(meta) = self.diff_line_meta.get(self.diff_cursor).copied() else {
+            self.diff_model = Some(model);
+            return false;
+        };
+
+        let Some((file_idx, hunk_idx)) = (match meta {
+            DiffLineMeta::File { file_idx } => Some((file_idx, None)),
+            DiffLineMeta::Hunk { file_idx, hunk_idx }
+            | DiffLineMeta::Line {
+                file_idx, hunk_idx, ..
+            } => Some((file_idx, Some(hunk_idx))),
+            _ => None,
+        }) else {
+            self.diff_model = Some(model);
+            return false;
+        };
+
+        let mut handled = false;
+        if let Some(file) = model.files.get(file_idx) {
+            if let Some(hunk_idx) = hunk_idx {
+                if let Some(hunk) = file.hunks.get(hunk_idx) {
+                    let key = DiffHunkKey {
+                        file_path: file.path.clone(),
+                        old_start: hunk.old_start,
+                        new_start: hunk.new_start,
+                    };
+                    if let Some(pos) = self.diff_folded_hunks.iter().position(|k| k == &key) {
+                        self.diff_folded_hunks.remove(pos);
+                    } else {
+                        self.diff_folded_hunks.push(key);
+                    }
+                    handled = true;
+                }
+            } else if let Some(pos) = self.diff_folded_files.iter().position(|p| p == &file.path) {
+                self.diff_folded_files.remove(pos);
+                handled = true;
+            } else {
+                self.diff_folded_files.push(file.path.clone());
+                handled = true;
+            }
+        }
+
+        if handled {
+            let (content, meta) = self.build_diff_view(&model);
+            self.set_diff_view(content, meta);
+        }
+
+        self.diff_model = Some(model);
+        handled
     }
 
     /// Set the preview pane dimensions for mux window sizing
@@ -192,6 +481,56 @@ impl UiState {
     pub fn clear_status(&mut self) {
         self.status_message = None;
     }
+}
+
+/// Identifies a foldable hunk in the diff view.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiffHunkKey {
+    /// File path for the hunk.
+    pub file_path: PathBuf,
+    /// Old start line number (from the diff header).
+    pub old_start: u32,
+    /// New start line number (from the diff header).
+    pub new_start: u32,
+}
+
+/// Metadata for a displayed diff line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffLineMeta {
+    /// Non-diff informational line.
+    Info,
+    /// A file header line (fold/unfold).
+    File {
+        /// File index in `diff_model.files`.
+        file_idx: usize,
+    },
+    /// A hunk header line (fold/unfold).
+    Hunk {
+        /// File index in `diff_model.files`.
+        file_idx: usize,
+        /// Hunk index in `diff_model.files[file_idx].hunks`.
+        hunk_idx: usize,
+    },
+    /// A line within a hunk.
+    Line {
+        /// File index in `diff_model.files`.
+        file_idx: usize,
+        /// Hunk index in `diff_model.files[file_idx].hunks`.
+        hunk_idx: usize,
+        /// Line index in `diff_model.files[file_idx].hunks[hunk_idx].lines`.
+        line_idx: usize,
+    },
+    /// Unknown line type (fallback).
+    Unknown,
+}
+
+/// One reversible edit applied from the diff view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffEdit {
+    /// The patch text to apply via `git apply`.
+    pub patch: String,
+    /// Whether the patch was applied with `-R` when the edit was first executed.
+    pub applied_reverse: bool,
 }
 
 /// Compute per-line byte ranges for fast slicing.
@@ -302,8 +641,8 @@ mod tests {
         ui.set_diff_content("line1\nline2\nline3\nline4\nline5");
 
         ui.scroll_diff_down(5);
-        // With 5 lines and height 3, max scroll is 2, but normalization happens on next scroll
-        assert_eq!(ui.diff_scroll, 5);
+        // With 5 lines and height 3, max scroll is 2 (cursor clamping keeps it in range)
+        assert_eq!(ui.diff_scroll, 2);
     }
 
     #[test]

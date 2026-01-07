@@ -1,7 +1,7 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
 use crate::agent::Status;
-use crate::app::{App, Tab};
+use crate::app::{App, DiffLineMeta, Tab};
 use crate::state::AppMode;
 use ratatui::{
     Frame,
@@ -146,30 +146,39 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn tab_bar_line(app: &App) -> Line<'static> {
-    let tabs = vec![
-        (" Preview ", app.data.active_tab == Tab::Preview),
-        (" Diff ", app.data.active_tab == Tab::Diff),
-    ];
+    let tab_span = |name: &'static str, active: bool| {
+        if active {
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(colors::SELECTED)
+                    .bg(colors::SURFACE_HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(
+                name,
+                Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
+            )
+        }
+    };
 
-    let spans: Vec<Span<'static>> = tabs
-        .into_iter()
-        .map(|(name, active)| {
-            if active {
-                Span::styled(
-                    name,
-                    Style::default()
-                        .fg(colors::SELECTED)
-                        .bg(colors::SURFACE_HIGHLIGHT)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled(
-                    name,
-                    Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
-                )
-            }
-        })
-        .collect();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    spans.push(tab_span(" Preview ", app.data.active_tab == Tab::Preview));
+
+    let diff_active = app.data.active_tab == Tab::Diff;
+    spans.push(tab_span(" Diff ", diff_active));
+
+    if app.data.ui.diff_has_unseen_changes && !diff_active {
+        spans.push(Span::styled(
+            "●",
+            Style::default()
+                .fg(colors::ACCENT_WARNING)
+                .bg(colors::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     Line::from(spans)
 }
@@ -314,11 +323,21 @@ fn render_preview_cursor(
 /// Render the diff pane
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.data.ui.diff_content;
+    let is_focused = matches!(&app.mode, AppMode::DiffFocused(_));
+
+    let (border_color, title) = if is_focused {
+        (
+            colors::SELECTED,
+            " Git Diff (INTERACTIVE) [Esc/Ctrl+q exit] ",
+        )
+    } else {
+        (colors::BORDER, " Git Diff ")
+    };
 
     let block = Block::default()
-        .title(" Git Diff ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(colors::BORDER))
+        .border_style(Style::default().fg(border_color))
         .border_type(colors::BORDER_TYPE)
         .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(block.clone(), area);
@@ -339,19 +358,46 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let end_line = (scroll + visible_height).min(total_lines);
 
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
-    for &(start, end) in &app.data.ui.diff_line_ranges[scroll..end_line] {
+    for (offset, &(start, end)) in app.data.ui.diff_line_ranges[scroll..end_line]
+        .iter()
+        .enumerate()
+    {
+        let line_idx = scroll.saturating_add(offset);
         let line = &content[start..end];
-        let color = if line.starts_with('+') && !line.starts_with("+++") {
-            colors::DIFF_ADD
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            colors::DIFF_REMOVE
-        } else if line.starts_with("@@") {
-            colors::DIFF_HUNK
-        } else {
-            colors::TEXT_PRIMARY
+
+        let meta = app
+            .data
+            .ui
+            .diff_line_meta
+            .get(line_idx)
+            .unwrap_or(&DiffLineMeta::Unknown);
+
+        let trimmed = line.trim_start();
+        let mut style = match meta {
+            DiffLineMeta::Info => Style::default().fg(colors::TEXT_MUTED),
+            DiffLineMeta::File { .. } => Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+            DiffLineMeta::Hunk { .. } => Style::default().fg(colors::DIFF_HUNK),
+            DiffLineMeta::Line { .. } => {
+                if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+                    Style::default().fg(colors::DIFF_ADD)
+                } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+                    Style::default().fg(colors::DIFF_REMOVE)
+                } else if trimmed.starts_with("@@") {
+                    Style::default().fg(colors::DIFF_HUNK)
+                } else {
+                    Style::default().fg(colors::TEXT_PRIMARY)
+                }
+            }
+            DiffLineMeta::Unknown => Style::default().fg(colors::TEXT_PRIMARY),
         };
 
-        lines.push(Line::styled(line, Style::default().fg(color)));
+        if line_idx == app.data.ui.diff_cursor && is_focused {
+            style = style.bg(colors::SURFACE_HIGHLIGHT);
+        }
+
+        lines.push(Line::styled(line, style));
     }
 
     let paragraph = Paragraph::new(Text::from(lines))

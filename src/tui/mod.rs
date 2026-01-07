@@ -276,12 +276,14 @@ fn run_loop(
         }
 
         // Diff refresh is expensive; throttle it while still updating promptly on selection/tab changes.
-        if app.data.active_tab == Tab::Diff {
-            let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;
-            if needs_content_update || diff_due {
+        let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;
+        if needs_content_update || diff_due || app.data.ui.diff_force_refresh {
+            if app.data.active_tab == Tab::Diff || app.data.ui.diff_force_refresh {
                 let _ = action_handler.update_diff(app);
-                last_diff_update = Instant::now();
+            } else {
+                let _ = action_handler.update_diff_digest(app);
             }
+            last_diff_update = Instant::now();
         }
 
         needs_content_update = false;

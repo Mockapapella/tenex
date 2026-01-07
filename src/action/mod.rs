@@ -2,6 +2,7 @@
 
 mod agent;
 mod confirm;
+mod diff;
 mod git;
 mod misc;
 mod modal;
@@ -12,6 +13,7 @@ mod text_input;
 
 pub use agent::*;
 pub use confirm::*;
+pub use diff::*;
 pub use git::*;
 pub use misc::*;
 #[cfg(test)]
@@ -29,7 +31,7 @@ use crate::config::Action as KeyAction;
 use crate::state::{
     BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
     ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode,
-    CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
+    CustomAgentCommandMode, DiffFocusedMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
     MergeBranchSelectorMode, ModelSelectorMode, NormalMode, PreviewFocusedMode, PromptingMode,
     RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode,
     ReviewInfoMode, ScrollingMode, SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
@@ -96,7 +98,14 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::Cancel => CancelAction.execute(NormalMode, &mut app.data)?,
 
         // Not valid in Normal mode; treat as no-op.
-        KeyAction::Confirm | KeyAction::UnfocusPreview => NormalMode.into(),
+        KeyAction::Confirm
+        | KeyAction::UnfocusPreview
+        | KeyAction::DiffCursorUp
+        | KeyAction::DiffCursorDown
+        | KeyAction::DiffDeleteLine
+        | KeyAction::DiffDeleteHunk
+        | KeyAction::DiffUndo
+        | KeyAction::DiffRedo => NormalMode.into(),
     };
 
     app.apply_mode(next);
@@ -146,7 +155,14 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::Cancel => CancelAction.execute(ScrollingMode, &mut app.data)?,
 
         // Not valid in Scrolling mode; treat as no-op.
-        KeyAction::Confirm | KeyAction::UnfocusPreview => ScrollingMode.into(),
+        KeyAction::Confirm
+        | KeyAction::UnfocusPreview
+        | KeyAction::DiffCursorUp
+        | KeyAction::DiffCursorDown
+        | KeyAction::DiffDeleteLine
+        | KeyAction::DiffDeleteHunk
+        | KeyAction::DiffUndo
+        | KeyAction::DiffRedo => ScrollingMode.into(),
     };
 
     app.apply_mode(next);
@@ -233,6 +249,79 @@ pub fn dispatch_preview_focused_mode(
     };
 
     app.apply_mode(next);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `DiffFocusedMode`.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_diff_focused_mode(
+    app: &mut App,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<()> {
+    // Ctrl+q exits diff focus mode (same key quits app when not focused).
+    if matches!(code, KeyCode::Char('q' | 'Q')) && modifiers.contains(KeyModifiers::CONTROL) {
+        let next = UnfocusDiffAction.execute(DiffFocusedMode, &mut app.data)?;
+        app.apply_mode(next);
+        return Ok(());
+    }
+
+    // Esc exits diff focus mode.
+    if code == KeyCode::Esc {
+        let next = UnfocusDiffAction.execute(DiffFocusedMode, &mut app.data)?;
+        app.apply_mode(next);
+        return Ok(());
+    }
+
+    // Diff navigation uses ↑/↓.
+    if modifiers == KeyModifiers::NONE {
+        match code {
+            KeyCode::Up => {
+                let next = DiffCursorUpAction.execute(DiffFocusedMode, &mut app.data)?;
+                app.apply_mode(next);
+                return Ok(());
+            }
+            KeyCode::Down => {
+                let next = DiffCursorDownAction.execute(DiffFocusedMode, &mut app.data)?;
+                app.apply_mode(next);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(action) = crate::config::get_action(code, modifiers) {
+        let next = match action {
+            KeyAction::DiffDeleteLine => {
+                DiffDeleteLineAction.execute(DiffFocusedMode, &mut app.data)?
+            }
+            KeyAction::DiffDeleteHunk => {
+                DiffDeleteHunkAction.execute(DiffFocusedMode, &mut app.data)?
+            }
+            KeyAction::DiffUndo => DiffUndoAction.execute(DiffFocusedMode, &mut app.data)?,
+            KeyAction::DiffRedo => DiffRedoAction.execute(DiffFocusedMode, &mut app.data)?,
+            KeyAction::ToggleCollapse => {
+                ToggleCollapseAction.execute(DiffFocusedMode, &mut app.data)?
+            }
+            KeyAction::ScrollUp => ScrollUpAction.execute(DiffFocusedMode, &mut app.data)?,
+            KeyAction::ScrollDown => ScrollDownAction.execute(DiffFocusedMode, &mut app.data)?,
+            KeyAction::ScrollTop => ScrollTopAction.execute(DiffFocusedMode, &mut app.data)?,
+            KeyAction::ScrollBottom => {
+                ScrollBottomAction.execute(DiffFocusedMode, &mut app.data)?
+            }
+            KeyAction::SwitchTab => SwitchTabAction.execute(DiffFocusedMode, &mut app.data)?,
+            other => {
+                // For everything else, fall back to normal-mode dispatch (which exits diff focus).
+                return dispatch_normal_mode(app, other);
+            }
+        };
+
+        app.apply_mode(next);
+    }
+
     Ok(())
 }
 
@@ -784,6 +873,51 @@ mod tests {
         assert_eq!(app.mode, AppMode::normal());
 
         std::env::set_current_dir(original_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_diff_focused_mode_raw_dispatch_routes_keys() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        add_agent_with_child(&mut app);
+
+        app.data.active_tab = crate::app::Tab::Diff;
+        app.data.ui.set_diff_content("a\nb\nc\n");
+        app.enter_mode(DiffFocusedMode.into());
+
+        dispatch_diff_focused_mode(&mut app, KeyCode::Down, KeyModifiers::NONE)?;
+        assert_eq!(app.data.ui.diff_cursor, 1);
+        assert!(matches!(app.mode, AppMode::DiffFocused(_)));
+
+        dispatch_diff_focused_mode(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL)?;
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Nothing to undo")
+        );
+        assert!(matches!(app.mode, AppMode::DiffFocused(_)));
+
+        dispatch_diff_focused_mode(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL)?;
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Nothing to redo")
+        );
+        assert!(matches!(app.mode, AppMode::DiffFocused(_)));
+
+        dispatch_diff_focused_mode(&mut app, KeyCode::Char(' '), KeyModifiers::NONE)?;
+        assert!(matches!(app.mode, AppMode::DiffFocused(_)));
+
+        // Unhandled actions should fall back to normal-mode dispatch.
+        dispatch_diff_focused_mode(&mut app, KeyCode::Char('a'), KeyModifiers::NONE)?;
+        assert!(matches!(app.mode, AppMode::Creating(_)));
+
+        app.enter_mode(DiffFocusedMode.into());
+        dispatch_diff_focused_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE)?;
+        assert_eq!(app.mode, AppMode::normal());
+
+        app.enter_mode(DiffFocusedMode.into());
+        dispatch_diff_focused_mode(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL)?;
+        assert_eq!(app.mode, AppMode::normal());
+
         Ok(())
     }
 }

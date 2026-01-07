@@ -116,6 +116,10 @@ pub fn handle_key_event(
         AppMode::PreviewFocused(_) => {
             crate::action::dispatch_preview_focused_mode(app, code, modifiers, batched_keys)?;
         }
+        // Diff focused mode (interactive diff view)
+        AppMode::DiffFocused(_) => {
+            crate::action::dispatch_diff_focused_mode(app, code, modifiers)?;
+        }
 
         // Normal and scrolling modes
         AppMode::Normal(_) | AppMode::Scrolling(_) => {
@@ -203,6 +207,24 @@ mod tests {
         )?;
 
         assert_eq!(app.mode, AppMode::normal());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_diff_focused_ctrl_q_exits() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::DiffFocused(DiffFocusedMode);
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(!app.data.should_quit);
         Ok(())
     }
 
