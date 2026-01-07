@@ -24,11 +24,12 @@ jobs:
         with:
           components: clippy, rustfmt, llvm-tools-preview
       - name: Read cargo-llvm-cov version
-        run: echo "CARGO_LLVM_COV_VERSION=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_ENV"
+        id: llvm-cov-version
+        run: echo "version=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_OUTPUT"
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
         with:
-          version: ${{ env.CARGO_LLVM_COV_VERSION }}
+          version: ${{ steps.llvm-cov-version.outputs.version }}
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Install pre-commit
