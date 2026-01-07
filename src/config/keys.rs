@@ -27,7 +27,7 @@ pub enum Action {
     DiffCursorUp,
     /// Move the diff cursor down (Diff tab)
     DiffCursorDown,
-    /// Delete the selected diff line (Diff tab)
+    /// Delete the selected diff line/hunk (Diff tab)
     DiffDeleteLine,
     /// Delete the selected diff hunk (Diff tab)
     DiffDeleteHunk,
@@ -375,7 +375,7 @@ impl Action {
             Self::SwitchTab => "[Tab] switch preview/diff",
             Self::DiffCursorUp => "[↑] diff cursor up (diff focus)",
             Self::DiffCursorDown => "[↓] diff cursor down (diff focus)",
-            Self::DiffDeleteLine => "[x] delete diff line",
+            Self::DiffDeleteLine => "[x] delete diff line/hunk",
             Self::DiffDeleteHunk => "[X] delete diff hunk",
             Self::DiffUndo => "[Ctrl+z] undo diff edit",
             Self::DiffRedo => "[Ctrl+Shift+z] redo diff edit (Ctrl+y fallback)",

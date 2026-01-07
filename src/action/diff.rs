@@ -58,7 +58,17 @@ impl ValidIn<DiffFocusedMode> for DiffDeleteLineAction {
     type NextState = AppMode;
 
     fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        delete_selected_line(app_data)?;
+        let meta = app_data
+            .ui
+            .diff_line_meta
+            .get(app_data.ui.diff_cursor)
+            .copied();
+
+        if matches!(meta, Some(DiffLineMeta::Hunk { .. })) {
+            delete_selected_hunk(app_data)?;
+        } else {
+            delete_selected_line(app_data)?;
+        }
         Ok(DiffFocusedMode.into())
     }
 }
@@ -141,7 +151,8 @@ fn delete_selected_line(app_data: &mut AppData) -> Result<()> {
     };
 
     if file.status == FileStatus::Deleted {
-        app_data.set_status("Cannot delete a line from a deleted file (use X to restore file)");
+        app_data
+            .set_status("Cannot delete a line from a deleted file (select hunk header to restore)");
         return Ok(());
     }
 
@@ -746,7 +757,7 @@ mod tests {
         set_diff_view_from_repo(&mut data, &repo)?;
         select_first_hunk_header(&mut data)?;
 
-        DiffDeleteHunkAction.execute(DiffFocusedMode, &mut data)?;
+        DiffDeleteLineAction.execute(DiffFocusedMode, &mut data)?;
         assert_eq!(fs::read_to_string(&file_path)?, original);
         assert_eq!(data.ui.status_message.as_deref(), Some("Deleted diff hunk"));
         Ok(())
@@ -777,7 +788,7 @@ mod tests {
         set_diff_view_from_repo(&mut data, &repo)?;
         select_first_hunk_header(&mut data)?;
 
-        DiffDeleteHunkAction.execute(DiffFocusedMode, &mut data)?;
+        DiffDeleteLineAction.execute(DiffFocusedMode, &mut data)?;
         assert_eq!(fs::read_to_string(&file_path)?, original);
         assert_eq!(
             data.ui.status_message.as_deref(),
@@ -817,7 +828,7 @@ mod tests {
         assert!(!file_path.exists());
         assert_eq!(
             data.ui.status_message.as_deref(),
-            Some("Cannot delete a line from a deleted file (use X to restore file)")
+            Some("Cannot delete a line from a deleted file (select hunk header to restore)")
         );
         Ok(())
     }
