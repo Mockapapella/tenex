@@ -1,11 +1,18 @@
-#![cfg(not(windows))]
-
 //! Tests for git worktree operations
 
 use crate::common::{DirGuard, TestFixture, git_command};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, Settings};
 use tenex::config::Action;
+
+fn assert_git_success(output: &std::process::Output, context: &str) {
+    assert!(
+        output.status.success(),
+        "{context}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 #[test]
 fn test_git_worktree_create_and_remove() -> Result<(), Box<dyn std::error::Error>> {
@@ -162,14 +169,16 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
 
     // Make a commit on the feature branch
     std::fs::write(worktree_path.join("test.txt"), "test content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "test.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add test.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Test commit"])
         .current_dir(&worktree_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
@@ -221,14 +230,16 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
 
     // Make a commit on the feature branch
     std::fs::write(worktree_path.join("feature.txt"), "feature content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "feature.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add feature.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Feature commit"])
         .current_dir(&worktree_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
@@ -576,25 +587,29 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
 
     // Create a file on the feature branch
     std::fs::write(worktree_path.join("conflict.txt"), "feature content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "conflict.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add conflict.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Feature commit"])
         .current_dir(&worktree_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     // Now create a conflicting commit on master
     std::fs::write(fixture.repo_path.join("conflict.txt"), "master content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "conflict.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add conflict.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Master commit"])
         .current_dir(&fixture.repo_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
@@ -655,14 +670,16 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
 
     // First, create a commit on master with a file that will conflict
     std::fs::write(fixture.repo_path.join("shared.txt"), "initial")?;
-    git_command()
+    let output = git_command()
         .args(["add", "shared.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add shared.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Initial shared file"])
         .current_dir(&fixture.repo_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     // Create a feature branch with a worktree
     let repo = tenex::git::open_repository(&fixture.repo_path)?;
@@ -673,25 +690,29 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
 
     // Modify the file on the feature branch
     std::fs::write(worktree_path.join("shared.txt"), "feature content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "shared.txt"])
         .current_dir(&worktree_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add shared.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Feature changes to shared"])
         .current_dir(&worktree_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     // Now create a conflicting modification on master
     std::fs::write(fixture.repo_path.join("shared.txt"), "master content")?;
-    git_command()
+    let output = git_command()
         .args(["add", "shared.txt"])
         .current_dir(&fixture.repo_path)
         .output()?;
-    git_command()
+    assert_git_success(&output, "git add shared.txt failed");
+    let output = git_command()
         .args(["commit", "-m", "Master changes to shared"])
         .current_dir(&fixture.repo_path)
         .output()?;
+    assert_git_success(&output, "git commit failed");
 
     // Change to repo directory (with DirGuard for cleanup on panic)
     let _dir_guard = DirGuard::new()?;

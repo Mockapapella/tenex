@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, Signature};
+use git2::{Repository, RepositoryInitOptions, Signature};
 use tempfile::TempDir;
 use tenex::agent::Storage;
 use tenex::config::Config;
@@ -27,14 +27,31 @@ pub struct TestFixture {
 impl TestFixture {
     pub fn new(test_name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
-        // Canonicalize to handle macOS symlink (/var -> /private/var)
+        // Canonicalize to handle symlinked temp dirs.
         let repo_path = temp_dir
             .path()
             .canonicalize()
             .unwrap_or_else(|_| temp_dir.path().to_path_buf());
 
-        // Initialize git repo with initial commit
-        let repo = Repository::init(&repo_path)?;
+        // Initialize git repo with a stable default branch name.
+        // Git's default branch is user-configurable (e.g., main vs master) which can
+        // cause integration tests to take different paths across environments/CI.
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(&repo_path, &init_opts)?;
+        // Double-ensure the default branch is `master` even if templates/config override init opts.
+        repo.set_head("refs/heads/master")?;
+        {
+            let mut config = repo.config()?;
+            // Avoid relying on global git config (CI doesn't have it) for commits made via the git CLI.
+            config.set_str("user.name", "Test")?;
+            config.set_str("user.email", "test@test.com")?;
+            // Avoid flaky failures on developer machines that enable GPG signing or custom hooks globally.
+            config.set_str("commit.gpgsign", "false")?;
+            let hooks_dir = repo.path().join("hooks-tenex-tests");
+            fs::create_dir_all(&hooks_dir)?;
+            config.set_str("core.hooksPath", &hooks_dir.to_string_lossy())?;
+        }
         let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
@@ -65,7 +82,7 @@ impl TestFixture {
     }
 
     pub fn config(&self) -> Config {
-        // Canonicalize worktree_dir to handle macOS symlink (/var -> /private/var)
+        // Canonicalize worktree_dir to handle symlinked temp dirs.
         let worktree_dir = self
             .worktree_dir
             .path()
@@ -90,7 +107,7 @@ impl TestFixture {
     }
 
     /// Returns the canonicalized worktree directory path.
-    /// This handles macOS symlink (/var -> /private/var).
+    /// This handles symlinked temp dirs.
     pub fn worktree_path(&self) -> PathBuf {
         self.worktree_dir
             .path()

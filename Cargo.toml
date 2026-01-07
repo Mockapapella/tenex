@@ -32,13 +32,8 @@ portable-pty = { version = "0.9", default-features = false }
 vt100 = { package = "vt100-ctt", version = "0.16.0", default-features = false }
 parking_lot = { version = "0.12", default-features = false }
 interprocess = { version = "2.2.3", default-features = false }
-
-[target.'cfg(not(windows))'.dependencies]
 git2 = { version = "0.19", default-features = false }
 ureq = { version = "3.1.4", default-features = false, features = ["json", "rustls"] }
-
-[target.'cfg(windows)'.dependencies]
-ureq = { version = "3.1.4", default-features = false, features = ["json", "native-tls"] }
 
 [dev-dependencies]
 tempfile = "3.19"

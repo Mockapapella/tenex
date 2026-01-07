@@ -6,39 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-#[cfg(windows)]
-#[expect(
-    clippy::permissions_set_readonly_false,
-    reason = "Windows worktree cleanup needs to clear the read-only attribute"
-)]
-fn clear_readonly_recursive(root: &Path) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        if let Ok(metadata) = fs::metadata(&path) {
-            let mut permissions = metadata.permissions();
-            if permissions.readonly() {
-                permissions.set_readonly(false);
-                let _ = fs::set_permissions(&path, permissions);
-            }
-        }
-
-        if let Ok(entries) = fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                let child = entry.path();
-                if child.is_dir() {
-                    stack.push(child);
-                } else if let Ok(metadata) = entry.metadata() {
-                    let mut permissions = metadata.permissions();
-                    if permissions.readonly() {
-                        permissions.set_readonly(false);
-                        let _ = fs::set_permissions(&child, permissions);
-                    }
-                }
-            }
-        }
-    }
-}
-
 fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -57,8 +24,6 @@ fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
             }
             Err(e) => {
                 last_err = Some(e);
-                #[cfg(windows)]
-                clear_readonly_recursive(path);
             }
         }
 
@@ -244,7 +209,7 @@ impl<'a> Manager<'a> {
             drop(worktree);
 
             // Always try to remove the directory even if prune failed (may take time for processes
-            // to release handles, especially on Windows).
+            // to release handles).
             if let Err(e) = remove_dir_all_with_retries(&wt_path) {
                 warn!(name, path = ?wt_path, error = %e, "Failed to remove worktree directory");
                 return Err(e);

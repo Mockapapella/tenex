@@ -151,7 +151,7 @@ impl Manager {
             .and_then(|p| std::path::Path::new(p).file_stem())
             .and_then(|s| s.to_str());
         if exe_stem == Some("codex") {
-            // Bracketed paste sequences break some default shells (notably macOS bash).
+            // Bracketed paste sequences break some default shells.
             // Only use the bracketed paste path when the pane is actually running codex.
             let capture = super::OutputCapture::new();
             if let Ok(pane_cmd) = capture.pane_current_command(target) {

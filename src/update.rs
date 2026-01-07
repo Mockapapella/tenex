@@ -46,14 +46,10 @@ pub fn check_for_update() -> Result<Option<UpdateInfo>> {
 
 /// Internal implementation that allows injecting the URL and current version for testing.
 fn check_for_update_impl(url: &str, current_version: &Version) -> Result<Option<UpdateInfo>> {
-    let builder = ureq::config::Config::builder().timeout_global(Some(Duration::from_secs(3)));
-    #[cfg(windows)]
-    let builder = builder.tls_config(
-        ureq::tls::TlsConfig::builder()
-            .provider(ureq::tls::TlsProvider::NativeTls)
-            .build(),
-    );
-    let agent: Agent = builder.build().new_agent();
+    let config = ureq::config::Config::builder()
+        .timeout_global(Some(Duration::from_secs(3)))
+        .build();
+    let agent: Agent = config.new_agent();
     let user_agent = format!("tenex/{current_version}");
 
     let response = match agent.get(url).header("User-Agent", user_agent).call() {

@@ -3,6 +3,9 @@
 //! Tenex allows you to run multiple AI agents in parallel, each in isolated
 //! git worktrees, with a TUI for managing and monitoring them.
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("Tenex currently supports Linux only.");
+
 mod command;
 
 pub mod action;

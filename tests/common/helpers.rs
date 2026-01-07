@@ -54,8 +54,7 @@ pub fn skip_if_no_mux() -> bool {
 
 /// Assert two paths are equal after canonicalization.
 ///
-/// This is necessary on macOS where `/var` is a symlink to `/private/var`,
-/// causing path comparisons to fail unexpectedly.
+/// This avoids failures when temp dirs are symlinked (for example `/var` -> `/private/var`).
 pub fn assert_paths_eq(left: &Path, right: &Path, msg: &str) {
     let left_canonical = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
     let right_canonical = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
