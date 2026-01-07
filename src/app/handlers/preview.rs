@@ -1,14 +1,12 @@
 //! Preview operations: update preview and diff content
 
-use crate::app::Tab;
+use crate::app::{App, Tab};
 use crate::git::{self, DiffGenerator};
 use crate::mux::SessionManager;
 use crate::state::AppMode;
 use anyhow::Result;
 
 use super::Actions;
-use crate::app::App;
-use crate::app::Tab;
 
 impl Actions {
     /// Update preview content for the selected agent
