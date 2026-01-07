@@ -27,9 +27,11 @@ jobs:
         id: llvm-cov-version
         run: echo "version=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_OUTPUT"
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@v2
         with:
-          version: ${{ steps.llvm-cov-version.outputs.version }}
+          tool: cargo-llvm-cov@${{ steps.llvm-cov-version.outputs.version }}
+          checksum: true
+          fallback: cargo-binstall
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Install pre-commit
