@@ -133,7 +133,11 @@ fn init_preview_dimensions(terminal: &TuiTerminal, app: &mut App, action_handler
     app.ensure_agent_list_scroll();
 }
 
-fn drain_events(terminal: &TuiTerminal, app: &mut App, event_handler: &Handler) -> Result<DrainedEvents> {
+fn drain_events(
+    terminal: &TuiTerminal,
+    app: &mut App,
+    event_handler: &Handler,
+) -> Result<DrainedEvents> {
     let mut last_resize: Option<(u16, u16)> = None;
     let mut batched_keys: Vec<String> = Vec::new();
     let mut flushed_batched_keys = false;
@@ -156,8 +160,7 @@ fn drain_events(terminal: &TuiTerminal, app: &mut App, event_handler: &Handler) 
             Event::Mouse(mouse) => {
                 // If we're attached and have batched keys, flush them before applying any
                 // click-driven selection changes so keys go to the intended agent.
-                if !batched_keys.is_empty()
-                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                if !batched_keys.is_empty() && mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 {
                     send_batched_keys_to_mux(app, &batched_keys);
                     batched_keys.clear();
