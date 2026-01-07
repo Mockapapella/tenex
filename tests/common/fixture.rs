@@ -41,6 +41,17 @@ impl TestFixture {
         let repo = Repository::init_opts(&repo_path, &init_opts)?;
         // Double-ensure the default branch is `master` even if templates/config override init opts.
         repo.set_head("refs/heads/master")?;
+        {
+            let mut config = repo.config()?;
+            // Avoid relying on global git config (CI doesn't have it) for commits made via the git CLI.
+            config.set_str("user.name", "Test")?;
+            config.set_str("user.email", "test@test.com")?;
+            // Avoid flaky failures on developer machines that enable GPG signing or custom hooks globally.
+            config.set_str("commit.gpgsign", "false")?;
+            let hooks_dir = repo.path().join("hooks-tenex-tests");
+            fs::create_dir_all(&hooks_dir)?;
+            config.set_str("core.hooksPath", &hooks_dir.to_string_lossy())?;
+        }
         let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
