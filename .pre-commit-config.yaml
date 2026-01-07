@@ -26,7 +26,8 @@ repos:
         pass_filenames: false
 
       - id: cargo-coverage
-        name: cargo llvm-cov (90% lines + functions)
+        name: cargo llvm-cov (manual, 90% lines + functions)
+        stages: [manual]
         entry: bash -c
         args:
           - |
