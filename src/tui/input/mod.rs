@@ -5,6 +5,7 @@
 
 mod command;
 mod confirm;
+mod mouse;
 mod normal;
 mod picker;
 mod text_input;
@@ -12,7 +13,10 @@ mod text_input;
 use crate::app::App;
 use crate::state::AppMode;
 use anyhow::Result;
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::{
+    crossterm::event::{KeyCode, KeyModifiers, MouseEvent},
+    layout::Rect,
+};
 
 /// Handle a key event based on the current mode
 ///
@@ -119,6 +123,13 @@ pub fn handle_key_event(
         }
     }
     Ok(())
+}
+
+/// Handle a mouse event based on the current mode and layout.
+///
+/// `frame_area` should be the terminal viewport (`Rect::new(0, 0, width, height)`).
+pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) -> Result<()> {
+    mouse::handle_mouse_event(app, mouse, frame_area)
 }
 
 #[cfg(test)]

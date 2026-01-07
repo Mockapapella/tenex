@@ -12,8 +12,9 @@ use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
         event::{
-            self as crossterm_event, KeyEventKind, KeyboardEnhancementFlags,
-            PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+            self as crossterm_event, DisableMouseCapture, EnableMouseCapture, KeyEventKind,
+            KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
+            PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{
@@ -33,7 +34,7 @@ const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
 const MIN_OUTPUT_REFRESH_MS: u64 = 16;
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
-type DrainedEvents = (Vec<String>, Option<(u16, u16)>);
+type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
 
 /// Run the TUI application
 ///
@@ -47,7 +48,7 @@ type DrainedEvents = (Vec<String>, Option<(u16, u16)>);
 pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
 
     // Enable Kitty keyboard protocol to disambiguate Ctrl+M from Enter
     // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
@@ -91,7 +92,11 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -128,9 +133,19 @@ fn init_preview_dimensions(terminal: &TuiTerminal, app: &mut App, action_handler
     app.ensure_agent_list_scroll();
 }
 
-fn drain_events(app: &mut App, event_handler: &Handler) -> Result<DrainedEvents> {
+fn drain_events(
+    terminal: &TuiTerminal,
+    app: &mut App,
+    event_handler: &Handler,
+) -> Result<DrainedEvents> {
     let mut last_resize: Option<(u16, u16)> = None;
     let mut batched_keys: Vec<String> = Vec::new();
+    let mut flushed_batched_keys = false;
+
+    let size = terminal
+        .size()
+        .unwrap_or_else(|_| ratatui::layout::Size::new(0, 0));
+    let mut frame_area = Rect::new(0, 0, size.width, size.height);
 
     loop {
         match event_handler.next()? {
@@ -142,9 +157,21 @@ fn drain_events(app: &mut App, event_handler: &Handler) -> Result<DrainedEvents>
                     input::handle_key_event(app, key.code, key.modifiers, &mut batched_keys)?;
                 }
             }
-            Event::Mouse(_) => {}
+            Event::Mouse(mouse) => {
+                // If we're attached and have batched keys, flush them before applying any
+                // click-driven selection changes so keys go to the intended agent.
+                if !batched_keys.is_empty() && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                {
+                    send_batched_keys_to_mux(app, &batched_keys);
+                    batched_keys.clear();
+                    flushed_batched_keys = true;
+                }
+
+                input::handle_mouse_event(app, mouse, frame_area)?;
+            }
             Event::Resize(w, h) => {
                 last_resize = Some((w, h));
+                frame_area = Rect::new(0, 0, w, h);
             }
         }
 
@@ -153,7 +180,7 @@ fn drain_events(app: &mut App, event_handler: &Handler) -> Result<DrainedEvents>
         }
     }
 
-    Ok((batched_keys, last_resize))
+    Ok((batched_keys, last_resize, flushed_batched_keys))
 }
 
 fn compute_preview_refresh_interval(
@@ -197,11 +224,12 @@ fn run_loop(
             app.show_keyboard_remap_prompt();
         }
 
-        let (batched_keys, last_resize) = drain_events(app, event_handler)?;
+        let (batched_keys, last_resize, flushed_batched_keys) =
+            drain_events(terminal, app, event_handler)?;
 
         // Send batched keys to the mux in one command (much faster than per-keystroke)
-        let sent_keys_in_preview =
-            !batched_keys.is_empty() && matches!(app.mode, AppMode::PreviewFocused(_));
+        let sent_keys_in_preview = flushed_batched_keys
+            || (!batched_keys.is_empty() && matches!(app.mode, AppMode::PreviewFocused(_)));
         send_batched_keys_to_mux(app, &batched_keys);
 
         // Apply final resize if any occurred
