@@ -39,6 +39,8 @@ impl TestFixture {
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
         let repo = Repository::init_opts(&repo_path, &init_opts)?;
+        // Double-ensure the default branch is `master` even if templates/config override init opts.
+        repo.set_head("refs/heads/master")?;
         let sig = Signature::now("Test", "test@test.com")?;
 
         // Create a file and commit it
