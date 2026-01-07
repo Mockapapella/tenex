@@ -197,14 +197,18 @@ impl Actions {
                 continue;
             }
 
-            info!(branch = %branch_name, path = ?wt.path, "Auto-connecting to existing worktree");
+            info!(
+                branch = %branch_name,
+                path = ?worktree_path,
+                "Auto-connecting to existing worktree"
+            );
 
             // Create an agent for this worktree
             let mut agent = Agent::new(
                 branch_name.clone(), // Use branch name as title
                 program.clone(),
                 branch_name.clone(),
-                wt.path.clone(),
+                worktree_path.clone(),
                 None, // No initial prompt
             );
             agent.mux_session = format!("{session_prefix}{}", agent.short_id());
@@ -212,7 +216,7 @@ impl Actions {
             // Create mux session and start the agent program
             let command = crate::command::build_command_argv(&program, None)?;
             self.session_manager
-                .create(&agent.mux_session, &wt.path, Some(&command))?;
+                .create(&agent.mux_session, &worktree_path, Some(&command))?;
 
             // Resize the session to match preview dimensions if available
             if let Some((width, height)) = app.data.ui.preview_dimensions {
