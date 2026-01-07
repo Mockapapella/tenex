@@ -22,7 +22,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.91.1
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
+      - name: Read cargo-llvm-cov version
+        id: llvm-cov-version
+        run: echo "version=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_OUTPUT"
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@${{ steps.llvm-cov-version.outputs.version }}
+          checksum: true
+          fallback: cargo-binstall
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Install pre-commit
