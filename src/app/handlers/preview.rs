@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use super::Actions;
 use crate::app::App;
+use crate::app::Tab;
 
 impl Actions {
     /// Update preview content for the selected agent
@@ -15,6 +16,11 @@ impl Actions {
     ///
     /// Returns an error if preview update fails
     pub fn update_preview(self, app: &mut App) -> Result<()> {
+        const HISTORY_LINES_DEFAULT: u32 = 1000;
+        // When actively watching the preview and following the output, keep the history window
+        // smaller so we can refresh more frequently without stuttering.
+        const HISTORY_LINES_FOLLOWING: u32 = 300;
+
         if let Some(agent) = app.selected_agent() {
             // Determine the target (session or specific window)
             let target = if let Some(window_idx) = agent.window_index {
@@ -35,8 +41,14 @@ impl Actions {
                         .capture_pane(&target)
                         .unwrap_or_default()
                 } else {
+                    let history_lines =
+                        if app.data.active_tab == Tab::Preview && app.data.ui.preview_follow {
+                            HISTORY_LINES_FOLLOWING
+                        } else {
+                            HISTORY_LINES_DEFAULT
+                        };
                     self.output_capture
-                        .capture_pane_with_history(&target, 1000)
+                        .capture_pane_with_history(&target, history_lines)
                         .unwrap_or_default()
                 };
                 app.data.ui.preview_content = content;
