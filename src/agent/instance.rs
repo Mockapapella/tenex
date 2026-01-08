@@ -27,9 +27,6 @@ pub struct Agent {
     /// Path to the git worktree
     pub worktree_path: PathBuf,
 
-    /// Initial prompt sent to the agent (if any)
-    pub initial_prompt: Option<String>,
-
     /// Mux session name
     #[serde(alias = "tmux_session")]
     pub mux_session: String,
@@ -76,13 +73,7 @@ pub struct ChildConfig {
 impl Agent {
     /// Create a new agent with the given parameters
     #[must_use]
-    pub fn new(
-        title: String,
-        program: String,
-        branch: String,
-        worktree_path: PathBuf,
-        initial_prompt: Option<String>,
-    ) -> Self {
+    pub fn new(title: String, program: String, branch: String, worktree_path: PathBuf) -> Self {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let mux_session = format!("tenex-{}", &id.to_string()[..8]);
@@ -94,7 +85,6 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
-            initial_prompt,
             mux_session,
             created_at: now,
             updated_at: now,
@@ -112,7 +102,6 @@ impl Agent {
         program: String,
         branch: String,
         worktree_path: PathBuf,
-        initial_prompt: Option<String>,
         config: ChildConfig,
     ) -> Self {
         let id = Uuid::new_v4();
@@ -125,7 +114,6 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
-            initial_prompt,
             mux_session: config.mux_session,
             created_at: now,
             updated_at: now,
@@ -201,7 +189,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test-agent".to_string(),
             PathBuf::from("/tmp/worktree"),
-            None,
         )
     }
 
@@ -214,23 +201,6 @@ mod tests {
         assert_eq!(agent.status, Status::Starting);
         assert_eq!(agent.branch, "tenex/test-agent");
         assert!(agent.mux_session.starts_with("tenex-"));
-        assert!(agent.initial_prompt.is_none());
-    }
-
-    #[test]
-    fn test_agent_with_prompt() {
-        let agent = Agent::new(
-            "Fix Bug".to_string(),
-            "aider".to_string(),
-            "tenex/fix-bug".to_string(),
-            PathBuf::from("/tmp/worktree"),
-            Some("Fix the authentication bug".to_string()),
-        );
-
-        assert_eq!(
-            agent.initial_prompt,
-            Some("Fix the authentication bug".to_string())
-        );
     }
 
     #[test]
@@ -314,7 +284,6 @@ mod tests {
             "claude".to_string(),
             parent.branch.clone(),
             parent.worktree_path.clone(),
-            Some("Research task".to_string()),
             ChildConfig {
                 parent_id: parent.id,
                 mux_session: parent.mux_session.clone(),
@@ -338,7 +307,6 @@ mod tests {
             "claude".to_string(),
             parent.branch.clone(),
             parent.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: parent.id,
                 mux_session: parent.mux_session,
@@ -357,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_serde_backwards_compatibility() -> Result<(), Box<dyn std::error::Error>> {
-        // Test that old JSON without hierarchy fields deserializes correctly
+        // Test that old JSON with removed fields deserializes correctly.
         let old_json = r#"{
             "id": "12345678-1234-1234-1234-123456789012",
             "title": "Old Agent",
@@ -365,7 +333,7 @@ mod tests {
             "status": "running",
             "branch": "tenex/old",
             "worktree_path": "/tmp/old",
-            "initial_prompt": null,
+            "initial_prompt": "this field is no longer persisted",
             "tmux_session": "tenex-12345678",
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-01T00:00:00Z"

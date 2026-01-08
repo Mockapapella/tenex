@@ -191,8 +191,8 @@ On first launch, Tenex checks if your terminal supports the Kitty keyboard proto
 If a newly-created agent flashes into existence and vanishes a few seconds later, it usually means the underlying agent process exited during startup (Tenex then prunes the agent because its mux session is gone).
 
 - Enable logs with `DEBUG=3 tenex` and inspect the log at `/tmp/tenex.log`.
-- Tenex isolates mux daemons per build by default, so stale daemons from older installs shouldn’t interfere after an upgrade.
-- To isolate mux state, start Tenex with an explicit socket: `TENEX_MUX_SOCKET=/tmp/tenex-mux.sock tenex`.
+- Tenex stores the mux socket name in `~/.tenex/state.json` so sessions can survive rebuilds/upgrades.
+- To force a fresh mux daemon, set an explicit socket: `TENEX_MUX_SOCKET=/tmp/tenex-mux.sock tenex`.
 
 ## License
 

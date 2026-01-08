@@ -294,7 +294,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex-modal-rect-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-modal-rect-test-{pid}/{title}")),
-            None,
         );
         let id = agent.id;
         app.data.storage.add(agent);

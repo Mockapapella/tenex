@@ -238,7 +238,6 @@ mod tests {
             "claude".to_string(),
             "nonexistent-session".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.update_preview(&mut app)?;
@@ -257,7 +256,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/nonexistent/path"),
-            None,
         ));
 
         handler.update_diff(&mut app)?;
@@ -281,7 +279,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
 
         handler.update_diff(&mut app)?;
@@ -324,14 +321,12 @@ mod tests {
             "claude".to_string(),
             "muster/a".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         app.data.storage.add(Agent::new(
             "b".to_string(),
             "claude".to_string(),
             "muster/b".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
 
         app.data.active_tab = crate::app::Tab::Diff;
@@ -362,7 +357,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         root.collapsed = false;
         let root_id = root.id;
@@ -374,7 +368,6 @@ mod tests {
             "claude".to_string(),
             "muster/child".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,
@@ -429,7 +422,6 @@ mod tests {
             "claude".to_string(),
             "muster/a".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
 
         app.data.active_tab = crate::app::Tab::Preview;
@@ -461,7 +453,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/nonexistent/path"),
-            None,
         ));
 
         handler.update_diff_digest(&mut app)?;
@@ -505,7 +496,6 @@ mod tests {
             "claude".to_string(),
             "muster/a".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
 
         app.data.active_tab = crate::app::Tab::Preview;
@@ -551,7 +541,6 @@ mod tests {
             "claude".to_string(),
             "muster/a".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
 
         // Viewing diff marks the current hash as "seen".

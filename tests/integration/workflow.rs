@@ -38,7 +38,6 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
         config.default_program,
         branch.clone(),
         worktree_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     storage.add(agent);
@@ -197,7 +196,6 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
         config.default_program,
         branch.clone(),
         worktree_path,
-        None,
     );
     agent.set_status(tenex::Status::Running);
     let agent_id = agent.id;

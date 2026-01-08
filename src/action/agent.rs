@@ -479,7 +479,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         assert!(matches!(
@@ -519,7 +518,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         root.collapsed = true;
@@ -531,7 +529,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,

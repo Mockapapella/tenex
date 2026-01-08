@@ -452,7 +452,6 @@ mod tests {
             "claude".to_string(),
             "branch".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
         app.data.selected = 0;
 

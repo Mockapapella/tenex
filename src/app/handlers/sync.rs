@@ -3,6 +3,7 @@
 use crate::agent::{Agent, Status};
 use crate::git::{self, WorktreeManager};
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -209,7 +210,6 @@ impl Actions {
                 program.clone(),
                 branch_name.clone(),
                 worktree_path.clone(),
-                None, // No initial prompt
             );
             agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
@@ -233,6 +233,233 @@ impl Actions {
         app.data.storage.save()?;
         Ok(())
     }
+
+    /// Respawn missing agent mux sessions/windows from persisted state.
+    ///
+    /// After a system reboot or crash, Tenex can still load the stored agent list from
+    /// `state.json`, but the mux daemon (and all agent processes) will be gone. This helper
+    /// recreates missing mux sessions for root agents and re-creates windows for all descendants
+    /// (including terminals) using each agent's stored program.
+    ///
+    /// This function is intended to run on startup and is best-effort: it will continue
+    /// attempting to restore other agents if one fails to spawn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if saving updated state fails.
+    pub fn respawn_missing_agents(self, app: &mut App) -> Result<()> {
+        let roots = stored_root_agents(app);
+        if roots.is_empty() {
+            return Ok(());
+        }
+
+        let session_manager = self.session_manager;
+        let mut summary = RespawnSummary::default();
+        for root in &roots {
+            respawn_root_agent(session_manager, app, root, &mut summary);
+        }
+
+        if summary.changed {
+            app.data.storage.save()?;
+            app.validate_selection();
+        }
+
+        if summary.respawned_sessions > 0 {
+            app.data.set_status(format!(
+                "Respawned {} agent session(s)",
+                summary.respawned_sessions
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RespawnSummary {
+    changed: bool,
+    respawned_sessions: usize,
+}
+
+fn stored_root_agents(app: &App) -> Vec<Agent> {
+    app.data
+        .storage
+        .root_agents()
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+fn respawn_root_agent(
+    session_manager: crate::mux::SessionManager,
+    app: &mut App,
+    root: &Agent,
+    summary: &mut RespawnSummary,
+) {
+    if session_manager.exists(&root.mux_session) {
+        summary.changed |= normalize_tree_running(app, root.id, &root.mux_session, true);
+        return;
+    }
+
+    // Mark as not running while we attempt to respawn.
+    summary.changed |= normalize_tree_running(app, root.id, &root.mux_session, false);
+
+    if !root.worktree_path.exists() {
+        warn!(
+            title = %root.title,
+            branch = %root.branch,
+            worktree = %root.worktree_path.display(),
+            "Worktree missing; cannot respawn agent session"
+        );
+        return;
+    }
+
+    let root_command = match command_for_agent(root) {
+        Ok(cmd) => cmd,
+        Err(err) => {
+            warn!(
+                title = %root.title,
+                branch = %root.branch,
+                error = %err,
+                "Failed to build command for root agent; skipping respawn"
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = session_manager.create(
+        &root.mux_session,
+        &root.worktree_path,
+        root_command.as_deref(),
+    ) {
+        warn!(
+            title = %root.title,
+            session = %root.mux_session,
+            error = %err,
+            "Failed to recreate mux session for agent"
+        );
+        return;
+    }
+
+    summary.respawned_sessions = summary.respawned_sessions.saturating_add(1);
+    summary.changed = true;
+
+    let descendants = sorted_descendants(app, root.id);
+    let recreated_window_indices =
+        recreate_descendant_windows(session_manager, &root.mux_session, &descendants);
+    summary.changed |=
+        mark_respawned_agents_running(app, root.id, &root.mux_session, recreated_window_indices);
+}
+
+fn sorted_descendants(app: &App, root_id: uuid::Uuid) -> Vec<Agent> {
+    let mut descendants: Vec<Agent> = app
+        .data
+        .storage
+        .descendants(root_id)
+        .into_iter()
+        .cloned()
+        .collect();
+
+    // Preserve (approximate) window ordering from the previous run when possible.
+    descendants.sort_by_key(|agent| agent.window_index.unwrap_or(u32::MAX));
+    descendants
+}
+
+fn recreate_descendant_windows(
+    session_manager: crate::mux::SessionManager,
+    root_session: &str,
+    descendants: &[Agent],
+) -> HashMap<uuid::Uuid, u32> {
+    let mut recreated_window_indices = HashMap::with_capacity(descendants.len());
+
+    for desc in descendants {
+        if !desc.worktree_path.exists() {
+            warn!(
+                title = %desc.title,
+                branch = %desc.branch,
+                worktree = %desc.worktree_path.display(),
+                "Worktree missing; skipping respawn for agent window"
+            );
+            continue;
+        }
+
+        let command = match command_for_agent(desc) {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                warn!(
+                    title = %desc.title,
+                    session = %root_session,
+                    error = %err,
+                    "Failed to build command for child agent; skipping window respawn"
+                );
+                continue;
+            }
+        };
+
+        match session_manager.create_window(
+            root_session,
+            &desc.title,
+            &desc.worktree_path,
+            command.as_deref(),
+        ) {
+            Ok(index) => {
+                let _ = recreated_window_indices.insert(desc.id, index);
+            }
+            Err(err) => {
+                warn!(
+                    title = %desc.title,
+                    session = %root_session,
+                    error = %err,
+                    "Failed to recreate mux window for agent"
+                );
+            }
+        }
+    }
+
+    recreated_window_indices
+}
+
+fn mark_respawned_agents_running(
+    app: &mut App,
+    root_id: uuid::Uuid,
+    mux_session: &str,
+    recreated_window_indices: HashMap<uuid::Uuid, u32>,
+) -> bool {
+    let mut changed = false;
+    let mux_session_owned = mux_session.to_owned();
+
+    if let Some(agent) = app.data.storage.get_mut(root_id) {
+        if agent.mux_session != mux_session_owned {
+            agent.mux_session.clone_from(&mux_session_owned);
+            changed = true;
+        }
+
+        if agent.status != Status::Running {
+            agent.set_status(Status::Running);
+            changed = true;
+        }
+    }
+
+    for (agent_id, window_index) in recreated_window_indices {
+        if let Some(agent) = app.data.storage.get_mut(agent_id) {
+            if agent.mux_session != mux_session_owned {
+                agent.mux_session.clone_from(&mux_session_owned);
+                changed = true;
+            }
+
+            if agent.window_index != Some(window_index) {
+                agent.window_index = Some(window_index);
+                changed = true;
+            }
+
+            if agent.status != Status::Running {
+                agent.set_status(Status::Running);
+                changed = true;
+            }
+        }
+    }
+
+    changed
 }
 
 fn has_isolated_state_marker(worktree_path: &Path, stop_at: &Path) -> bool {
@@ -253,6 +480,58 @@ fn has_isolated_state_marker(worktree_path: &Path, stop_at: &Path) -> bool {
     }
 }
 
+fn normalize_tree_running(
+    app: &mut App,
+    root_id: uuid::Uuid,
+    mux_session: &str,
+    running: bool,
+) -> bool {
+    let mut changed = false;
+    let status = if running {
+        Status::Running
+    } else {
+        Status::Starting
+    };
+
+    if let Some(agent) = app.data.storage.get_mut(root_id) {
+        if agent.mux_session != mux_session {
+            agent.mux_session = mux_session.to_string();
+            changed = true;
+        }
+        if agent.status != status {
+            agent.set_status(status);
+            changed = true;
+        }
+    }
+
+    let descendant_ids = app.data.storage.descendant_ids(root_id);
+    for agent_id in descendant_ids {
+        if let Some(agent) = app.data.storage.get_mut(agent_id) {
+            if agent.mux_session != mux_session {
+                agent.mux_session = mux_session.to_string();
+                changed = true;
+            }
+            if agent.status != status {
+                agent.set_status(status);
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+fn command_for_agent(agent: &Agent) -> Result<Option<Vec<String>>> {
+    if agent.is_terminal || agent.program == "terminal" {
+        return Ok(None);
+    }
+
+    Ok(Some(crate::command::build_command_argv(
+        &agent.program,
+        None,
+    )?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +540,7 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
@@ -290,7 +570,6 @@ mod tests {
             "claude".to_string(),
             "muster/running".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         running.set_status(Status::Running);
         app.data.storage.add(running);
@@ -300,7 +579,6 @@ mod tests {
             "claude".to_string(),
             "muster/starting".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         starting.set_status(Status::Starting);
         app.data.storage.add(starting);
@@ -322,7 +600,6 @@ mod tests {
             "claude".to_string(),
             "muster/alive".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         alive.set_status(Status::Running);
         let alive_session = alive.mux_session.clone();
@@ -333,7 +610,6 @@ mod tests {
             "claude".to_string(),
             "muster/missing".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         missing.set_status(Status::Running);
         let missing_id = missing.id;
@@ -363,7 +639,6 @@ mod tests {
             "claude".to_string(),
             "muster/starting".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         agent.set_status(Status::Starting);
         let session = agent.mux_session.clone();
@@ -401,7 +676,6 @@ mod tests {
             "claude".to_string(),
             "muster/running".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         agent.set_status(Status::Running);
         app.data.storage.add(agent);
@@ -409,6 +683,127 @@ mod tests {
         Actions::new()
             .sync_agent_status_with_sessions(&mut app, Err(anyhow::anyhow!("mux down")))?;
         assert_eq!(app.data.storage.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_respawn_missing_agents_creates_sessions_and_windows()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let worktree = TempDir::new()?;
+        let worktree_path = worktree.path().to_path_buf();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            "tenex-test/root".to_string(),
+            worktree_path.clone(),
+        );
+        root.set_status(Status::Running);
+        let root_session = root.mux_session.clone();
+        let root_id = root.id;
+
+        let child = Agent::new_child(
+            "child".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            root.branch.clone(),
+            worktree_path,
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 1,
+            },
+        );
+
+        app.data.storage.add(root);
+        app.data.storage.add(child);
+        app.data.storage.save()?;
+
+        // Ensure the session doesn't already exist (best-effort).
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+
+        Actions::new().respawn_missing_agents(&mut app)?;
+
+        assert!(crate::mux::SessionManager::new().exists(&root_session));
+
+        let windows = crate::mux::SessionManager::new().list_windows(&root_session)?;
+        assert!(windows.iter().any(|w| w.index == 0));
+        assert!(windows.iter().any(|w| w.name == "child"));
+
+        // Clean up to avoid leaving long-running processes around.
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_respawn_missing_agents_ignores_legacy_initial_prompt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let state_path = temp_file.path().to_path_buf();
+
+        let worktree = TempDir::new()?;
+        let worktree_path = worktree.path().to_path_buf();
+
+        // This program prints $1, then sleeps so we can capture output. The `_` argument is the
+        // arg0 placeholder for `sh -c`, so an appended prompt becomes $1.
+        let program = "sh -c 'echo ARG1:$1; sleep 3600' _".to_string();
+
+        let mut storage = Storage::with_path(state_path.clone());
+        let mut root = Agent::new(
+            "root".to_string(),
+            program,
+            "tenex-test/root".to_string(),
+            worktree_path,
+        );
+        root.set_status(Status::Running);
+        let root_session = root.mux_session.clone();
+        storage.add(root);
+
+        // Write state.json with a legacy `initial_prompt` field injected.
+        let mut value = serde_json::to_value(&storage)?;
+        let agents = value
+            .get_mut("agents")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or("Expected agents array")?;
+        let root_value = agents
+            .first_mut()
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or("Expected root agent object")?;
+        root_value.insert(
+            "initial_prompt".to_string(),
+            serde_json::Value::String("PROMPT".to_string()),
+        );
+        std::fs::write(&state_path, serde_json::to_string_pretty(&value)?)?;
+
+        // Load the state and ensure subsequent saves target the temp file (not the real state).
+        let mut loaded = Storage::load_from(&state_path)?;
+        loaded.state_path = Some(state_path);
+
+        let mut app = App::new(Config::default(), loaded, Settings::default(), false);
+
+        // Ensure the session doesn't already exist (best-effort).
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+
+        Actions::new().respawn_missing_agents(&mut app)?;
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let output = crate::mux::OutputCapture::new().capture_pane(&root_session)?;
+        assert!(
+            output.contains("ARG1:"),
+            "Expected respawned agent output to include ARG1:, got: {output:?}"
+        );
+        assert!(
+            !output.contains("PROMPT"),
+            "Respawn should not replay legacy initial_prompt. Got: {output:?}"
+        );
+
+        // Clean up to avoid leaving long-running processes around.
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+
         Ok(())
     }
 }

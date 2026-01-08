@@ -10,7 +10,6 @@ fn create_test_agent(title: &str) -> Agent {
         "claude".to_string(),
         format!("tenex/{title}"),
         PathBuf::from("/tmp/worktree"),
-        None,
     )
 }
 

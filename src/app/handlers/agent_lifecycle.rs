@@ -92,7 +92,6 @@ impl Actions {
             program.clone(),
             branch.to_string(),
             worktree_path.to_path_buf(),
-            prompt.map(String::from),
         );
         let session_prefix = app_data.storage.instance_session_prefix();
         agent.mux_session = format!("{session_prefix}{}", agent.short_id());
@@ -140,7 +139,6 @@ impl Actions {
                 program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
-                None, // Root doesn't get the prompt
             );
             let session_prefix = app_data.storage.instance_session_prefix();
             root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
@@ -181,7 +179,6 @@ impl Actions {
                 program.clone(),
                 conflict.branch.clone(),
                 conflict.worktree_path.clone(),
-                conflict.prompt.clone(),
             );
             let session_prefix = app_data.storage.instance_session_prefix();
             agent.mux_session = format!("{session_prefix}{}", agent.short_id());
@@ -410,7 +407,6 @@ impl Actions {
             "terminal".to_string(),
             branch,
             worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
@@ -510,7 +506,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp/nonexistent"),
-            None,
         ));
 
         // Enter confirming mode for kill
@@ -538,7 +533,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Kill should work (session doesn't exist, but should not error)
@@ -558,7 +552,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         root.collapsed = false;
         let root_id = root.id;
@@ -571,7 +564,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,
@@ -601,7 +593,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -614,7 +605,6 @@ mod tests {
                 "claude".to_string(),
                 "muster/root".to_string(),
                 PathBuf::from("/tmp"),
-                None,
                 ChildConfig {
                     parent_id: root_id,
                     mux_session: root_session.clone(),
@@ -640,7 +630,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp/worktree"),
-            None,
         );
         root.collapsed = false;
         let root_id = root.id;
@@ -653,7 +642,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp/worktree"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,

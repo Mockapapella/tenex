@@ -114,14 +114,22 @@ fn send_request(stream: &mut Stream, req: &MuxRequest) -> Result<MuxResponse> {
 
 fn start_daemon(endpoint: &SocketEndpoint) -> Result<()> {
     let exe = resolve_tenex_executable()?;
-    Command::new(exe)
-        .arg("muxd")
+    let mut cmd = Command::new(exe);
+    cmd.arg("muxd")
         .env("TENEX_MUX_SOCKET", &endpoint.display)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("Failed to spawn mux daemon")?;
+        .stderr(std::process::Stdio::null());
+
+    // Put the mux daemon in a separate process group so Ctrl+C in the Tenex TUI
+    // doesn't tear down the daemon (and thus all agent sessions).
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+
+    cmd.spawn().context("Failed to spawn mux daemon")?;
     Ok(())
 }
 

@@ -125,7 +125,6 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
         .next()
         .expect("Should have an agent");
     assert_eq!(agent.title, "reconnect-test");
-    assert_eq!(agent.initial_prompt, Some("modified prompt".to_string()));
 
     // Cleanup
     fixture.cleanup_sessions();
@@ -195,7 +194,6 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
         .next()
         .expect("Should have an agent");
     assert_eq!(agent.title, "recreate-test");
-    assert_eq!(agent.initial_prompt, Some("new prompt".to_string()));
 
     // The old marker file should be gone (worktree was recreated)
     assert!(
@@ -277,10 +275,10 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// Test reconnecting to existing worktree for swarm - verifies children get the updated prompt
+/// Test reconnecting to existing worktree for swarm
 #[test]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "test assertions")]
-fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
+fn test_worktree_conflict_reconnect_swarm_creates_children()
 -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
@@ -364,25 +362,8 @@ fn test_worktree_conflict_reconnect_swarm_children_get_prompt()
     let children: Vec<_> = app.data.storage.iter().filter(|a| !a.is_root()).collect();
 
     assert_eq!(children.len(), 2, "Should have 2 children");
-
-    // Root should NOT have the prompt (root doesn't get the planning preamble)
-    assert!(
-        root.initial_prompt.is_none(),
-        "Root should not have initial_prompt, got {:?}",
-        root.initial_prompt
-    );
-
-    // Children SHOULD have the updated prompt (wrapped in planning preamble)
-    for child in &children {
-        let prompt = child
-            .initial_prompt
-            .as_ref()
-            .expect("Child should have initial_prompt");
-        assert!(
-            prompt.contains(updated_task),
-            "Child prompt should contain the updated task '{updated_task}'. Got: {prompt}"
-        );
-    }
+    assert_eq!(root.program, "sleep 60");
+    assert!(children.iter().all(|child| child.program == "sleep 60"));
 
     // Cleanup
     fixture.cleanup_sessions();

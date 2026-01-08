@@ -234,7 +234,6 @@ impl Actions {
                 "terminal".to_string(),
                 branch,
                 worktree_path.to_path_buf(),
-                None,
                 ChildConfig {
                     parent_id: root_id,
                     mux_session: root_session.clone(),

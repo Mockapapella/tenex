@@ -118,7 +118,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex-action-misc-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-action-misc-test-{pid}/{title}")),
-            None,
         );
         agent.set_status(status);
         agent

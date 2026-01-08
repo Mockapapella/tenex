@@ -176,10 +176,45 @@ fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result
     let state_path = Config::state_path();
     let state_existed = state_path.exists();
     let previous_instance_id = storage.instance_id.clone();
+    let previous_mux_socket = storage.mux_socket.clone();
 
     let _ = storage.ensure_instance_id();
 
-    if !state_existed || storage.instance_id != previous_instance_id {
+    // Persist and reuse a stable mux socket per instance so agents can survive restarts even if
+    // the Tenex binary (and thus the default socket fingerprint) changes across rebuilds/upgrades.
+    //
+    // Allow users to override via TENEX_MUX_SOCKET without mutating the saved configuration.
+    let env_mux_socket = std::env::var("TENEX_MUX_SOCKET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if env_mux_socket.is_none() {
+        let wanted_sessions: std::collections::HashSet<String> = storage
+            .root_agents()
+            .into_iter()
+            .map(|agent| agent.mux_session.clone())
+            .collect();
+
+        let preferred = storage.mux_socket.as_deref();
+        let discovered = tenex::mux::discover_socket_for_sessions(&wanted_sessions, preferred);
+        let chosen = discovered
+            .or_else(|| preferred.map(ToString::to_string))
+            .or_else(|| tenex::mux::socket_display().ok());
+
+        if storage.mux_socket != chosen {
+            storage.mux_socket = chosen;
+        }
+
+        if let Some(socket) = storage.mux_socket.as_deref() {
+            let _ = tenex::mux::set_socket_override(socket);
+        }
+    }
+
+    if !state_existed
+        || storage.instance_id != previous_instance_id
+        || storage.mux_socket != previous_mux_socket
+    {
         storage.save()?;
     }
 
@@ -221,6 +256,12 @@ fn run_interactive(
     let action_handler = tenex::app::Actions::new();
     if let Err(e) = action_handler.auto_connect_worktrees(&mut app) {
         eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
+    }
+
+    // After reboot/crash, stored agents may outlive the mux daemon. Attempt to restore missing
+    // mux sessions and windows from persisted state.
+    if let Err(e) = action_handler.respawn_missing_agents(&mut app) {
+        eprintln!("Warning: Failed to respawn agents: {e}");
     }
 
     if let Some(info) = tenex::tui::run(app)? {

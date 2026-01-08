@@ -4,6 +4,7 @@ mod backend;
 mod capture;
 mod client;
 mod daemon;
+mod discovery;
 mod endpoint;
 mod ipc;
 mod protocol;
@@ -50,6 +51,27 @@ pub fn version() -> Result<String> {
     Ok(format!("tenex-mux/{}", env!("CARGO_PKG_VERSION")))
 }
 
+/// Get the mux daemon socket name/path Tenex will use by default for this process.
+///
+/// # Errors
+///
+/// Returns an error if the socket endpoint cannot be constructed.
+pub fn socket_display() -> Result<String> {
+    Ok(endpoint::socket_endpoint()?.display)
+}
+
+/// Attempt to discover a running mux daemon socket that contains one of the provided session names.
+///
+/// This is primarily used to keep agents alive across upgrades/rebuilds when the default socket
+/// fingerprint changes.
+#[must_use]
+pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
+    wanted_sessions: &std::collections::HashSet<String, S>,
+    preferred_socket: Option<&str>,
+) -> Option<String> {
+    discovery::discover_socket_for_sessions(wanted_sessions, preferred_socket)
+}
+
 /// Run the mux daemon in the foreground.
 ///
 /// This is intended to be invoked by the `tenex muxd` CLI subcommand.
@@ -88,5 +110,12 @@ mod tests {
             );
         }
         assert!(!is_server_running());
+    }
+
+    #[test]
+    fn test_socket_display() -> Result<(), Box<dyn std::error::Error>> {
+        let display = socket_display()?;
+        assert!(!display.trim().is_empty());
+        Ok(())
     }
 }

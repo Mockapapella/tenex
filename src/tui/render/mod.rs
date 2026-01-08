@@ -262,7 +262,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex-render-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-render-test-{pid}/{title}")),
-            None,
         );
         agent.set_status(status);
         agent
@@ -698,7 +697,6 @@ mod tests {
             "echo".to_string(),
             "test".to_string(),
             PathBuf::from("/tmp/tenex-render-test-child-visible"),
-            None,
             crate::agent::ChildConfig {
                 parent_id: expanded_root_id,
                 mux_session: expanded_root_mux_session,
@@ -716,7 +714,6 @@ mod tests {
             "echo".to_string(),
             "test".to_string(),
             PathBuf::from("/tmp/tenex-render-test-child-hidden"),
-            None,
             crate::agent::ChildConfig {
                 parent_id: collapsed_root_id,
                 mux_session: collapsed_root_mux_session,
