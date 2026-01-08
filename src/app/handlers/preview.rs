@@ -3,7 +3,6 @@
 use crate::app::{App, Tab};
 use crate::git::{self, DiffGenerator};
 use crate::mux::SessionManager;
-use crate::state::AppMode;
 use anyhow::Result;
 
 use super::Actions;
@@ -15,10 +14,23 @@ impl Actions {
     ///
     /// Returns an error if preview update fails
     pub fn update_preview(self, app: &mut App) -> Result<()> {
-        const HISTORY_LINES_DEFAULT: u32 = 1000;
         // When actively watching the preview and following the output, keep the history window
         // smaller so we can refresh more frequently without stuttering.
         const HISTORY_LINES_FOLLOWING: u32 = 300;
+
+        let old_line_count = app.data.ui.preview_content.lines().count();
+        let old_scroll = app.data.ui.preview_scroll;
+        let visible_height = app
+            .data
+            .ui
+            .preview_dimensions
+            .map_or(20, |(_, h)| usize::from(h));
+
+        // When the user manually scrolls up, stop using a short tail buffer to avoid
+        // the viewport "jumping" as the tail window slides.
+        let wants_full_history = !app.data.ui.preview_follow;
+        let switching_to_full_history =
+            wants_full_history && !app.data.ui.preview_using_full_history;
 
         if let Some(agent) = app.selected_agent() {
             // Determine the target (session or specific window)
@@ -35,19 +47,13 @@ impl Actions {
             };
 
             if self.session_manager.exists(&agent.mux_session) {
-                let content = if matches!(&app.mode, AppMode::PreviewFocused(_)) {
+                let content = if wants_full_history {
                     self.output_capture
-                        .capture_pane(&target)
+                        .capture_full_history(&target)
                         .unwrap_or_default()
                 } else {
-                    let history_lines =
-                        if app.data.active_tab == Tab::Preview && app.data.ui.preview_follow {
-                            HISTORY_LINES_FOLLOWING
-                        } else {
-                            HISTORY_LINES_DEFAULT
-                        };
                     self.output_capture
-                        .capture_pane_with_history(&target, history_lines)
+                        .capture_pane_with_history(&target, HISTORY_LINES_FOLLOWING)
                         .unwrap_or_default()
                 };
                 app.data.ui.preview_content = content;
@@ -65,11 +71,27 @@ impl Actions {
             app.data.ui.preview_pane_size = None;
         }
 
+        // If we just switched from a short tail buffer to full history, preserve the user's
+        // scroll position relative to the bottom of the buffer. Without this, the viewport
+        // can appear to "jump" far up because the top of the buffer gained many lines.
+        if switching_to_full_history {
+            let new_line_count = app.data.ui.preview_content.lines().count();
+
+            let old_max = old_line_count.saturating_sub(visible_height);
+            let old_scroll = old_scroll.min(old_max);
+            let distance_from_bottom = old_max.saturating_sub(old_scroll);
+
+            let new_max = new_line_count.saturating_sub(visible_height);
+            app.data.ui.preview_scroll = new_max.saturating_sub(distance_from_bottom);
+        }
+
         // Auto-scroll to bottom only if follow mode is enabled
         // (disabled when user manually scrolls up, re-enabled when they scroll to bottom)
         if app.data.ui.preview_follow {
             app.data.ui.preview_scroll = usize::MAX;
         }
+
+        app.data.ui.preview_using_full_history = wants_full_history;
 
         Ok(())
     }

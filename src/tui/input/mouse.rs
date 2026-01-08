@@ -1,22 +1,88 @@
 //! Mouse input handling (click-to-select).
 
 use crate::app::{App, Tab};
-use crate::state::{AppMode, PreviewFocusedMode};
+use crate::state::{AppMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 use ratatui::{
     crossterm::event::{MouseButton, MouseEvent, MouseEventKind},
     layout::{Constraint, Direction, Layout, Rect},
 };
 
+const MOUSE_SCROLL_LINES: usize = 3;
+
 /// Handle a mouse event.
 ///
-/// Currently only handles left-click selection (agents list, tabs, preview focus)
-/// and "click outside modal to cancel".
+/// Handles left-click selection (agents list, tabs, preview focus),
+/// scroll wheel preview/diff scrolling, and "click outside modal to cancel".
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) -> Result<()> {
-    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-        handle_left_click(app, mouse.column, mouse.row, frame_area)?;
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            handle_left_click(app, mouse.column, mouse.row, frame_area)?;
+        }
+        MouseEventKind::ScrollUp => {
+            handle_scroll_wheel(
+                app,
+                mouse.column,
+                mouse.row,
+                ScrollDirection::Up,
+                frame_area,
+            );
+        }
+        MouseEventKind::ScrollDown => {
+            handle_scroll_wheel(
+                app,
+                mouse.column,
+                mouse.row,
+                ScrollDirection::Down,
+                frame_area,
+            );
+        }
+        _ => {}
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ScrollDirection {
+    Up,
+    Down,
+}
+
+fn handle_scroll_wheel(
+    app: &mut App,
+    x: u16,
+    y: u16,
+    direction: ScrollDirection,
+    frame_area: Rect,
+) {
+    // Ignore scroll wheel while a modal is open or text input is active.
+    if !matches!(
+        &app.mode,
+        AppMode::Normal(_)
+            | AppMode::Scrolling(_)
+            | AppMode::PreviewFocused(_)
+            | AppMode::DiffFocused(_)
+    ) {
+        return;
+    }
+
+    let (agents_area, content_area) = main_panes(frame_area);
+    if rect_contains(content_area, x, y) {
+        match direction {
+            ScrollDirection::Up => app.data.scroll_up(MOUSE_SCROLL_LINES),
+            ScrollDirection::Down => app.data.scroll_down(MOUSE_SCROLL_LINES),
+        }
+
+        // Match keyboard scrolling behavior: when Tenex has focus, enter scrolling mode.
+        // When preview/diff is focused, keep focus so keystrokes still go to the agent.
+        if matches!(&app.mode, AppMode::Normal(_) | AppMode::Scrolling(_)) {
+            app.apply_mode(ScrollingMode.into());
+        }
+        return;
+    }
+
+    // Reserved for future: scrolling the agents list.
+    let _ = agents_area;
 }
 
 fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) -> Result<()> {
@@ -40,20 +106,7 @@ fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) -> Result<
         return Ok(());
     }
 
-    let main_area = Rect {
-        x: frame_area.x,
-        y: frame_area.y,
-        width: frame_area.width,
-        height: frame_area.height.saturating_sub(1),
-    };
-
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(main_area);
-
-    let agents_area = chunks[0];
-    let content_area = chunks[1];
+    let (agents_area, content_area) = main_panes(frame_area);
 
     if rect_contains(agents_area, x, y) {
         // Clicking anywhere in the agents pane should focus Tenex (i.e., detach from preview).
@@ -67,6 +120,22 @@ fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) -> Result<
     }
 
     Ok(())
+}
+
+fn main_panes(frame_area: Rect) -> (Rect, Rect) {
+    let main_area = Rect {
+        x: frame_area.x,
+        y: frame_area.y,
+        width: frame_area.width,
+        height: frame_area.height.saturating_sub(1),
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(main_area);
+
+    (chunks[0], chunks[1])
 }
 
 fn handle_agent_list_click(app: &mut App, x: u16, y: u16, area: Rect) {
@@ -201,6 +270,24 @@ mod tests {
         }
     }
 
+    fn scroll_up(x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn scroll_down(x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
     #[test]
     fn click_agent_row_selects_agent() -> anyhow::Result<()> {
         let (mut app, _tmp) = create_test_app()?;
@@ -326,6 +413,65 @@ mod tests {
         handle_mouse_event(&mut app, click, frame)?;
 
         assert!(matches!(&app.mode, AppMode::Normal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn scroll_wheel_over_content_scrolls_preview_and_enters_scrolling_mode() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.set_preview_dimensions(80, 3);
+        app.data.ui.preview_content = (0..30)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.data.ui.preview_scroll = usize::MAX;
+        app.data.ui.preview_follow = true;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let (agents_area, content_area) = main_panes(frame);
+        let _ = agents_area;
+
+        // Scroll up inside the preview body.
+        let event = scroll_up(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, event, frame)?;
+
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        assert!(!app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, 24);
+        Ok(())
+    }
+
+    #[test]
+    fn scroll_wheel_in_preview_focused_mode_scrolls_without_detaching() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(PreviewFocusedMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.set_preview_dimensions(80, 3);
+        app.data.ui.preview_content = (0..30)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.data.ui.preview_scroll = usize::MAX;
+        app.data.ui.preview_follow = true;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let (_agents_area, content_area) = main_panes(frame);
+        let up = scroll_up(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, up, frame)?;
+
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(!app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, 24);
+
+        let down = scroll_down(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, down, frame)?;
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, 27);
         Ok(())
     }
 }
