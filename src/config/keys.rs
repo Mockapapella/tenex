@@ -522,12 +522,19 @@ impl Action {
 /// Get the action for a key event
 #[must_use]
 pub fn get_action(code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
-    // Special-case: allow Ctrl+Shift+z for redo on terminals that distinguish it.
-    if matches!(code, KeyCode::Char('z' | 'Z'))
-        && modifiers.contains(KeyModifiers::CONTROL)
-        && modifiers.contains(KeyModifiers::SHIFT)
-    {
-        return Some(Action::DiffRedo);
+    // Special-case: allow Ctrl+Shift+z for redo.
+    //
+    // With the Kitty keyboard protocol + "report alternate keys", crossterm will often encode the
+    // shifted character in `KeyCode::Char` and clear the SHIFT modifier. That means Ctrl+Shift+z
+    // can arrive as `KeyCode::Char('Z')` with only the CONTROL modifier.
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match code {
+            KeyCode::Char('Z') => return Some(Action::DiffRedo),
+            KeyCode::Char('z') if modifiers.contains(KeyModifiers::SHIFT) => {
+                return Some(Action::DiffRedo);
+            }
+            _ => {}
+        }
     }
 
     let (code, modifiers) = normalize_key_event(code, modifiers);
@@ -678,6 +685,13 @@ mod tests {
         assert_eq!(
             get_action(KeyCode::Char('M'), KeyModifiers::CONTROL),
             Some(Action::Merge)
+        );
+
+        // Ctrl+Shift+z redo can be reported as Ctrl+Z when using Kitty keyboard protocol with
+        // alternate keys enabled.
+        assert_eq!(
+            get_action(KeyCode::Char('Z'), KeyModifiers::CONTROL),
+            Some(Action::DiffRedo)
         );
     }
 
