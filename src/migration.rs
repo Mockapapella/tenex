@@ -27,63 +27,8 @@ pub fn migrate_default_state_dir() -> Result<()> {
 
     let new_dir = Config::default_instance_root();
 
-    let old_state = old_dir.join("state.json");
-    let new_state = new_dir.join("state.json");
-
-    if !old_state.exists() || new_state.exists() {
+    if !migrate_state_dir(&old_dir, &new_dir)? {
         return Ok(());
-    }
-
-    fs::create_dir_all(&new_dir)
-        .with_context(|| format!("Failed to create {}", new_dir.display()))?;
-
-    let mut to_move = Vec::new();
-    for name in ["state.json", "settings.json"] {
-        let path = old_dir.join(name);
-        if path.exists() {
-            to_move.push(path);
-        }
-    }
-
-    if let Ok(entries) = fs::read_dir(&old_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        Path::new(name)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("bak"))
-                    })
-            {
-                to_move.push(path);
-            }
-        }
-    }
-
-    for src in &to_move {
-        let Some(file_name) = src.file_name() else {
-            continue;
-        };
-
-        let dst = new_dir.join(file_name);
-        if dst.exists() {
-            continue;
-        }
-
-        move_file(src, &dst)
-            .with_context(|| format!("Failed to move {} to {}", src.display(), dst.display()))?;
-    }
-
-    // Only delete the old directory if it is empty after migration.
-    if let Ok(mut entries) = fs::read_dir(&old_dir)
-        && entries.next().is_none()
-    {
-        fs::remove_dir_all(&old_dir).with_context(|| {
-            format!("Failed to remove old state directory {}", old_dir.display())
-        })?;
     }
 
     info!(
@@ -93,6 +38,80 @@ pub fn migrate_default_state_dir() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn migrate_state_dir(old_dir: &Path, new_dir: &Path) -> Result<bool> {
+    if !old_dir.exists() {
+        return Ok(false);
+    }
+
+    let mut to_move = Vec::new();
+    for name in ["state.json", "settings.json"] {
+        let src = old_dir.join(name);
+        if !src.exists() {
+            continue;
+        }
+
+        let dst = new_dir.join(name);
+        if dst.exists() {
+            continue;
+        }
+
+        to_move.push((src, dst));
+    }
+
+    if let Ok(entries) = fs::read_dir(old_dir) {
+        for entry in entries.flatten() {
+            let src = entry.path();
+            if !src.is_file() {
+                continue;
+            }
+
+            let Some(file_name) = src.file_name() else {
+                continue;
+            };
+            let Some(file_name_str) = file_name.to_str() else {
+                continue;
+            };
+
+            if !Path::new(file_name_str)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("bak"))
+            {
+                continue;
+            }
+
+            let dst = new_dir.join(file_name);
+            if dst.exists() {
+                continue;
+            }
+
+            to_move.push((src, dst));
+        }
+    }
+
+    if to_move.is_empty() {
+        return Ok(false);
+    }
+
+    fs::create_dir_all(new_dir)
+        .with_context(|| format!("Failed to create {}", new_dir.display()))?;
+
+    for (src, dst) in &to_move {
+        move_file(src, dst)
+            .with_context(|| format!("Failed to move {} to {}", src.display(), dst.display()))?;
+    }
+
+    // Only delete the old directory if it is empty after migration.
+    if let Ok(mut entries) = fs::read_dir(old_dir)
+        && entries.next().is_none()
+    {
+        fs::remove_dir_all(old_dir).with_context(|| {
+            format!("Failed to remove old state directory {}", old_dir.display())
+        })?;
+    }
+
+    Ok(true)
 }
 
 fn move_file(src: &Path, dst: &Path) -> Result<()> {
@@ -124,6 +143,57 @@ mod tests {
         let src = tmp.path().join("missing.json");
         let dst = tmp.path().join("dst.json");
         assert!(move_file(&src, &dst).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_migrate_state_dir_moves_settings_without_state() -> Result<()> {
+        let tmp = tempfile::TempDir::new()?;
+        let old_dir = tmp.path().join("old");
+        let new_dir = tmp.path().join("new");
+
+        fs::create_dir_all(&old_dir)
+            .with_context(|| format!("Failed to create {}", old_dir.display()))?;
+
+        fs::write(
+            old_dir.join("settings.json"),
+            r#"{"agent_program":"codex"}"#,
+        )
+        .with_context(|| "Failed to write legacy settings")?;
+
+        assert!(migrate_state_dir(&old_dir, &new_dir)?);
+        assert!(new_dir.join("settings.json").exists());
+        assert!(!old_dir.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_migrate_state_dir_does_not_overwrite_existing_settings() -> Result<()> {
+        let tmp = tempfile::TempDir::new()?;
+        let old_dir = tmp.path().join("old");
+        let new_dir = tmp.path().join("new");
+
+        fs::create_dir_all(&old_dir)
+            .with_context(|| format!("Failed to create {}", old_dir.display()))?;
+        fs::create_dir_all(&new_dir)
+            .with_context(|| format!("Failed to create {}", new_dir.display()))?;
+
+        fs::write(
+            old_dir.join("settings.json"),
+            r#"{"agent_program":"codex"}"#,
+        )
+        .with_context(|| "Failed to write legacy settings")?;
+        fs::write(
+            new_dir.join("settings.json"),
+            r#"{"agent_program":"claude"}"#,
+        )
+        .with_context(|| "Failed to write current settings")?;
+
+        assert!(!migrate_state_dir(&old_dir, &new_dir)?);
+
+        let settings = fs::read_to_string(new_dir.join("settings.json"))
+            .with_context(|| "Failed to read current settings")?;
+        assert!(settings.contains("claude"));
         Ok(())
     }
 }
