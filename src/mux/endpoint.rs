@@ -99,7 +99,16 @@ pub fn socket_endpoint() -> Result<SocketEndpoint> {
     })
 }
 
-fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> {
+/// Resolve a mux socket endpoint from a display value.
+///
+/// This mirrors the parsing rules of `TENEX_MUX_SOCKET`:
+/// - Values containing a path separator are treated as filesystem socket paths.
+/// - Otherwise, values are treated as namespaced socket names when supported.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint cannot be constructed.
+pub(super) fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> {
     let display = value.to_string();
     let looks_like_path = display.contains('/') || display.contains('\\');
 

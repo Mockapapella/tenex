@@ -156,6 +156,13 @@ pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
 
+    /// Mux daemon socket name/path used by this Tenex instance.
+    ///
+    /// Tenex persists this value so agent sessions can survive restarts even if the Tenex binary
+    /// (and thus the default mux socket fingerprint) changes across upgrades or rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux_socket: Option<String>,
+
     /// Custom state file path (if set, overrides default location)
     /// When None, uses `Config::state_path()`
     #[serde(skip)]
@@ -180,6 +187,7 @@ impl Storage {
             agents: Vec::new(),
             version: default_version(),
             instance_id: None,
+            mux_socket: None,
             state_path: None,
         }
     }
@@ -192,6 +200,7 @@ impl Storage {
             agents: Vec::new(),
             version: 1, // Can't call default_version() in const context
             instance_id: None,
+            mux_socket: None,
             state_path: Some(path),
         }
     }
@@ -688,7 +697,6 @@ mod tests {
             "claude".to_string(),
             format!("tenex/{title}"),
             PathBuf::from("/tmp/worktree"),
-            None,
         )
     }
 
@@ -886,7 +894,6 @@ mod tests {
             "claude".to_string(),
             parent.branch.clone(),
             parent.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: parent.id,
                 mux_session: parent.mux_session.clone(),
@@ -967,7 +974,6 @@ mod tests {
             "claude".to_string(),
             root.branch.clone(),
             root.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: child.id,
                 mux_session: root.mux_session.clone(),
@@ -1013,7 +1019,6 @@ mod tests {
             "claude".to_string(),
             root.branch.clone(),
             root.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: child1.id,
                 mux_session: root.mux_session.clone(),
@@ -1042,7 +1047,6 @@ mod tests {
             "claude".to_string(),
             root.branch.clone(),
             root.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: child.id,
                 mux_session: root.mux_session.clone(),
@@ -1143,7 +1147,6 @@ mod tests {
             "claude".to_string(),
             root.branch.clone(),
             root.worktree_path.clone(),
-            None,
             ChildConfig {
                 parent_id: child1.id,
                 mux_session: root.mux_session.clone(),

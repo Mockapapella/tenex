@@ -531,7 +531,6 @@ mod tests {
             "echo".to_string(),
             "tenex/render-agent".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let id = agent.id;
         app.data.storage.add(agent);

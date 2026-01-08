@@ -260,14 +260,12 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
         data.storage.add(Agent::new(
             "second".to_string(),
             "claude".to_string(),
             "tenex/second".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
     }
 

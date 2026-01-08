@@ -116,7 +116,6 @@ impl Actions {
             program.clone(),
             branch.clone(),
             worktree_path.clone(),
-            None,
         );
         let session_prefix = app_data.storage.instance_session_prefix();
         root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
@@ -243,7 +242,6 @@ impl Actions {
             program.to_string(),
             config.branch.clone(),
             config.worktree_path.clone(),
-            child_prompt.map(String::from),
             ChildConfig {
                 parent_id: config.parent_agent_id,
                 mux_session: config.root_session.clone(),
@@ -351,7 +349,6 @@ impl Actions {
                 program.clone(),
                 branch.clone(),
                 worktree_path.clone(),
-                Some(review_prompt.clone()),
                 ChildConfig {
                     parent_id,
                     mux_session: root_session.clone(),
@@ -567,7 +564,6 @@ mod tests {
             "echo".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         app.data.storage.add(root);
@@ -607,7 +603,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Should set error when agent has no children
@@ -650,7 +645,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
@@ -675,7 +669,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         root.collapsed = false;
         let root_id = root.id;
@@ -688,7 +681,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
@@ -703,7 +695,6 @@ mod tests {
             "terminal".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,

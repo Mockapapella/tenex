@@ -219,7 +219,6 @@ mod tests {
                 "claude".to_string(),
                 format!("muster/agent{i}"),
                 PathBuf::from("/tmp"),
-                None,
             ));
         }
 
@@ -294,7 +293,6 @@ mod tests {
             "claude".to_string(),
             "muster/running".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         agent.set_status(Status::Running);
         app.data.storage.add(agent);
@@ -324,7 +322,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Kill should enter confirming mode
@@ -372,7 +369,6 @@ mod tests {
                 "claude".to_string(),
                 format!("muster/agent{i}"),
                 PathBuf::from("/tmp"),
-                None,
             ));
         }
 
@@ -404,7 +400,6 @@ mod tests {
             "claude".to_string(),
             "test-session".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // FocusPreview should enter PreviewFocused mode
@@ -442,7 +437,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Should not error when agent has no children
@@ -474,7 +468,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
@@ -510,7 +503,6 @@ mod tests {
             "claude".to_string(),
             "tenex/parent".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let parent_id = parent.id;
         app.data.storage.add(parent);
@@ -521,7 +513,6 @@ mod tests {
             "claude".to_string(),
             "tenex/child".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         child.parent_id = Some(parent_id);
         app.data.storage.add(child);
@@ -551,7 +542,6 @@ mod tests {
             "claude".to_string(),
             "tenex/parent".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // No children - should show error modal, not enter confirming mode
@@ -594,7 +584,6 @@ mod tests {
             "claude".to_string(),
             "muster/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.handle_action(&mut app, Action::Broadcast)?;
@@ -798,7 +787,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // With agent selected - should enter TerminalPrompt mode
@@ -820,7 +808,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Counter starts at 0
@@ -849,7 +836,6 @@ mod tests {
             "terminal".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: uuid::Uuid::new_v4(),
                 mux_session: "test-session".to_string(),
@@ -884,7 +870,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // 4. With agent - [T] enters prompt mode
@@ -946,7 +931,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.handle_action(&mut app, Action::Kill)?;
@@ -981,7 +965,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         agent.status = Status::Running;
         app.data.storage.add(agent);
@@ -1029,7 +1012,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.handle_action(&mut app, Action::Synthesize)?;
@@ -1060,7 +1042,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.handle_action(&mut app, Action::Broadcast)?;
@@ -1090,7 +1071,6 @@ mod tests {
             "claude".to_string(),
             "tenex/test".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;

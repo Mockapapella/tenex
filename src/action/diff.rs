@@ -837,7 +837,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;
@@ -878,7 +877,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;
@@ -945,7 +943,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;
@@ -974,7 +971,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
         DiffUndoAction.execute(DiffFocusedMode, &mut data)?;
         assert_eq!(data.ui.status_message.as_deref(), Some("Nothing to undo"));
@@ -1005,7 +1001,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;
@@ -1036,7 +1031,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;
@@ -1072,7 +1066,6 @@ mod tests {
             "claude".to_string(),
             "feature/root".to_string(),
             temp_dir.path().to_path_buf(),
-            None,
         ));
         data.active_tab = Tab::Diff;
         set_diff_view_from_repo(&mut data, &repo)?;

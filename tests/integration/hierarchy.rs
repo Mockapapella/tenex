@@ -711,7 +711,6 @@ fn test_visible_agents_with_info_hierarchy() {
         "echo".to_string(),
         "branch1".to_string(),
         PathBuf::from("/tmp/root1"),
-        None,
     );
     root1.collapsed = false; // Expanded
 
@@ -726,7 +725,6 @@ fn test_visible_agents_with_info_hierarchy() {
         "echo".to_string(),
         "branch2".to_string(),
         PathBuf::from("/tmp/root2"),
-        None,
     );
     // root2.collapsed = true is default
 

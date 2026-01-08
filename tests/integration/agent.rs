@@ -15,14 +15,12 @@ fn test_cmd_list_shows_agents() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("agent1"),
         fixture.worktree_path().join("agent1"),
-        None,
     );
     let agent2 = Agent::new(
         "test-agent-2".to_string(),
         "echo".to_string(),
         fixture.session_name("agent2"),
         fixture.worktree_path().join("agent2"),
-        None,
     );
 
     storage.add(agent1);
@@ -47,7 +45,6 @@ fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("running"),
         fixture.worktree_path().join("running"),
-        None,
     );
     agent1.set_status(Status::Running);
 
@@ -56,7 +53,6 @@ fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("starting"),
         fixture.worktree_path().join("starting"),
-        None,
     );
     agent2.set_status(Status::Starting);
 
@@ -84,7 +80,6 @@ fn test_find_agent_by_short_id_integration() -> Result<(), Box<dyn std::error::E
         "echo".to_string(),
         fixture.session_name("findable"),
         fixture.worktree_path().join("findable"),
-        None,
     );
     let short_id = agent.short_id();
     let full_id = agent.id;
@@ -108,14 +103,12 @@ fn test_find_agent_by_index_integration() -> Result<(), Box<dyn std::error::Erro
         "echo".to_string(),
         fixture.session_name("idx0"),
         fixture.worktree_path().join("idx0"),
-        None,
     ));
     storage.add(Agent::new(
         "agent-1".to_string(),
         "echo".to_string(),
         fixture.session_name("idx1"),
         fixture.worktree_path().join("idx1"),
-        None,
     ));
 
     // Find by index
@@ -142,7 +135,6 @@ fn test_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("status"),
         fixture.worktree_path().join("status"),
-        None,
     );
 
     // Initial status should be Starting

@@ -26,21 +26,18 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
         "echo".to_string(),
         fixture.session_name("agent1"),
         fixture.worktree_path(),
-        None,
     );
     let agent2 = Agent::new(
         "agent2".to_string(),
         "echo".to_string(),
         fixture.session_name("agent2"),
         fixture.worktree_path(),
-        None,
     );
     let agent3 = Agent::new(
         "agent3".to_string(),
         "echo".to_string(),
         fixture.session_name("agent3"),
         fixture.worktree_path(),
-        None,
     );
 
     let agent1_session = agent1.mux_session.clone();
@@ -104,7 +101,6 @@ fn test_reserve_window_indices_consecutive() {
         "echo".to_string(),
         "branch".to_string(),
         PathBuf::from("/tmp/root"),
-        None,
     );
     let root_id = root.id;
     storage.add(root.clone());
@@ -157,7 +153,6 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("root"),
         fixture.worktree_path(),
-        None,
     );
     let root_session = root.mux_session.clone();
     let root_id = root.id;

@@ -37,7 +37,6 @@ fn test_handle_push_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         "claude".to_string(),
         "muster/test".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -59,7 +58,6 @@ fn test_push_branch_sets_confirm_mode() -> Result<(), Box<dyn std::error::Error>
         "claude".to_string(),
         "feature/pushable".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -104,7 +102,6 @@ fn test_rename_agent_sets_state_for_selected() -> Result<(), Box<dyn std::error:
         "claude".to_string(),
         "feature/rename-me".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -177,7 +174,6 @@ fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::erro
         "claude".to_string(),
         "feature/pr-agent".to_string(),
         temp_dir.path().to_path_buf(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -202,7 +198,6 @@ fn test_open_pr_in_browser_missing_gh_sets_error() -> Result<(), Box<dyn std::er
         "claude".to_string(),
         "feature/gh-less".to_string(),
         temp_dir.path().to_path_buf(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -234,7 +229,6 @@ fn test_push_flow_state_transitions() -> Result<(), Box<dyn std::error::Error>> 
         "claude".to_string(),
         "feature/test".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -262,7 +256,6 @@ fn test_rename_root_flow_state_transitions() -> Result<(), Box<dyn std::error::E
         "claude".to_string(),
         "tenex/test-agent".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -304,7 +297,6 @@ fn test_rename_subagent_flow_state_transitions() -> Result<(), Box<dyn std::erro
         "claude".to_string(),
         "tenex/root-agent".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     app.data.storage.add(root.clone());
 
@@ -314,7 +306,6 @@ fn test_rename_subagent_flow_state_transitions() -> Result<(), Box<dyn std::erro
         "claude".to_string(),
         "tenex/root-agent".to_string(),
         PathBuf::from("/tmp"),
-        None,
         crate::agent::ChildConfig {
             parent_id: root.id,
             mux_session: root.mux_session,
@@ -359,7 +350,6 @@ fn test_open_pr_flow_state_with_unpushed() -> Result<(), Box<dyn std::error::Err
         "claude".to_string(),
         "feature/test".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -390,7 +380,6 @@ fn test_open_pr_flow_state_no_unpushed() -> Result<(), Box<dyn std::error::Error
         "claude".to_string(),
         "feature/test".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -420,7 +409,6 @@ fn test_execute_push_and_open_pr_handles_failed_push() -> Result<(), Box<dyn std
         "claude".to_string(),
         "feature/failing-push".to_string(),
         temp_dir.path().to_path_buf(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -475,7 +463,6 @@ fn test_handle_rename_with_root_agent() -> Result<(), Box<dyn std::error::Error>
         "claude".to_string(),
         "tenex/test-agent".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -503,7 +490,6 @@ fn test_handle_rename_with_subagent() -> Result<(), Box<dyn std::error::Error>> 
         "claude".to_string(),
         "tenex/root".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let root_id = root.id;
     app.data.storage.add(root.clone());
@@ -514,7 +500,6 @@ fn test_handle_rename_with_subagent() -> Result<(), Box<dyn std::error::Error>> 
         "claude".to_string(),
         "tenex/root".to_string(),
         PathBuf::from("/tmp"),
-        None,
         crate::agent::ChildConfig {
             parent_id: root_id,
             mux_session: root.mux_session,
@@ -645,7 +630,6 @@ fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         "claude".to_string(),
         "tenex/test".to_string(),
         temp_dir.path().to_path_buf(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -669,7 +653,6 @@ fn test_push_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         "claude".to_string(),
         "tenex/test".to_string(),
         PathBuf::from("/tmp"),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);

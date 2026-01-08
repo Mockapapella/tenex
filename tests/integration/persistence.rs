@@ -15,7 +15,6 @@ fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         fixture.session_name("persist"),
         fixture.worktree_path().join("persist"),
-        None,
     ));
 
     // Save to file

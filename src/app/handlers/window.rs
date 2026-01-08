@@ -140,7 +140,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         // Should not panic when resizing non-existent sessions
@@ -162,7 +161,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -174,7 +172,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,
@@ -196,7 +193,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         app.data.storage.add(root);
@@ -215,7 +211,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -227,7 +222,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
@@ -242,7 +236,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,
@@ -273,7 +266,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -285,7 +277,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,
@@ -316,7 +307,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -328,7 +318,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,

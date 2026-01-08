@@ -281,7 +281,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex-action-git-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-action-git-test-{pid}/{title}")),
-            None,
         )
     }
 

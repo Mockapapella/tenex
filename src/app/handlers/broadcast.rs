@@ -120,7 +120,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         ));
 
         let next = handler.broadcast_to_leaves(&mut app.data, "test message")?;
@@ -139,7 +138,6 @@ mod tests {
             "claude".to_string(),
             "muster/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         root.collapsed = false;
         let root_id = root.id;
@@ -153,7 +151,6 @@ mod tests {
                 "claude".to_string(),
                 "muster/root".to_string(),
                 PathBuf::from("/tmp"),
-                None,
                 ChildConfig {
                     parent_id: root_id,
                     mux_session: root_session.clone(),

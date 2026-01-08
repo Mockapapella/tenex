@@ -592,7 +592,6 @@ mod tests {
             "claude".to_string(),
             "branch".to_string(),
             std::path::PathBuf::from("/tmp"),
-            None,
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
@@ -616,7 +615,6 @@ mod tests {
             "claude".to_string(),
             "branch".to_string(),
             std::path::PathBuf::from("/tmp"),
-            None,
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
@@ -640,7 +638,6 @@ mod tests {
             "claude".to_string(),
             "branch".to_string(),
             std::path::PathBuf::from("/tmp"),
-            None,
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);

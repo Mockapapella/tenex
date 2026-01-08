@@ -738,7 +738,6 @@ mod tests {
             "claude".to_string(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
-            None,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();
@@ -750,7 +749,6 @@ mod tests {
             "claude".to_string(),
             root_branch,
             root_worktree,
-            None,
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session,

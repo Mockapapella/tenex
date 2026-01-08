@@ -256,7 +256,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex/{title}"),
             PathBuf::from("/tmp"),
-            None,
         );
         app.data.storage.add(agent);
     }

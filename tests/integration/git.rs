@@ -82,7 +82,6 @@ fn test_execute_rename_same_name() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "test-branch".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -131,7 +130,6 @@ fn test_execute_push_with_valid_agent() -> Result<(), Box<dyn std::error::Error>
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -188,7 +186,6 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -249,7 +246,6 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -287,7 +283,6 @@ fn test_push_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "feature/test".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -321,7 +316,6 @@ fn test_rename_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "feature/rename".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -360,7 +354,6 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "feature/rebase".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     app.data.storage.add(agent);
 
@@ -396,7 +389,6 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "feature/merge".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     app.data.storage.add(agent);
 
@@ -434,7 +426,6 @@ fn test_open_pr_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -476,7 +467,6 @@ fn test_execute_root_rename_with_real_worktree() -> Result<(), Box<dyn std::erro
         "echo".to_string(),
         old_branch.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -517,7 +507,6 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "tenex-root".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let root_id = root.id;
     let root_session = root.mux_session.clone();
@@ -529,7 +518,6 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "tenex-root".to_string(),
         fixture.repo_path.clone(),
-        None,
         tenex::agent::ChildConfig {
             parent_id: root_id,
             mux_session: root_session,
@@ -619,7 +607,6 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -726,7 +713,6 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -803,7 +789,6 @@ fn test_execute_push_and_open_pr_no_remote() -> Result<(), Box<dyn std::error::E
         "echo".to_string(),
         branch_name.to_string(),
         worktree_path,
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -841,7 +826,6 @@ fn test_rename_unchanged_name() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "tenex-same".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -887,7 +871,6 @@ fn test_execute_rebase_no_target_branch() -> Result<(), Box<dyn std::error::Erro
         "echo".to_string(),
         "tenex-feature".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -928,7 +911,6 @@ fn test_execute_merge_no_target_branch() -> Result<(), Box<dyn std::error::Error
         "echo".to_string(),
         "tenex-feature".to_string(),
         fixture.repo_path.clone(),
-        None,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -974,7 +956,6 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
         "echo".to_string(),
         old_branch.to_string(),
         worktree_path.clone(),
-        None,
     );
     let root_id = root.id;
     let root_session = root.mux_session.clone();
@@ -987,7 +968,6 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
             "echo".to_string(),
             old_branch.to_string(),
             worktree_path.clone(),
-            None,
             tenex::agent::ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),

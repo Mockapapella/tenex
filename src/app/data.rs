@@ -557,7 +557,6 @@ mod tests {
             "echo".to_string(),
             format!("tenex-app-data-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/{title}")),
-            None,
         )
     }
 
