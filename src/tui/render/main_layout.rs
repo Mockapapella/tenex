@@ -326,10 +326,7 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let is_focused = matches!(&app.mode, AppMode::DiffFocused(_));
 
     let (border_color, title) = if is_focused {
-        (
-            colors::SELECTED,
-            " Git Diff (INTERACTIVE) [Esc/Ctrl+q exit] ",
-        )
+        (colors::SELECTED, " Git Diff (INTERACTIVE) [Ctrl+q exit] ")
     } else {
         (colors::BORDER, " Git Diff ")
     };

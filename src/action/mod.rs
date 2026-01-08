@@ -267,10 +267,8 @@ pub fn dispatch_diff_focused_mode(
         return Ok(());
     }
 
-    // Esc exits diff focus mode.
+    // Esc should not exit diff focus mode (keep consistent with preview focus).
     if code == KeyCode::Esc {
-        let next = UnfocusDiffAction.execute(DiffFocusedMode, &mut app.data)?;
-        app.apply_mode(next);
         return Ok(());
     }
 
@@ -907,7 +905,7 @@ mod tests {
 
         app.enter_mode(DiffFocusedMode.into());
         dispatch_diff_focused_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, AppMode::normal());
+        assert!(matches!(app.mode, AppMode::DiffFocused(_)));
 
         app.enter_mode(DiffFocusedMode.into());
         dispatch_diff_focused_mode(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL)?;
