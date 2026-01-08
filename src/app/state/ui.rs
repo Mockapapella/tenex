@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 /// UI-related state for the application
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "UiState stores a handful of independent rendering/behavior flags"
+)]
 pub struct UiState {
     /// Scroll offset for the agent list (index of first visible agent)
     pub agent_list_scroll: usize,
@@ -29,6 +33,12 @@ pub struct UiState {
     /// Whether preview should auto-scroll to bottom on content updates
     /// Set to false when user manually scrolls up, true when they scroll to bottom
     pub preview_follow: bool,
+
+    /// Whether the current preview buffer represents the full scrollback history.
+    ///
+    /// Used to keep scroll position stable when switching between a short tail
+    /// buffer (following) and full history (manual scrolling).
+    pub preview_using_full_history: bool,
 
     /// Cached preview content
     pub preview_content: String,
@@ -97,6 +107,7 @@ impl UiState {
             diff_visual_anchor: None,
             help_scroll: 0,
             preview_follow: true,
+            preview_using_full_history: false,
             preview_content: String::new(),
             preview_cursor_position: None,
             preview_pane_size: None,
@@ -155,6 +166,7 @@ impl UiState {
         // Preview: set to max so render functions clamp to bottom of content
         self.preview_scroll = usize::MAX;
         self.preview_follow = true;
+        self.preview_using_full_history = false;
         // Diff: set to 0 to show from top
         self.diff_scroll = 0;
         self.diff_cursor = 0;
