@@ -96,3 +96,6 @@ strip = "symbols"
 inherits = "test"
 debug = 2
 opt-level = 0
+
+[patch.crates-io]
+vt100-ctt = { path = "crates/vt100-ctt" }

@@ -4,6 +4,7 @@
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+worktrees/
 state.json
 settings.json
 CLAUDE.md
