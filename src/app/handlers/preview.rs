@@ -447,4 +447,105 @@ mod tests {
         assert!(!app.data.ui.diff_has_unseen_changes);
         Ok(())
     }
+
+    #[test]
+    fn test_update_diff_digest_sets_unseen_when_not_viewing_diff_tab()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(app.data.ui.diff_has_unseen_changes);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_digest_sets_unseen_after_viewing_diff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        // Viewing diff marks the current hash as "seen".
+        app.data.active_tab = crate::app::Tab::Diff;
+        handler.update_diff(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        // Make another change and ensure digest marks it as unseen while in preview.
+        fs::write(&file_path, "hello again\n")?;
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(app.data.ui.diff_has_unseen_changes);
+
+        Ok(())
+    }
 }

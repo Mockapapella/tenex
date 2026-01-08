@@ -19,6 +19,10 @@ pub struct UiState {
     /// Cursor position (selected line index) in diff pane
     pub diff_cursor: usize,
 
+    /// Visual selection anchor for diff focus (line index). When set, the selection spans from
+    /// `diff_visual_anchor` to `diff_cursor` (inclusive).
+    pub diff_visual_anchor: Option<usize>,
+
     /// Scroll position in help overlay
     pub help_scroll: usize,
 
@@ -90,6 +94,7 @@ impl UiState {
             preview_scroll: 0,
             diff_scroll: 0,
             diff_cursor: 0,
+            diff_visual_anchor: None,
             help_scroll: 0,
             preview_follow: true,
             preview_content: String::new(),
@@ -119,6 +124,7 @@ impl UiState {
         self.diff_line_ranges = compute_line_ranges(&content);
         self.diff_content = content;
         self.diff_line_meta = vec![DiffLineMeta::Unknown; self.diff_line_ranges.len()];
+        self.normalize_diff_visual_anchor();
         self.normalize_diff_scroll();
         self.normalize_diff_cursor();
     }
@@ -138,24 +144,27 @@ impl UiState {
             );
             vec![DiffLineMeta::Unknown; self.diff_line_ranges.len()]
         };
+        self.normalize_diff_visual_anchor();
         self.normalize_diff_scroll();
         self.normalize_diff_cursor();
     }
 
     /// Reset scroll positions for both panes
     /// Preview is pinned to bottom (with follow enabled), Diff is pinned to top
-    pub const fn reset_scroll(&mut self) {
+    pub fn reset_scroll(&mut self) {
         // Preview: set to max so render functions clamp to bottom of content
         self.preview_scroll = usize::MAX;
         self.preview_follow = true;
         // Diff: set to 0 to show from top
         self.diff_scroll = 0;
         self.diff_cursor = 0;
+        self.normalize_diff_cursor();
     }
 
     /// Reset interactive diff state when switching agents/worktrees.
     pub fn reset_diff_interaction(&mut self) {
         self.diff_cursor = 0;
+        self.diff_visual_anchor = None;
         self.diff_model = None;
         self.diff_folded_files.clear();
         self.diff_folded_hunks.clear();
@@ -253,6 +262,26 @@ impl UiState {
         }
     }
 
+    fn normalize_diff_visual_anchor(&mut self) {
+        let Some(anchor) = self.diff_visual_anchor else {
+            return;
+        };
+
+        let diff_lines = self.diff_line_ranges.len();
+        if diff_lines == 0 {
+            self.diff_visual_anchor = None;
+            return;
+        }
+
+        let max = diff_lines.saturating_sub(1);
+        let min = self.diff_cursor_min().min(max);
+        if anchor > max {
+            self.diff_visual_anchor = Some(max);
+        } else if anchor < min {
+            self.diff_visual_anchor = Some(min);
+        }
+    }
+
     fn normalize_diff_cursor(&mut self) {
         let diff_lines = self.diff_line_ranges.len();
         if diff_lines == 0 {
@@ -261,11 +290,26 @@ impl UiState {
         }
 
         let max = diff_lines.saturating_sub(1);
+        let min = self.diff_cursor_min().min(max);
+
         if self.diff_cursor > max {
             self.diff_cursor = max;
+        } else if self.diff_cursor < min {
+            self.diff_cursor = min;
         }
 
+        self.normalize_diff_visual_anchor();
         self.ensure_diff_cursor_visible();
+    }
+
+    fn diff_cursor_min(&self) -> usize {
+        if matches!(self.diff_line_meta.first(), Some(DiffLineMeta::Info))
+            && matches!(self.diff_line_meta.get(1), Some(DiffLineMeta::Info))
+        {
+            2
+        } else {
+            0
+        }
     }
 
     fn ensure_diff_cursor_visible(&mut self) {
@@ -292,9 +336,10 @@ impl UiState {
     }
 
     /// Scroll diff to the top
-    pub const fn diff_to_top(&mut self) {
+    pub fn diff_to_top(&mut self) {
         self.diff_scroll = 0;
         self.diff_cursor = 0;
+        self.normalize_diff_cursor();
     }
 
     /// Scroll preview to the bottom
@@ -336,7 +381,7 @@ impl UiState {
         meta.push(DiffLineMeta::Info);
 
         lines.push(
-            "Focused: Ctrl+q: exit | ↑/↓: move | x: delete line/hunk | Ctrl+z: undo | Ctrl+y: redo | Space: fold"
+            "Focused: Ctrl+q: exit | ↑/↓: move | shift+v: block select/unselect | x: delete line/hunk | Ctrl+z: undo | Ctrl+y: redo | Space: fold"
                 .to_string(),
         );
         meta.push(DiffLineMeta::Info);
@@ -565,6 +610,7 @@ fn compute_line_ranges(s: &str) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::{DiffModel, DiffSummary};
 
     #[test]
     fn test_ui_state_new() {
@@ -771,5 +817,51 @@ mod tests {
             &ui.diff_content[ui.diff_line_ranges[0].0..ui.diff_line_ranges[0].1],
             "line1"
         );
+    }
+
+    #[test]
+    fn test_build_diff_view_includes_visual_select_hint() {
+        let ui = UiState::new();
+        let model = DiffModel {
+            files: Vec::new(),
+            summary: DiffSummary {
+                files_changed: 0,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let (content, _) = ui.build_diff_view(&model);
+        assert!(content.contains("shift+v: block select/unselect"));
+    }
+
+    #[test]
+    fn test_diff_cursor_never_enters_diff_header_lines() {
+        let mut ui = UiState::new();
+        let model = DiffModel {
+            files: Vec::new(),
+            summary: DiffSummary {
+                files_changed: 0,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let (content, meta) = ui.build_diff_view(&model);
+        ui.set_diff_view(content, meta);
+
+        // The first two lines are the summary + help line.
+        assert_eq!(ui.diff_cursor, 2);
+
+        // Cursor up should clamp at the first non-header line.
+        ui.diff_cursor_up(1);
+        assert_eq!(ui.diff_cursor, 2);
+
+        // If something sets the cursor into the header range, normalization should repair it.
+        ui.diff_cursor = 0;
+        ui.normalize_diff_cursor();
+        assert_eq!(ui.diff_cursor, 2);
     }
 }

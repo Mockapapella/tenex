@@ -27,6 +27,8 @@ pub enum Action {
     DiffCursorUp,
     /// Move the diff cursor down (Diff tab)
     DiffCursorDown,
+    /// Toggle visual selection (multi-line) in diff focus
+    DiffToggleVisual,
     /// Delete the selected diff line/hunk (Diff tab)
     DiffDeleteLine,
     /// Undo the last diff edit (Diff tab)
@@ -247,6 +249,11 @@ const BINDINGS: &[Binding] = &[
     },
     // Diff (interactive)
     Binding {
+        code: KeyCode::Char('V'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::DiffToggleVisual,
+    },
+    Binding {
         code: KeyCode::Char('x'),
         modifiers: KeyModifiers::NONE,
         action: Action::DiffDeleteLine,
@@ -366,8 +373,9 @@ impl Action {
             Self::RenameBranch => "[r]ename branch",
             Self::OpenPR => "[Ctrl+o]pen pull request",
             Self::SwitchTab => "[Tab] switch preview/diff",
-            Self::DiffCursorUp => "[↑] diff cursor up (diff focus)",
-            Self::DiffCursorDown => "[↓] diff cursor down (diff focus)",
+            Self::DiffCursorUp => "[↑] diff cursor up",
+            Self::DiffCursorDown => "[↓] diff cursor down",
+            Self::DiffToggleVisual => "[shift+v] block select/unselect",
             Self::DiffDeleteLine => "[x] delete diff line/hunk",
             Self::DiffUndo => "[Ctrl+z] undo diff edit",
             Self::DiffRedo => "[Ctrl+y] redo diff edit",
@@ -405,13 +413,12 @@ impl Action {
             Self::FocusPreview => "Enter",
             Self::Kill => "d",
             Self::SwitchTab => "Tab",
-            Self::DiffCursorUp => "↑ (diff focus)",
-            Self::DiffCursorDown => "↓ (diff focus)",
+            Self::DiffCursorUp | Self::PrevAgent => "↑",
+            Self::DiffCursorDown | Self::NextAgent => "↓",
+            Self::DiffToggleVisual => "shift+v",
             Self::DiffDeleteLine => "x",
             Self::DiffUndo => "Ctrl+z",
             Self::DiffRedo => "Ctrl+y",
-            Self::NextAgent => "↓",
-            Self::PrevAgent => "↑",
             Self::Help => "?",
             // Both use Ctrl+q: UnfocusPreview when in preview, Quit otherwise
             Self::UnfocusPreview | Self::Quit => "Ctrl+q",
@@ -462,22 +469,29 @@ impl Action {
             | Self::NextAgent
             | Self::PrevAgent
             | Self::SwitchTab
-            | Self::DiffCursorUp
-            | Self::DiffCursorDown
-            | Self::DiffDeleteLine
-            | Self::DiffUndo
-            | Self::DiffRedo
             | Self::ScrollUp
             | Self::ScrollDown
             | Self::ScrollTop
             | Self::ScrollBottom => ActionGroup::Navigation,
             Self::Help | Self::Quit | Self::CommandPalette => ActionGroup::Other,
-            Self::Cancel | Self::Confirm => ActionGroup::Hidden,
+            Self::Cancel
+            | Self::Confirm
+            | Self::DiffCursorUp
+            | Self::DiffCursorDown
+            | Self::DiffToggleVisual
+            | Self::DiffDeleteLine
+            | Self::DiffUndo
+            | Self::DiffRedo => ActionGroup::Hidden,
         }
     }
 
     /// All actions in display order for help
     pub const ALL_FOR_HELP: &'static [Self] = &[
+        // Navigation
+        Self::FocusPreview,
+        Self::UnfocusPreview,
+        Self::ToggleCollapse,
+        Self::SwitchTab,
         // Agents
         Self::NewAgent,
         Self::NewAgentWithPrompt,
@@ -497,22 +511,6 @@ impl Action {
         Self::OpenPR,
         Self::Rebase,
         Self::Merge,
-        // Navigation
-        Self::FocusPreview,
-        Self::UnfocusPreview,
-        Self::ToggleCollapse,
-        Self::NextAgent,
-        Self::PrevAgent,
-        Self::SwitchTab,
-        Self::DiffCursorUp,
-        Self::DiffCursorDown,
-        Self::DiffDeleteLine,
-        Self::DiffUndo,
-        Self::DiffRedo,
-        Self::ScrollUp,
-        Self::ScrollDown,
-        Self::ScrollTop,
-        Self::ScrollBottom,
         // Other
         Self::Help,
         Self::CommandPalette,
@@ -714,6 +712,10 @@ mod tests {
     #[test]
     fn test_unknown_key() {
         assert_eq!(get_action(KeyCode::Char('v'), KeyModifiers::NONE), None);
+        assert_eq!(
+            get_action(KeyCode::Char('V'), KeyModifiers::NONE),
+            Some(Action::DiffToggleVisual)
+        );
     }
 
     #[test]
@@ -721,6 +723,7 @@ mod tests {
         assert_eq!(Action::NewAgent.keys(), "a");
         assert_eq!(Action::SpawnChildren.keys(), "S");
         assert_eq!(Action::NextAgent.keys(), "↓");
+        assert_eq!(Action::DiffToggleVisual.keys(), "shift+v");
     }
 
     #[test]
@@ -737,5 +740,11 @@ mod tests {
             Action::PlanSwarm.description(),
             "[P] spawn planners for selected agent"
         );
+        assert_eq!(
+            Action::DiffToggleVisual.description(),
+            "[shift+v] block select/unselect"
+        );
     }
+
+    // Diff actions are context-specific and intentionally excluded from the global help overlay.
 }

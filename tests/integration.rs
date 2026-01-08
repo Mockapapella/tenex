@@ -14,6 +14,7 @@ mod integration {
     pub mod actions;
     pub mod agent;
     pub mod auto_connect;
+    pub mod diff;
     pub mod git;
     pub mod hierarchy;
     pub mod mux;

@@ -26,6 +26,8 @@ pub const STATUS_STARTING: Color = Color::Rgb(255, 200, 60);
 pub const DIFF_ADD: Color = Color::Rgb(0, 200, 120);
 pub const DIFF_REMOVE: Color = Color::Rgb(255, 90, 90);
 pub const DIFF_HUNK: Color = Color::Rgb(0, 170, 255);
+pub const DIFF_SELECTION_BG: Color = Color::Rgb(18, 34, 54);
+pub const DIFF_CURSOR_BG: Color = Color::Rgb(24, 48, 76);
 
 // Modals
 pub const MODAL_BG: Color = Color::Rgb(8, 12, 18);

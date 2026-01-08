@@ -102,6 +102,7 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         | KeyAction::UnfocusPreview
         | KeyAction::DiffCursorUp
         | KeyAction::DiffCursorDown
+        | KeyAction::DiffToggleVisual
         | KeyAction::DiffDeleteLine
         | KeyAction::DiffUndo
         | KeyAction::DiffRedo => NormalMode.into(),
@@ -158,6 +159,7 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         | KeyAction::UnfocusPreview
         | KeyAction::DiffCursorUp
         | KeyAction::DiffCursorDown
+        | KeyAction::DiffToggleVisual
         | KeyAction::DiffDeleteLine
         | KeyAction::DiffUndo
         | KeyAction::DiffRedo => ScrollingMode.into(),
@@ -291,6 +293,9 @@ pub fn dispatch_diff_focused_mode(
 
     if let Some(action) = crate::config::get_action(code, modifiers) {
         let next = match action {
+            KeyAction::DiffToggleVisual => {
+                DiffToggleVisualAction.execute(DiffFocusedMode, &mut app.data)?
+            }
             KeyAction::DiffDeleteLine => {
                 DiffDeleteLineAction.execute(DiffFocusedMode, &mut app.data)?
             }
