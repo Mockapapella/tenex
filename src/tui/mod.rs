@@ -54,26 +54,14 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
     let keyboard_enhancement_enabled = if supports_keyboard_enhancement().unwrap_or(false) {
         info!("Terminal supports keyboard enhancement protocol - Ctrl+M will work");
-
-        let full_flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-        if execute!(stdout, PushKeyboardEnhancementFlags(full_flags)).is_ok() {
-            true
-        } else {
-            // If the terminal supports the protocol but rejects some flags, fall back to the
-            // minimal set we need for Ctrl+M disambiguation.
-            let minimal_flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
-            if execute!(stdout, PushKeyboardEnhancementFlags(minimal_flags)).is_ok() {
-                warn!(
-                    "Terminal rejected full keyboard enhancement flags; falling back to minimal set"
-                );
-                true
-            } else {
-                false
-            }
-        }
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        )
+        .is_ok()
     } else {
         warn!("Terminal does not support keyboard enhancement protocol - Ctrl+M will act as Enter");
         false
