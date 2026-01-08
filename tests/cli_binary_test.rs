@@ -2,6 +2,7 @@
 //!
 //! These tests run the actual tenex binary to exercise the CLI code paths.
 
+use std::fs;
 use std::process::Command;
 
 fn tenex_bin() -> Command {
@@ -67,8 +68,6 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs;
-
     let log_path = tenex::paths::log_path();
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent)?;
@@ -95,5 +94,53 @@ fn test_log_file_cleared_on_startup() -> Result<(), Box<dyn std::error::Error>> 
         "Log file should be empty after tenex startup, but contained: {content_after}"
     );
 
+    Ok(())
+}
+
+#[test]
+fn test_migrate_settings_without_state_moves_to_tenex_dir() -> Result<(), Box<dyn std::error::Error>>
+{
+    use tempfile::TempDir;
+
+    let home = TempDir::new()?;
+    let xdg_data_home = TempDir::new()?;
+
+    let legacy_dir = xdg_data_home.path().join("tenex");
+    fs::create_dir_all(&legacy_dir)?;
+    fs::write(
+        legacy_dir.join("settings.json"),
+        r#"{"agent_program":"codex"}"#,
+    )?;
+
+    let output = tenex_bin()
+        .args(["reset", "--force"])
+        .env("HOME", home.path())
+        .env("XDG_DATA_HOME", xdg_data_home.path())
+        .env_remove("TENEX_STATE_PATH")
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-migration-{}", std::process::id()),
+        )
+        .output()?;
+    assert!(
+        output.status.success(),
+        "tenex reset failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let migrated_settings_path = home.path().join(".tenex").join("settings.json");
+    assert!(
+        migrated_settings_path.exists(),
+        "Expected migrated settings at {}",
+        migrated_settings_path.display()
+    );
+    let migrated_settings = fs::read_to_string(&migrated_settings_path)?;
+    assert!(
+        migrated_settings.contains("codex"),
+        "Expected migrated settings to contain codex, got: {migrated_settings}"
+    );
+
+    assert!(!legacy_dir.exists(), "Expected legacy dir to be removed");
     Ok(())
 }
