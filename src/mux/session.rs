@@ -1,13 +1,29 @@
 //! Mux session management (client-side).
 
 use super::protocol::{MuxRequest, MuxResponse};
-use anyhow::{Result, bail};
-use std::path::Path;
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// Manager for mux sessions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Manager;
+
+fn resolve_working_dir(working_dir: &Path) -> Result<PathBuf> {
+    let mut resolved = if working_dir.is_absolute() {
+        working_dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("Failed to resolve current directory for mux working dir")?
+            .join(working_dir)
+    };
+
+    if let Ok(canonical) = resolved.canonicalize() {
+        resolved = canonical;
+    }
+
+    Ok(resolved)
+}
 
 impl Manager {
     /// Create a new session manager.
@@ -22,6 +38,7 @@ impl Manager {
     ///
     /// Returns an error if the session cannot be created.
     pub fn create(&self, name: &str, working_dir: &Path, command: Option<&[String]>) -> Result<()> {
+        let working_dir = resolve_working_dir(working_dir)?;
         debug!(name, ?working_dir, ?command, "Creating mux session");
 
         let command = command
@@ -212,6 +229,7 @@ impl Manager {
         working_dir: &Path,
         command: Option<&[String]>,
     ) -> Result<u32> {
+        let working_dir = resolve_working_dir(working_dir)?;
         let command = command
             .unwrap_or(&[])
             .iter()

@@ -4,7 +4,10 @@ mod branch;
 mod diff;
 mod worktree;
 pub use branch::{BranchInfo, Manager as BranchManager};
-pub use diff::{FileChange, Generator as DiffGenerator, LineChange, Summary as DiffSummary};
+pub use diff::{
+    DiffDigest, DiffFile, DiffHunk, DiffHunkLine, DiffModel, FileChange, FileStatus,
+    Generator as DiffGenerator, LineChange, Summary as DiffSummary,
+};
 pub use worktree::{Info as WorktreeInfo, Manager as WorktreeManager};
 
 use anyhow::{Context, Result};

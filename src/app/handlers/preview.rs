@@ -1,13 +1,12 @@
 //! Preview operations: update preview and diff content
 
+use crate::app::{App, Tab};
 use crate::git::{self, DiffGenerator};
 use crate::mux::SessionManager;
 use crate::state::AppMode;
 use anyhow::Result;
 
 use super::Actions;
-use crate::app::App;
-use crate::app::Tab;
 
 impl Actions {
     /// Update preview content for the selected agent
@@ -82,12 +81,18 @@ impl Actions {
     /// Returns an error if diff update fails
     pub fn update_diff(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
+            let agent_id = agent.id;
             if agent.worktree_path.exists() {
                 if let Ok(repo) = git::open_repository(&agent.worktree_path) {
                     let diff_gen = DiffGenerator::new(&repo);
-                    let files = match diff_gen.uncommitted() {
-                        Ok(files) => files,
+                    app.data.ui.diff_force_refresh = false;
+
+                    let model = match diff_gen.uncommitted_model() {
+                        Ok(model) => model,
                         Err(err) => {
+                            app.data.ui.diff_model = None;
+                            app.data.ui.diff_hash = 0;
+                            app.data.ui.diff_has_unseen_changes = false;
                             app.data
                                 .ui
                                 .set_diff_content(format!("(Failed to generate diff: {err:#})"));
@@ -95,26 +100,67 @@ impl Actions {
                         }
                     };
 
-                    let mut content = String::new();
-                    for file in files {
-                        content.push_str(&file.to_string_colored());
-                        content.push('\n');
-                    }
+                    app.data.ui.diff_hash = model.hash;
+                    app.data.ui.diff_model = Some(model.clone());
 
-                    if content.is_empty() {
-                        content = String::from("(No changes)");
-                    }
+                    let (content, meta) = app.data.ui.build_diff_view(&model);
+                    app.data.ui.set_diff_view(content, meta);
 
-                    app.data.ui.set_diff_content(content);
+                    if app.data.active_tab == Tab::Diff {
+                        app.data
+                            .ui
+                            .set_diff_last_seen_hash_for_agent(agent_id, model.hash);
+                        app.data.ui.diff_has_unseen_changes = false;
+                    } else {
+                        app.data.ui.diff_has_unseen_changes = model.hash != 0
+                            && model.hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
+                    }
                 } else {
+                    app.data.ui.diff_model = None;
+                    app.data.ui.diff_hash = 0;
+                    app.data.ui.diff_has_unseen_changes = false;
                     app.data.ui.set_diff_content("(Not a git repository)");
                 }
             } else {
+                app.data.ui.diff_model = None;
+                app.data.ui.diff_hash = 0;
+                app.data.ui.diff_has_unseen_changes = false;
                 app.data.ui.set_diff_content("(Worktree not found)");
             }
         } else {
+            app.data.ui.diff_model = None;
+            app.data.ui.diff_hash = 0;
+            app.data.ui.diff_has_unseen_changes = false;
             app.data.ui.set_diff_content("(No agent selected)");
         }
+        Ok(())
+    }
+
+    /// Update diff digest (hash + unseen flag) without rebuilding the full diff view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if digest computation fails.
+    pub fn update_diff_digest(self, app: &mut App) -> Result<()> {
+        if let Some(agent) = app.selected_agent() {
+            let agent_id = agent.id;
+            if agent.worktree_path.exists() {
+                let repo = git::open_repository(&agent.worktree_path)?;
+                let diff_gen = DiffGenerator::new(&repo);
+                let digest = diff_gen.uncommitted_digest()?;
+
+                app.data.ui.diff_hash = digest.hash;
+                app.data.ui.diff_has_unseen_changes = digest.hash != 0
+                    && digest.hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
+            } else {
+                app.data.ui.diff_hash = 0;
+                app.data.ui.diff_has_unseen_changes = false;
+            }
+        } else {
+            app.data.ui.diff_hash = 0;
+            app.data.ui.diff_has_unseen_changes = false;
+        }
+
         Ok(())
     }
 }
@@ -122,9 +168,12 @@ impl Actions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, Storage};
+    use crate::agent::{Agent, ChildConfig, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    use git2::{Repository, RepositoryInitOptions, Signature};
+    use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
 
     fn create_test_app() -> App {
@@ -215,6 +264,288 @@ mod tests {
 
         handler.update_diff(&mut app)?;
         assert!(app.data.ui.diff_content.contains("Not a git repository"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_diff_unseen_dot_only_shows_changes_since_last_view_per_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+        app.data.storage.add(Agent::new(
+            "b".to_string(),
+            "claude".to_string(),
+            "muster/b".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        app.data.active_tab = crate::app::Tab::Diff;
+        handler.update_diff(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app)?;
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        app.data.select_next();
+        app.data.select_prev();
+
+        handler.update_diff_digest(&mut app)?;
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_preview_child_agent_window_target() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "muster/child".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 1,
+            },
+        );
+        app.data.storage.add(child);
+
+        app.data.select_next();
+        assert!(matches!(
+            app.selected_agent(),
+            Some(agent) if agent.window_index.is_some()
+        ));
+
+        handler.update_preview(&mut app)?;
+        assert!(app.data.ui.preview_content.contains("Session not running"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_sets_unseen_when_not_viewing_diff_tab()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(app.data.ui.diff_has_unseen_changes);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_digest_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        handler.update_diff_digest(&mut app)?;
+        assert_eq!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_digest_missing_worktree() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.data.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/nonexistent/path"),
+            None,
+        ));
+
+        handler.update_diff_digest(&mut app)?;
+        assert_eq!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_digest_sets_unseen_when_not_viewing_diff_tab()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(app.data.ui.diff_has_unseen_changes);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_diff_digest_sets_unseen_after_viewing_diff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        fs::write(&file_path, "hello world\n")?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+            None,
+        ));
+
+        // Viewing diff marks the current hash as "seen".
+        app.data.active_tab = crate::app::Tab::Diff;
+        handler.update_diff(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        // Make another change and ensure digest marks it as unseen while in preview.
+        fs::write(&file_path, "hello again\n")?;
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app)?;
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(app.data.ui.diff_has_unseen_changes);
+
         Ok(())
     }
 }

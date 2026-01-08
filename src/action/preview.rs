@@ -157,7 +157,11 @@ fn apply_modifier(base: &[u8], param: u8) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Storage;
+    use crate::app::Settings;
+    use crate::config::Config;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_keycode_to_input_sequence_char_variants() {
@@ -213,5 +217,52 @@ mod tests {
             keycode_to_input_sequence(KeyCode::PageUp, KeyModifiers::ALT).as_deref(),
             Some("\u{1b}[5;3~")
         );
+    }
+
+    #[test]
+    fn test_keycode_to_input_sequence_alt_prefix_for_non_escape_base() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::Enter, KeyModifiers::ALT)
+                .map(std::string::String::into_bytes),
+            Some(vec![0x1b, b'\r'])
+        );
+    }
+
+    #[test]
+    fn test_preview_focused_actions_buffer_and_exit() -> anyhow::Result<()> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+
+        let mut batched_keys = Vec::new();
+        assert_eq!(
+            ForwardKeystrokeAction {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                batched_keys: &mut batched_keys,
+            }
+            .execute(PreviewFocusedMode, &mut data)?,
+            PreviewFocusedMode.into()
+        );
+        assert_eq!(batched_keys, vec!["a".to_string()]);
+
+        let mut batched_keys = Vec::new();
+        assert_eq!(
+            ForwardKeystrokeAction {
+                code: KeyCode::Char('é'),
+                modifiers: KeyModifiers::CONTROL,
+                batched_keys: &mut batched_keys,
+            }
+            .execute(PreviewFocusedMode, &mut data)?,
+            PreviewFocusedMode.into()
+        );
+        assert!(batched_keys.is_empty());
+
+        assert_eq!(
+            UnfocusPreviewAction.execute(PreviewFocusedMode, &mut data)?,
+            AppMode::normal()
+        );
+
+        Ok(())
     }
 }

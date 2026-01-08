@@ -1,6 +1,6 @@
 use crate::action::ValidIn;
 use crate::app::{AppData, Tab};
-use crate::state::{AppMode, NormalMode, PreviewFocusedMode, ScrollingMode};
+use crate::state::{AppMode, DiffFocusedMode, NormalMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 
 /// Normal-mode action: switch the detail pane tab (Preview/Diff).
@@ -22,6 +22,15 @@ impl ValidIn<ScrollingMode> for SwitchTabAction {
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.switch_tab();
         Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<DiffFocusedMode> for SwitchTabAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.switch_tab();
+        Ok(AppMode::normal())
     }
 }
 
@@ -91,6 +100,15 @@ impl ValidIn<ScrollingMode> for ScrollUpAction {
     }
 }
 
+impl ValidIn<DiffFocusedMode> for ScrollUpAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.scroll_up(5);
+        Ok(DiffFocusedMode.into())
+    }
+}
+
 /// Normal-mode action: scroll down in the active view.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollDownAction;
@@ -110,6 +128,15 @@ impl ValidIn<ScrollingMode> for ScrollDownAction {
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.scroll_down(5);
         Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<DiffFocusedMode> for ScrollDownAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.scroll_down(5);
+        Ok(DiffFocusedMode.into())
     }
 }
 
@@ -135,6 +162,15 @@ impl ValidIn<ScrollingMode> for ScrollTopAction {
     }
 }
 
+impl ValidIn<DiffFocusedMode> for ScrollTopAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.scroll_to_top();
+        Ok(DiffFocusedMode.into())
+    }
+}
+
 /// Normal-mode action: scroll to the bottom of the active view.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollBottomAction;
@@ -157,6 +193,15 @@ impl ValidIn<ScrollingMode> for ScrollBottomAction {
     }
 }
 
+impl ValidIn<DiffFocusedMode> for ScrollBottomAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.scroll_to_bottom(10000, 0);
+        Ok(DiffFocusedMode.into())
+    }
+}
+
 /// Normal-mode action: focus the preview pane (forward keys to mux).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FocusPreviewAction;
@@ -166,8 +211,10 @@ impl ValidIn<NormalMode> for FocusPreviewAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            app_data.active_tab = Tab::Preview;
-            Ok(PreviewFocusedMode.into())
+            match app_data.active_tab {
+                Tab::Preview => Ok(PreviewFocusedMode.into()),
+                Tab::Diff => Ok(DiffFocusedMode.into()),
+            }
         } else {
             Ok(AppMode::normal())
         }
@@ -179,10 +226,166 @@ impl ValidIn<ScrollingMode> for FocusPreviewAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if app_data.selected_agent().is_some() {
-            app_data.active_tab = Tab::Preview;
-            Ok(PreviewFocusedMode.into())
+            match app_data.active_tab {
+                Tab::Preview => Ok(PreviewFocusedMode.into()),
+                Tab::Diff => Ok(DiffFocusedMode.into()),
+            }
         } else {
             Ok(ScrollingMode.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{Agent, Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+
+    fn create_test_data() -> Result<(AppData, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((
+            AppData::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
+    }
+
+    fn add_two_agents(data: &mut AppData) {
+        data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+        data.storage.add(Agent::new(
+            "second".to_string(),
+            "claude".to_string(),
+            "tenex/second".to_string(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_switch_tab_action_toggles_tabs() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        data.active_tab = Tab::Preview;
+        assert_eq!(
+            SwitchTabAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.active_tab, Tab::Diff);
+
+        assert_eq!(
+            SwitchTabAction.execute(ScrollingMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        assert_eq!(data.active_tab, Tab::Preview);
+
+        data.active_tab = Tab::Diff;
+        assert_eq!(
+            SwitchTabAction.execute(DiffFocusedMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.active_tab, Tab::Preview);
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_prev_agent_actions_update_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(
+            NextAgentAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 0);
+
+        add_two_agents(&mut data);
+        assert_eq!(data.selected, 0);
+        assert_eq!(
+            NextAgentAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 1);
+        assert_eq!(
+            PrevAgentAction.execute(ScrollingMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        assert_eq!(data.selected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scroll_actions_respect_active_tab() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        data.active_tab = Tab::Preview;
+        data.ui.preview_content = "line1\nline2\nline3\n".to_string();
+        assert_eq!(
+            ScrollUpAction.execute(NormalMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        assert!(!data.ui.preview_follow);
+
+        data.active_tab = Tab::Diff;
+        data.ui.set_diff_content("a\nb\nc\nd\ne\n");
+        assert_eq!(
+            ScrollDownAction.execute(DiffFocusedMode, &mut data)?,
+            DiffFocusedMode.into()
+        );
+
+        assert_eq!(
+            ScrollTopAction.execute(ScrollingMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        assert_eq!(data.ui.diff_scroll, 0);
+
+        assert_eq!(
+            ScrollBottomAction.execute(DiffFocusedMode, &mut data)?,
+            DiffFocusedMode.into()
+        );
+        assert!(data.ui.diff_cursor > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_focus_preview_action_enters_correct_focus_mode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        data.active_tab = Tab::Preview;
+        assert_eq!(
+            FocusPreviewAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+
+        add_two_agents(&mut data);
+        data.active_tab = Tab::Preview;
+        assert_eq!(
+            FocusPreviewAction.execute(NormalMode, &mut data)?,
+            PreviewFocusedMode.into()
+        );
+
+        data.active_tab = Tab::Diff;
+        assert_eq!(
+            FocusPreviewAction.execute(ScrollingMode, &mut data)?,
+            DiffFocusedMode.into()
+        );
+
+        let (mut data, _temp) = create_test_data()?;
+        data.active_tab = Tab::Diff;
+        assert_eq!(
+            FocusPreviewAction.execute(ScrollingMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        Ok(())
     }
 }

@@ -43,7 +43,7 @@ impl App {
     }
 
     /// Switch between preview and diff tabs
-    pub const fn switch_tab(&mut self) {
+    pub fn switch_tab(&mut self) {
         self.data.active_tab = match self.data.active_tab {
             Tab::Preview => Tab::Diff,
             Tab::Diff => Tab::Preview,

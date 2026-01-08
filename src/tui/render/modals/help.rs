@@ -117,7 +117,7 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
 
     help_text.push(Line::from(""));
     help_text.push(Line::from(Span::styled(
-        "Scroll: ↑/↓, PgUp/PgDn, Ctrl+u/d, g/G",
+        "Scroll: ↑/↓, Ctrl+u/d, g/G",
         Style::default().fg(colors::TEXT_MUTED),
     )));
     help_text.push(Line::from(Span::styled(

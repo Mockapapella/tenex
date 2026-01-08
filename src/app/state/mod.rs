@@ -22,7 +22,7 @@ pub use models::ModelSelectorState;
 pub use review::ReviewState;
 pub use spawn::SpawnState;
 pub use spawn::WorktreeConflictInfo;
-pub use ui::UiState;
+pub use ui::{DiffEdit, DiffLineMeta, UiState};
 
 use crate::agent::Storage;
 use crate::config::Config;

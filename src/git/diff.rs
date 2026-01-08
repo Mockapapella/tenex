@@ -2,9 +2,65 @@
 
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Repository};
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::hash::{Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
+
+fn diff_line_content(line: &git2::DiffLine<'_>) -> String {
+    let mut content = String::from_utf8_lossy(line.content()).to_string();
+    if content.ends_with('\n') {
+        content.pop();
+        if content.ends_with('\r') {
+            content.pop();
+        }
+    }
+    content
+}
+
+fn hash_diff_context(hasher: &mut DefaultHasher, status: FileStatus, file_path: &Path) {
+    status.hash(hasher);
+    file_path.hash(hasher);
+}
+
+fn hash_diff_line(hasher: &mut DefaultHasher, origin: char, content: &str) {
+    match origin {
+        '+' | '-' | ' ' | '\\' => {
+            hasher.write_u8(origin as u8);
+            hasher.write_usize(content.len());
+            hasher.write(content.as_bytes());
+        }
+        _ => {
+            hasher.write_usize(content.len());
+            hasher.write(content.as_bytes());
+        }
+    }
+}
+
+fn upsert_model_file(
+    files: &mut Vec<DiffFile>,
+    file_indices: &mut HashMap<PathBuf, usize>,
+    file_set: &mut HashSet<PathBuf>,
+    file_path: &Path,
+    status: FileStatus,
+) -> usize {
+    file_indices.get(file_path).copied().unwrap_or_else(|| {
+        let file_path_buf = file_path.to_path_buf();
+        files.push(DiffFile {
+            path: file_path_buf.clone(),
+            status,
+            meta: Vec::new(),
+            hunks: Vec::new(),
+            additions: 0,
+            deletions: 0,
+        });
+        let idx = files.len() - 1;
+        file_indices.insert(file_path_buf.clone(), idx);
+        file_set.insert(file_path_buf);
+        idx
+    })
+}
 
 /// Generator for git diffs
 pub struct Generator<'a> {
@@ -80,6 +136,54 @@ impl<'a> Generator<'a> {
             .context("Failed to get uncommitted diff")?;
 
         Self::parse_diff(&diff)
+    }
+
+    /// Get a structured uncommitted diff model suitable for interactive UIs.
+    ///
+    /// Includes staged + unstaged + untracked changes vs `HEAD`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the diff cannot be generated or parsed.
+    pub fn uncommitted_model(&self) -> Result<DiffModel> {
+        let head = self.repo.head().ok();
+        let tree = head.and_then(|h| h.peel_to_tree().ok());
+
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.show_untracked_content(true);
+
+        let diff = self
+            .repo
+            .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
+            .context("Failed to get uncommitted diff")?;
+
+        Self::parse_diff_model(&diff)
+    }
+
+    /// Get a lightweight digest of the uncommitted diff for change detection.
+    ///
+    /// This hashes the patch output and includes a summary, without storing the full model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the diff cannot be generated or printed.
+    pub fn uncommitted_digest(&self) -> Result<DiffDigest> {
+        let head = self.repo.head().ok();
+        let tree = head.and_then(|h| h.peel_to_tree().ok());
+
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.show_untracked_content(true);
+
+        let diff = self
+            .repo
+            .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
+            .context("Failed to get uncommitted diff")?;
+
+        Self::digest_diff(&diff)
     }
 
     /// Get diff between two commits
@@ -176,6 +280,167 @@ impl<'a> Generator<'a> {
         Ok(files)
     }
 
+    /// Parse a `git2::Diff` into a structured `DiffModel`.
+    fn parse_diff_model(diff: &git2::Diff<'_>) -> Result<DiffModel> {
+        let mut files: Vec<DiffFile> = Vec::new();
+        let mut file_indices: HashMap<PathBuf, usize> = HashMap::new();
+
+        let mut hasher = DefaultHasher::new();
+        let mut file_set: HashSet<PathBuf> = HashSet::new();
+        let mut additions = 0usize;
+        let mut deletions = 0usize;
+
+        diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
+            let file_path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .unwrap_or_else(|| Path::new(""));
+
+            let status = delta_to_status(delta.status());
+            hash_diff_context(&mut hasher, status, file_path);
+
+            let file_idx = upsert_model_file(
+                &mut files,
+                &mut file_indices,
+                &mut file_set,
+                file_path,
+                status,
+            );
+
+            let file = &mut files[file_idx];
+
+            let content = diff_line_content(&line);
+
+            let origin = line.origin();
+            hash_diff_line(&mut hasher, origin, &content);
+
+            match origin {
+                'H' => {
+                    // Start a new hunk.
+                    let (old_start, old_lines, new_start, new_lines) = hunk
+                        .map_or((0, 0, 0, 0), |h| {
+                            (h.old_start(), h.old_lines(), h.new_start(), h.new_lines())
+                        });
+                    file.hunks.push(DiffHunk {
+                        header: content,
+                        old_start,
+                        old_lines,
+                        new_start,
+                        new_lines,
+                        lines: Vec::new(),
+                    });
+                }
+                '+' | '-' | ' ' | '\\' => {
+                    // Hunk line. Ensure we have a hunk to attach to.
+                    if file.hunks.is_empty() {
+                        file.hunks.push(DiffHunk {
+                            header: "@@ -0,0 +0,0 @@".to_string(),
+                            old_start: 0,
+                            old_lines: 0,
+                            new_start: 0,
+                            new_lines: 0,
+                            lines: Vec::new(),
+                        });
+                    }
+                    let line_entry = DiffHunkLine {
+                        origin,
+                        content,
+                        old_lineno: line.old_lineno(),
+                        new_lineno: line.new_lineno(),
+                    };
+                    if let Some(last) = file.hunks.last_mut() {
+                        last.lines.push(line_entry);
+                    }
+
+                    match origin {
+                        '+' => {
+                            additions += 1;
+                            file.additions += 1;
+                        }
+                        '-' => {
+                            deletions += 1;
+                            file.deletions += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {
+                    // File-level metadata or other patch lines (diff --git, index, ---/+++).
+                    file.meta.push(content);
+                }
+            }
+
+            true
+        })
+        .context("Failed to parse diff patch")?;
+
+        let files_changed = file_set.len();
+        let summary = Summary {
+            files_changed,
+            additions,
+            deletions,
+        };
+
+        let hash = if files_changed == 0 {
+            0
+        } else {
+            hasher.finish()
+        };
+
+        Ok(DiffModel {
+            files,
+            summary,
+            hash,
+        })
+    }
+
+    fn digest_diff(diff: &git2::Diff<'_>) -> Result<DiffDigest> {
+        let mut hasher = DefaultHasher::new();
+        let mut file_set: HashSet<PathBuf> = HashSet::new();
+        let mut additions = 0usize;
+        let mut deletions = 0usize;
+
+        diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+            let file_path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .unwrap_or_else(|| Path::new(""));
+
+            file_set.insert(file_path.to_path_buf());
+
+            let status = delta_to_status(delta.status());
+            hash_diff_context(&mut hasher, status, file_path);
+
+            let content = diff_line_content(&line);
+            hash_diff_line(&mut hasher, line.origin(), &content);
+
+            match line.origin() {
+                '+' => additions += 1,
+                '-' => deletions += 1,
+                _ => {}
+            }
+
+            true
+        })
+        .context("Failed to compute diff digest")?;
+
+        let files_changed = file_set.len();
+        let summary = Summary {
+            files_changed,
+            additions,
+            deletions,
+        };
+        let hash = if files_changed == 0 {
+            0
+        } else {
+            hasher.finish()
+        };
+
+        Ok(DiffDigest { hash, summary })
+    }
+
     /// Get a summary of changes (files changed, additions, deletions)
     ///
     /// # Errors
@@ -206,6 +471,73 @@ impl<'a> Generator<'a> {
             .context("Failed to get repository status")?;
         Ok(!statuses.is_empty())
     }
+}
+
+/// A lightweight fingerprint of a diff for change detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffDigest {
+    /// Hash of the patch output (0 when no changes).
+    pub hash: u64,
+    /// Summary statistics derived from the patch output.
+    pub summary: Summary,
+}
+
+/// A structured diff model suitable for interactive UIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffModel {
+    /// Files included in this diff.
+    pub files: Vec<DiffFile>,
+    /// Summary of changes.
+    pub summary: Summary,
+    /// Hash of the patch content (0 when no changes).
+    pub hash: u64,
+}
+
+/// A single file in a structured diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffFile {
+    /// Path to the file.
+    pub path: PathBuf,
+    /// Status of the file.
+    pub status: FileStatus,
+    /// File-level metadata lines (e.g. `diff --git`, `index`, `---/+++`).
+    pub meta: Vec<String>,
+    /// Hunks in the file.
+    pub hunks: Vec<DiffHunk>,
+    /// Number of added lines in this file.
+    pub additions: usize,
+    /// Number of removed lines in this file.
+    pub deletions: usize,
+}
+
+/// A hunk within a file diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffHunk {
+    /// The raw hunk header line (starts with `@@`).
+    pub header: String,
+    /// Old-file starting line (as reported by libgit2).
+    pub old_start: u32,
+    /// Old-file line count (as reported by libgit2).
+    pub old_lines: u32,
+    /// New-file starting line (as reported by libgit2).
+    pub new_start: u32,
+    /// New-file line count (as reported by libgit2).
+    pub new_lines: u32,
+    /// Lines within the hunk.
+    pub lines: Vec<DiffHunkLine>,
+}
+
+/// A single line within a hunk.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiffHunkLine {
+    /// The line origin character (`+`, `-`, ` `, or `\\`).
+    pub origin: char,
+    /// The line content without the origin prefix, and without trailing newline.
+    pub content: String,
+    /// 1-based line number in the old file, if applicable.
+    pub old_lineno: Option<u32>,
+    /// 1-based line number in the new file, if applicable.
+    pub new_lineno: Option<u32>,
 }
 
 /// Represents a single file's diff
@@ -265,7 +597,7 @@ pub enum LineChange {
 }
 
 /// Status of a file in the diff
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileStatus {
     /// File was added
     Added,

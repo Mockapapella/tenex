@@ -10,6 +10,7 @@ mod confirm_push_for_pr;
 mod confirming;
 mod creating;
 mod custom_agent_cmd;
+mod diff_focused;
 mod error_modal;
 mod help;
 mod keyboard_remap_prompt;
@@ -39,6 +40,7 @@ pub use confirm_push_for_pr::ConfirmPushForPRMode;
 pub use confirming::{ConfirmAction, ConfirmingMode};
 pub use creating::CreatingMode;
 pub use custom_agent_cmd::CustomAgentCommandMode;
+pub use diff_focused::DiffFocusedMode;
 pub use error_modal::ErrorModalMode;
 pub use help::HelpMode;
 pub use keyboard_remap_prompt::KeyboardRemapPromptMode;
@@ -117,6 +119,8 @@ pub enum AppMode {
     SuccessModal(SuccessModalMode),
     /// Preview focused mode.
     PreviewFocused(PreviewFocusedMode),
+    /// Diff focused mode.
+    DiffFocused(DiffFocusedMode),
 }
 
 impl AppMode {
@@ -136,6 +140,12 @@ impl Default for AppMode {
 impl From<NormalMode> for AppMode {
     fn from(_: NormalMode) -> Self {
         Self::Normal(NormalMode)
+    }
+}
+
+impl From<DiffFocusedMode> for AppMode {
+    fn from(_: DiffFocusedMode) -> Self {
+        Self::DiffFocused(DiffFocusedMode)
     }
 }
 

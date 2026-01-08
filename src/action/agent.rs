@@ -1,10 +1,10 @@
 use crate::action::ValidIn;
-use crate::app::{Actions, AppData};
+use crate::app::{Actions, AppData, Tab};
 use crate::git;
 use crate::state::{
     AppMode, BroadcastingMode, ChildCountMode, ConfirmAction, ConfirmingMode, CreatingMode,
-    ErrorModalMode, NormalMode, PromptingMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode,
-    TerminalPromptMode,
+    DiffFocusedMode, ErrorModalMode, NormalMode, PromptingMode, ReviewChildCountMode,
+    ReviewInfoMode, ScrollingMode, TerminalPromptMode,
 };
 use anyhow::{Context, Result};
 
@@ -249,6 +249,17 @@ impl ValidIn<ScrollingMode> for ToggleCollapseAction {
             }
         }
         Ok(ScrollingMode.into())
+    }
+}
+
+impl ValidIn<DiffFocusedMode> for ToggleCollapseAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        if app_data.active_tab == Tab::Diff {
+            let _ = app_data.ui.toggle_diff_fold_at_cursor();
+        }
+        Ok(DiffFocusedMode.into())
     }
 }
 

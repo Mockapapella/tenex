@@ -5,7 +5,7 @@ use super::{App, Tab};
 impl App {
     /// Reset scroll positions for both panes
     /// Preview is pinned to bottom (with follow enabled), Diff is pinned to top
-    pub const fn reset_scroll(&mut self) {
+    pub fn reset_scroll(&mut self) {
         self.data.ui.reset_scroll();
     }
 
@@ -26,7 +26,7 @@ impl App {
     }
 
     /// Scroll to the top of the active pane
-    pub const fn scroll_to_top(&mut self) {
+    pub fn scroll_to_top(&mut self) {
         match self.data.active_tab {
             Tab::Preview => self.data.ui.preview_to_top(),
             Tab::Diff => self.data.ui.diff_to_top(),

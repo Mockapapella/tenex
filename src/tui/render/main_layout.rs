@@ -1,7 +1,7 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
 use crate::agent::Status;
-use crate::app::{App, Tab};
+use crate::app::{App, DiffLineMeta, Tab};
 use crate::state::AppMode;
 use ratatui::{
     Frame,
@@ -146,30 +146,48 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn tab_bar_line(app: &App) -> Line<'static> {
-    let tabs = vec![
-        (" Preview ", app.data.active_tab == Tab::Preview),
-        (" Diff ", app.data.active_tab == Tab::Diff),
-    ];
+    let tab_span = |name: &'static str, active: bool| {
+        if active {
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(colors::SELECTED)
+                    .bg(colors::SURFACE_HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(
+                name,
+                Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
+            )
+        }
+    };
 
-    let spans: Vec<Span<'static>> = tabs
-        .into_iter()
-        .map(|(name, active)| {
-            if active {
-                Span::styled(
-                    name,
-                    Style::default()
-                        .fg(colors::SELECTED)
-                        .bg(colors::SURFACE_HIGHLIGHT)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled(
-                    name,
-                    Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
-                )
-            }
-        })
-        .collect();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    spans.push(tab_span(" Preview ", app.data.active_tab == Tab::Preview));
+
+    let diff_active = app.data.active_tab == Tab::Diff;
+    spans.push(tab_span(" Diff ", diff_active));
+
+    let diff_has_unseen_changes = if diff_active {
+        false
+    } else if let Some(agent) = app.selected_agent() {
+        let hash = app.data.ui.diff_hash;
+        hash != 0 && hash != app.data.ui.diff_last_seen_hash_for_agent(agent.id)
+    } else {
+        false
+    };
+
+    if diff_has_unseen_changes {
+        spans.push(Span::styled(
+            "●",
+            Style::default()
+                .fg(colors::ACCENT_WARNING)
+                .bg(colors::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     Line::from(spans)
 }
@@ -314,11 +332,18 @@ fn render_preview_cursor(
 /// Render the diff pane
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.data.ui.diff_content;
+    let is_focused = matches!(&app.mode, AppMode::DiffFocused(_));
+
+    let (border_color, title) = if is_focused {
+        (colors::SELECTED, " Git Diff (INTERACTIVE) [Ctrl+q exit] ")
+    } else {
+        (colors::BORDER, " Git Diff ")
+    };
 
     let block = Block::default()
-        .title(" Git Diff ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(colors::BORDER))
+        .border_style(Style::default().fg(border_color))
         .border_type(colors::BORDER_TYPE)
         .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(block.clone(), area);
@@ -338,20 +363,63 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = app.data.ui.diff_scroll.min(max_scroll);
     let end_line = (scroll + visible_height).min(total_lines);
 
+    let selection_range = if is_focused {
+        app.data.ui.diff_visual_anchor.map(|anchor| {
+            let cursor = app.data.ui.diff_cursor;
+            (anchor.min(cursor), anchor.max(cursor))
+        })
+    } else {
+        None
+    };
+
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
-    for &(start, end) in &app.data.ui.diff_line_ranges[scroll..end_line] {
+    for (offset, &(start, end)) in app.data.ui.diff_line_ranges[scroll..end_line]
+        .iter()
+        .enumerate()
+    {
+        let line_idx = scroll.saturating_add(offset);
         let line = &content[start..end];
-        let color = if line.starts_with('+') && !line.starts_with("+++") {
-            colors::DIFF_ADD
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            colors::DIFF_REMOVE
-        } else if line.starts_with("@@") {
-            colors::DIFF_HUNK
-        } else {
-            colors::TEXT_PRIMARY
+
+        let meta = app
+            .data
+            .ui
+            .diff_line_meta
+            .get(line_idx)
+            .unwrap_or(&DiffLineMeta::Unknown);
+
+        let trimmed = line.trim_start();
+        let mut style = match meta {
+            DiffLineMeta::Info => Style::default().fg(colors::TEXT_MUTED),
+            DiffLineMeta::File { .. } => Style::default()
+                .fg(colors::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+            DiffLineMeta::Hunk { .. } => Style::default().fg(colors::DIFF_HUNK),
+            DiffLineMeta::Line { .. } => {
+                if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+                    Style::default().fg(colors::DIFF_ADD)
+                } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+                    Style::default().fg(colors::DIFF_REMOVE)
+                } else if trimmed.starts_with("@@") {
+                    Style::default().fg(colors::DIFF_HUNK)
+                } else {
+                    Style::default().fg(colors::TEXT_PRIMARY)
+                }
+            }
+            DiffLineMeta::Unknown => Style::default().fg(colors::TEXT_PRIMARY),
         };
 
-        lines.push(Line::styled(line, Style::default().fg(color)));
+        if let Some((sel_start, sel_end)) = selection_range
+            && line_idx >= sel_start
+            && line_idx <= sel_end
+        {
+            style = style.bg(colors::DIFF_SELECTION_BG);
+        }
+
+        if line_idx == app.data.ui.diff_cursor && is_focused {
+            style = style.bg(colors::DIFF_CURSOR_BG);
+        }
+
+        lines.push(Line::styled(line, style));
     }
 
     let paragraph = Paragraph::new(Text::from(lines))
@@ -359,29 +427,53 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, content_area);
 
-    if total_lines > visible_height && area.width != 0 {
-        let scrollbar_area = Rect {
-            x: area.x,
-            y: content_area.y,
-            width: area.width,
-            height: content_area.height,
-        };
+    render_diff_scrollbar(
+        frame,
+        area,
+        content_area,
+        total_lines,
+        visible_height,
+        max_scroll,
+        scroll,
+    );
+}
 
-        if scrollbar_area.width != 0 && scrollbar_area.height != 0 {
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some("░"))
-                .track_style(Style::default().fg(colors::TEXT_MUTED))
-                .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
-
-            let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
-                .position(scroll)
-                .viewport_content_length(visible_height);
-
-            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
-        }
+fn render_diff_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content_area: Rect,
+    total_lines: usize,
+    visible_height: usize,
+    max_scroll: usize,
+    scroll: usize,
+) {
+    if total_lines <= visible_height || area.width == 0 {
+        return;
     }
+
+    let scrollbar_area = Rect {
+        x: area.x,
+        y: content_area.y,
+        width: area.width,
+        height: content_area.height,
+    };
+
+    if scrollbar_area.width == 0 || scrollbar_area.height == 0 {
+        return;
+    }
+
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("░"))
+        .track_style(Style::default().fg(colors::TEXT_MUTED))
+        .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+    let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+        .position(scroll)
+        .viewport_content_length(visible_height);
+
+    frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 }
 
 /// Render the status bar
@@ -464,4 +556,102 @@ pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
     let inner_height = preview_height.saturating_sub(3);
 
     (inner_width, inner_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{Agent, Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    use tempfile::NamedTempFile;
+
+    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
+        let temp_file = NamedTempFile::new()?;
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        Ok((
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        ))
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn test_tab_bar_renders_unseen_diff_dot() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.diff_hash = 123;
+        app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 0);
+
+        let line = tab_bar_line(&app);
+        assert!(line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_hides_unseen_diff_dot_when_viewing_diff_tab() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Diff;
+
+        app.data.ui.diff_hash = 123;
+        app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 0);
+
+        let line = tab_bar_line(&app);
+        assert!(!line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_hides_unseen_diff_dot_when_hash_seen() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.diff_hash = 123;
+        app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 123);
+
+        let line = tab_bar_line(&app);
+        assert!(!line_text(&line).contains('●'));
+        Ok(())
+    }
 }

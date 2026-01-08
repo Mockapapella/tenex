@@ -117,7 +117,7 @@ impl AppData {
     }
 
     /// Switch between preview and diff tabs.
-    pub(crate) const fn switch_tab(&mut self) {
+    pub(crate) fn switch_tab(&mut self) {
         self.active_tab = match self.active_tab {
             Tab::Preview => Tab::Diff,
             Tab::Diff => Tab::Preview,
@@ -134,6 +134,7 @@ impl AppData {
 
         self.selected = (self.selected + 1) % visible_count;
         self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
     }
 
@@ -146,6 +147,7 @@ impl AppData {
 
         self.selected = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
         self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
     }
 
@@ -207,7 +209,7 @@ impl AppData {
     }
 
     /// Scroll to the top of the active pane.
-    pub(crate) const fn scroll_to_top(&mut self) {
+    pub(crate) fn scroll_to_top(&mut self) {
         match self.active_tab {
             Tab::Preview => self.ui.preview_to_top(),
             Tab::Diff => self.ui.diff_to_top(),
