@@ -45,6 +45,23 @@ fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn copy_optional_file(src_root: &Path, dst_root: &Path, file_name: &str) -> Result<()> {
+    let src = src_root.join(file_name);
+    if !src.is_file() {
+        return Ok(());
+    }
+
+    let dst = dst_root.join(file_name);
+    if dst.exists() {
+        return Ok(());
+    }
+
+    fs::copy(&src, &dst)
+        .with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))?;
+
+    Ok(())
+}
+
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
@@ -92,6 +109,10 @@ impl<'a> Manager<'a> {
                 Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
+
+        if let Err(err) = self.copy_agent_instruction_files(path) {
+            warn!(?path, error = %err, "Failed to copy instruction files into worktree");
+        }
 
         Ok(())
     }
@@ -157,6 +178,10 @@ impl<'a> Manager<'a> {
                 Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
+
+        if let Err(err) = self.copy_agent_instruction_files(path) {
+            warn!(?path, error = %err, "Failed to copy instruction files into worktree");
+        }
 
         info!(branch, ?path, "Worktree created");
         Ok(())
@@ -394,6 +419,20 @@ impl<'a> Manager<'a> {
 
         Ok((branch_name, short_hash))
     }
+
+    fn copy_agent_instruction_files(&self, worktree_path: &Path) -> Result<()> {
+        let Some(repo_root) = self.repo.workdir() else {
+            return Ok(());
+        };
+
+        // Git worktrees don't include gitignored files. Copy over common agent
+        // instruction files to keep agent behavior consistent between worktrees.
+        for file in ["CLAUDE.md", "AGENTS.md"] {
+            copy_optional_file(repo_root, worktree_path, file)?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Information about a worktree
@@ -445,6 +484,29 @@ mod tests {
 
         assert!(wt_path.exists());
         assert!(manager.exists("feature-test"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_copies_agent_instruction_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join("CLAUDE.md"), "claude instructions")?;
+        fs::write(temp_dir.path().join("AGENTS.md"), "agent instructions")?;
+
+        let wt_path = temp_dir.path().join("worktrees").join("feature-copy");
+        manager.create_with_new_branch(&wt_path, "feature-copy-test")?;
+
+        assert_eq!(
+            fs::read_to_string(wt_path.join("CLAUDE.md"))?,
+            "claude instructions"
+        );
+        assert_eq!(
+            fs::read_to_string(wt_path.join("AGENTS.md"))?,
+            "agent instructions"
+        );
         Ok(())
     }
 
