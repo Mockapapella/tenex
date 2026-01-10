@@ -111,7 +111,7 @@ tenex
 
 ## Configuration
 
-The default agent command is `claude --allow-dangerously-skip-permissions`. Press `/` to open the command palette, run `/agents`, and choose the default program for new agents (`claude`, `codex`, or `custom` — which will prompt for a command and save it to `settings.json`).
+The default agent command is `claude --allow-dangerously-skip-permissions`. Press `/` to open the command palette, run `/agents`, then choose which agent type to configure (default/planner/review).
 
 ### Data Storage
 
