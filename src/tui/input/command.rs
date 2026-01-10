@@ -14,13 +14,18 @@ pub fn handle_model_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
     crate::action::dispatch_model_selector_mode(app, code)
 }
 
+/// Handle key events in `SettingsMenu` mode
+pub fn handle_settings_menu_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_settings_menu_mode(app, code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::Storage;
     use crate::app::Settings;
     use crate::config::Config;
-    use crate::state::{AppMode, CommandPaletteMode, ModelSelectorMode};
+    use crate::state::{AppMode, CommandPaletteMode, ModelSelectorMode, SettingsMenuMode};
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
@@ -163,6 +168,32 @@ mod tests {
         handle_model_selector_mode(&mut app, KeyCode::Tab)?;
         assert_eq!(app.data.model_selector.selected, selected);
         assert_eq!(app.mode, ModelSelectorMode.into());
+        Ok(())
+    }
+
+    // ========== SettingsMenu mode tests ==========
+
+    #[test]
+    fn test_settings_menu_esc_exits() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SettingsMenuMode.into());
+
+        handle_settings_menu_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
+        Ok(())
+    }
+
+    #[test]
+    fn test_settings_menu_up_down_navigation() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SettingsMenuMode.into());
+        assert_eq!(app.data.settings_menu.selected, 0);
+
+        handle_settings_menu_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.settings_menu.selected, 1);
+
+        handle_settings_menu_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.settings_menu.selected, 0);
         Ok(())
     }
 }

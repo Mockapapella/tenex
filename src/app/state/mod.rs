@@ -11,6 +11,7 @@ mod models;
 mod navigation;
 mod review;
 mod scroll;
+mod settings_menu;
 mod spawn;
 mod text_input;
 mod ui;
@@ -20,6 +21,7 @@ pub use git_op::GitOpState;
 pub use input::InputState;
 pub use models::ModelSelectorState;
 pub use review::ReviewState;
+pub use settings_menu::SettingsMenuState;
 pub use spawn::SpawnState;
 pub use spawn::WorktreeConflictInfo;
 pub use ui::{DiffEdit, DiffLineMeta, UiState};
@@ -47,7 +49,7 @@ pub struct SlashCommand {
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/agents",
-        description: "Select default agent model/program",
+        description: "Configure agent programs (default/planner/review)",
     },
     SlashCommand {
         name: "/help",

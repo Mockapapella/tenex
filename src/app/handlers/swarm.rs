@@ -199,7 +199,11 @@ impl Actions {
         let start_window_index = app_data
             .storage
             .reserve_window_indices(config.parent_agent_id);
-        let program = app_data.agent_spawn_command();
+        let program = if app_data.spawn.use_plan_prompt {
+            app_data.planner_agent_spawn_command()
+        } else {
+            app_data.agent_spawn_command()
+        };
         let child_prompt =
             task.map(|t| Self::build_child_prompt(t, app_data.spawn.use_plan_prompt));
 
@@ -337,7 +341,7 @@ impl Actions {
 
         // Reserve window indices
         let start_window_index = app_data.storage.reserve_window_indices(parent_id);
-        let program = app_data.agent_spawn_command();
+        let program = app_data.review_agent_spawn_command();
 
         // Create review child agents
         for i in 0..count {

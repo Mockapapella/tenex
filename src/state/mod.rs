@@ -25,6 +25,7 @@ mod rename_branch;
 mod review_child_count;
 mod review_info;
 mod scrolling;
+mod settings_menu;
 mod success_modal;
 mod terminal_prompt;
 mod update_prompt;
@@ -55,6 +56,7 @@ pub use rename_branch::RenameBranchMode;
 pub use review_child_count::ReviewChildCountMode;
 pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
+pub use settings_menu::SettingsMenuMode;
 pub use success_modal::SuccessModalMode;
 pub use terminal_prompt::TerminalPromptMode;
 pub use update_prompt::UpdatePromptMode;
@@ -95,6 +97,8 @@ pub enum AppMode {
     MergeBranchSelector(MergeBranchSelectorMode),
     /// Model selector mode.
     ModelSelector(ModelSelectorMode),
+    /// Settings menu mode.
+    SettingsMenu(SettingsMenuMode),
     /// Command palette mode.
     CommandPalette(CommandPaletteMode),
     /// General confirmation mode (requires carrying the confirmed action).
@@ -236,6 +240,12 @@ impl From<MergeBranchSelectorMode> for AppMode {
 impl From<ModelSelectorMode> for AppMode {
     fn from(_: ModelSelectorMode) -> Self {
         Self::ModelSelector(ModelSelectorMode)
+    }
+}
+
+impl From<SettingsMenuMode> for AppMode {
+    fn from(_: SettingsMenuMode) -> Self {
+        Self::SettingsMenu(SettingsMenuMode)
     }
 }
 

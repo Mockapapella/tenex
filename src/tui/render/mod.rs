@@ -9,6 +9,7 @@ pub mod colors;
 pub mod main_layout;
 pub mod modals;
 
+use crate::app::AgentRole;
 use crate::app::App;
 use crate::state::{AppMode, ConfirmAction};
 use ratatui::{
@@ -97,13 +98,30 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             &app.data.input.buffer,
             app.data.input.cursor,
         ),
-        AppMode::CustomAgentCommand(_) => modals::render_input_overlay(
-            frame,
-            "Custom Agent Command",
-            "Enter the command to run for new agents:",
-            &app.data.input.buffer,
-            app.data.input.cursor,
-        ),
+        AppMode::CustomAgentCommand(_) => {
+            let (title, prompt) = match app.data.model_selector.role {
+                AgentRole::Default => (
+                    "Custom Agent Command",
+                    "Enter the command to run for new agents:",
+                ),
+                AgentRole::Planner => (
+                    "Custom Planner Command",
+                    "Enter the command to run for planner agents:",
+                ),
+                AgentRole::Review => (
+                    "Custom Review Command",
+                    "Enter the command to run for review agents:",
+                ),
+            };
+
+            modals::render_input_overlay(
+                frame,
+                title,
+                prompt,
+                &app.data.input.buffer,
+                app.data.input.cursor,
+            );
+        }
         AppMode::Confirming(state) => {
             let action = state.action;
             let lines: Vec<Line<'_>> = match action {
@@ -222,6 +240,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             modals::render_branch_selector_overlay(frame, app);
         }
         AppMode::ModelSelector(_) => modals::render_model_selector_overlay(frame, app),
+        AppMode::SettingsMenu(_) => modals::render_settings_menu_overlay(frame, app),
         AppMode::ConfirmPush(_) => modals::render_confirm_push_overlay(frame, app),
         AppMode::RenameBranch(_) => modals::render_rename_overlay(frame, app),
         AppMode::ConfirmPushForPR(_) => modals::render_confirm_push_for_pr_overlay(frame, app),
@@ -1554,6 +1573,87 @@ mod tests {
 
         app.start_model_selector();
         app.data.model_selector.filter = "xyz".to_string();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_settings_menu_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(SettingsMenuMode.into());
+        app.data.settings_menu.selected = 2;
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_custom_agent_command_mode_for_roles() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(CustomAgentCommandMode.into());
+        app.data.input.buffer = "my-agent".to_string();
+        app.data.input.cursor = app.data.input.buffer.len();
+
+        for role in [
+            crate::app::AgentRole::Default,
+            crate::app::AgentRole::Planner,
+            crate::app::AgentRole::Review,
+        ] {
+            app.data.model_selector.role = role;
+            terminal.draw(|frame| {
+                render(frame, &app);
+            })?;
+
+            let buffer = terminal.backend().buffer();
+            assert!(!buffer.content.is_empty());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_model_selector_mode_planner() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_model_selector();
+        app.data.model_selector.role = crate::app::AgentRole::Planner;
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_model_selector_mode_review() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.start_model_selector();
+        app.data.model_selector.role = crate::app::AgentRole::Review;
 
         terminal.draw(|frame| {
             render(frame, &app);

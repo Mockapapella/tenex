@@ -21,7 +21,8 @@ impl CommandPaletteState {
 }
 
 use super::{App, SlashCommand};
-use crate::state::{AppMode, CommandPaletteMode, HelpMode, ModelSelectorMode};
+use crate::app::AgentRole;
+use crate::state::{AppMode, CommandPaletteMode, HelpMode, SettingsMenuMode};
 
 impl App {
     /// Enter slash command palette mode and pre-fill the leading `/`
@@ -46,7 +47,8 @@ impl App {
         let next = match cmd.name {
             "/agents" => {
                 self.data.input.clear();
-                ModelSelectorMode.into()
+                self.data.model_selector.role = AgentRole::Default;
+                SettingsMenuMode.into()
             }
             "/help" => {
                 self.data.ui.help_scroll = 0;

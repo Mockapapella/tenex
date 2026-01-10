@@ -1,5 +1,6 @@
 //! Model selector modal rendering (`/agents`)
 
+use crate::app::AgentRole;
 use crate::app::App;
 use ratatui::{
     Frame,
@@ -18,7 +19,12 @@ pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
 
     let filtered = app.filtered_model_programs();
     let selected_idx = app.data.model_selector.selected;
-    let current = app.data.settings.agent_program;
+    let role = app.data.model_selector.role;
+    let current = match role {
+        AgentRole::Default => app.data.settings.agent_program,
+        AgentRole::Planner => app.data.settings.planner_agent_program,
+        AgentRole::Review => app.data.settings.review_agent_program,
+    };
 
     let mut lines: Vec<Line<'_>> = Vec::new();
 
@@ -80,7 +86,7 @@ pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(" Models ")
+                .title(format!(" Models • {} ", role.menu_label()))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::SELECTED))
                 .border_type(colors::BORDER_TYPE),

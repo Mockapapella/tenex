@@ -8,7 +8,7 @@ use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, BranchSelectorMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
     ErrorModalMode, MergeBranchSelectorMode, ModelSelectorMode, RebaseBranchSelectorMode,
-    ReviewChildCountMode, ReviewInfoMode,
+    ReviewChildCountMode, ReviewInfoMode, SettingsMenuMode,
 };
 use anyhow::Result;
 
@@ -198,6 +198,14 @@ impl ValidIn<CommandPaletteMode> for CancelAction {
     }
 }
 
+impl ValidIn<SettingsMenuMode> for CancelAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: SettingsMenuMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
+    }
+}
+
 impl ValidIn<BranchSelectorMode> for NavigateUpAction {
     type NextState = AppMode;
 
@@ -320,6 +328,24 @@ impl ValidIn<CommandPaletteMode> for NavigateDownAction {
     }
 }
 
+impl ValidIn<SettingsMenuMode> for NavigateUpAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: SettingsMenuMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_prev_settings_menu_item();
+        Ok(SettingsMenuMode.into())
+    }
+}
+
+impl ValidIn<SettingsMenuMode> for NavigateDownAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: SettingsMenuMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_next_settings_menu_item();
+        Ok(SettingsMenuMode.into())
+    }
+}
+
 impl ValidIn<BranchSelectorMode> for SelectAction {
     type NextState = AppMode;
 
@@ -400,6 +426,14 @@ impl ValidIn<CommandPaletteMode> for SelectAction {
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
         Ok(app_data.confirm_slash_command_selection())
+    }
+}
+
+impl ValidIn<SettingsMenuMode> for SelectAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: SettingsMenuMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        Ok(app_data.confirm_settings_menu_selection())
     }
 }
 

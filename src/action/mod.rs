@@ -34,7 +34,8 @@ use crate::state::{
     CustomAgentCommandMode, DiffFocusedMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
     MergeBranchSelectorMode, ModelSelectorMode, NormalMode, PreviewFocusedMode, PromptingMode,
     RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode,
-    ReviewInfoMode, ScrollingMode, SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
+    ReviewInfoMode, ScrollingMode, SettingsMenuMode, SuccessModalMode, TerminalPromptMode,
+    UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
@@ -548,6 +549,27 @@ pub fn dispatch_model_selector_mode(app: &mut App, code: KeyCode) -> Result<()> 
             KeyCode::Char(c) => CharInputAction(c).execute(ModelSelectorMode, app_data)?,
             KeyCode::Backspace => BackspaceAction.execute(ModelSelectorMode, app_data)?,
             _ => ModelSelectorMode.into(),
+        }
+    };
+
+    app.apply_mode(next);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `SettingsMenuMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_settings_menu_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    let next = {
+        let app_data = &mut app.data;
+        match code {
+            KeyCode::Esc => CancelAction.execute(SettingsMenuMode, app_data)?,
+            KeyCode::Enter => SelectAction.execute(SettingsMenuMode, app_data)?,
+            KeyCode::Up => NavigateUpAction.execute(SettingsMenuMode, app_data)?,
+            KeyCode::Down => NavigateDownAction.execute(SettingsMenuMode, app_data)?,
+            _ => SettingsMenuMode.into(),
         }
     };
 
