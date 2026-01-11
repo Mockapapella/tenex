@@ -107,7 +107,7 @@ impl ValidIn<NormalMode> for OpenPRAction {
         let branch_name = agent.branch.clone();
         let worktree_path = agent.worktree_path.clone();
 
-        let base_branch = Actions::detect_base_branch(&worktree_path, &branch_name)?;
+        let base_branch = Actions::detect_base_branch(&worktree_path, &branch_name);
         let has_unpushed = Actions::has_unpushed_commits(&worktree_path, &branch_name)?;
 
         app_data
@@ -135,7 +135,7 @@ impl ValidIn<ScrollingMode> for OpenPRAction {
         let branch_name = agent.branch.clone();
         let worktree_path = agent.worktree_path.clone();
 
-        let base_branch = Actions::detect_base_branch(&worktree_path, &branch_name)?;
+        let base_branch = Actions::detect_base_branch(&worktree_path, &branch_name);
         let has_unpushed = Actions::has_unpushed_commits(&worktree_path, &branch_name)?;
 
         app_data

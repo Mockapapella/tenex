@@ -215,6 +215,9 @@ fn run_loop(
     // Diff refresh is expensive; throttle tick-based updates.
     let diff_refresh_interval = Duration::from_millis(1000);
     let mut last_diff_update = Instant::now();
+    // Commits refresh is cheap; still throttle tick-based updates.
+    let commits_refresh_interval = Duration::from_millis(1000);
+    let mut last_commits_update = Instant::now();
     let mut last_status_sync = Instant::now();
 
     loop {
@@ -284,6 +287,16 @@ fn run_loop(
                 let _ = action_handler.update_diff_digest(app);
             }
             last_diff_update = Instant::now();
+        }
+
+        let commits_due = last_commits_update.elapsed() >= commits_refresh_interval;
+        if needs_content_update || commits_due {
+            if app.data.active_tab == Tab::Commits {
+                let _ = action_handler.update_commits(app);
+            } else {
+                let _ = action_handler.update_commits_digest(app);
+            }
+            last_commits_update = Instant::now();
         }
 
         needs_content_update = false;

@@ -21,7 +21,7 @@ pub enum Action {
     RenameBranch,
     /// Open pull request (push first if needed)
     OpenPR,
-    /// Switch between preview/diff tabs
+    /// Switch between detail pane tabs
     SwitchTab,
     /// Move the diff cursor up (Diff tab)
     DiffCursorUp,
@@ -372,7 +372,7 @@ impl Action {
             Self::Push => "[Ctrl+p]ush branch to remote",
             Self::RenameBranch => "[r]ename branch",
             Self::OpenPR => "[Ctrl+o]pen pull request",
-            Self::SwitchTab => "[Tab] switch preview/diff",
+            Self::SwitchTab => "[Tab] next tab",
             Self::DiffCursorUp => "[↑] diff cursor up",
             Self::DiffCursorDown => "[↓] diff cursor down",
             Self::DiffToggleVisual => "[shift+v] block select/unselect",
@@ -383,8 +383,8 @@ impl Action {
             Self::PrevAgent => "[↑] prev agent",
             Self::Help => "[?] help",
             Self::Quit => "[Ctrl+q]uit",
-            Self::ScrollUp => "[Ctrl+u] scroll preview/diff up",
-            Self::ScrollDown => "[Ctrl+d] scroll preview/diff down",
+            Self::ScrollUp => "[Ctrl+u] scroll preview/diff/commits up",
+            Self::ScrollDown => "[Ctrl+d] scroll preview/diff/commits down",
             Self::ScrollTop => "[g]o to top",
             Self::ScrollBottom => "[G]o to bottom",
             Self::Cancel => "Cancel",

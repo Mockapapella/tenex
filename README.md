@@ -16,6 +16,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 - **Synthesis** — Aggregate outputs from descendant agents into a parent (captures last ~5000 lines from each, writes to markdown, then sends to parent)
 - **Live preview** — Watch agent output in real-time with ANSI color support; auto-follows bottom unless you scroll
 - **Diff view** — See uncommitted changes (staged + unstaged + untracked) vs HEAD in the selected agent's worktree
+- **Commits view** — See commits in the selected agent's branch (relative to base) in a dedicated tab
 - **Git operations** — Push, rebase, merge, rename branches, and open PRs from the TUI
 - **Command palette** — Run slash commands like `/agents` and `/help`
 - **Persistent state** — Agents survive restarts; auto-reconnects to existing worktrees on startup
@@ -100,10 +101,10 @@ tenex
 | `Enter` | Attach terminal (forward keystrokes to agent) |
 | `Ctrl+q` | Detach terminal / Quit (with confirm if agents running) |
 | `Esc` | Cancel current modal or flow |
-| `Tab` | Switch between Preview and Diff tabs |
+| `Tab` | Cycle tabs forward (Preview/Diff/Commits) |
 | `Space` | Collapse/expand agent tree |
-| `Ctrl+u` | Scroll preview/diff up |
-| `Ctrl+d` | Scroll preview/diff down |
+| `Ctrl+u` | Scroll preview/diff/commits up |
+| `Ctrl+d` | Scroll preview/diff/commits down |
 | `g` | Scroll to top |
 | `G` | Scroll to bottom |
 | `?` | Help |

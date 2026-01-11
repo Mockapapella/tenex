@@ -70,6 +70,9 @@ fn test_switch_tab() {
     assert_eq!(app.data.active_tab, Tab::Diff);
 
     app.switch_tab();
+    assert_eq!(app.data.active_tab, Tab::Commits);
+
+    app.switch_tab();
     assert_eq!(app.data.active_tab, Tab::Preview);
 }
 
@@ -149,6 +152,7 @@ fn test_handle_backspace() {
 fn test_tab_display() {
     assert_eq!(format!("{}", Tab::Preview), "Preview");
     assert_eq!(format!("{}", Tab::Diff), "Diff");
+    assert_eq!(format!("{}", Tab::Commits), "Commits");
 }
 
 #[test]

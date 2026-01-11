@@ -14,6 +14,7 @@ impl App {
         match self.data.active_tab {
             Tab::Preview => self.data.ui.scroll_preview_up(amount),
             Tab::Diff => self.data.ui.scroll_diff_up(amount),
+            Tab::Commits => self.data.ui.scroll_commits_up(amount),
         }
     }
 
@@ -22,6 +23,7 @@ impl App {
         match self.data.active_tab {
             Tab::Preview => self.data.ui.scroll_preview_down(amount),
             Tab::Diff => self.data.ui.scroll_diff_down(amount),
+            Tab::Commits => self.data.ui.scroll_commits_down(amount),
         }
     }
 
@@ -30,6 +32,7 @@ impl App {
         match self.data.active_tab {
             Tab::Preview => self.data.ui.preview_to_top(),
             Tab::Diff => self.data.ui.diff_to_top(),
+            Tab::Commits => self.data.ui.commits_to_top(),
         }
     }
 
@@ -38,6 +41,7 @@ impl App {
         match self.data.active_tab {
             Tab::Preview => self.data.ui.preview_to_bottom(content_lines, visible_lines),
             Tab::Diff => self.data.ui.diff_to_bottom(content_lines, visible_lines),
+            Tab::Commits => self.data.ui.commits_to_bottom(content_lines, visible_lines),
         }
     }
 

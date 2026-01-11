@@ -20,6 +20,9 @@ pub struct UiState {
     /// Scroll position in diff pane
     pub diff_scroll: usize,
 
+    /// Scroll position in commits pane
+    pub commits_scroll: usize,
+
     /// Cursor position (selected line index) in diff pane
     pub diff_cursor: usize,
 
@@ -55,6 +58,12 @@ pub struct UiState {
     /// Cached byte ranges for each diff line (matches `diff_content.lines()`)
     pub diff_line_ranges: Vec<(usize, usize)>,
 
+    /// Cached commit list content
+    pub commits_content: String,
+
+    /// Cached byte ranges for each commit line (matches `commits_content.lines()`)
+    pub commits_line_ranges: Vec<(usize, usize)>,
+
     /// Cached metadata for each diff line (matches `diff_content.lines()`)
     pub diff_line_meta: Vec<DiffLineMeta>,
 
@@ -82,6 +91,15 @@ pub struct UiState {
     /// Whether the diff has unseen changes since last view
     pub diff_has_unseen_changes: bool,
 
+    /// Current commits hash (0 when no commits)
+    pub commits_hash: u64,
+
+    /// Commits hash the user last saw in the commits tab per agent (0 if never viewed)
+    pub commits_last_seen_hash_by_agent: Vec<(Uuid, u64)>,
+
+    /// Whether the commits list has unseen changes since last view
+    pub commits_has_unseen_changes: bool,
+
     /// Request an immediate diff refresh after an edit action
     pub diff_force_refresh: bool,
 
@@ -103,6 +121,7 @@ impl UiState {
             agent_list_scroll: 0,
             preview_scroll: 0,
             diff_scroll: 0,
+            commits_scroll: 0,
             diff_cursor: 0,
             diff_visual_anchor: None,
             help_scroll: 0,
@@ -113,6 +132,8 @@ impl UiState {
             preview_pane_size: None,
             diff_content: String::new(),
             diff_line_ranges: Vec::new(),
+            commits_content: String::new(),
+            commits_line_ranges: Vec::new(),
             diff_line_meta: Vec::new(),
             diff_model: None,
             diff_folded_files: Vec::new(),
@@ -122,6 +143,9 @@ impl UiState {
             diff_hash: 0,
             diff_last_seen_hash_by_agent: Vec::new(),
             diff_has_unseen_changes: false,
+            commits_hash: 0,
+            commits_last_seen_hash_by_agent: Vec::new(),
+            commits_has_unseen_changes: false,
             diff_force_refresh: false,
             preview_dimensions: None,
             last_error: None,
@@ -138,6 +162,14 @@ impl UiState {
         self.normalize_diff_visual_anchor();
         self.normalize_diff_scroll();
         self.normalize_diff_cursor();
+    }
+
+    /// Set commits content and refresh cached line ranges.
+    pub fn set_commits_content(&mut self, content: impl Into<String>) {
+        let content = content.into();
+        self.commits_line_ranges = compute_line_ranges(&content);
+        self.commits_content = content;
+        self.normalize_commits_scroll();
     }
 
     /// Set diff content, line metadata, and refresh cached line ranges.
@@ -171,6 +203,9 @@ impl UiState {
         self.diff_scroll = 0;
         self.diff_cursor = 0;
         self.normalize_diff_cursor();
+        // Commits: set to 0 to show from top (most recent first)
+        self.commits_scroll = 0;
+        self.normalize_commits_scroll();
     }
 
     /// Reset interactive diff state when switching agents/worktrees.
@@ -209,6 +244,27 @@ impl UiState {
         self.diff_last_seen_hash_by_agent.push((agent_id, hash));
     }
 
+    #[must_use]
+    pub fn commits_last_seen_hash_for_agent(&self, agent_id: Uuid) -> u64 {
+        self.commits_last_seen_hash_by_agent
+            .iter()
+            .find(|(id, _)| *id == agent_id)
+            .map_or(0, |(_, hash)| *hash)
+    }
+
+    pub fn set_commits_last_seen_hash_for_agent(&mut self, agent_id: Uuid, hash: u64) {
+        if let Some((_, existing)) = self
+            .commits_last_seen_hash_by_agent
+            .iter_mut()
+            .find(|(id, _)| *id == agent_id)
+        {
+            *existing = hash;
+            return;
+        }
+
+        self.commits_last_seen_hash_by_agent.push((agent_id, hash));
+    }
+
     /// Scroll up in the preview pane by the given amount
     pub fn scroll_preview_up(&mut self, amount: usize) {
         self.normalize_preview_scroll();
@@ -241,6 +297,20 @@ impl UiState {
         self.normalize_diff_cursor();
     }
 
+    /// Scroll up in the commits pane by the given amount.
+    pub fn scroll_commits_up(&mut self, amount: usize) {
+        self.normalize_commits_scroll();
+        self.commits_scroll = self.commits_scroll.saturating_sub(amount);
+        self.normalize_commits_scroll();
+    }
+
+    /// Scroll down in the commits pane by the given amount.
+    pub fn scroll_commits_down(&mut self, amount: usize) {
+        self.normalize_commits_scroll();
+        self.commits_scroll = self.commits_scroll.saturating_add(amount);
+        self.normalize_commits_scroll();
+    }
+
     /// Check if preview scroll is at bottom and re-enable follow mode if so
     fn check_preview_follow(&mut self) {
         let preview_lines = self.preview_content.lines().count();
@@ -271,6 +341,16 @@ impl UiState {
 
         if self.diff_scroll > diff_max {
             self.diff_scroll = diff_max;
+        }
+    }
+
+    fn normalize_commits_scroll(&mut self) {
+        let commits_lines = self.commits_line_ranges.len();
+        let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
+        let commits_max = commits_lines.saturating_sub(visible_height);
+
+        if self.commits_scroll > commits_max {
+            self.commits_scroll = commits_max;
         }
     }
 
@@ -354,6 +434,11 @@ impl UiState {
         self.normalize_diff_cursor();
     }
 
+    /// Scroll commits to the top
+    pub const fn commits_to_top(&mut self) {
+        self.commits_scroll = 0;
+    }
+
     /// Scroll preview to the bottom
     pub const fn preview_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
         self.preview_scroll = content_lines.saturating_sub(visible_lines);
@@ -364,6 +449,11 @@ impl UiState {
     pub const fn diff_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
         self.diff_scroll = content_lines.saturating_sub(visible_lines);
         self.diff_cursor = content_lines.saturating_sub(1);
+    }
+
+    /// Scroll commits to the bottom
+    pub const fn commits_to_bottom(&mut self, content_lines: usize, visible_lines: usize) {
+        self.commits_scroll = content_lines.saturating_sub(visible_lines);
     }
 
     /// Move the diff cursor up by the given amount.
@@ -630,11 +720,14 @@ mod tests {
         assert_eq!(ui.agent_list_scroll, 0);
         assert_eq!(ui.preview_scroll, 0);
         assert_eq!(ui.diff_scroll, 0);
+        assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 0);
         assert!(ui.preview_follow);
         assert!(ui.preview_content.is_empty());
         assert!(ui.diff_content.is_empty());
         assert!(ui.diff_line_ranges.is_empty());
+        assert!(ui.commits_content.is_empty());
+        assert!(ui.commits_line_ranges.is_empty());
         assert!(ui.preview_dimensions.is_none());
         assert!(ui.last_error.is_none());
         assert!(ui.status_message.is_none());
@@ -645,6 +738,7 @@ mod tests {
         let mut ui = UiState::new();
         ui.preview_scroll = 100;
         ui.diff_scroll = 50;
+        ui.commits_scroll = 42;
         ui.preview_follow = false;
         ui.help_scroll = 25;
 
@@ -653,6 +747,7 @@ mod tests {
         assert_eq!(ui.preview_scroll, usize::MAX);
         assert!(ui.preview_follow);
         assert_eq!(ui.diff_scroll, 0);
+        assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 25);
     }
 

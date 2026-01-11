@@ -195,10 +195,12 @@ fn handle_tab_bar_click(app: &mut App, x: u16, tab_bar_area: Rect) {
     // Keep these in sync with `render::main_layout::tab_bar_line`.
     const PREVIEW_LABEL: &str = " Preview ";
     const DIFF_LABEL: &str = " Diff ";
+    const COMMITS_LABEL: &str = " Commits ";
 
     let rel_x = x.saturating_sub(tab_bar_area.x);
     let preview_w = u16::try_from(PREVIEW_LABEL.chars().count()).unwrap_or(0);
     let diff_w = u16::try_from(DIFF_LABEL.chars().count()).unwrap_or(0);
+    let commits_w = u16::try_from(COMMITS_LABEL.chars().count()).unwrap_or(0);
 
     if rel_x < preview_w {
         if app.data.active_tab != Tab::Preview {
@@ -214,6 +216,18 @@ fn handle_tab_bar_click(app: &mut App, x: u16, tab_bar_area: Rect) {
             app.data.ui.reset_scroll();
         }
         // Diff view is non-interactive; ensure we aren't "attached" to preview.
+        if matches!(&app.mode, AppMode::PreviewFocused(_)) {
+            app.apply_mode(AppMode::normal());
+        }
+        return;
+    }
+
+    if rel_x < preview_w.saturating_add(diff_w).saturating_add(commits_w) {
+        if app.data.active_tab != Tab::Commits {
+            app.data.active_tab = Tab::Commits;
+            app.data.ui.reset_scroll();
+        }
+        // Commits view is non-interactive; ensure we aren't "attached" to preview.
         if matches!(&app.mode, AppMode::PreviewFocused(_)) {
             app.apply_mode(AppMode::normal());
         }
@@ -370,6 +384,48 @@ mod tests {
         handle_mouse_event(&mut app, click, frame)?;
 
         assert_eq!(app.data.active_tab, Tab::Diff);
+        Ok(())
+    }
+
+    #[test]
+    fn click_commits_tab_selects_commits() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the " Commits " label (after " Preview " + " Diff ").
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let diff_w = u16::try_from(" Diff ".chars().count()).unwrap_or(0);
+        let click = left_click(tab_bar.x + preview_w + diff_w + 1, tab_bar.y);
+        handle_mouse_event(&mut app, click, frame)?;
+
+        assert_eq!(app.data.active_tab, Tab::Commits);
         Ok(())
     }
 

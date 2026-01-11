@@ -114,6 +114,8 @@ pub enum Tab {
     Preview,
     /// Git diff view
     Diff,
+    /// Current branch commit list
+    Commits,
 }
 
 impl std::fmt::Display for Tab {
@@ -121,6 +123,7 @@ impl std::fmt::Display for Tab {
         match self {
             Self::Preview => write!(f, "Preview"),
             Self::Diff => write!(f, "Diff"),
+            Self::Commits => write!(f, "Commits"),
         }
     }
 }
