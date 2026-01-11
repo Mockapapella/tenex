@@ -1,6 +1,7 @@
 //! Model selector state: selecting which agent command to run by default
 
 use crate::app::AgentProgram;
+use crate::app::AgentRole;
 
 /// State for the `/agents` selector modal
 #[derive(Debug, Default)]
@@ -10,6 +11,9 @@ pub struct ModelSelectorState {
 
     /// Currently selected index in filtered list
     pub selected: usize,
+
+    /// Which setting is being edited (default/planner/review).
+    pub role: AgentRole,
 }
 
 impl ModelSelectorState {
@@ -19,6 +23,7 @@ impl ModelSelectorState {
         Self {
             filter: String::new(),
             selected: 0,
+            role: AgentRole::Default,
         }
     }
 
@@ -91,6 +96,7 @@ use crate::state::{CustomAgentCommandMode, ModelSelectorMode};
 impl App {
     /// Enter the `/agents` selector modal.
     pub fn start_model_selector(&mut self) {
+        self.data.model_selector.role = AgentRole::Default;
         self.apply_mode(ModelSelectorMode.into());
     }
 
@@ -134,6 +140,7 @@ impl App {
 
     /// Open the custom agent command prompt (used when selecting `custom`).
     pub fn start_custom_agent_command_prompt(&mut self) {
+        self.data.model_selector.role = AgentRole::Default;
         self.apply_mode(CustomAgentCommandMode.into());
         self.data
             .input
@@ -190,6 +197,7 @@ mod tests {
         let state = ModelSelectorState::new();
         assert!(state.filter.is_empty());
         assert_eq!(state.selected, 0);
+        assert_eq!(state.role, AgentRole::Default);
     }
 
     #[test]
@@ -197,6 +205,7 @@ mod tests {
         let state = ModelSelectorState::default();
         assert!(state.filter.is_empty());
         assert_eq!(state.selected, 0);
+        assert_eq!(state.role, AgentRole::Default);
     }
 
     #[test]

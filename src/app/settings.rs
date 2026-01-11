@@ -36,6 +36,43 @@ impl AgentProgram {
     }
 }
 
+/// Which kind of agent should be configured in settings.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRole {
+    /// Default agent program used for new agents.
+    #[default]
+    Default,
+    /// Agent program used for planning swarms.
+    Planner,
+    /// Agent program used for review swarms.
+    Review,
+}
+
+impl AgentRole {
+    /// All supported roles, in display order.
+    pub const ALL: &'static [Self] = &[Self::Default, Self::Planner, Self::Review];
+
+    /// Lowercase label shown in the UI.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Planner => "planner",
+            Self::Review => "review",
+        }
+    }
+
+    /// Title-cased label for the settings menu.
+    #[must_use]
+    pub const fn menu_label(self) -> &'static str {
+        match self {
+            Self::Default => "Default agent",
+            Self::Planner => "Planner agent",
+            Self::Review => "Review agent",
+        }
+    }
+}
+
 /// Persistent user settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -54,9 +91,61 @@ pub struct Settings {
     /// Custom agent command (used when `agent_program == Custom`)
     #[serde(default)]
     pub custom_agent_command: String,
+
+    /// Which model/program to use for planner agents (planning swarms)
+    #[serde(default)]
+    pub planner_agent_program: AgentProgram,
+
+    /// Custom planner command (used when `planner_agent_program == Custom`)
+    #[serde(default)]
+    pub planner_custom_agent_command: String,
+
+    /// Which model/program to use for review agents (review swarms)
+    #[serde(default)]
+    pub review_agent_program: AgentProgram,
+
+    /// Custom review command (used when `review_agent_program == Custom`)
+    #[serde(default)]
+    pub review_custom_agent_command: String,
 }
 
 impl Settings {
+    fn deserialize_with_upgrade_defaults(content: &str) -> Result<Self, serde_json::Error> {
+        let mut value: serde_json::Value = serde_json::from_str(content)?;
+
+        // Preserve behavior across upgrades:
+        // Before planner/review-specific settings existed, those swarms used the default agent
+        // program. When upgrading from an older settings.json, default planner/review settings
+        // to whatever `agent_program` was set to (and copy the custom command as well).
+        if let Some(obj) = value.as_object_mut() {
+            let agent_program = obj.get("agent_program").cloned();
+            let custom_command = obj.get("custom_agent_command").cloned();
+
+            if let Some(agent_program) = agent_program {
+                if !obj.contains_key("planner_agent_program") {
+                    obj.insert("planner_agent_program".to_string(), agent_program.clone());
+                }
+                if !obj.contains_key("review_agent_program") {
+                    obj.insert("review_agent_program".to_string(), agent_program);
+                }
+            }
+
+            if let Some(custom_command) = custom_command {
+                if !obj.contains_key("planner_custom_agent_command") {
+                    obj.insert(
+                        "planner_custom_agent_command".to_string(),
+                        custom_command.clone(),
+                    );
+                }
+                if !obj.contains_key("review_custom_agent_command") {
+                    obj.insert("review_custom_agent_command".to_string(), custom_command);
+                }
+            }
+        }
+
+        serde_json::from_value(value)
+    }
+
     /// Get the settings file path
     #[must_use]
     pub fn path() -> PathBuf {
@@ -73,7 +162,7 @@ impl Settings {
         }
 
         match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str(&content) {
+            Ok(content) => match Self::deserialize_with_upgrade_defaults(&content) {
                 Ok(settings) => {
                     debug!("Loaded settings from {:?}", path);
                     settings
@@ -145,6 +234,10 @@ mod tests {
         assert!(!settings.keyboard_remap_asked);
         assert_eq!(settings.agent_program, AgentProgram::Claude);
         assert!(settings.custom_agent_command.is_empty());
+        assert_eq!(settings.planner_agent_program, AgentProgram::Claude);
+        assert!(settings.planner_custom_agent_command.is_empty());
+        assert_eq!(settings.review_agent_program, AgentProgram::Claude);
+        assert!(settings.review_custom_agent_command.is_empty());
     }
 
     #[test]
@@ -157,6 +250,7 @@ mod tests {
             keyboard_remap_asked: true,
             agent_program: AgentProgram::Codex,
             custom_agent_command: "echo hello".to_string(),
+            ..Settings::default()
         };
 
         // Save manually to temp location
@@ -196,6 +290,7 @@ mod tests {
             keyboard_remap_asked: false,
             agent_program: AgentProgram::Claude,
             custom_agent_command: String::new(),
+            ..Settings::default()
         };
         let cloned = settings.clone();
         // Verify both original and clone have correct values
@@ -219,6 +314,7 @@ mod tests {
             keyboard_remap_asked: true,
             agent_program: AgentProgram::Custom,
             custom_agent_command: "my-agent --flag".to_string(),
+            ..Settings::default()
         };
         let json = serde_json::to_string(&original)?;
         let parsed: Settings = serde_json::from_str(&json)?;
@@ -238,6 +334,47 @@ mod tests {
         assert!(!settings.keyboard_remap_asked);
         assert_eq!(settings.agent_program, AgentProgram::Claude);
         assert!(settings.custom_agent_command.is_empty());
+        assert_eq!(settings.planner_agent_program, AgentProgram::Claude);
+        assert!(settings.planner_custom_agent_command.is_empty());
+        assert_eq!(settings.review_agent_program, AgentProgram::Claude);
+        assert!(settings.review_custom_agent_command.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_upgrade_defaults_copy_default_program_to_planner_review()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let settings = Settings::deserialize_with_upgrade_defaults(r#"{"agent_program":"codex"}"#)?;
+        assert_eq!(settings.agent_program, AgentProgram::Codex);
+        assert_eq!(settings.planner_agent_program, AgentProgram::Codex);
+        assert_eq!(settings.review_agent_program, AgentProgram::Codex);
+        Ok(())
+    }
+
+    #[test]
+    fn test_upgrade_defaults_copy_custom_program_and_command_to_planner_review()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let settings = Settings::deserialize_with_upgrade_defaults(
+            r#"{"agent_program":"custom","custom_agent_command":"my-agent --flag"}"#,
+        )?;
+        assert_eq!(settings.agent_program, AgentProgram::Custom);
+        assert_eq!(settings.custom_agent_command, "my-agent --flag");
+        assert_eq!(settings.planner_agent_program, AgentProgram::Custom);
+        assert_eq!(settings.planner_custom_agent_command, "my-agent --flag");
+        assert_eq!(settings.review_agent_program, AgentProgram::Custom);
+        assert_eq!(settings.review_custom_agent_command, "my-agent --flag");
+        Ok(())
+    }
+
+    #[test]
+    fn test_upgrade_defaults_do_not_override_existing_planner_review_settings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let settings = Settings::deserialize_with_upgrade_defaults(
+            r#"{"agent_program":"claude","planner_agent_program":"codex","review_agent_program":"codex"}"#,
+        )?;
+        assert_eq!(settings.agent_program, AgentProgram::Claude);
+        assert_eq!(settings.planner_agent_program, AgentProgram::Codex);
+        assert_eq!(settings.review_agent_program, AgentProgram::Codex);
         Ok(())
     }
 }

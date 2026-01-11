@@ -11,6 +11,7 @@ mod help;
 mod input;
 mod models;
 mod picker;
+mod settings_menu;
 
 pub use branch::render_branch_selector_overlay;
 pub use command_palette::render_command_palette_overlay;
@@ -25,6 +26,7 @@ pub use models::render_model_selector_overlay;
 pub use picker::{
     render_count_picker_overlay, render_review_count_picker_overlay, render_review_info_overlay,
 };
+pub use settings_menu::render_settings_menu_overlay;
 
 use crate::app::App;
 use crate::config::Action;
@@ -77,6 +79,7 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
         | AppMode::RebaseBranchSelector(_)
         | AppMode::MergeBranchSelector(_) => Some(centered_rect_absolute(60, 20, frame_area)),
         AppMode::ModelSelector(_) => Some(centered_rect_absolute(55, 12, frame_area)),
+        AppMode::SettingsMenu(_) => Some(centered_rect_absolute(60, 9, frame_area)),
         AppMode::ConfirmPush(_) => Some(confirm_push_rect(app, frame_area)),
         AppMode::RenameBranch(_) => Some(centered_rect_absolute(55, 9, frame_area)),
         AppMode::ConfirmPushForPR(_) | AppMode::UpdatePrompt(_) => {

@@ -568,7 +568,7 @@ fn test_run_slash_command_agents() {
         name: "/agents",
         description: "test",
     });
-    assert_eq!(app.mode, AppMode::ModelSelector(ModelSelectorMode));
+    assert_eq!(app.mode, AppMode::SettingsMenu(SettingsMenuMode));
 }
 
 #[test]

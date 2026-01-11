@@ -1099,9 +1099,24 @@ impl ValidIn<CustomAgentCommandMode> for SubmitAction {
             return Ok(CustomAgentCommandMode.into());
         }
 
+        let role = app_data.model_selector.role;
         let command = input.trim().to_string();
-        app_data.settings.custom_agent_command = command;
-        app_data.settings.agent_program = crate::app::AgentProgram::Custom;
+
+        match role {
+            crate::app::AgentRole::Default => {
+                app_data.settings.custom_agent_command = command;
+                app_data.settings.agent_program = crate::app::AgentProgram::Custom;
+            }
+            crate::app::AgentRole::Planner => {
+                app_data.settings.planner_custom_agent_command = command;
+                app_data.settings.planner_agent_program = crate::app::AgentProgram::Custom;
+            }
+            crate::app::AgentRole::Review => {
+                app_data.settings.review_custom_agent_command = command;
+                app_data.settings.review_agent_program = crate::app::AgentProgram::Custom;
+            }
+        }
+
         if let Err(err) = app_data.settings.save() {
             return Ok(ErrorModalMode {
                 message: format!("Failed to save settings: {err}"),
@@ -1109,7 +1124,7 @@ impl ValidIn<CustomAgentCommandMode> for SubmitAction {
             .into());
         }
 
-        app_data.set_status("Model set to custom");
+        app_data.set_status(format!("{} set to custom", role.menu_label()));
         Ok(AppMode::normal())
     }
 }

@@ -2,12 +2,15 @@
 
 use super::{AgentProgram, Settings, Tab};
 use crate::agent::{Agent, Status, Storage};
+use crate::app::AgentRole;
 use crate::app::state::{
-    CommandPaletteState, GitOpState, InputState, ModelSelectorState, ReviewState, SpawnState,
-    UiState,
+    CommandPaletteState, GitOpState, InputState, ModelSelectorState, ReviewState,
+    SettingsMenuState, SpawnState, UiState,
 };
 use crate::config::Config;
-use crate::state::{AppMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode};
+use crate::state::{
+    AppMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
+};
 
 /// Persistent application data (everything except the current mode).
 #[derive(Debug)]
@@ -42,6 +45,9 @@ pub struct AppData {
     /// Slash command palette state (`/`).
     pub command_palette: CommandPaletteState,
 
+    /// Settings menu state (`/agents`).
+    pub settings_menu: SettingsMenuState,
+
     /// Model selector state (`/agents`).
     pub model_selector: ModelSelectorState,
 
@@ -75,6 +81,7 @@ impl AppData {
             git_op: GitOpState::new(),
             review: ReviewState::new(),
             command_palette: CommandPaletteState::new(),
+            settings_menu: SettingsMenuState::new(),
             model_selector: ModelSelectorState::new(),
             spawn: SpawnState::new(),
             settings,
@@ -90,6 +97,40 @@ impl AppData {
             AgentProgram::Claude => self.config.default_program.clone(),
             AgentProgram::Custom => {
                 let custom = self.settings.custom_agent_command.trim();
+                if custom.is_empty() {
+                    self.config.default_program.clone()
+                } else {
+                    custom.to_string()
+                }
+            }
+        }
+    }
+
+    /// The base command used when spawning planner agents (planning swarms).
+    #[must_use]
+    pub(crate) fn planner_agent_spawn_command(&self) -> String {
+        match self.settings.planner_agent_program {
+            AgentProgram::Codex => "codex".to_string(),
+            AgentProgram::Claude => self.config.default_program.clone(),
+            AgentProgram::Custom => {
+                let custom = self.settings.planner_custom_agent_command.trim();
+                if custom.is_empty() {
+                    self.config.default_program.clone()
+                } else {
+                    custom.to_string()
+                }
+            }
+        }
+    }
+
+    /// The base command used when spawning review agents (review swarms).
+    #[must_use]
+    pub(crate) fn review_agent_spawn_command(&self) -> String {
+        match self.settings.review_agent_program {
+            AgentProgram::Codex => "codex".to_string(),
+            AgentProgram::Claude => self.config.default_program.clone(),
+            AgentProgram::Custom => {
+                let custom = self.settings.review_custom_agent_command.trim();
                 if custom.is_empty() {
                     self.config.default_program.clone()
                 } else {
@@ -295,24 +336,23 @@ impl AppData {
             return AppMode::normal();
         };
 
+        let role = self.model_selector.role;
+
         match program {
-            AgentProgram::Custom if self.settings.custom_agent_command.trim().is_empty() => {
-                CustomAgentCommandMode.into()
-            }
-            AgentProgram::Custom => {
-                self.settings.agent_program = AgentProgram::Custom;
-                if let Err(err) = self.settings.save() {
-                    return crate::state::ErrorModalMode {
-                        message: format!("Failed to save settings: {err}"),
-                    }
-                    .into();
-                }
-
-                self.set_status(format!("Model set to {}", program.label()));
-                AppMode::normal()
-            }
+            AgentProgram::Custom => CustomAgentCommandMode.into(),
             other => {
-                self.settings.agent_program = other;
+                match role {
+                    AgentRole::Default => {
+                        self.settings.agent_program = other;
+                    }
+                    AgentRole::Planner => {
+                        self.settings.planner_agent_program = other;
+                    }
+                    AgentRole::Review => {
+                        self.settings.review_agent_program = other;
+                    }
+                }
+
                 if let Err(err) = self.settings.save() {
                     return crate::state::ErrorModalMode {
                         message: format!("Failed to save settings: {err}"),
@@ -320,7 +360,7 @@ impl AppData {
                     .into();
                 }
 
-                self.set_status(format!("Model set to {}", other.label()));
+                self.set_status(format!("{} set to {}", role.menu_label(), other.label()));
                 AppMode::normal()
             }
         }
@@ -374,6 +414,22 @@ impl AppData {
         } else {
             self.command_palette.selected = 0;
         }
+    }
+
+    /// Select the next settings menu item.
+    pub(crate) const fn select_next_settings_menu_item(&mut self) {
+        self.settings_menu.select_next();
+    }
+
+    /// Select the previous settings menu item.
+    pub(crate) const fn select_prev_settings_menu_item(&mut self) {
+        self.settings_menu.select_prev();
+    }
+
+    /// Confirm the current settings menu selection and return the next mode.
+    pub(crate) fn confirm_settings_menu_selection(&mut self) -> AppMode {
+        self.model_selector.role = self.settings_menu.selected_role();
+        ModelSelectorMode.into()
     }
 
     /// Reset the slash command selection back to the first entry.
@@ -446,7 +502,8 @@ impl AppData {
         match cmd.name {
             "/agents" => {
                 self.input.clear();
-                ModelSelectorMode.into()
+                self.model_selector.role = AgentRole::Default;
+                SettingsMenuMode.into()
             }
             "/help" => {
                 self.ui.help_scroll = 0;
@@ -514,7 +571,8 @@ impl AppData {
         match cmd.name {
             "/agents" => {
                 self.input.clear();
-                ModelSelectorMode.into()
+                self.model_selector.role = AgentRole::Default;
+                SettingsMenuMode.into()
             }
             "/help" => {
                 self.ui.help_scroll = 0;
@@ -620,6 +678,110 @@ mod tests {
 
         let data = AppData::new(Config::default(), Storage::default(), settings, false);
         assert_eq!(data.agent_spawn_command(), "my-agent");
+    }
+
+    #[test]
+    fn test_planner_agent_spawn_command_codex() {
+        let settings = Settings {
+            planner_agent_program: AgentProgram::Codex,
+            ..Settings::default()
+        };
+
+        let data = AppData::new(Config::default(), Storage::default(), settings, false);
+        assert_eq!(data.planner_agent_spawn_command(), "codex");
+    }
+
+    #[test]
+    fn test_planner_agent_spawn_command_claude_uses_config_default() {
+        let settings = Settings {
+            planner_agent_program: AgentProgram::Claude,
+            ..Settings::default()
+        };
+
+        let config = Config::default();
+        let expected = config.default_program.clone();
+
+        let data = AppData::new(config, Storage::default(), settings, false);
+        assert_eq!(data.planner_agent_spawn_command(), expected);
+    }
+
+    #[test]
+    fn test_planner_agent_spawn_command_custom_falls_back_when_empty() {
+        let settings = Settings {
+            planner_agent_program: AgentProgram::Custom,
+            planner_custom_agent_command: "   ".to_string(),
+            ..Settings::default()
+        };
+
+        let config = Config::default();
+        let expected = config.default_program.clone();
+
+        let data = AppData::new(config, Storage::default(), settings, false);
+        assert_eq!(data.planner_agent_spawn_command(), expected);
+    }
+
+    #[test]
+    fn test_planner_agent_spawn_command_custom_uses_trimmed_command() {
+        let settings = Settings {
+            planner_agent_program: AgentProgram::Custom,
+            planner_custom_agent_command: "  my-agent  ".to_string(),
+            ..Settings::default()
+        };
+
+        let data = AppData::new(Config::default(), Storage::default(), settings, false);
+        assert_eq!(data.planner_agent_spawn_command(), "my-agent");
+    }
+
+    #[test]
+    fn test_review_agent_spawn_command_codex() {
+        let settings = Settings {
+            review_agent_program: AgentProgram::Codex,
+            ..Settings::default()
+        };
+
+        let data = AppData::new(Config::default(), Storage::default(), settings, false);
+        assert_eq!(data.review_agent_spawn_command(), "codex");
+    }
+
+    #[test]
+    fn test_review_agent_spawn_command_claude_uses_config_default() {
+        let settings = Settings {
+            review_agent_program: AgentProgram::Claude,
+            ..Settings::default()
+        };
+
+        let config = Config::default();
+        let expected = config.default_program.clone();
+
+        let data = AppData::new(config, Storage::default(), settings, false);
+        assert_eq!(data.review_agent_spawn_command(), expected);
+    }
+
+    #[test]
+    fn test_review_agent_spawn_command_custom_falls_back_when_empty() {
+        let settings = Settings {
+            review_agent_program: AgentProgram::Custom,
+            review_custom_agent_command: "   ".to_string(),
+            ..Settings::default()
+        };
+
+        let config = Config::default();
+        let expected = config.default_program.clone();
+
+        let data = AppData::new(config, Storage::default(), settings, false);
+        assert_eq!(data.review_agent_spawn_command(), expected);
+    }
+
+    #[test]
+    fn test_review_agent_spawn_command_custom_uses_trimmed_command() {
+        let settings = Settings {
+            review_agent_program: AgentProgram::Custom,
+            review_custom_agent_command: "  my-agent  ".to_string(),
+            ..Settings::default()
+        };
+
+        let data = AppData::new(Config::default(), Storage::default(), settings, false);
+        assert_eq!(data.review_agent_spawn_command(), "my-agent");
     }
 
     #[test]

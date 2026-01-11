@@ -111,6 +111,9 @@ pub fn handle_key_event(
         AppMode::ModelSelector(_) => {
             command::handle_model_selector_mode(app, code)?;
         }
+        AppMode::SettingsMenu(_) => {
+            command::handle_settings_menu_mode(app, code)?;
+        }
 
         // Preview focused mode (forwards keys to the mux backend)
         AppMode::PreviewFocused(_) => {

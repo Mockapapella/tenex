@@ -3,9 +3,10 @@
 use tracing::{debug, warn};
 
 use super::App;
+use crate::app::AgentRole;
 use crate::state::{
     AppMode, CommandPaletteMode, ErrorModalMode, KeyboardRemapPromptMode, ModelSelectorMode,
-    SuccessModalMode,
+    SettingsMenuMode, SuccessModalMode,
 };
 
 impl App {
@@ -31,10 +32,19 @@ impl App {
                 self.mode = CommandPaletteMode.into();
             }
             AppMode::ModelSelector(_) => {
-                self.data
-                    .model_selector
-                    .start(self.data.settings.agent_program);
+                let current = match self.data.model_selector.role {
+                    AgentRole::Default => self.data.settings.agent_program,
+                    AgentRole::Planner => self.data.settings.planner_agent_program,
+                    AgentRole::Review => self.data.settings.review_agent_program,
+                };
+
+                self.data.model_selector.start(current);
                 self.mode = ModelSelectorMode.into();
+            }
+            AppMode::SettingsMenu(_) => {
+                self.data.settings_menu.reset();
+                self.data.input.clear();
+                self.mode = SettingsMenuMode.into();
             }
             AppMode::Creating(state) => {
                 self.data.input.clear();
@@ -61,7 +71,14 @@ impl App {
                 self.mode = AppMode::TerminalPrompt(state);
             }
             AppMode::CustomAgentCommand(state) => {
+                let existing = match self.data.model_selector.role {
+                    AgentRole::Default => self.data.settings.custom_agent_command.clone(),
+                    AgentRole::Planner => self.data.settings.planner_custom_agent_command.clone(),
+                    AgentRole::Review => self.data.settings.review_custom_agent_command.clone(),
+                };
+
                 self.data.input.clear();
+                self.data.input.set(existing);
                 self.mode = AppMode::CustomAgentCommand(state);
             }
             AppMode::ErrorModal(state) => {
