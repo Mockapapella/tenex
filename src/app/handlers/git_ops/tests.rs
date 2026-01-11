@@ -433,7 +433,7 @@ fn test_detect_base_branch_no_git() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
 
     // Should return default "main" when git commands fail
-    let result = Actions::detect_base_branch(temp_dir.path(), "feature/test")?;
+    let result = Actions::detect_base_branch(temp_dir.path(), "feature/test");
     assert_eq!(result, "main");
     Ok(())
 }

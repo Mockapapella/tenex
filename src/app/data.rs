@@ -157,11 +157,12 @@ impl AppData {
         self.ui.set_status(message);
     }
 
-    /// Switch between preview and diff tabs.
+    /// Switch between detail pane tabs (forward).
     pub(crate) fn switch_tab(&mut self) {
         self.active_tab = match self.active_tab {
             Tab::Preview => Tab::Diff,
-            Tab::Diff => Tab::Preview,
+            Tab::Diff => Tab::Commits,
+            Tab::Commits => Tab::Preview,
         };
         self.ui.reset_scroll();
     }
@@ -238,6 +239,7 @@ impl AppData {
         match self.active_tab {
             Tab::Preview => self.ui.scroll_preview_up(amount),
             Tab::Diff => self.ui.scroll_diff_up(amount),
+            Tab::Commits => self.ui.scroll_commits_up(amount),
         }
     }
 
@@ -246,6 +248,7 @@ impl AppData {
         match self.active_tab {
             Tab::Preview => self.ui.scroll_preview_down(amount),
             Tab::Diff => self.ui.scroll_diff_down(amount),
+            Tab::Commits => self.ui.scroll_commits_down(amount),
         }
     }
 
@@ -254,6 +257,7 @@ impl AppData {
         match self.active_tab {
             Tab::Preview => self.ui.preview_to_top(),
             Tab::Diff => self.ui.diff_to_top(),
+            Tab::Commits => self.ui.commits_to_top(),
         }
     }
 
@@ -262,6 +266,7 @@ impl AppData {
         match self.active_tab {
             Tab::Preview => self.ui.preview_to_bottom(content_lines, visible_lines),
             Tab::Diff => self.ui.diff_to_bottom(content_lines, visible_lines),
+            Tab::Commits => self.ui.commits_to_bottom(content_lines, visible_lines),
         }
     }
 

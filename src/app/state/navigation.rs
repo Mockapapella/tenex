@@ -42,11 +42,12 @@ impl App {
         }
     }
 
-    /// Switch between preview and diff tabs
+    /// Switch between detail pane tabs (forward)
     pub fn switch_tab(&mut self) {
         self.data.active_tab = match self.data.active_tab {
             Tab::Preview => Tab::Diff,
-            Tab::Diff => Tab::Preview,
+            Tab::Diff => Tab::Commits,
+            Tab::Commits => Tab::Preview,
         };
         self.reset_scroll();
     }

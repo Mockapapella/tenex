@@ -15,7 +15,7 @@ impl Actions {
     ///
     /// # Errors
     ///
-    /// Returns an error if no agent is selected or base branch detection fails.
+    /// Returns an error if no agent is selected or PR creation fails.
     pub fn open_pr_flow(app_data: &mut AppData) -> Result<AppMode> {
         let agent = app_data
             .selected_agent()
@@ -25,8 +25,8 @@ impl Actions {
         let branch_name = agent.branch.clone();
         let worktree_path = agent.worktree_path.clone();
 
-        // Detect base branch from git history
-        let base_branch = Self::detect_base_branch(&worktree_path, &branch_name)?;
+        // Detect base branch from git history (best-effort)
+        let base_branch = Self::detect_base_branch(&worktree_path, &branch_name);
 
         // Check if there are unpushed commits
         let has_unpushed = Self::has_unpushed_commits(&worktree_path, &branch_name)?;
@@ -58,48 +58,70 @@ impl Actions {
     }
 
     /// Detect the base branch that this branch was created from
-    pub(crate) fn detect_base_branch(
-        worktree_path: &std::path::Path,
-        branch_name: &str,
-    ) -> Result<String> {
-        // Try to find the merge base with common default branches
-        let candidates = ["main", "master", "develop"];
-
-        for candidate in &candidates {
-            let output = crate::git::git_command()
-                .args(["merge-base", candidate, branch_name])
-                .current_dir(worktree_path)
-                .output();
-
-            if let Ok(result) = output
-                && result.status.success()
-            {
-                return Ok((*candidate).to_string());
-            }
-        }
-
-        // Fallback: try to detect from the reflog
-        let output = crate::git::git_command()
+    pub(crate) fn detect_base_branch(worktree_path: &std::path::Path, branch_name: &str) -> String {
+        // Prefer explicit "Created from <branch>" data in reflog when available.
+        if let Ok(output) = crate::git::git_command()
             .args(["reflog", "show", "--no-abbrev", branch_name])
             .current_dir(worktree_path)
             .output()
-            .context("Failed to read reflog")?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Look for "branch: Created from" in reflog
-        for line in stdout.lines() {
-            if line.contains("Created from") {
-                // Extract branch name after "Created from "
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
                 if let Some(from_idx) = line.find("Created from ") {
                     let rest = &line[from_idx + 13..];
                     let base = rest.split_whitespace().next().unwrap_or("main");
-                    return Ok(base.to_string());
+                    return base.to_string();
                 }
             }
         }
 
-        // Default to main
-        Ok("main".to_string())
+        // Fall back to the remote's default branch when available (e.g. origin/main).
+        if let Ok(output) = crate::git::git_command()
+            .args([
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ])
+            .current_dir(worktree_path)
+            .output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(remote_ref) = stdout.lines().next()
+                && let Some(base) = remote_ref.trim().split('/').next_back()
+                && !base.is_empty()
+            {
+                return base.to_string();
+            }
+        }
+
+        // Otherwise, use the first common default branch that exists locally or on origin.
+        let candidates = ["main", "master", "develop"];
+        for candidate in &candidates {
+            let local_ref = format!("refs/heads/{candidate}");
+            if crate::git::git_command()
+                .args(["show-ref", "--verify", "--quiet", &local_ref])
+                .current_dir(worktree_path)
+                .status()
+                .is_ok_and(|s| s.success())
+            {
+                return (*candidate).to_string();
+            }
+
+            let remote_ref = format!("refs/remotes/origin/{candidate}");
+            if crate::git::git_command()
+                .args(["show-ref", "--verify", "--quiet", &remote_ref])
+                .current_dir(worktree_path)
+                .status()
+                .is_ok_and(|s| s.success())
+            {
+                return (*candidate).to_string();
+            }
+        }
+
+        "main".to_string()
     }
 
     /// Check if there are unpushed commits on the branch

@@ -1,9 +1,11 @@
-//! Preview operations: update preview and diff content
+//! Preview operations: update preview, diff, and commits content
 
 use crate::app::{App, Tab};
 use crate::git::{self, DiffGenerator};
 use crate::mux::SessionManager;
 use anyhow::Result;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::Actions;
 
@@ -185,6 +187,314 @@ impl Actions {
 
         Ok(())
     }
+
+    /// Update commit list content for the selected agent.
+    ///
+    /// Shows only commits that are in the current branch and not in the detected base branch
+    /// (i.e. `base..HEAD`), similar to what a PR would contain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if git operations fail unexpectedly.
+    pub fn update_commits(self, app: &mut App) -> Result<()> {
+        const MAX_COMMITS: usize = 200;
+
+        let Some(agent) = app.selected_agent() else {
+            app.data.ui.commits_hash = 0;
+            app.data.ui.commits_has_unseen_changes = false;
+            app.data.ui.set_commits_content("(No agent selected)");
+            return Ok(());
+        };
+
+        let agent_id = agent.id;
+        let worktree_path = agent.worktree_path.clone();
+        let branch_name = agent.branch.clone();
+
+        if !worktree_path.exists() {
+            app.data.ui.commits_hash = 0;
+            app.data.ui.commits_has_unseen_changes = false;
+            app.data.ui.set_commits_content("(Worktree not found)");
+            return Ok(());
+        }
+
+        if git::open_repository(&worktree_path).is_err() {
+            app.data.ui.commits_hash = 0;
+            app.data.ui.commits_has_unseen_changes = false;
+            app.data.ui.set_commits_content("(Not a git repository)");
+            return Ok(());
+        }
+
+        let base_branch = Self::detect_base_branch(&worktree_path, &branch_name);
+
+        let range = format!("{base_branch}..HEAD");
+
+        let (commits, used_range, truncated) =
+            git_log_rich(&worktree_path, Some(&range), MAX_COMMITS)
+                .or_else(|_| git_log_rich(&worktree_path, None, MAX_COMMITS))?;
+
+        let commits_hash = hash_commit_ids(commits.iter().map(|c| c.id.as_str()));
+        app.data.ui.commits_hash = commits_hash;
+
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("Branch: {branch_name}"));
+        let suffix = if truncated { " (truncated)" } else { "" };
+        if used_range {
+            lines.push(format!(
+                "Commits: {base_branch}..HEAD ({n} shown){suffix}",
+                n = commits.len()
+            ));
+        } else {
+            lines.push(format!(
+                "Commits: HEAD history ({n} shown){suffix}",
+                n = commits.len()
+            ));
+        }
+
+        if commits.is_empty() {
+            lines.push("(No commits)".to_string());
+        } else {
+            for commit in commits {
+                lines.push(format!("{}  {}", commit.short_id, commit.subject));
+
+                let mut meta = format!("  {} • {}", commit.date, commit.author);
+                let decorations = commit.decorations.trim();
+                if !decorations.is_empty() {
+                    meta.push_str(" • ");
+                    meta.push_str(decorations);
+                }
+                lines.push(meta);
+
+                let body = commit.body.trim_end();
+                let body = body.trim_start_matches(['\n', '\r']);
+                if !body.trim().is_empty() {
+                    const MAX_BODY_LINES_PER_COMMIT: usize = 40;
+
+                    let mut iter = body.lines();
+                    for line in iter.by_ref().take(MAX_BODY_LINES_PER_COMMIT) {
+                        if line.is_empty() {
+                            lines.push("    ".to_string());
+                        } else {
+                            lines.push(format!("    {line}"));
+                        }
+                    }
+
+                    if iter.next().is_some() {
+                        lines.push("    …".to_string());
+                    }
+                }
+            }
+        }
+
+        app.data.ui.set_commits_content(lines.join("\n"));
+
+        if app.data.active_tab == Tab::Commits {
+            app.data
+                .ui
+                .set_commits_last_seen_hash_for_agent(agent_id, commits_hash);
+            app.data.ui.commits_has_unseen_changes = false;
+        } else {
+            app.data.ui.commits_has_unseen_changes = commits_hash != 0
+                && commits_hash != app.data.ui.commits_last_seen_hash_for_agent(agent_id);
+        }
+
+        Ok(())
+    }
+
+    /// Update commits digest (hash + unseen flag) without rebuilding the full commits view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if digest computation fails unexpectedly.
+    pub fn update_commits_digest(self, app: &mut App) -> Result<()> {
+        const MAX_COMMITS: usize = 200;
+
+        let Some(agent) = app.selected_agent() else {
+            app.data.ui.commits_hash = 0;
+            app.data.ui.commits_has_unseen_changes = false;
+            return Ok(());
+        };
+
+        let agent_id = agent.id;
+        let worktree_path = agent.worktree_path.clone();
+        let branch_name = agent.branch.clone();
+
+        if !worktree_path.exists() || git::open_repository(&worktree_path).is_err() {
+            app.data.ui.commits_hash = 0;
+            app.data.ui.commits_has_unseen_changes = false;
+            return Ok(());
+        }
+
+        let base_branch = Self::detect_base_branch(&worktree_path, &branch_name);
+
+        let range = format!("{base_branch}..HEAD");
+
+        let (commit_ids, _used_range, _truncated) =
+            git_log_commit_ids(&worktree_path, Some(&range), MAX_COMMITS)
+                .or_else(|_| git_log_commit_ids(&worktree_path, None, MAX_COMMITS))?;
+
+        let commits_hash = hash_commit_ids(commit_ids.iter().map(String::as_str));
+        app.data.ui.commits_hash = commits_hash;
+        app.data.ui.commits_has_unseen_changes = commits_hash != 0
+            && commits_hash != app.data.ui.commits_last_seen_hash_for_agent(agent_id);
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CommitInfo {
+    id: String,
+    short_id: String,
+    date: String,
+    author: String,
+    subject: String,
+    decorations: String,
+    body: String,
+}
+
+fn git_log_commit_ids(
+    worktree_path: &std::path::Path,
+    range: Option<&str>,
+    max_commits: usize,
+) -> Result<(Vec<String>, bool, bool)> {
+    // Fetch `max_commits + 1` lines so we can detect truncation without an extra command.
+    let max_plus_one = max_commits.saturating_add(1);
+    let max_plus_one = u32::try_from(max_plus_one).unwrap_or(u32::MAX);
+
+    let mut cmd = crate::git::git_command();
+    cmd.args([
+        "log",
+        "--no-color",
+        "--format=%H",
+        "-n",
+        &max_plus_one.to_string(),
+    ])
+    .current_dir(worktree_path);
+
+    let used_range = range.is_some_and(|range| {
+        cmd.arg(range);
+        true
+    });
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        anyhow::bail!("git log failed");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ids: Vec<String> = stdout
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    let truncated = ids.len() > max_commits;
+    if truncated {
+        ids.truncate(max_commits);
+    }
+
+    Ok((ids, used_range, truncated))
+}
+
+fn git_log_rich(
+    worktree_path: &std::path::Path,
+    range: Option<&str>,
+    max_commits: usize,
+) -> Result<(Vec<CommitInfo>, bool, bool)> {
+    const FIELD_SEP: char = '\u{001F}';
+    const RECORD_SEP: char = '\u{001E}';
+
+    // Fetch `max_commits + 1` lines so we can detect truncation without an extra command.
+    let max_plus_one = max_commits.saturating_add(1);
+    let max_plus_one = u32::try_from(max_plus_one).unwrap_or(u32::MAX);
+
+    let mut cmd = crate::git::git_command();
+    cmd.args([
+        "log",
+        "--no-color",
+        "--decorate=short",
+        "--date=format:%Y-%m-%d %H:%M",
+        &format!("--format=%H{FIELD_SEP}%h{FIELD_SEP}%ad{FIELD_SEP}%an{FIELD_SEP}%s{FIELD_SEP}%D{FIELD_SEP}%b{RECORD_SEP}"),
+        "-n",
+        &max_plus_one.to_string(),
+    ])
+    .current_dir(worktree_path);
+
+    let used_range = range.is_some_and(|range| {
+        cmd.arg(range);
+        true
+    });
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        anyhow::bail!("git log failed");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut commits: Vec<CommitInfo> = Vec::new();
+    for record in stdout.split(RECORD_SEP) {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+
+        let mut parts = record.splitn(7, FIELD_SEP);
+        let Some(id) = parts.next() else {
+            continue;
+        };
+
+        let Some(short_id) = parts.next() else {
+            continue;
+        };
+
+        let Some(date) = parts.next() else {
+            continue;
+        };
+
+        let Some(author) = parts.next() else {
+            continue;
+        };
+
+        let Some(subject) = parts.next() else {
+            continue;
+        };
+
+        let decorations = parts.next().unwrap_or_default();
+        let body = parts.next().unwrap_or_default();
+
+        commits.push(CommitInfo {
+            id: id.to_string(),
+            short_id: short_id.to_string(),
+            date: date.to_string(),
+            author: author.to_string(),
+            subject: subject.to_string(),
+            decorations: decorations.to_string(),
+            body: body.to_string(),
+        });
+    }
+
+    let truncated = commits.len() > max_commits;
+    if truncated {
+        commits.truncate(max_commits);
+    }
+
+    Ok((commits, used_range, truncated))
+}
+
+fn hash_commit_ids<'a>(ids: impl IntoIterator<Item = &'a str>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let mut count = 0u64;
+
+    for id in ids {
+        count = count.saturating_add(1);
+        id.hash(&mut hasher);
+    }
+
+    if count == 0 {
+        return 0;
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]
@@ -283,6 +593,320 @@ mod tests {
 
         handler.update_diff(&mut app)?;
         assert!(app.data.ui.diff_content.contains("Not a git repository"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains("No agent selected"));
+        assert_eq!(app.data.ui.commits_hash, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_with_agent_no_worktree() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.data.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/nonexistent/path"),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains("Worktree not found"));
+        assert_eq!(app.data.ui.commits_hash, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_with_agent_non_git_worktree() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new()?;
+
+        app.data.storage.add(Agent::new(
+            "test".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains("Not a git repository"));
+        assert_eq!(app.data.ui.commits_hash, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_includes_description_body() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+
+        // Initial commit on master
+        fs::write(&file_path, "hello\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        // Create and checkout feature branch
+        let first = repo.find_commit(first_commit)?;
+        repo.branch("tenex/test", &first, false)?;
+        repo.set_head("refs/heads/tenex/test")?;
+
+        // Commit with body description
+        fs::write(&file_path, "hello world\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add world\n\nThis adds world to greeting.",
+            &tree,
+            &[&first],
+        )?;
+
+        // Wire into app as selected agent
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/does-not-exist".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(
+            app.data
+                .ui
+                .commits_content
+                .contains("This adds world to greeting.")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_falls_back_to_head_history_when_base_range_invalid()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("trunk");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/trunk")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/does-not-exist".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains("HEAD history"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_truncates_long_body() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+
+        let first = repo.find_commit(first_commit)?;
+        repo.branch("tenex/test", &first, false)?;
+        repo.set_head("refs/heads/tenex/test")?;
+
+        fs::write(&file_path, "hello world\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+
+        let body = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let message = format!("Big body\n\n{body}");
+        repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&first])?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains('…'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_shows_no_commits_when_range_empty()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n")?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "master".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        handler.update_commits(&mut app)?;
+        assert!(app.data.ui.commits_content.contains("(No commits)"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_commits_digest_sets_unseen_when_hash_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new()?;
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+
+        let first = repo.find_commit(first_commit)?;
+        repo.branch("tenex/test", &first, false)?;
+        repo.set_head("refs/heads/tenex/test")?;
+
+        fs::write(&file_path, "hello world\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("file.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Change", &tree, &[&first])?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        );
+        let agent_id = agent.id;
+        app.data.storage = Storage::default();
+        app.data.storage.add(agent);
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits_digest(&mut app)?;
+        assert_ne!(app.data.ui.commits_hash, 0);
+        assert!(app.data.ui.commits_has_unseen_changes);
+
+        app.data
+            .ui
+            .set_commits_last_seen_hash_for_agent(agent_id, app.data.ui.commits_hash);
+
+        handler.update_commits_digest(&mut app)?;
+        assert!(!app.data.ui.commits_has_unseen_changes);
         Ok(())
     }
 

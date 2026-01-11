@@ -214,6 +214,7 @@ impl ValidIn<NormalMode> for FocusPreviewAction {
             match app_data.active_tab {
                 Tab::Preview => Ok(PreviewFocusedMode.into()),
                 Tab::Diff => Ok(DiffFocusedMode.into()),
+                Tab::Commits => Ok(AppMode::normal()),
             }
         } else {
             Ok(AppMode::normal())
@@ -229,6 +230,7 @@ impl ValidIn<ScrollingMode> for FocusPreviewAction {
             match app_data.active_tab {
                 Tab::Preview => Ok(PreviewFocusedMode.into()),
                 Tab::Diff => Ok(DiffFocusedMode.into()),
+                Tab::Commits => Ok(ScrollingMode.into()),
             }
         } else {
             Ok(ScrollingMode.into())
@@ -284,6 +286,12 @@ mod tests {
             SwitchTabAction.execute(ScrollingMode, &mut data)?,
             ScrollingMode.into()
         );
+        assert_eq!(data.active_tab, Tab::Commits);
+
+        assert_eq!(
+            SwitchTabAction.execute(ScrollingMode, &mut data)?,
+            ScrollingMode.into()
+        );
         assert_eq!(data.active_tab, Tab::Preview);
 
         data.active_tab = Tab::Diff;
@@ -291,7 +299,8 @@ mod tests {
             SwitchTabAction.execute(DiffFocusedMode, &mut data)?,
             AppMode::normal()
         );
-        assert_eq!(data.active_tab, Tab::Preview);
+        assert_eq!(data.active_tab, Tab::Commits);
+
         Ok(())
     }
 

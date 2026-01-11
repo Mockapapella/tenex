@@ -142,6 +142,7 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
     match app.data.active_tab {
         Tab::Preview => render_preview(frame, app, area),
         Tab::Diff => render_diff(frame, app, area),
+        Tab::Commits => render_commits(frame, app, area),
     }
 }
 
@@ -180,6 +181,28 @@ fn tab_bar_line(app: &App) -> Line<'static> {
     };
 
     if diff_has_unseen_changes {
+        spans.push(Span::styled(
+            "●",
+            Style::default()
+                .fg(colors::ACCENT_WARNING)
+                .bg(colors::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let commits_active = app.data.active_tab == Tab::Commits;
+    spans.push(tab_span(" Commits ", commits_active));
+
+    let commits_has_unseen_changes = if commits_active {
+        false
+    } else if let Some(agent) = app.selected_agent() {
+        let hash = app.data.ui.commits_hash;
+        hash != 0 && hash != app.data.ui.commits_last_seen_hash_for_agent(agent.id)
+    } else {
+        false
+    };
+
+    if commits_has_unseen_changes {
         spans.push(Span::styled(
             "●",
             Style::default()
@@ -438,6 +461,136 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
+/// Render the commits pane
+pub fn render_commits(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let content = &app.data.ui.commits_content;
+
+    let block = Block::default()
+        .title(" Git Commits ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::BORDER))
+        .border_type(colors::BORDER_TYPE)
+        .style(Style::default().bg(colors::SURFACE));
+    frame.render_widget(block.clone(), area);
+
+    let inner = block.inner(area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_tab_bar(frame, app, chunks[0]);
+
+    let content_area = chunks[1];
+    let visible_height = usize::from(content_area.height);
+    let total_lines = app.data.ui.commits_line_ranges.len();
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll = app.data.ui.commits_scroll.min(max_scroll);
+    let end_line = (scroll + visible_height).min(total_lines);
+
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(end_line.saturating_sub(scroll));
+    for (offset, &(start, end)) in app.data.ui.commits_line_ranges[scroll..end_line]
+        .iter()
+        .enumerate()
+    {
+        let line_idx = scroll.saturating_add(offset);
+        let line = &content[start..end];
+
+        let trimmed = line.trim_start();
+        if line_idx <= 1
+            || trimmed.starts_with("Branch:")
+            || trimmed.starts_with("Commits:")
+            || trimmed == "(No commits)"
+        {
+            lines.push(Line::styled(line, Style::default().fg(colors::TEXT_MUTED)));
+            continue;
+        }
+
+        if line.starts_with("    ") {
+            lines.push(Line::styled(line, Style::default().fg(colors::TEXT_DIM)));
+            continue;
+        }
+
+        if line.starts_with("  ") {
+            lines.push(Line::styled(line, Style::default().fg(colors::TEXT_MUTED)));
+            continue;
+        }
+
+        let subject_line = if let Some((hash, subject)) = line.split_once("  ")
+            && hash.len() >= 7
+            && hash.len() <= 12
+            && hash.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            Line::from(vec![
+                Span::styled(
+                    hash,
+                    Style::default()
+                        .fg(colors::DIFF_HUNK)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(subject, Style::default().fg(colors::TEXT_PRIMARY)),
+            ])
+        } else {
+            Line::styled(line, Style::default().fg(colors::TEXT_PRIMARY))
+        };
+        lines.push(subject_line);
+    }
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(colors::SURFACE));
+    frame.render_widget(paragraph, content_area);
+
+    render_commits_scrollbar(
+        frame,
+        area,
+        content_area,
+        total_lines,
+        visible_height,
+        max_scroll,
+        scroll,
+    );
+}
+
+fn render_commits_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content_area: Rect,
+    total_lines: usize,
+    visible_height: usize,
+    max_scroll: usize,
+    scroll: usize,
+) {
+    if total_lines <= visible_height || area.width == 0 {
+        return;
+    }
+
+    let scrollbar_area = Rect {
+        x: area.x,
+        y: content_area.y,
+        width: area.width,
+        height: content_area.height,
+    };
+
+    if scrollbar_area.width == 0 || scrollbar_area.height == 0 {
+        return;
+    }
+
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("░"))
+        .track_style(Style::default().fg(colors::TEXT_MUTED))
+        .thumb_style(Style::default().fg(colors::TEXT_PRIMARY));
+
+    let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+        .position(scroll)
+        .viewport_content_length(visible_height);
+
+    frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+}
+
 fn render_diff_scrollbar(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -564,6 +717,7 @@ mod tests {
     use crate::agent::{Agent, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    use ratatui::{Terminal, backend::TestBackend};
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
@@ -579,6 +733,15 @@ mod tests {
         line.spans
             .iter()
             .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
             .collect::<Vec<_>>()
             .join("")
     }
@@ -649,6 +812,136 @@ mod tests {
 
         let line = tab_bar_line(&app);
         assert!(!line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_renders_unseen_commits_dot() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.diff_hash = 0;
+        app.data.ui.commits_hash = 123;
+        app.data
+            .ui
+            .set_commits_last_seen_hash_for_agent(agent_id, 0);
+
+        let line = tab_bar_line(&app);
+        assert!(line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_hides_unseen_commits_dot_when_viewing_commits_tab() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Commits;
+
+        app.data.ui.diff_hash = 0;
+        app.data.ui.commits_hash = 123;
+        app.data
+            .ui
+            .set_commits_last_seen_hash_for_agent(agent_id, 0);
+
+        let line = tab_bar_line(&app);
+        assert!(!line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_hides_unseen_commits_dot_when_hash_seen() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.diff_hash = 0;
+        app.data.ui.commits_hash = 123;
+        app.data
+            .ui
+            .set_commits_last_seen_hash_for_agent(agent_id, 123);
+
+        let line = tab_bar_line(&app);
+        assert!(!line_text(&line).contains('●'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_commits_renders_subject_meta_and_body() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Commits;
+        app.data.ui.set_commits_content(
+            [
+                "Branch: tenex/test",
+                "Commits: main..HEAD (1 shown)",
+                "abcdef1  Add thing",
+                "  2026-01-11 12:34 • Test Author • (HEAD -> tenex/test)",
+                "    This is the body.",
+                "zzzzzzz  Not hex (should not parse as hash)",
+            ]
+            .join("\n"),
+        );
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_commits(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("abcdef1"));
+        assert!(text.contains("Add thing"));
+        assert!(text.contains("Test Author"));
+        assert!(text.contains("This is the body."));
+        assert!(text.contains("Not hex"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_commits_renders_scrollbar_when_overflowing() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Commits;
+
+        let mut lines = Vec::new();
+        lines.push("Branch: tenex/test".to_string());
+        lines.push("Commits: main..HEAD (100 shown)".to_string());
+        for idx in 0..100 {
+            lines.push(format!("{idx:07x}  Commit {idx}"));
+        }
+
+        app.data.ui.set_commits_content(lines.join("\n"));
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_commits(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains('░') || text.contains('█'));
         Ok(())
     }
 }
