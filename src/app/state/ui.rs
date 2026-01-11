@@ -1,8 +1,27 @@
 //! UI-related state: scroll positions, preview content, dimensions
 
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use std::path::PathBuf;
+
+/// Whether an agent's pane output is changing or stalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneActivity {
+    /// Output changed since the last observation.
+    Active,
+    /// Output is identical to the last observation.
+    Waiting,
+}
+
+/// Cached pane output digest used to detect activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneDigest {
+    /// Hash of the captured visible pane content.
+    pub hash: u64,
+    /// Whether the pane appears active or waiting.
+    pub activity: PaneActivity,
+}
 
 /// UI-related state for the application
 #[derive(Debug, Default)]
@@ -93,6 +112,12 @@ pub struct UiState {
 
     /// Status message to display
     pub status_message: Option<String>,
+
+    /// Cached pane output digests per agent (used for the `●`/`◐`/`○` activity indicator).
+    pub pane_digest_by_agent: BTreeMap<Uuid, PaneDigest>,
+
+    /// The pane digest hash the user last saw per agent (used for the `◐` "unseen waiting" indicator).
+    pub pane_last_seen_hash_by_agent: BTreeMap<Uuid, u64>,
 }
 
 impl UiState {
@@ -126,7 +151,66 @@ impl UiState {
             preview_dimensions: None,
             last_error: None,
             status_message: None,
+            pane_digest_by_agent: BTreeMap::new(),
+            pane_last_seen_hash_by_agent: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn agent_is_waiting_for_input(&self, agent_id: Uuid) -> bool {
+        matches!(
+            self.pane_digest_by_agent.get(&agent_id),
+            Some(PaneDigest {
+                activity: PaneActivity::Waiting,
+                ..
+            })
+        )
+    }
+
+    #[must_use]
+    pub fn agent_has_unseen_waiting_output(&self, agent_id: Uuid) -> bool {
+        let Some(digest) = self.pane_digest_by_agent.get(&agent_id) else {
+            return false;
+        };
+
+        if digest.activity != PaneActivity::Waiting {
+            return false;
+        }
+
+        self.pane_last_seen_hash_by_agent
+            .get(&agent_id)
+            .is_none_or(|last_seen| *last_seen != digest.hash)
+    }
+
+    pub fn mark_agent_pane_seen(&mut self, agent_id: Uuid) {
+        if let Some(digest) = self.pane_digest_by_agent.get(&agent_id) {
+            self.pane_last_seen_hash_by_agent
+                .insert(agent_id, digest.hash);
+        }
+    }
+
+    pub fn observe_agent_pane_digest(&mut self, agent_id: Uuid, hash: u64) {
+        let activity = match self.pane_digest_by_agent.get(&agent_id) {
+            Some(previous) if previous.hash == hash => PaneActivity::Waiting,
+            _ => PaneActivity::Active,
+        };
+
+        self.pane_digest_by_agent
+            .insert(agent_id, PaneDigest { hash, activity });
+    }
+
+    pub fn retain_agent_pane_digests<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&Uuid) -> bool,
+    {
+        self.pane_digest_by_agent.retain(|id, _| keep(id));
+    }
+
+    pub fn retain_agent_pane_last_seen_hashes<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&Uuid) -> bool,
+    {
+        self.pane_last_seen_hash_by_agent.retain(|id, _| keep(id));
     }
 
     /// Set diff content and refresh cached line ranges

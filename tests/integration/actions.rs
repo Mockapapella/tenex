@@ -1,6 +1,7 @@
 //! Tests for Actions handler with real operations
 
 use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+use std::time::Duration;
 use tenex::mux::SessionManager;
 
 #[test]
@@ -34,6 +35,94 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
 
     assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.data.storage.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_pane_activity")?;
+    let mut config = fixture.config();
+    config.default_program = "sh".to_string();
+    let storage = TestFixture::create_storage();
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "pane-a", None)?;
+    app.apply_mode(next);
+    let next = handler.create_agent(&mut app.data, "pane-b", None)?;
+    app.apply_mode(next);
+
+    for agent in app.data.storage.iter_mut() {
+        agent.set_status(tenex::agent::Status::Running);
+    }
+
+    app.data.selected = 0;
+    app.validate_selection();
+    assert_eq!(
+        app.selected_agent().map(|a| a.title.as_str()),
+        Some("pane-a"),
+        "Expected the first created agent to be selected"
+    );
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    let manager = SessionManager::new();
+
+    let agents: Vec<_> = app.data.storage.iter().cloned().collect();
+    let agent_a = agents
+        .iter()
+        .find(|agent| agent.title == "pane-a")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing pane-a agent"))?;
+    let agent_b = agents
+        .iter()
+        .find(|agent| agent.title == "pane-b")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing pane-b agent"))?;
+
+    let token_a = format!("__tenex_pane_activity_a_{}__", agent_a.short_id());
+    manager.send_keys_and_submit(&agent_a.mux_session, &format!("echo {token_a}"))?;
+    let token_b = format!("__tenex_pane_activity_b_{}__", agent_b.short_id());
+    manager.send_keys_and_submit(&agent_b.mux_session, &format!("echo {token_b}"))?;
+
+    std::thread::sleep(Duration::from_secs(2));
+
+    handler.sync_agent_pane_activity(&mut app)?;
+    std::thread::sleep(Duration::from_millis(50));
+    handler.sync_agent_pane_activity(&mut app)?;
+
+    assert!(app.data.ui.agent_is_waiting_for_input(agent_a.id));
+    assert!(!app.data.ui.agent_has_unseen_waiting_output(agent_a.id));
+
+    assert!(app.data.ui.agent_is_waiting_for_input(agent_b.id));
+    assert!(app.data.ui.agent_has_unseen_waiting_output(agent_b.id));
+
+    app.data.ui.mark_agent_pane_seen(agent_b.id);
+    assert!(!app.data.ui.agent_has_unseen_waiting_output(agent_b.id));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let output_a = capture.capture_pane_with_history(&agent_a.mux_session, 200)?;
+    assert!(
+        output_a.contains(&token_a),
+        "Expected pane-a output to contain token {token_a}, got: {output_a:?}"
+    );
+    let output_b = capture.capture_pane_with_history(&agent_b.mux_session, 200)?;
+    assert!(
+        output_b.contains(&token_b),
+        "Expected pane-b output to contain token {token_b}, got: {output_b:?}"
+    );
+
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
 
     Ok(())
 }

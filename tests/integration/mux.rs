@@ -652,12 +652,12 @@ fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error:
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Test with "claude" program (uses send_keys path)
-    let token_claude = format!("__tenex_claude_test_{session_name}__");
+    // Test default path (uses send_keys + carriage return).
+    let token_default = format!("__tenex_submit_default_test_{session_name}__");
     let result = manager.send_keys_and_submit_for_program(
         &session_name,
-        "claude",
-        &format!("echo {token_claude}"),
+        "bash",
+        &format!("echo {token_default}"),
     );
     assert!(result.is_ok());
 
@@ -667,8 +667,8 @@ fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error:
     let capture = tenex::mux::OutputCapture::new();
     let output = capture.capture_pane_with_history(&session_name, 200)?;
     assert!(
-        output.contains(&token_claude),
-        "Expected submitted command output to contain token {token_claude}, got: {output:?}"
+        output.contains(&token_default),
+        "Expected submitted command output to contain token {token_default}, got: {output:?}"
     );
 
     // Test with "codex" program (uses paste_keys path)
@@ -692,6 +692,89 @@ fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error:
     // Cleanup
     manager.kill(&session_name)?;
 
+    Ok(())
+}
+
+#[test]
+fn test_mux_send_keys_and_submit_for_program_claude_uses_csi_u_enter_when_pane_is_claude()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("program_submit_claude_csi_u")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("claude-csi-u");
+
+    // Create a mock "claude" executable that only submits when it receives CSI-u Enter as its
+    // own read chunk (mirrors Claude Code behavior).
+    let claude_path = fixture.worktree_path().join("claude");
+    std::fs::write(
+        &claude_path,
+        r#"#!/usr/bin/env python3
+import os
+import sys
+import select
+import time
+import tty
+
+CSI_U_ENTER = b"\x1b[13;1u"
+
+def main() -> int:
+    tty.setraw(sys.stdin.fileno())
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        r, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if not r:
+            continue
+        chunk = os.read(sys.stdin.fileno(), 1024)
+        if not chunk:
+            break
+        if chunk == CSI_U_ENTER:
+            sys.stdout.write("SUBMIT_OK\n")
+            sys.stdout.flush()
+            return 0
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"#,
+    )?;
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(&claude_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&claude_path, perms)?;
+    }
+
+    if manager.exists(&session_name) {
+        manager.kill(&session_name)?;
+    }
+
+    let cmd = vec![claude_path.to_string_lossy().into_owned()];
+    manager.create(&session_name, &fixture.worktree_path(), Some(&cmd))?;
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let result = manager.send_keys_and_submit_for_program(
+        &session_name,
+        &claude_path.to_string_lossy(),
+        "hello",
+    );
+    assert!(result.is_ok());
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    assert!(
+        output.contains("SUBMIT_OK"),
+        "Expected CSI-u submit marker, got: {output:?}"
+    );
+
+    manager.kill(&session_name)?;
     Ok(())
 }
 

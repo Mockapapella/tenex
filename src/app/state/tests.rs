@@ -110,6 +110,21 @@ fn test_status_handling() {
 }
 
 #[test]
+fn test_ui_pane_activity_observation() {
+    let mut ui = UiState::new();
+    let id = uuid::Uuid::new_v4();
+
+    ui.observe_agent_pane_digest(id, 42);
+    assert!(!ui.agent_is_waiting_for_input(id));
+
+    ui.observe_agent_pane_digest(id, 42);
+    assert!(ui.agent_is_waiting_for_input(id));
+
+    ui.observe_agent_pane_digest(id, 43);
+    assert!(!ui.agent_is_waiting_for_input(id));
+}
+
+#[test]
 fn test_handle_char() {
     let mut app = App::default();
 
