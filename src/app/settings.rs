@@ -185,6 +185,16 @@ impl Settings {
     ///
     /// Returns an error if the settings file cannot be written.
     pub fn save(&self) -> std::io::Result<()> {
+        // Unit tests run as part of `cargo test` should never touch the user's real settings file
+        // (typically `~/.tenex/settings.json`). Some tests exercise key handlers that call
+        // `Settings::save()` as a side effect; without this guard, running the test suite can
+        // clobber a developer's local Tenex settings (including the selected default agent).
+        if cfg!(test) {
+            return Err(std::io::Error::other(
+                "Refusing to write Tenex settings during tests",
+            ));
+        }
+
         let path = Self::path();
 
         // Ensure parent directory exists
@@ -226,6 +236,12 @@ impl Settings {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_settings_save_is_disabled_in_tests() {
+        let err_kind = Settings::default().save().err().map(|err| err.kind());
+        assert_eq!(err_kind, Some(std::io::ErrorKind::Other));
+    }
 
     #[test]
     fn test_settings_default() {
