@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+const CLAUDE_ENTER_CSI_U: &[u8] = b"\x1b[13;1u";
+
 /// Manager for mux sessions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Manager;
@@ -137,6 +139,23 @@ impl Manager {
         self.send_input_bytes(target, &payload)
     }
 
+    /// Send keys to a target and submit using the CSI-u Enter sequence.
+    ///
+    /// Claude Code enables the kitty keyboard protocol and expects Enter to arrive as a CSI-u
+    /// sequence instead of a raw carriage return byte. Without this, "submit" behaves like a
+    /// literal newline in the prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if input cannot be sent/submitted.
+    pub fn send_keys_and_submit_csi_u_enter(&self, target: &str, keys: &str) -> Result<()> {
+        // Claude Code sometimes fails to recognize CSI-u when it arrives in the same read as the
+        // typed text. Send the message and the Enter sequence as two writes with a short delay.
+        self.send_input_bytes(target, keys.as_bytes())?;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        self.send_input_bytes(target, CLAUDE_ENTER_CSI_U)
+    }
+
     /// Paste keys to a target and submit (bracketed paste when supported).
     ///
     /// # Errors
@@ -167,6 +186,13 @@ impl Manager {
             .next()
             .and_then(|p| std::path::Path::new(p).file_stem())
             .and_then(|s| s.to_str());
+
+        if exe_stem == Some("claude") {
+            // Claude Code enables the kitty keyboard protocol and may treat a raw carriage return
+            // as a literal newline. Use CSI-u Enter to reliably "submit" prompts.
+            return self.send_keys_and_submit_csi_u_enter(target, keys);
+        }
+
         if exe_stem == Some("codex") {
             // Bracketed paste sequences break some default shells.
             // Only use the bracketed paste path when the pane is actually running codex.

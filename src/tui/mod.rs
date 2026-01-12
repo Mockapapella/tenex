@@ -32,6 +32,7 @@ const UI_FRAME_INTERVAL_MS: u64 = 33;
 const PREVIEW_SMOOTH_REFRESH_MS: u64 = 33;
 const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
 const MIN_OUTPUT_REFRESH_MS: u64 = 16;
+const MIN_PANE_ACTIVITY_SYNC_MS: u64 = 500;
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
@@ -219,6 +220,7 @@ fn run_loop(
     let commits_refresh_interval = Duration::from_millis(1000);
     let mut last_commits_update = Instant::now();
     let mut last_status_sync = Instant::now();
+    let mut last_pane_activity_sync = Instant::now();
 
     loop {
         // If we returned to normal mode and still need to show the keyboard prompt,
@@ -250,6 +252,11 @@ fn run_loop(
         if app.data.selected != last_selected {
             last_selected = app.data.selected;
             needs_content_update = true;
+
+            // Treat selecting an agent as "checking" its output for the unseen-waiting indicator.
+            if let Some(agent_id) = app.selected_agent().map(|agent| agent.id) {
+                app.data.ui.mark_agent_pane_seen(agent_id);
+            }
         }
         // Detect tab change
         if app.data.active_tab != last_tab {
@@ -303,6 +310,18 @@ fn run_loop(
 
         // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
+
+        // Diff-check each pane less frequently than the UI frame rate.
+        let pane_activity_interval = Duration::from_millis(
+            app.data
+                .config
+                .poll_interval_ms
+                .max(MIN_PANE_ACTIVITY_SYNC_MS),
+        );
+        if last_pane_activity_sync.elapsed() >= pane_activity_interval {
+            let _ = action_handler.sync_agent_pane_activity(app);
+            last_pane_activity_sync = Instant::now();
+        }
 
         // Sync agent status less frequently (session listing is relatively expensive).
         if last_status_sync.elapsed() >= Duration::from_millis(AGENT_STATUS_SYNC_INTERVAL_MS) {

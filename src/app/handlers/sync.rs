@@ -4,6 +4,9 @@ use crate::agent::{Agent, Status};
 use crate::git::{self, WorktreeManager};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash as _, Hasher as _};
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -119,6 +122,63 @@ impl Actions {
             app.data.storage.save()?;
             app.validate_selection();
         }
+
+        Ok(())
+    }
+
+    /// Update per-agent activity indicators by diffing pane output once per interval.
+    ///
+    /// If the visible pane content for an agent has not changed since the previous observation,
+    /// Tenex considers it "waiting". Agents show as:
+    /// - `●` in green while output is changing (working)
+    /// - `◐` in yellow when waiting and unseen (needs attention)
+    /// - `○` in red when waiting and already seen
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if internal state mutation fails (captures are best-effort).
+    pub fn sync_agent_pane_activity(self, app: &mut App) -> Result<()> {
+        // Pane capture depends on the mux daemon; avoid stale "waiting" indicators when it's down.
+        if !crate::mux::is_server_running() {
+            app.data.ui.pane_digest_by_agent.clear();
+            app.data.ui.pane_last_seen_hash_by_agent.clear();
+            return Ok(());
+        }
+
+        let selected_agent_id = app.selected_agent().map(|agent| agent.id);
+
+        let mut keep_ids: HashSet<uuid::Uuid> = HashSet::new();
+
+        for agent in app.data.storage.iter() {
+            keep_ids.insert(agent.id);
+
+            // Only track activity once the session exists and the agent is running.
+            if agent.status != Status::Running {
+                continue;
+            }
+
+            let target = mux_target_for_agent(app, agent);
+            let Ok(content) = self.output_capture.capture_pane(&target) else {
+                continue;
+            };
+
+            let digest = hash_text(&content);
+            app.data.ui.observe_agent_pane_digest(agent.id, digest);
+
+            if selected_agent_id == Some(agent.id) {
+                app.data
+                    .ui
+                    .pane_last_seen_hash_by_agent
+                    .insert(agent.id, digest);
+            }
+        }
+
+        app.data
+            .ui
+            .retain_agent_pane_digests(|id| keep_ids.contains(id));
+        app.data
+            .ui
+            .retain_agent_pane_last_seen_hashes(|id| keep_ids.contains(id));
 
         Ok(())
     }
@@ -273,6 +333,25 @@ impl Actions {
 
         Ok(())
     }
+}
+
+fn mux_target_for_agent(app: &App, agent: &Agent) -> String {
+    agent.window_index.map_or_else(
+        || agent.mux_session.clone(),
+        |window_idx| {
+            // Child agent: target specific window within root's session.
+            let root = app.data.storage.root_ancestor(agent.id);
+            let root_session =
+                root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
+            crate::mux::SessionManager::window_target(&root_session, window_idx)
+        },
+    )
+}
+
+fn hash_text(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Default)]

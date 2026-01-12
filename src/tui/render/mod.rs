@@ -697,6 +697,71 @@ mod tests {
     }
 
     #[test]
+    fn test_render_waiting_indicator_renders_unseen_waiting_half_moon()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        let waiting_id = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.title == "agent-1")
+            .map(|agent| agent.id)
+            .ok_or("missing agent-1")?;
+
+        app.data.ui.observe_agent_pane_digest(waiting_id, 123);
+        app.data.ui.observe_agent_pane_digest(waiting_id, 123);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+
+        assert!(text.contains("◐"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_waiting_indicator_renders_seen_waiting_circle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        let waiting_id = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.title == "agent-1")
+            .map(|agent| agent.id)
+            .ok_or("missing agent-1")?;
+
+        app.data.ui.observe_agent_pane_digest(waiting_id, 123);
+        app.data.ui.observe_agent_pane_digest(waiting_id, 123);
+        app.data.ui.mark_agent_pane_seen(waiting_id);
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+
+        assert!(text.contains("○"));
+        Ok(())
+    }
+
+    #[test]
     fn test_render_agent_list_scrollbar_and_hierarchy_indicators()
     -> Result<(), Box<dyn std::error::Error>> {
         let backend = TestBackend::new(80, 12);

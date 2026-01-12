@@ -40,9 +40,19 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, info)| {
-            let status_color = match info.agent.status {
-                Status::Starting => colors::STATUS_STARTING,
-                Status::Running => colors::STATUS_RUNNING,
+            let (status_symbol, status_color) = match info.agent.status {
+                Status::Starting => (info.agent.status.symbol(), colors::STATUS_STARTING),
+                Status::Running => {
+                    if app.data.ui.agent_is_waiting_for_input(info.agent.id) {
+                        if app.data.ui.agent_has_unseen_waiting_output(info.agent.id) {
+                            ("◐", colors::STATUS_STARTING)
+                        } else {
+                            ("○", colors::STATUS_WAITING)
+                        }
+                    } else {
+                        (info.agent.status.symbol(), colors::STATUS_RUNNING)
+                    }
+                }
             };
 
             let style = if i == app.data.selected {
@@ -74,7 +84,7 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             let content = Line::from(vec![
                 Span::raw(indent),
                 Span::styled(
-                    format!("{} ", info.agent.status.symbol()),
+                    format!("{status_symbol} "),
                     Style::default().fg(status_color),
                 ),
                 Span::styled(collapse_indicator, Style::default().fg(colors::TEXT_DIM)),

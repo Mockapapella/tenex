@@ -32,7 +32,7 @@ impl Status {
     pub const fn symbol(&self) -> &'static str {
         match self {
             Self::Starting => "...",
-            Self::Running => ">>>",
+            Self::Running => "●",
         }
     }
 
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn test_symbol() {
         assert_eq!(Status::Starting.symbol(), "...");
-        assert_eq!(Status::Running.symbol(), ">>>");
+        assert_eq!(Status::Running.symbol(), "●");
     }
 
     #[test]
