@@ -157,30 +157,39 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn tab_bar_line(app: &App) -> Line<'static> {
-    let tab_span = |name: &'static str, active: bool| {
-        if active {
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(colors::SELECTED)
-                    .bg(colors::SURFACE_HIGHLIGHT)
-                    .add_modifier(Modifier::BOLD),
-            )
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    let mut push_tab = |label: &'static str, active: bool, has_unseen_changes: bool| {
+        let bg = if active {
+            colors::SURFACE_HIGHLIGHT
         } else {
-            Span::styled(
-                name,
-                Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE),
-            )
+            colors::SURFACE
+        };
+
+        let tab_style = if active {
+            Style::default()
+                .fg(colors::SELECTED)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::TEXT_MUTED).bg(bg)
+        };
+
+        if has_unseen_changes {
+            spans.push(Span::styled(" ", tab_style));
+            spans.push(Span::styled(
+                "◐ ",
+                Style::default().fg(colors::STATUS_STARTING).bg(bg),
+            ));
+            spans.push(Span::styled(format!("{label} "), tab_style));
+        } else {
+            spans.push(Span::styled(format!(" {label} "), tab_style));
         }
     };
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    spans.push(tab_span(" Preview ", app.data.active_tab == Tab::Preview));
+    push_tab("Preview", app.data.active_tab == Tab::Preview, false);
 
     let diff_active = app.data.active_tab == Tab::Diff;
-    spans.push(tab_span(" Diff ", diff_active));
-
     let diff_has_unseen_changes = if diff_active {
         false
     } else if let Some(agent) = app.selected_agent() {
@@ -190,19 +199,9 @@ fn tab_bar_line(app: &App) -> Line<'static> {
         false
     };
 
-    if diff_has_unseen_changes {
-        spans.push(Span::styled(
-            "●",
-            Style::default()
-                .fg(colors::ACCENT_WARNING)
-                .bg(colors::SURFACE)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
+    push_tab("Diff", diff_active, diff_has_unseen_changes);
 
     let commits_active = app.data.active_tab == Tab::Commits;
-    spans.push(tab_span(" Commits ", commits_active));
-
     let commits_has_unseen_changes = if commits_active {
         false
     } else if let Some(agent) = app.selected_agent() {
@@ -212,15 +211,7 @@ fn tab_bar_line(app: &App) -> Line<'static> {
         false
     };
 
-    if commits_has_unseen_changes {
-        spans.push(Span::styled(
-            "●",
-            Style::default()
-                .fg(colors::ACCENT_WARNING)
-                .bg(colors::SURFACE)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
+    push_tab("Commits", commits_active, commits_has_unseen_changes);
 
     Line::from(spans)
 }
@@ -775,7 +766,7 @@ mod tests {
         app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 0);
 
         let line = tab_bar_line(&app);
-        assert!(line_text(&line).contains('●'));
+        assert!(line_text(&line).contains("◐ Diff"));
         Ok(())
     }
 
@@ -798,7 +789,7 @@ mod tests {
         app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 0);
 
         let line = tab_bar_line(&app);
-        assert!(!line_text(&line).contains('●'));
+        assert!(!line_text(&line).contains('◐'));
         Ok(())
     }
 
@@ -821,7 +812,7 @@ mod tests {
         app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 123);
 
         let line = tab_bar_line(&app);
-        assert!(!line_text(&line).contains('●'));
+        assert!(!line_text(&line).contains('◐'));
         Ok(())
     }
 
@@ -847,7 +838,7 @@ mod tests {
             .set_commits_last_seen_hash_for_agent(agent_id, 0);
 
         let line = tab_bar_line(&app);
-        assert!(line_text(&line).contains('●'));
+        assert!(line_text(&line).contains("◐ Commits"));
         Ok(())
     }
 
@@ -873,7 +864,7 @@ mod tests {
             .set_commits_last_seen_hash_for_agent(agent_id, 0);
 
         let line = tab_bar_line(&app);
-        assert!(!line_text(&line).contains('●'));
+        assert!(!line_text(&line).contains('◐'));
         Ok(())
     }
 
@@ -899,7 +890,7 @@ mod tests {
             .set_commits_last_seen_hash_for_agent(agent_id, 123);
 
         let line = tab_bar_line(&app);
-        assert!(!line_text(&line).contains('●'));
+        assert!(!line_text(&line).contains('◐'));
         Ok(())
     }
 
