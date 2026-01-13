@@ -8,7 +8,10 @@ use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 use interprocess::local_socket::{ListenerOptions, Stream};
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+const IPC_PING_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Run the mux daemon in the foreground.
 ///
@@ -31,7 +34,7 @@ pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
     {
         Ok(listener) => listener,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            if try_ping_existing(endpoint)? {
+            if try_ping_existing(endpoint) {
                 info!(endpoint = %endpoint.display, "Mux daemon already running");
                 return Ok(());
             }
@@ -69,13 +72,20 @@ pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
     Ok(())
 }
 
-fn try_ping_existing(endpoint: &SocketEndpoint) -> Result<bool> {
+fn try_ping_existing(endpoint: &SocketEndpoint) -> bool {
     match Stream::connect(endpoint.name.clone()) {
         Ok(mut stream) => {
-            ipc::write_json(&mut stream, &MuxRequest::Ping)?;
-            Ok(ipc::read_json::<_, MuxResponse>(&mut stream).is_ok())
+            if stream.set_nonblocking(true).is_err() {
+                return false;
+            }
+            if ipc::write_json_with_timeout(&mut stream, &MuxRequest::Ping, IPC_PING_TIMEOUT)
+                .is_err()
+            {
+                return false;
+            }
+            ipc::read_json_with_timeout::<_, MuxResponse>(&mut stream, IPC_PING_TIMEOUT).is_ok()
         }
-        Err(_) => Ok(false),
+        Err(_) => false,
     }
 }
 
