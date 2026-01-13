@@ -15,6 +15,8 @@ use std::time::Duration;
 static CLIENT: OnceLock<Mutex<MuxClient>> = OnceLock::new();
 static ENDPOINT: OnceLock<SocketEndpoint> = OnceLock::new();
 
+const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Send a request to the mux daemon.
 ///
 /// This will start the daemon if needed.
@@ -84,6 +86,9 @@ impl MuxClient {
         }
 
         if let Ok(stream) = Stream::connect(self.endpoint.name.clone()) {
+            stream
+                .set_nonblocking(true)
+                .context("Failed to set mux stream nonblocking")?;
             self.stream = Some(stream);
             return Ok(());
         }
@@ -93,6 +98,9 @@ impl MuxClient {
         for _ in 0..20 {
             match Stream::connect(self.endpoint.name.clone()) {
                 Ok(stream) => {
+                    stream
+                        .set_nonblocking(true)
+                        .context("Failed to set mux stream nonblocking")?;
                     self.stream = Some(stream);
                     return Ok(());
                 }
@@ -108,8 +116,8 @@ impl MuxClient {
 }
 
 fn send_request(stream: &mut Stream, req: &MuxRequest) -> Result<MuxResponse> {
-    ipc::write_json(stream, req)?;
-    ipc::read_json(stream)
+    ipc::write_json_with_timeout(stream, req, IPC_REQUEST_TIMEOUT)?;
+    ipc::read_json_with_timeout(stream, IPC_REQUEST_TIMEOUT)
 }
 
 fn start_daemon(endpoint: &SocketEndpoint) -> Result<()> {

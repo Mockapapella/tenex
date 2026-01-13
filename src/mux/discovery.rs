@@ -10,6 +10,9 @@ use super::protocol::{MuxRequest, MuxResponse};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+const SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Attempt to find a running mux daemon socket that contains at least one of the requested
 /// session names.
@@ -69,8 +72,12 @@ fn probe_session_matches<S: std::hash::BuildHasher>(
     let endpoint = socket_endpoint_from_value(socket).ok()?;
     let mut stream = Stream::connect(endpoint.name).ok()?;
 
-    ipc::write_json(&mut stream, &MuxRequest::ListSessions).ok()?;
-    let response: MuxResponse = ipc::read_json(&mut stream).ok()?;
+    stream.set_nonblocking(true).ok()?;
+
+    ipc::write_json_with_timeout(&mut stream, &MuxRequest::ListSessions, SOCKET_PROBE_TIMEOUT)
+        .ok()?;
+    let response: MuxResponse =
+        ipc::read_json_with_timeout(&mut stream, SOCKET_PROBE_TIMEOUT).ok()?;
 
     let MuxResponse::Sessions { sessions } = response else {
         return None;

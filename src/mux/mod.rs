@@ -17,6 +17,9 @@ pub use session::{Manager as SessionManager, Session, Window};
 
 use anyhow::Result;
 use interprocess::local_socket::traits::Stream as StreamTrait;
+use std::time::Duration;
+
+const IPC_PING_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Check if the mux backend is available on the system.
 #[must_use]
@@ -33,10 +36,49 @@ pub fn is_server_running() -> bool {
 
     match interprocess::local_socket::Stream::connect(endpoint.name) {
         Ok(mut stream) => {
-            if ipc::write_json(&mut stream, &protocol::MuxRequest::Ping).is_err() {
+            if stream.set_nonblocking(true).is_err() {
                 return false;
             }
-            ipc::read_json::<_, protocol::MuxResponse>(&mut stream).is_ok()
+            if ipc::write_json_with_timeout(
+                &mut stream,
+                &protocol::MuxRequest::Ping,
+                IPC_PING_TIMEOUT,
+            )
+            .is_err()
+            {
+                return false;
+            }
+            ipc::read_json_with_timeout::<_, protocol::MuxResponse>(&mut stream, IPC_PING_TIMEOUT)
+                .is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Determine whether a mux daemon is accepting connections on `socket` but not responding.
+///
+/// This is used to avoid hangs when an old (or wedged) daemon remains bound to a persisted socket.
+/// Connection failures are treated as "not unresponsive" because Tenex can safely start a new
+/// daemon on that socket later.
+#[must_use]
+pub fn socket_is_unresponsive(socket: &str, timeout: Duration) -> bool {
+    let Ok(endpoint) = endpoint::socket_endpoint_from_value(socket) else {
+        return false;
+    };
+
+    match interprocess::local_socket::Stream::connect(endpoint.name) {
+        Ok(mut stream) => {
+            if stream.set_nonblocking(true).is_err() {
+                return true;
+            }
+
+            if ipc::write_json_with_timeout(&mut stream, &protocol::MuxRequest::Ping, timeout)
+                .is_err()
+            {
+                return true;
+            }
+
+            ipc::read_json_with_timeout::<_, protocol::MuxResponse>(&mut stream, timeout).is_err()
         }
         Err(_) => false,
     }
@@ -116,6 +158,34 @@ mod tests {
     fn test_socket_display() -> Result<(), Box<dyn std::error::Error>> {
         let display = socket_display()?;
         assert!(!display.trim().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_socket_is_unresponsive_when_server_never_responds() -> Result<()> {
+        use interprocess::local_socket::traits::ListenerExt;
+        use interprocess::local_socket::{GenericFilePath, ListenerOptions, prelude::*};
+
+        let temp_dir = tempfile::tempdir()?;
+        let socket_path = temp_dir.path().join("tenex-test-unresponsive.sock");
+        let name = socket_path
+            .as_path()
+            .to_fs_name::<GenericFilePath>()?
+            .into_owned();
+
+        let listener = ListenerOptions::new().name(name).create_sync()?;
+        let handle = std::thread::spawn(move || {
+            if let Some(stream) = listener.incoming().next()
+                && let Ok(_stream) = stream
+            {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+
+        let display = socket_path.to_string_lossy().into_owned();
+        assert!(socket_is_unresponsive(&display, Duration::from_millis(50)));
+
+        let _ = handle.join();
         Ok(())
     }
 }
