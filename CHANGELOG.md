@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.5] - 2026-01-14
+
+### Added
+
+- **Interactive Diff tab**: Select a range (line/hunk/file) and revert directly from the TUI.
+- **Commits tab**: View commits for the current branch.
+- **Mouse support**: Mouse wheel scrolling in preview/diff, plus click selection and modal dismiss.
+- **Agent activity indicators**: Shows whether each agent is producing output or waiting (and whether waiting output has been seen).
+- **Per-role agent settings**: Persist agent program selection separately for default, planner, and review swarms.
+
+### Changed
+
+- **Platform support**: Tenex is now Linux-only.
+- **State directory**: Default state moved to `~/.tenex/` (migrating legacy `~/.local/share/tenex/` data when possible).
+- **`TENEX_STATE_PATH` scoping**: When set, Tenex treats the state file's parent directory as the instance root (state, settings, and worktrees live alongside it).
+- **UI polish**: Improved color highlights; Diff/Commits tab notifications repositioned.
+- **Reset scope** (`tenex reset`): Choose to reset only the current Tenex instance or all Tenex sessions on the machine.
+
+### Fixed
+
+- **Startup recovery**: After reboot/crash, Tenex can respawn missing agent mux sessions/windows from saved state.
+- **Safer agent pruning**: Avoids deleting agents when mux session listing is unavailable or transiently empty.
+- **Scrolling**: Fix preview scrolling/history capture; enable scrollback for alt-screen TUIs (e.g. Codex).
+- **Preview performance**: Fix preview stutter while moving the mouse.
+- **Claude Code broadcast**: Fix broadcast submit behavior.
+- **Worktree reliability**: Copy agent instruction files into worktrees for consistent agent behavior.
+- **Developer safety**: Tests no longer overwrite real user settings.
+
 ## [1.0.4] - 2025-12-20
 
 ### Changed
