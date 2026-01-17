@@ -193,6 +193,7 @@ If a newly-created agent flashes into existence and vanishes a few seconds later
 
 - Enable logs with `DEBUG=3 tenex` and inspect the log at `/tmp/tenex.log`.
 - Tenex stores the mux socket name in `~/.tenex/state.json` so sessions can survive rebuilds/upgrades.
+- After upgrading Tenex, you may still have an older `tenex muxd` running (old behavior persists until the daemon is restarted). Tenex will prompt you to restart it on launch.
 - To force a fresh mux daemon, set an explicit socket: `TENEX_MUX_SOCKET=/tmp/tenex-mux.sock tenex`.
 
 ## License

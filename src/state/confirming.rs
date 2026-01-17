@@ -7,6 +7,8 @@ pub enum ConfirmAction {
     Kill,
     /// Reset all state.
     Reset,
+    /// Restart the mux daemon (kills all agent sessions).
+    RestartMuxDaemon,
     /// Quit the application.
     Quit,
     /// Synthesize children into parent.

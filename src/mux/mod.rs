@@ -15,8 +15,11 @@ pub use capture::Capture as OutputCapture;
 pub use endpoint::set_socket_override;
 pub use session::{Manager as SessionManager, Session, Window};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
+use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// Check if the mux backend is available on the system.
 #[must_use]
@@ -40,6 +43,106 @@ pub fn is_server_running() -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Try to query the version string of the currently running mux daemon.
+///
+/// This function does **not** start the daemon. If no daemon is listening on the current
+/// socket endpoint, it returns `Ok(None)`.
+///
+/// # Errors
+///
+/// Returns an error if the mux endpoint cannot be resolved or the daemon responds with an error.
+pub fn running_daemon_version() -> Result<Option<String>> {
+    let endpoint = endpoint::socket_endpoint()?;
+    let Ok(mut stream) = Stream::connect(endpoint.name) else {
+        return Ok(None);
+    };
+
+    ipc::write_json(&mut stream, &protocol::MuxRequest::Ping)?;
+    match ipc::read_json::<_, protocol::MuxResponse>(&mut stream)? {
+        protocol::MuxResponse::Pong { version } => Ok(Some(version)),
+        protocol::MuxResponse::Err { message } => Err(anyhow::anyhow!(message)),
+        other => Err(anyhow::anyhow!("Unexpected mux response: {other:?}")),
+    }
+}
+
+pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
+    fn pid_is_alive(pid: u32) -> bool {
+        let proc_dir = format!("/proc/{pid}");
+        let Ok(stat) = std::fs::read_to_string(format!("{proc_dir}/stat")) else {
+            return std::fs::metadata(proc_dir).is_ok();
+        };
+
+        let Some(idx) = stat.rfind(") ") else {
+            return true;
+        };
+        !matches!(stat.as_bytes().get(idx.saturating_add(2)), Some(b'Z'))
+    }
+
+    fn send_signal(pid: u32, signal: &str) -> Result<()> {
+        let status = Command::new("kill")
+            .arg(signal)
+            .arg(pid.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .with_context(|| format!("Failed to invoke kill {signal} {pid}"))?;
+
+        if status.success() || !pid_is_alive(pid) {
+            return Ok(());
+        }
+
+        bail!("kill {signal} {pid} failed");
+    }
+
+    let socket = socket.trim();
+    if socket.is_empty() {
+        bail!("Mux socket cannot be empty");
+    }
+
+    let pids = discovery::mux_daemon_pids_for_socket(socket);
+    if pids.is_empty() {
+        return Ok(());
+    }
+
+    for pid in &pids {
+        let _ = send_signal(*pid, "-TERM");
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut remaining: Vec<u32> = pids;
+    while Instant::now() < deadline {
+        remaining.retain(|pid| pid_is_alive(*pid));
+        if remaining.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if remaining.is_empty() {
+        return Ok(());
+    }
+
+    for pid in &remaining {
+        let _ = send_signal(*pid, "-KILL");
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        remaining.retain(|pid| pid_is_alive(*pid));
+        if remaining.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if remaining.is_empty() {
+        return Ok(());
+    }
+
+    bail!("Failed to terminate mux daemon (pids: {remaining:?})");
 }
 
 /// Get the mux daemon version string.
@@ -88,6 +191,8 @@ pub fn run_mux_daemon() -> Result<()> {
 mod tests {
     use super::*;
 
+    use std::process::Command;
+
     #[test]
     fn test_is_available() {
         assert!(is_available());
@@ -117,5 +222,94 @@ mod tests {
         let display = socket_display()?;
         assert!(!display.trim().is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn test_terminate_mux_daemon_for_socket_rejects_empty_socket()
+    -> Result<(), Box<dyn std::error::Error>> {
+        match terminate_mux_daemon_for_socket("   ") {
+            Ok(()) => Err("Expected empty socket to error".into()),
+            Err(err) => {
+                assert!(err.to_string().contains("Mux socket cannot be empty"));
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_terminate_mux_daemon_for_socket_noops_when_no_matches()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let socket = format!("tenex-mux-test-no-matches-{}", uuid::Uuid::new_v4());
+        terminate_mux_daemon_for_socket(&socket)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_terminate_mux_daemon_for_socket_kills_matching_process()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let mut child = Command::new("bash")
+            .arg("-c")
+            .arg("exec -a muxd sleep 60")
+            .env("TENEX_MUX_SOCKET", &socket)
+            .spawn()?;
+        let pid = child.id();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        terminate_mux_daemon_for_socket(&socket)?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        Err("Expected spawned muxd process to terminate".into())
+    }
+
+    #[test]
+    fn test_terminate_mux_daemon_for_socket_escalates_to_kill_when_ignoring_term()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg("import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)")
+            .arg("muxd")
+            .env("TENEX_MUX_SOCKET", &socket)
+            .spawn()?;
+        let pid = child.id();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        terminate_mux_daemon_for_socket(&socket)?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        Err("Expected spawned muxd process to terminate after SIGKILL".into())
     }
 }

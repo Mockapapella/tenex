@@ -25,6 +25,19 @@ pub struct PaneDigest {
     pub activity: PaneActivity,
 }
 
+/// Details about a running mux daemon whose version differs from the Tenex client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MuxdVersionMismatchInfo {
+    /// The socket display name/path the daemon is listening on.
+    pub socket: String,
+    /// The version string reported by the running mux daemon.
+    pub daemon_version: String,
+    /// The version string expected by the running Tenex binary.
+    pub expected_version: String,
+    /// The value of `TENEX_MUX_SOCKET`, if set for this process.
+    pub env_mux_socket: Option<String>,
+}
+
 /// UI-related state for the application
 #[derive(Debug, Default)]
 #[expect(
@@ -133,6 +146,9 @@ pub struct UiState {
     /// Cached preview pane dimensions (width, height) for mux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
+    /// Captured mismatch information when connected to an out-of-date mux daemon.
+    pub muxd_version_mismatch: Option<MuxdVersionMismatchInfo>,
+
     /// Last error message (if any)
     pub last_error: Option<String>,
 
@@ -186,6 +202,7 @@ impl UiState {
             commits_has_unseen_changes: false,
             diff_force_refresh: false,
             preview_dimensions: None,
+            muxd_version_mismatch: None,
             last_error: None,
             status_message: None,
             pane_digest_by_agent: BTreeMap::new(),
