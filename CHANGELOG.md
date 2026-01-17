@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.6] - 2026-01-17
+
+### Changed
+
+- **Preview scrollbar UX**: Hide the preview scrollbar while auto-following; show it only when paused (scrolled up).
+- **Preview rendering performance**: Cache ANSI parsing and render only the visible lines for smoother scrolling.
+
+### Fixed
+
+- **Follow mode**: Scrolling up no longer disables follow when the preview buffer isn't scrollable.
+- **Paused preview stability**: When scrolled up, Tenex keeps the captured preview stable instead of refreshing/jumping.
+- **Codex scroll wheel**: In preview-focused mode on Codex, `Alt` + wheel forwards scroll to the agent; if Tenex has no preview scrollback, wheel events are forwarded automatically.
+
 ## [1.0.5] - 2026-01-14
 
 ### Added
