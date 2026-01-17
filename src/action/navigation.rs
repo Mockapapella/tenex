@@ -336,6 +336,9 @@ mod tests {
 
         data.active_tab = Tab::Preview;
         data.ui.set_preview_content("line1\nline2\nline3\n");
+        data.ui.preview_dimensions = Some((80, 1));
+        data.ui.preview_scroll = usize::MAX;
+        data.ui.preview_follow = true;
         assert_eq!(
             ScrollUpAction.execute(NormalMode, &mut data)?,
             ScrollingMode.into()
@@ -360,6 +363,29 @@ mod tests {
             DiffFocusedMode.into()
         );
         assert!(data.ui.diff_cursor > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scroll_up_does_not_pause_preview_when_not_scrollable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression: When the preview buffer has no scrollback (common for full-screen/alt-screen
+        // TUIs like Codex early in a session), a scroll-up gesture shouldn't flip follow off.
+        // Otherwise Tenex looks "paused" even though there is nothing to scroll.
+        let (mut data, _temp) = create_test_data()?;
+
+        data.active_tab = Tab::Preview;
+        data.ui.set_preview_content("line1\nline2\nline3\n");
+        data.ui.preview_dimensions = Some((80, 10));
+        data.ui.preview_scroll = usize::MAX;
+        data.ui.preview_follow = true;
+
+        assert_eq!(
+            ScrollUpAction.execute(NormalMode, &mut data)?,
+            ScrollingMode.into()
+        );
+        assert!(data.ui.preview_follow);
+
         Ok(())
     }
 
