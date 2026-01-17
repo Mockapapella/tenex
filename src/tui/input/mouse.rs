@@ -7,8 +7,6 @@ use ratatui::{
     crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     layout::{Constraint, Direction, Layout, Rect},
 };
-use std::path::Path;
-
 const MOUSE_SCROLL_LINES: usize = 3;
 
 /// Handle a mouse event.
@@ -80,23 +78,37 @@ fn handle_scroll_wheel(
 
     let (agents_area, content_area) = main_panes(frame_area);
     if rect_contains(content_area, x, y) {
-        if matches!(&app.mode, AppMode::PreviewFocused(_))
-            && app.data.active_tab == Tab::Preview
-            && app
+        let preview_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
+        let preview_tab = app.data.active_tab == Tab::Preview;
+        let preview_is_codex = app
+            .data
+            .selected_agent()
+            .is_some_and(|agent| is_codex_program(&agent.program));
+
+        // When attached, forward scroll wheel events to the agent's terminal rather than
+        // scrolling Tenex's preview buffer. This allows full-screen TUIs (e.g. Codex) to
+        // handle scroll input normally.
+        //
+        // Some terminals don't report mouse-wheel modifiers reliably. If the preview buffer
+        // isn't scrollable anyway, prefer forwarding to the agent so the wheel still does
+        // something useful.
+        if preview_focused && preview_tab && preview_is_codex {
+            let visible_height = app
                 .data
-                .selected_agent()
-                .is_some_and(|agent| is_codex_program(&agent.program))
-            && modifiers.contains(KeyModifiers::ALT)
-        {
-            // When attached, forward scroll wheel events to the agent's terminal rather than
-            // scrolling Tenex's preview buffer. This allows full-screen TUIs (e.g. Codex) to
-            // handle scroll input normally.
-            if let Some(sequence) =
-                scroll_wheel_to_sgr_sequence(content_area, x, y, modifiers, direction)
-            {
-                batched_keys.push(sequence);
+                .ui
+                .preview_dimensions
+                .map_or(20, |(_, h)| usize::from(h));
+            let can_scroll_preview = app.data.ui.preview_text.lines.len() > visible_height;
+            let forward_to_agent = modifiers.contains(KeyModifiers::ALT) || !can_scroll_preview;
+
+            if forward_to_agent {
+                if let Some(sequence) =
+                    scroll_wheel_to_sgr_sequence(content_area, x, y, modifiers, direction)
+                {
+                    batched_keys.push(sequence);
+                }
+                return;
             }
-            return;
         }
 
         match direction {
@@ -118,11 +130,8 @@ fn handle_scroll_wheel(
 
 fn is_codex_program(program: &str) -> bool {
     program
-        .split_whitespace()
-        .next()
-        .and_then(|exe| Path::new(exe).file_stem())
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem == "codex")
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .any(|token| token == "codex")
 }
 
 fn scroll_wheel_to_sgr_sequence(
@@ -643,7 +652,34 @@ mod tests {
     }
 
     #[test]
+    fn scroll_wheel_over_non_scrollable_preview_does_not_pause_follow() -> anyhow::Result<()> {
+        // Regression: when the preview buffer can't scroll, wheel-up should not flip follow off.
+        // Otherwise Tenex looks "paused" even though there's no scrollback to move through.
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.set_preview_dimensions(80, 3);
+        app.data.ui.set_preview_content("line0\nline1\nline2");
+        app.data.ui.preview_scroll = usize::MAX;
+        app.data.ui.preview_follow = true;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let (_agents_area, content_area) = main_panes(frame);
+        let up = scroll_up(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, up, frame, &mut batched_keys)?;
+
+        assert!(app.data.ui.preview_follow);
+        assert!(batched_keys.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
     fn scroll_wheel_in_preview_focused_mode_for_codex_forwards_to_agent() -> anyhow::Result<()> {
+        // Codex is a full-screen TUI; when attached, forwarding wheel events lets Codex handle
+        // scrolling/viewport changes instead of Tenex scrolling its own preview snapshot.
         let (mut app, _tmp) = create_test_app()?;
         add_agent_with_program(&mut app, "a0", "codex");
         app.apply_mode(PreviewFocusedMode.into());
@@ -681,6 +717,34 @@ mod tests {
         assert!(!app.data.ui.preview_follow);
         assert_eq!(app.data.ui.preview_scroll, 24);
         assert_eq!(batched_keys, vec![String::from("\u{1b}[<72;2;1M")]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn scroll_wheel_in_preview_focused_mode_for_codex_forwards_when_preview_isnt_scrollable()
+    -> anyhow::Result<()> {
+        // Some terminals don't report wheel modifiers reliably. If Tenex has no scrollback to
+        // scroll anyway, forwarding is strictly better than entering a "paused" state.
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent_with_program(&mut app, "a0", "codex");
+        app.apply_mode(PreviewFocusedMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.set_preview_dimensions(80, 3);
+        app.data.ui.set_preview_content("line0\nline1\nline2");
+        app.data.ui.preview_scroll = usize::MAX;
+        app.data.ui.preview_follow = true;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let (_agents_area, content_area) = main_panes(frame);
+        let up = scroll_up(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, up, frame, &mut batched_keys)?;
+
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, usize::MAX);
+        assert_eq!(batched_keys, vec![String::from("\u{1b}[<64;2;1M")]);
 
         Ok(())
     }

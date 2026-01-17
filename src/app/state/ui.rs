@@ -375,9 +375,12 @@ impl UiState {
     /// Scroll up in the preview pane by the given amount
     pub fn scroll_preview_up(&mut self, amount: usize) {
         self.normalize_preview_scroll();
+        let before = self.preview_scroll;
         self.preview_scroll = self.preview_scroll.saturating_sub(amount);
-        // Disable auto-follow when user scrolls up
-        self.preview_follow = false;
+        // Disable auto-follow only if the scroll position actually changed.
+        if self.preview_scroll < before {
+            self.preview_follow = false;
+        }
     }
 
     /// Scroll down in the preview pane by the given amount
@@ -869,6 +872,23 @@ mod tests {
         ui.scroll_preview_up(3);
         assert_eq!(ui.preview_scroll, 0);
         assert!(!ui.preview_follow);
+    }
+
+    #[test]
+    fn test_scroll_preview_up_when_not_scrollable_does_not_disable_follow() {
+        // Regression: if the preview has no scrollback (max scroll is 0), scrolling "up" should
+        // not disable follow. Otherwise the UI enters a confusing "paused" state with no visible
+        // scrolling possible.
+        let mut ui = UiState::new();
+        ui.preview_scroll = usize::MAX;
+        ui.preview_follow = true;
+        ui.set_preview_content("line1\nline2\nline3");
+        ui.preview_dimensions = Some((80, 10));
+
+        ui.scroll_preview_up(3);
+
+        assert_eq!(ui.preview_scroll, 0);
+        assert!(ui.preview_follow);
     }
 
     #[test]
