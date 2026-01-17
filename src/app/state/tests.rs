@@ -355,7 +355,9 @@ fn test_input_cursor_home_end() {
 #[test]
 fn test_scroll_methods() {
     let mut app = App::default();
-    app.data.ui.preview_content = "line1\nline2\nline3\nline4\nline5".to_string();
+    app.data
+        .ui
+        .set_preview_content("line1\nline2\nline3\nline4\nline5");
     app.data.ui.set_diff_content("diff1\ndiff2\ndiff3");
     app.data.ui.preview_dimensions = Some((80, 2));
 

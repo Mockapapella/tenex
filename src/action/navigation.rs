@@ -335,7 +335,7 @@ mod tests {
         let (mut data, _temp) = create_test_data()?;
 
         data.active_tab = Tab::Preview;
-        data.ui.preview_content = "line1\nline2\nline3\n".to_string();
+        data.ui.set_preview_content("line1\nline2\nline3\n");
         assert_eq!(
             ScrollUpAction.execute(NormalMode, &mut data)?,
             ScrollingMode.into()

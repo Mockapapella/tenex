@@ -168,7 +168,7 @@ fn drain_events(
                     flushed_batched_keys = true;
                 }
 
-                input::handle_mouse_event(app, mouse, frame_area)?;
+                input::handle_mouse_event(app, mouse, frame_area, &mut batched_keys)?;
             }
             Event::Resize(w, h) => {
                 last_resize = Some((w, h));
@@ -194,6 +194,33 @@ fn compute_preview_refresh_interval(
         base_refresh.min(Duration::from_millis(PREVIEW_SMOOTH_REFRESH_MS))
     } else {
         base_refresh
+    }
+}
+
+fn maybe_refresh_preview(
+    app: &mut App,
+    action_handler: Actions,
+    needs_content_update: bool,
+    sent_keys_in_preview: bool,
+    last_preview_update: &mut Instant,
+) {
+    let preview_refresh_interval = compute_preview_refresh_interval(
+        app.data.config.poll_interval_ms,
+        app.data.active_tab,
+        app.data.ui.preview_follow,
+    );
+
+    let preview_visible =
+        app.data.active_tab == Tab::Preview || matches!(&app.mode, AppMode::PreviewFocused(_));
+
+    let preview_due = last_preview_update.elapsed() >= preview_refresh_interval;
+    // When scrolled up (preview_follow = false), keep the captured buffer stable.
+    if preview_visible
+        && (needs_content_update
+            || (app.data.ui.preview_follow && (sent_keys_in_preview || preview_due)))
+    {
+        let _ = action_handler.update_preview(app);
+        *last_preview_update = Instant::now();
     }
 }
 
@@ -269,21 +296,13 @@ fn run_loop(
             needs_content_update = true;
         }
 
-        // Update preview more frequently when the user is actively watching it and following output.
-        let preview_refresh_interval = compute_preview_refresh_interval(
-            app.data.config.poll_interval_ms,
-            app.data.active_tab,
-            app.data.ui.preview_follow,
+        maybe_refresh_preview(
+            app,
+            action_handler,
+            needs_content_update,
+            sent_keys_in_preview,
+            &mut last_preview_update,
         );
-
-        let preview_visible =
-            app.data.active_tab == Tab::Preview || matches!(&app.mode, AppMode::PreviewFocused(_));
-
-        let preview_due = last_preview_update.elapsed() >= preview_refresh_interval;
-        if preview_visible && (needs_content_update || sent_keys_in_preview || preview_due) {
-            let _ = action_handler.update_preview(app);
-            last_preview_update = Instant::now();
-        }
 
         // Diff refresh is expensive; throttle it while still updating promptly on selection/tab changes.
         let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;

@@ -20,7 +20,7 @@ impl Actions {
         // smaller so we can refresh more frequently without stuttering.
         const HISTORY_LINES_FOLLOWING: u32 = 300;
 
-        let old_line_count = app.data.ui.preview_content.lines().count();
+        let old_line_count = app.data.ui.preview_text.lines.len();
         let old_scroll = app.data.ui.preview_scroll;
         let visible_height = app
             .data
@@ -58,17 +58,21 @@ impl Actions {
                         .capture_pane_with_history(&target, HISTORY_LINES_FOLLOWING)
                         .unwrap_or_default()
                 };
-                app.data.ui.preview_content = content;
+                app.data.ui.set_preview_content(content);
                 app.data.ui.preview_cursor_position =
                     self.output_capture.cursor_position(&target).ok();
                 app.data.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
             } else {
-                app.data.ui.preview_content = String::from("(Session not running)");
+                app.data
+                    .ui
+                    .set_preview_content(String::from("(Session not running)"));
                 app.data.ui.preview_cursor_position = None;
                 app.data.ui.preview_pane_size = None;
             }
         } else {
-            app.data.ui.preview_content = String::from("(No agent selected)");
+            app.data
+                .ui
+                .set_preview_content(String::from("(No agent selected)"));
             app.data.ui.preview_cursor_position = None;
             app.data.ui.preview_pane_size = None;
         }
@@ -77,7 +81,7 @@ impl Actions {
         // scroll position relative to the bottom of the buffer. Without this, the viewport
         // can appear to "jump" far up because the top of the buffer gained many lines.
         if switching_to_full_history {
-            let new_line_count = app.data.ui.preview_content.lines().count();
+            let new_line_count = app.data.ui.preview_text.lines.len();
 
             let old_max = old_line_count.saturating_sub(visible_height);
             let old_scroll = old_scroll.min(old_max);

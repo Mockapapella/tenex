@@ -223,16 +223,10 @@ fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the preview pane
 pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let content = &app.data.ui.preview_content;
     let is_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
 
-    // Parse ANSI escape sequences to preserve terminal colors
-    let text = ansi_to_tui::IntoText::into_text(content).unwrap_or_else(|_| {
-        // Fallback to plain text if parsing fails
-        Text::from(content.as_str())
-    });
-
-    let line_count = text.lines.len();
+    let full_text = &app.data.ui.preview_text;
+    let line_count = full_text.lines.len();
 
     // Use highlighted border when focused, show exit hint in title
     let (border_color, title) = if is_focused {
@@ -264,18 +258,24 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let visible_height = usize::from(content_area.height);
     let max_scroll = line_count.saturating_sub(visible_height);
     let scroll = app.data.ui.preview_scroll.min(max_scroll);
-    let scroll_pos = u16::try_from(scroll).unwrap_or(u16::MAX);
+    let start = scroll.min(line_count);
+    let end = start.saturating_add(visible_height).min(line_count);
+    let visible_text = Text {
+        alignment: full_text.alignment,
+        style: full_text.style,
+        lines: full_text.lines[start..end].to_vec(),
+    };
 
-    let paragraph = Paragraph::new(text)
-        .scroll((scroll_pos, 0))
-        .style(Style::default().bg(colors::SURFACE));
+    let paragraph = Paragraph::new(visible_text).style(Style::default().bg(colors::SURFACE));
     frame.render_widget(paragraph, content_area);
 
     if is_focused {
         render_preview_cursor(frame, app, content_area, scroll, line_count, visible_height);
     }
 
-    if line_count > visible_height && area.width != 0 {
+    // Match common terminal UX (e.g. Claude Code): don't show a scrollbar while we're
+    // auto-following the bottom. Show it only once the user scrolls up (paused).
+    if !app.data.ui.preview_follow && line_count > visible_height && area.width != 0 {
         let scrollbar_area = Rect {
             x: area.x,
             y: content_area.y,
@@ -940,6 +940,52 @@ mod tests {
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend)?;
         terminal.draw(|frame| render_commits(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains('░') || text.contains('█'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_preview_hides_scrollbar_when_following() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.set_preview_content(
+            (0..50)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        app.data.ui.preview_follow = true;
+        app.data.ui.preview_scroll = usize::MAX;
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_preview(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains('░') && !text.contains('█'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_preview_shows_scrollbar_when_paused() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Preview;
+
+        app.data.ui.set_preview_content(
+            (0..50)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        app.data.ui.preview_follow = false;
+        app.data.ui.preview_scroll = 0;
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_preview(frame, &app, frame.area()))?;
 
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains('░') || text.contains('█'));

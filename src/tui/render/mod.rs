@@ -571,7 +571,9 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.data.ui.preview_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5".to_string();
+        app.data
+            .ui
+            .set_preview_content("Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
 
         terminal.draw(|frame| {
             render(frame, &app);
@@ -587,10 +589,12 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.data.ui.preview_content = (0..100)
-            .map(|i| format!("Line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.data.ui.set_preview_content(
+            (0..100)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.data.ui.preview_scroll = 50;
 
         terminal.draw(|frame| {
@@ -611,10 +615,12 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(PreviewFocusedMode.into());
-        app.data.ui.preview_content = (0..10)
-            .map(|i| format!("Line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.data.ui.set_preview_content(
+            (0..10)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.data.ui.preview_cursor_position = Some((3, 4, false));
         app.data.ui.preview_pane_size = Some((54, 50));
 
@@ -636,10 +642,12 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(PreviewFocusedMode.into());
-        app.data.ui.preview_content = (0..50)
-            .map(|i| format!("Line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.data.ui.set_preview_content(
+            (0..50)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.data.ui.preview_scroll = 16;
         app.data.ui.preview_cursor_position = Some((7, 5, false));
         app.data.ui.preview_pane_size = Some((54, 20));
@@ -883,7 +891,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
-        app.data.ui.preview_content = "Line 1\nLine 2".to_string();
+        app.data.ui.set_preview_content("Line 1\nLine 2");
         // Set scroll position beyond content length
         app.data.ui.preview_scroll = 1000;
 
