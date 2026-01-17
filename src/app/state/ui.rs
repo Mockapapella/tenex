@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 use std::path::PathBuf;
 
+use ratatui::{style::Style, text::Text};
+
 /// Whether an agent's pane output is changing or stalled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneActivity {
@@ -64,6 +66,12 @@ pub struct UiState {
 
     /// Cached preview content
     pub preview_content: String,
+
+    /// Cached preview content parsed into styled lines for rendering.
+    ///
+    /// This avoids reparsing ANSI sequences on every frame and lets the renderer slice
+    /// just the visible portion for smooth scrolling.
+    pub preview_text: Text<'static>,
 
     /// Cached cursor position in the selected pane (x, y), 0-based, and whether it is hidden.
     pub preview_cursor_position: Option<(u16, u16, bool)>,
@@ -153,6 +161,11 @@ impl UiState {
             preview_follow: true,
             preview_using_full_history: false,
             preview_content: String::new(),
+            preview_text: Text {
+                alignment: None,
+                style: Style::new(),
+                lines: Vec::new(),
+            },
             preview_cursor_position: None,
             preview_pane_size: None,
             diff_content: String::new(),
@@ -178,6 +191,16 @@ impl UiState {
             pane_digest_by_agent: BTreeMap::new(),
             pane_last_seen_hash_by_agent: BTreeMap::new(),
         }
+    }
+
+    pub fn set_preview_content(&mut self, content: impl Into<String>) {
+        let content = content.into();
+
+        let parsed = ansi_to_tui::IntoText::into_text(&content)
+            .unwrap_or_else(|_| Text::raw(content.clone()));
+
+        self.preview_content = content;
+        self.preview_text = parsed;
     }
 
     #[must_use]
@@ -397,7 +420,7 @@ impl UiState {
 
     /// Check if preview scroll is at bottom and re-enable follow mode if so
     fn check_preview_follow(&mut self) {
-        let preview_lines = self.preview_content.lines().count();
+        let preview_lines = self.preview_text.lines.len();
         let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
         let preview_max = preview_lines.saturating_sub(visible_height);
 
@@ -408,7 +431,7 @@ impl UiState {
 
     /// Normalize preview scroll position to be within valid range
     fn normalize_preview_scroll(&mut self) {
-        let preview_lines = self.preview_content.lines().count();
+        let preview_lines = self.preview_text.lines.len();
         let visible_height = self.preview_dimensions.map_or(20, |(_, h)| usize::from(h));
         let preview_max = preview_lines.saturating_sub(visible_height);
 
@@ -808,6 +831,7 @@ mod tests {
         assert_eq!(ui.help_scroll, 0);
         assert!(ui.preview_follow);
         assert!(ui.preview_content.is_empty());
+        assert!(ui.preview_text.lines.is_empty());
         assert!(ui.diff_content.is_empty());
         assert!(ui.diff_line_ranges.is_empty());
         assert!(ui.commits_content.is_empty());
@@ -839,7 +863,7 @@ mod tests {
     fn test_scroll_preview_up() {
         let mut ui = UiState::new();
         ui.preview_scroll = 10;
-        ui.preview_content = "line1\nline2\nline3\nline4\nline5".to_string();
+        ui.set_preview_content("line1\nline2\nline3\nline4\nline5");
         ui.preview_dimensions = Some((80, 3));
 
         ui.scroll_preview_up(3);
@@ -851,7 +875,7 @@ mod tests {
     fn test_scroll_preview_down() {
         let mut ui = UiState::new();
         ui.preview_scroll = 0;
-        ui.preview_content = "line1\nline2\nline3\nline4\nline5".to_string();
+        ui.set_preview_content("line1\nline2\nline3\nline4\nline5");
         ui.preview_dimensions = Some((80, 3));
 
         ui.scroll_preview_down(2);

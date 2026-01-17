@@ -135,8 +135,13 @@ pub fn handle_key_event(
 /// Handle a mouse event based on the current mode and layout.
 ///
 /// `frame_area` should be the terminal viewport (`Rect::new(0, 0, width, height)`).
-pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) -> Result<()> {
-    mouse::handle_mouse_event(app, mouse, frame_area)
+pub fn handle_mouse_event(
+    app: &mut App,
+    mouse: MouseEvent,
+    frame_area: Rect,
+    batched_keys: &mut Vec<String>,
+) -> Result<()> {
+    mouse::handle_mouse_event(app, mouse, frame_area, batched_keys)
 }
 
 #[cfg(test)]

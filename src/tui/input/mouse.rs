@@ -4,9 +4,10 @@ use crate::app::{App, Tab};
 use crate::state::{AppMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 use ratatui::{
-    crossterm::event::{MouseButton, MouseEvent, MouseEventKind},
+    crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     layout::{Constraint, Direction, Layout, Rect},
 };
+use std::path::Path;
 
 const MOUSE_SCROLL_LINES: usize = 3;
 
@@ -14,7 +15,12 @@ const MOUSE_SCROLL_LINES: usize = 3;
 ///
 /// Handles left-click selection (agents list, tabs, preview focus),
 /// scroll wheel preview/diff scrolling, and "click outside modal to cancel".
-pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) -> Result<()> {
+pub fn handle_mouse_event(
+    app: &mut App,
+    mouse: MouseEvent,
+    frame_area: Rect,
+    batched_keys: &mut Vec<String>,
+) -> Result<()> {
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             handle_left_click(app, mouse.column, mouse.row, frame_area)?;
@@ -24,8 +30,10 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) ->
                 app,
                 mouse.column,
                 mouse.row,
+                mouse.modifiers,
                 ScrollDirection::Up,
                 frame_area,
+                batched_keys,
             );
         }
         MouseEventKind::ScrollDown => {
@@ -33,8 +41,10 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_area: Rect) ->
                 app,
                 mouse.column,
                 mouse.row,
+                mouse.modifiers,
                 ScrollDirection::Down,
                 frame_area,
+                batched_keys,
             );
         }
         _ => {}
@@ -52,8 +62,10 @@ fn handle_scroll_wheel(
     app: &mut App,
     x: u16,
     y: u16,
+    modifiers: KeyModifiers,
     direction: ScrollDirection,
     frame_area: Rect,
+    batched_keys: &mut Vec<String>,
 ) {
     // Ignore scroll wheel while a modal is open or text input is active.
     if !matches!(
@@ -68,6 +80,25 @@ fn handle_scroll_wheel(
 
     let (agents_area, content_area) = main_panes(frame_area);
     if rect_contains(content_area, x, y) {
+        if matches!(&app.mode, AppMode::PreviewFocused(_))
+            && app.data.active_tab == Tab::Preview
+            && app
+                .data
+                .selected_agent()
+                .is_some_and(|agent| is_codex_program(&agent.program))
+            && modifiers.contains(KeyModifiers::ALT)
+        {
+            // When attached, forward scroll wheel events to the agent's terminal rather than
+            // scrolling Tenex's preview buffer. This allows full-screen TUIs (e.g. Codex) to
+            // handle scroll input normally.
+            if let Some(sequence) =
+                scroll_wheel_to_sgr_sequence(content_area, x, y, modifiers, direction)
+            {
+                batched_keys.push(sequence);
+            }
+            return;
+        }
+
         match direction {
             ScrollDirection::Up => app.data.scroll_up(MOUSE_SCROLL_LINES),
             ScrollDirection::Down => app.data.scroll_down(MOUSE_SCROLL_LINES),
@@ -83,6 +114,68 @@ fn handle_scroll_wheel(
 
     // Reserved for future: scrolling the agents list.
     let _ = agents_area;
+}
+
+fn is_codex_program(program: &str) -> bool {
+    program
+        .split_whitespace()
+        .next()
+        .and_then(|exe| Path::new(exe).file_stem())
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == "codex")
+}
+
+fn scroll_wheel_to_sgr_sequence(
+    content_area: Rect,
+    x: u16,
+    y: u16,
+    modifiers: KeyModifiers,
+    direction: ScrollDirection,
+) -> Option<String> {
+    // Compute inner block area (inside borders), then the preview "body" area
+    // (inner area excluding the 1-line tab bar).
+    let inner = Rect {
+        x: content_area.x.saturating_add(1),
+        y: content_area.y.saturating_add(1),
+        width: content_area.width.saturating_sub(2),
+        height: content_area.height.saturating_sub(2),
+    };
+
+    let body = Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(1),
+        width: inner.width,
+        height: inner.height.saturating_sub(1),
+    };
+
+    if body.width == 0 || body.height == 0 {
+        return None;
+    }
+
+    // Map terminal coordinates into 1-based cell coordinates for the agent PTY.
+    let local_x = x.saturating_sub(body.x).min(body.width.saturating_sub(1));
+    let local_y = y.saturating_sub(body.y).min(body.height.saturating_sub(1));
+    let col = local_x.saturating_add(1);
+    let row = local_y.saturating_add(1);
+
+    // Xterm mouse protocol button codes.
+    let base_button = match direction {
+        ScrollDirection::Up => 64u8,
+        ScrollDirection::Down => 65u8,
+    };
+
+    let mut button = base_button;
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        button = button.saturating_add(4);
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        button = button.saturating_add(8);
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        button = button.saturating_add(16);
+    }
+
+    Some(format!("\x1b[<{button};{col};{row}M"))
 }
 
 fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) -> Result<()> {
@@ -265,9 +358,13 @@ mod tests {
     }
 
     fn add_agent(app: &mut App, title: &str) {
+        add_agent_with_program(app, title, "echo");
+    }
+
+    fn add_agent_with_program(app: &mut App, title: &str, program: &str) {
         let agent = Agent::new(
             title.to_string(),
-            "echo".to_string(),
+            program.to_string(),
             format!("tenex/{title}"),
             PathBuf::from("/tmp"),
         );
@@ -310,6 +407,7 @@ mod tests {
         app.apply_mode(NormalMode.into());
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let main = Rect {
             x: 0,
             y: 0,
@@ -325,7 +423,7 @@ mod tests {
         // Click on the second visible row (index 1).
         let inner_y = agents_area.y + 1;
         let click = left_click(agents_area.x + 2, inner_y + 1);
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert_eq!(app.data.selected, 1);
         Ok(())
@@ -339,8 +437,9 @@ mod tests {
         app.apply_mode(PreviewFocusedMode.into());
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let click = left_click(0, 0); // agents pane border
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert!(matches!(&app.mode, AppMode::Normal(_)));
         Ok(())
@@ -354,6 +453,7 @@ mod tests {
         app.data.active_tab = Tab::Preview;
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let main = Rect {
             x: 0,
             y: 0,
@@ -381,7 +481,7 @@ mod tests {
         // Click inside the " Diff " label (after " Preview ").
         let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
         let click = left_click(tab_bar.x + preview_w + 1, tab_bar.y);
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert_eq!(app.data.active_tab, Tab::Diff);
         Ok(())
@@ -395,6 +495,7 @@ mod tests {
         app.data.active_tab = Tab::Preview;
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let main = Rect {
             x: 0,
             y: 0,
@@ -423,7 +524,7 @@ mod tests {
         let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
         let diff_w = u16::try_from(" Diff ".chars().count()).unwrap_or(0);
         let click = left_click(tab_bar.x + preview_w + diff_w + 1, tab_bar.y);
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert_eq!(app.data.active_tab, Tab::Commits);
         Ok(())
@@ -437,6 +538,7 @@ mod tests {
         app.data.active_tab = Tab::Preview;
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let main = Rect {
             x: 0,
             y: 0,
@@ -451,7 +553,7 @@ mod tests {
 
         // Click below the tab bar, inside the preview content body.
         let click = left_click(content_area.x + 2, content_area.y + 3);
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
         Ok(())
@@ -464,8 +566,9 @@ mod tests {
         assert!(!matches!(&app.mode, AppMode::Normal(_)));
 
         let frame = Rect::new(0, 0, 80, 24);
+        let mut batched_keys = Vec::new();
         let click = left_click(0, 0);
-        handle_mouse_event(&mut app, click, frame)?;
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert!(matches!(&app.mode, AppMode::Normal(_)));
         Ok(())
@@ -478,24 +581,28 @@ mod tests {
         app.apply_mode(NormalMode.into());
         app.data.active_tab = Tab::Preview;
         app.set_preview_dimensions(80, 3);
-        app.data.ui.preview_content = (0..30)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.data.ui.set_preview_content(
+            (0..30)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.data.ui.preview_scroll = usize::MAX;
         app.data.ui.preview_follow = true;
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let (agents_area, content_area) = main_panes(frame);
         let _ = agents_area;
 
         // Scroll up inside the preview body.
         let event = scroll_up(content_area.x + 2, content_area.y + 2);
-        handle_mouse_event(&mut app, event, frame)?;
+        handle_mouse_event(&mut app, event, frame, &mut batched_keys)?;
 
         assert!(matches!(&app.mode, AppMode::Scrolling(_)));
         assert!(!app.data.ui.preview_follow);
         assert_eq!(app.data.ui.preview_scroll, 24);
+        assert!(batched_keys.is_empty());
         Ok(())
     }
 
@@ -506,27 +613,75 @@ mod tests {
         app.apply_mode(PreviewFocusedMode.into());
         app.data.active_tab = Tab::Preview;
         app.set_preview_dimensions(80, 3);
-        app.data.ui.preview_content = (0..30)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        app.data.ui.set_preview_content(
+            (0..30)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         app.data.ui.preview_scroll = usize::MAX;
         app.data.ui.preview_follow = true;
 
         let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
         let (_agents_area, content_area) = main_panes(frame);
         let up = scroll_up(content_area.x + 2, content_area.y + 2);
-        handle_mouse_event(&mut app, up, frame)?;
+        handle_mouse_event(&mut app, up, frame, &mut batched_keys)?;
 
         assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
         assert!(!app.data.ui.preview_follow);
         assert_eq!(app.data.ui.preview_scroll, 24);
+        assert!(batched_keys.is_empty());
 
         let down = scroll_down(content_area.x + 2, content_area.y + 2);
-        handle_mouse_event(&mut app, down, frame)?;
+        handle_mouse_event(&mut app, down, frame, &mut batched_keys)?;
         assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
         assert!(app.data.ui.preview_follow);
         assert_eq!(app.data.ui.preview_scroll, 27);
+        assert!(batched_keys.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn scroll_wheel_in_preview_focused_mode_for_codex_forwards_to_agent() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent_with_program(&mut app, "a0", "codex");
+        app.apply_mode(PreviewFocusedMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.set_preview_dimensions(80, 3);
+        app.data.ui.set_preview_content(
+            (0..30)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        app.data.ui.preview_scroll = usize::MAX;
+        app.data.ui.preview_follow = true;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let (_agents_area, content_area) = main_panes(frame);
+        let up = scroll_up(content_area.x + 2, content_area.y + 2);
+        handle_mouse_event(&mut app, up, frame, &mut batched_keys)?;
+
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(!app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, 24);
+        assert!(batched_keys.is_empty());
+
+        let up_with_alt = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: content_area.x + 2,
+            row: content_area.y + 2,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut app, up_with_alt, frame, &mut batched_keys)?;
+
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(!app.data.ui.preview_follow);
+        assert_eq!(app.data.ui.preview_scroll, 24);
+        assert_eq!(batched_keys, vec![String::from("\u{1b}[<72;2;1M")]);
+
         Ok(())
     }
 }
