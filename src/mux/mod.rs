@@ -54,8 +54,8 @@ pub fn is_server_running() -> bool {
 ///
 /// Returns an error if the mux endpoint cannot be resolved or the daemon responds with an error.
 pub fn running_daemon_version() -> Result<Option<String>> {
-    let endpoint = endpoint::socket_endpoint()?;
-    let Ok(mut stream) = Stream::connect(endpoint.name) else {
+    let endpoint = client::endpoint()?;
+    let Ok(mut stream) = Stream::connect(endpoint.name.clone()) else {
         return Ok(None);
     };
 
@@ -311,5 +311,35 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         Err("Expected spawned muxd process to terminate after SIGKILL".into())
+    }
+
+    #[test]
+    fn test_running_daemon_version_returns_none_when_not_running()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let endpoint = client::endpoint()?;
+        let _ = terminate_mux_daemon_for_socket(&endpoint.display);
+        assert!(running_daemon_version()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_running_daemon_version_returns_some_when_running()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Starting a mux request should boot the daemon if it isn't running yet.
+        let _ = SessionManager::new().exists("tenex-version-probe-nonexistent");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let version = loop {
+            match running_daemon_version()? {
+                Some(version) => break version,
+                None if Instant::now() >= deadline => {
+                    return Err("Expected running daemon version to be available".into());
+                }
+                None => std::thread::sleep(Duration::from_millis(25)),
+            }
+        };
+
+        assert!(version.starts_with("tenex-mux/"));
+        Ok(())
     }
 }
