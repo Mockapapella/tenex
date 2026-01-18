@@ -55,6 +55,8 @@ jobs:
             exit 0
           fi
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
+          gzip -9 -f llvm-cov-report.lcov
           sha256sum llvm-cov-report.txt | tee llvm-cov-report.sha256
           {
             echo "git_sha=$(git rev-parse HEAD)"
@@ -83,6 +85,7 @@ jobs:
           name: llvm-cov-report
           path: |
             llvm-cov-report.txt
+            llvm-cov-report.lcov.gz
             llvm-cov-report.sha256
             llvm-cov-meta.txt
           if-no-files-found: ignore
