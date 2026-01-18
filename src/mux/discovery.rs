@@ -62,6 +62,50 @@ pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
     best.map(|(_, socket)| socket)
 }
 
+pub(super) fn mux_daemon_pids_for_socket(socket: &str) -> Vec<u32> {
+    let wanted_socket = socket.trim();
+    if wanted_socket.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid_str) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+
+        let base = entry.path();
+        let Ok(cmdline) = std::fs::read(base.join("cmdline")) else {
+            continue;
+        };
+        if !cmdline_contains_muxd(&cmdline) {
+            continue;
+        }
+
+        let Ok(environ) = std::fs::read(base.join("environ")) else {
+            continue;
+        };
+
+        let parsed = parse_environ(&environ);
+        let Some(value) = parsed.get("TENEX_MUX_SOCKET") else {
+            continue;
+        };
+        if value.trim() == wanted_socket {
+            pids.push(pid);
+        }
+    }
+
+    pids
+}
+
 fn probe_session_matches<S: std::hash::BuildHasher>(
     socket: &str,
     wanted_sessions: &HashSet<String, S>,
@@ -163,6 +207,9 @@ mod tests {
     use anyhow::Result;
     use tempfile::TempDir;
 
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
     #[test]
     fn test_cmdline_contains_muxd() {
         assert!(cmdline_contains_muxd(b"tenex\0muxd\0"));
@@ -225,5 +272,36 @@ mod tests {
         let _ = session_manager.kill(&existing_session);
         assert!(discovered.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_mux_daemon_pids_for_socket_finds_process() -> Result<(), Box<dyn std::error::Error>> {
+        let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let mut child = Command::new("bash")
+            .arg("-c")
+            .arg("exec -a muxd sleep 60")
+            .env("TENEX_MUX_SOCKET", &socket)
+            .spawn()?;
+        let pid = child.id();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if mux_daemon_pids_for_socket(&socket).contains(&pid) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        Err("Expected to discover spawned muxd process".into())
+    }
+
+    #[test]
+    fn test_mux_daemon_pids_for_socket_returns_empty_for_empty_socket() {
+        assert!(mux_daemon_pids_for_socket("").is_empty());
+        assert!(mux_daemon_pids_for_socket("   ").is_empty());
     }
 }

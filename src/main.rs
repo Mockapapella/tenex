@@ -5,10 +5,10 @@ use clap::{CommandFactory, Parser, Subcommand};
 use tenex::App;
 use tenex::AppMode;
 use tenex::agent::Storage;
-use tenex::app::Settings;
+use tenex::app::{MuxdVersionMismatchInfo, Settings};
 use tenex::config::Config;
 use tenex::mux::SessionManager;
-use tenex::state::UpdatePromptMode;
+use tenex::state::{ConfirmAction, ConfirmingMode, UpdatePromptMode};
 
 /// Terminal multiplexer for AI coding agents
 #[derive(Parser)]
@@ -241,6 +241,10 @@ fn run_interactive(
     }
 
     if matches!(&app.mode, AppMode::Normal(_)) {
+        maybe_prompt_restart_mux_daemon(&mut app);
+    }
+
+    if matches!(&app.mode, AppMode::Normal(_)) {
         match tenex::update::check_for_update() {
             Ok(Some(info)) => {
                 app.apply_mode(UpdatePromptMode { info }.into());
@@ -274,6 +278,39 @@ fn run_interactive(
     }
 
     Ok(())
+}
+
+fn maybe_prompt_restart_mux_daemon(app: &mut App) {
+    let Ok(expected_version) = tenex::mux::version() else {
+        return;
+    };
+    let Ok(Some(daemon_version)) = tenex::mux::running_daemon_version() else {
+        return;
+    };
+
+    if daemon_version == expected_version {
+        return;
+    }
+
+    let socket = tenex::mux::socket_display().unwrap_or_else(|_| "<unknown>".to_string());
+    let env_mux_socket = std::env::var("TENEX_MUX_SOCKET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    app.data.ui.muxd_version_mismatch = Some(MuxdVersionMismatchInfo {
+        socket,
+        daemon_version,
+        expected_version,
+        env_mux_socket,
+    });
+
+    app.apply_mode(
+        ConfirmingMode {
+            action: ConfirmAction::RestartMuxDaemon,
+        }
+        .into(),
+    );
 }
 
 fn preserve_corrupt_state_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -483,6 +520,7 @@ fn confirm_reset(force: bool) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_cli_parsing() {
@@ -514,4 +552,39 @@ mod tests {
     // Note: test_cmd_reset_force moved to tests/cli_binary_test.rs
     // to properly isolate state via subprocess + TENEX_STATE_PATH env var.
     // Running cmd_reset directly in a unit test would corrupt real state.
+
+    #[test]
+    fn test_preserve_corrupt_state_file_renames_file() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let path = dir.path().join("state.json");
+        std::fs::write(&path, "boom")?;
+
+        let preserved = preserve_corrupt_state_file(&path)
+            .ok_or("Expected preserve_corrupt_state_file to rename file")?;
+
+        assert!(!path.exists());
+        assert!(preserved.exists());
+        assert_eq!(std::fs::read_to_string(&preserved)?, "boom");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_preserve_corrupt_state_file_returns_none_for_root_path() {
+        assert!(preserve_corrupt_state_file(std::path::Path::new("/")).is_none());
+    }
+
+    #[test]
+    fn test_print_reset_plan_with_agents_and_orphans_does_not_panic() {
+        let mut storage = Storage::new();
+        storage.add(tenex::Agent::new(
+            "agent".to_string(),
+            "echo".to_string(),
+            "tenex/test-branch".to_string(),
+            std::path::PathBuf::from("/tmp/tenex-test-reset-plan"),
+        ));
+
+        let orphaned = vec!["tenex-orphan-session".to_string()];
+        print_reset_plan(&storage, &orphaned);
+    }
 }

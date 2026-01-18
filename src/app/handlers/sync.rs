@@ -11,7 +11,7 @@ use std::path::Path;
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::App;
+use crate::app::{App, AppData};
 
 impl Actions {
     /// Check and update agent statuses based on mux sessions
@@ -308,7 +308,11 @@ impl Actions {
     ///
     /// Returns an error if saving updated state fails.
     pub fn respawn_missing_agents(self, app: &mut App) -> Result<()> {
-        let roots = stored_root_agents(app);
+        self.respawn_missing_agents_in_data(&mut app.data)
+    }
+
+    pub(crate) fn respawn_missing_agents_in_data(self, app_data: &mut AppData) -> Result<()> {
+        let roots = stored_root_agents(app_data);
         if roots.is_empty() {
             return Ok(());
         }
@@ -316,21 +320,34 @@ impl Actions {
         let session_manager = self.session_manager;
         let mut summary = RespawnSummary::default();
         for root in &roots {
-            respawn_root_agent(session_manager, app, root, &mut summary);
+            respawn_root_agent(session_manager, app_data, root, &mut summary);
         }
 
         if summary.changed {
-            app.data.storage.save()?;
-            app.validate_selection();
+            app_data.storage.save()?;
+            app_data.validate_selection();
         }
 
         if summary.respawned_sessions > 0 {
-            app.data.set_status(format!(
+            app_data.set_status(format!(
                 "Respawned {} agent session(s)",
                 summary.respawned_sessions
             ));
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn restart_mux_daemon(self, app_data: &mut AppData) -> Result<()> {
+        let socket = crate::mux::socket_display()?;
+        crate::mux::terminate_mux_daemon_for_socket(&socket)?;
+
+        app_data.ui.muxd_version_mismatch = None;
+
+        // Recreate missing sessions/windows after the daemon restart (best-effort inside helper).
+        self.respawn_missing_agents_in_data(app_data)?;
+
+        app_data.set_status("Mux daemon restarted");
         Ok(())
     }
 }
@@ -360,8 +377,8 @@ struct RespawnSummary {
     respawned_sessions: usize,
 }
 
-fn stored_root_agents(app: &App) -> Vec<Agent> {
-    app.data
+fn stored_root_agents(app_data: &AppData) -> Vec<Agent> {
+    app_data
         .storage
         .root_agents()
         .into_iter()
@@ -371,17 +388,17 @@ fn stored_root_agents(app: &App) -> Vec<Agent> {
 
 fn respawn_root_agent(
     session_manager: crate::mux::SessionManager,
-    app: &mut App,
+    app_data: &mut AppData,
     root: &Agent,
     summary: &mut RespawnSummary,
 ) {
     if session_manager.exists(&root.mux_session) {
-        summary.changed |= normalize_tree_running(app, root.id, &root.mux_session, true);
+        summary.changed |= normalize_tree_running(app_data, root.id, &root.mux_session, true);
         return;
     }
 
     // Mark as not running while we attempt to respawn.
-    summary.changed |= normalize_tree_running(app, root.id, &root.mux_session, false);
+    summary.changed |= normalize_tree_running(app_data, root.id, &root.mux_session, false);
 
     if !root.worktree_path.exists() {
         warn!(
@@ -423,16 +440,19 @@ fn respawn_root_agent(
     summary.respawned_sessions = summary.respawned_sessions.saturating_add(1);
     summary.changed = true;
 
-    let descendants = sorted_descendants(app, root.id);
+    let descendants = sorted_descendants(app_data, root.id);
     let recreated_window_indices =
         recreate_descendant_windows(session_manager, &root.mux_session, &descendants);
-    summary.changed |=
-        mark_respawned_agents_running(app, root.id, &root.mux_session, recreated_window_indices);
+    summary.changed |= mark_respawned_agents_running(
+        app_data,
+        root.id,
+        &root.mux_session,
+        recreated_window_indices,
+    );
 }
 
-fn sorted_descendants(app: &App, root_id: uuid::Uuid) -> Vec<Agent> {
-    let mut descendants: Vec<Agent> = app
-        .data
+fn sorted_descendants(app_data: &AppData, root_id: uuid::Uuid) -> Vec<Agent> {
+    let mut descendants: Vec<Agent> = app_data
         .storage
         .descendants(root_id)
         .into_iter()
@@ -499,7 +519,7 @@ fn recreate_descendant_windows(
 }
 
 fn mark_respawned_agents_running(
-    app: &mut App,
+    app_data: &mut AppData,
     root_id: uuid::Uuid,
     mux_session: &str,
     recreated_window_indices: HashMap<uuid::Uuid, u32>,
@@ -507,7 +527,7 @@ fn mark_respawned_agents_running(
     let mut changed = false;
     let mux_session_owned = mux_session.to_owned();
 
-    if let Some(agent) = app.data.storage.get_mut(root_id) {
+    if let Some(agent) = app_data.storage.get_mut(root_id) {
         if agent.mux_session != mux_session_owned {
             agent.mux_session.clone_from(&mux_session_owned);
             changed = true;
@@ -520,7 +540,7 @@ fn mark_respawned_agents_running(
     }
 
     for (agent_id, window_index) in recreated_window_indices {
-        if let Some(agent) = app.data.storage.get_mut(agent_id) {
+        if let Some(agent) = app_data.storage.get_mut(agent_id) {
             if agent.mux_session != mux_session_owned {
                 agent.mux_session.clone_from(&mux_session_owned);
                 changed = true;
@@ -560,7 +580,7 @@ fn has_isolated_state_marker(worktree_path: &Path, stop_at: &Path) -> bool {
 }
 
 fn normalize_tree_running(
-    app: &mut App,
+    app_data: &mut AppData,
     root_id: uuid::Uuid,
     mux_session: &str,
     running: bool,
@@ -572,7 +592,7 @@ fn normalize_tree_running(
         Status::Starting
     };
 
-    if let Some(agent) = app.data.storage.get_mut(root_id) {
+    if let Some(agent) = app_data.storage.get_mut(root_id) {
         if agent.mux_session != mux_session {
             agent.mux_session = mux_session.to_string();
             changed = true;
@@ -583,9 +603,9 @@ fn normalize_tree_running(
         }
     }
 
-    let descendant_ids = app.data.storage.descendant_ids(root_id);
+    let descendant_ids = app_data.storage.descendant_ids(root_id);
     for agent_id in descendant_ids {
-        if let Some(agent) = app.data.storage.get_mut(agent_id) {
+        if let Some(agent) = app_data.storage.get_mut(agent_id) {
             if agent.mux_session != mux_session {
                 agent.mux_session = mux_session.to_string();
                 changed = true;

@@ -23,17 +23,21 @@ static ENDPOINT: OnceLock<SocketEndpoint> = OnceLock::new();
 ///
 /// Returns an error if the daemon cannot be reached or the request fails.
 pub fn request(req: &MuxRequest) -> Result<MuxResponse> {
-    let endpoint = if let Some(endpoint) = ENDPOINT.get() {
-        endpoint.clone()
-    } else {
-        let endpoint = socket_endpoint()?;
-        let _ = ENDPOINT.set(endpoint.clone());
-        endpoint
-    };
+    let endpoint = endpoint()?;
 
     let client = CLIENT.get_or_init(|| Mutex::new(MuxClient::new(endpoint)));
     let mut client = client.lock();
     client.request(req)
+}
+
+pub(super) fn endpoint() -> Result<SocketEndpoint> {
+    if let Some(endpoint) = ENDPOINT.get() {
+        return Ok(endpoint.clone());
+    }
+
+    let endpoint = socket_endpoint()?;
+    let _ = ENDPOINT.set(endpoint.clone());
+    Ok(endpoint)
 }
 
 /// A synchronous request/response mux client.

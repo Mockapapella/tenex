@@ -37,6 +37,14 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
             ConfirmAction::Reset => {
                 Actions::new().reset_all(app_data)?;
             }
+            ConfirmAction::RestartMuxDaemon => {
+                if let Err(err) = Actions::new().restart_mux_daemon(app_data) {
+                    return Ok(ErrorModalMode {
+                        message: format!("Failed to restart mux daemon: {err}"),
+                    }
+                    .into());
+                }
+            }
             ConfirmAction::Quit => {
                 app_data.should_quit = true;
             }
