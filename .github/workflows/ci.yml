@@ -16,11 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # CI uses a synthetic merge commit and defaults to `fetch-depth: 1`, which leaves
-          # `refs/remotes/origin/*` empty. Some tests exercise branch selector behavior using
-          # the current repo and expect remote branches to exist; without them coverage drops
-          # below the pre-commit threshold.
+          # For pull_request workflows, GitHub Actions uses a synthetic merge commit by default.
+          # We check out the PR head SHA so coverage reports can be compared byte-for-byte with
+          # reports generated locally on the same commit.
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Fetch remote branches
         run: git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
       - name: Set up Python
@@ -62,6 +62,20 @@ jobs:
             rustc -V
           } > llvm-cov-meta.txt
           tail -n 3 llvm-cov-report.txt
+      - name: Verify committed llvm-cov report matches
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f ci/llvm-cov-report.txt ]; then
+            echo "ERROR: Missing ci/llvm-cov-report.txt" >&2
+            echo "Run locally: pre-commit install -t post-commit" >&2
+            echo "Then make a commit (it will auto-amend in the report)." >&2
+            exit 1
+          fi
+          diff -u ci/llvm-cov-report.txt llvm-cov-report.txt
+          if [ -f ci/llvm-cov-report.sha256 ]; then
+            sha256sum -c ci/llvm-cov-report.sha256
+          fi
       - name: Upload llvm-cov report
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,6 +1,22 @@
 repos:
   - repo: local
     hooks:
+      - id: ensure-post-commit-hook-installed
+        name: "pre-commit: ensure post-commit hook installed"
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              hook_path="$(git rev-parse --git-path hooks/post-commit)"
+              if [ ! -f "$hook_path" ]; then
+                echo "ERROR: post-commit hook is not installed." >&2
+                echo "Run: pre-commit install -t post-commit" >&2
+                exit 1
+              fi
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: cargo-fmt
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
@@ -43,3 +59,42 @@ repos:
               TENEX_STATE_PATH="$state_dir/state.json" env -u TENEX_MUX_SOCKET cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
         language: system
         pass_filenames: false
+
+      - id: llvm-cov-report-amend
+        name: "commit: embed llvm-cov per-file report"
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+
+              if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+                exit 0
+              fi
+
+              if [ "${TENEX_SKIP_COV_REPORT_AMEND:-}" = "1" ]; then
+                exit 0
+              fi
+
+              git_dir="$(git rev-parse --git-dir)"
+              if [ -d "$git_dir/rebase-apply" ] || [ -d "$git_dir/rebase-merge" ]; then
+                exit 0
+              fi
+
+              if [ ! -d target/llvm-cov-target/coverage ]; then
+                echo "Skipping llvm-cov report embed: no coverage artifacts found." >&2
+                exit 0
+              fi
+
+              mkdir -p ci
+              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > ci/llvm-cov-report.txt
+              sha256sum ci/llvm-cov-report.txt > ci/llvm-cov-report.sha256
+
+              if git diff --quiet -- ci/llvm-cov-report.txt ci/llvm-cov-report.sha256; then
+                exit 0
+              fi
+
+              git add ci/llvm-cov-report.txt ci/llvm-cov-report.sha256
+              TENEX_SKIP_COV_REPORT_AMEND=1 git commit --amend --no-edit --no-verify
+        language: system
+        pass_filenames: false
+        stages: [post-commit]
