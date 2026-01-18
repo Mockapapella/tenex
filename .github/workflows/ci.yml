@@ -21,6 +21,8 @@ jobs:
           # the current repo and expect remote branches to exist; without them coverage drops
           # below the pre-commit threshold.
           fetch-depth: 0
+      - name: Fetch remote branches
+        run: git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
