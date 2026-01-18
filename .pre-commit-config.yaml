@@ -96,5 +96,6 @@ repos:
               git add ci/llvm-cov-report.txt ci/llvm-cov-report.sha256
               TENEX_SKIP_COV_REPORT_AMEND=1 git commit --amend --no-edit --no-verify
         language: system
+        always_run: true
         pass_filenames: false
         stages: [post-commit]
