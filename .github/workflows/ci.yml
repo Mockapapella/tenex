@@ -46,3 +46,29 @@ jobs:
         run: python -m pip install --upgrade pip pre-commit
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
+      - name: Export llvm-cov report (per file)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "No coverage artifacts found; skipping llvm-cov report export."
+            exit 0
+          fi
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
+          sha256sum llvm-cov-report.txt | tee llvm-cov-report.sha256
+          {
+            echo "git_sha=$(git rev-parse HEAD)"
+            cargo llvm-cov --version
+            rustc -V
+          } > llvm-cov-meta.txt
+          tail -n 3 llvm-cov-report.txt
+      - name: Upload llvm-cov report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-report
+          path: |
+            llvm-cov-report.txt
+            llvm-cov-report.sha256
+            llvm-cov-meta.txt
+          if-no-files-found: ignore
