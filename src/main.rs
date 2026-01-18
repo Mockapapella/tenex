@@ -196,7 +196,21 @@ fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result
             .map(|agent| agent.mux_session.clone())
             .collect();
 
-        let preferred = storage.mux_socket.as_deref();
+        let preferred = match storage.mux_socket.as_deref() {
+            Some(socket)
+                if tenex::mux::socket_is_unresponsive(
+                    socket,
+                    std::time::Duration::from_millis(250),
+                ) =>
+            {
+                eprintln!(
+                    "Warning: mux daemon at {socket} is unresponsive; selecting a new socket. \
+                     To find the stuck process: ss -xlp | rg {socket}"
+                );
+                None
+            }
+            other => other,
+        };
         let discovered = tenex::mux::discover_socket_for_sessions(&wanted_sessions, preferred);
         let chosen = discovered
             .or_else(|| preferred.map(ToString::to_string))
