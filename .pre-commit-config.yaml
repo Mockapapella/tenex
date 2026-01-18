@@ -20,8 +20,23 @@ repos:
           - |
               set -euo pipefail
               state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" cargo test --all-targets --all-features -- --test-threads=1
+              socket="tenex-mux-pre-commit-$(basename "$state_dir")"
+
+              kill_muxd_for_socket() {
+                local socket="$1"
+                command -v pgrep >/dev/null 2>&1 || return 0
+                for pid in $(pgrep -f "tenex muxd" || true); do
+                  local environ="/proc/${pid}/environ"
+                  [ -r "$environ" ] || continue
+                  if tr '\0' '\n' < "$environ" | grep -Fxq "TENEX_MUX_SOCKET=${socket}"; then
+                    kill -TERM "$pid" >/dev/null 2>&1 || true
+                  fi
+                done
+              }
+
+              trap 'kill_muxd_for_socket "$socket"; rm -rf "$state_dir"' EXIT
+
+              TENEX_MUX_SOCKET="$socket" TENEX_STATE_PATH="$state_dir/state.json" cargo test --all-targets --all-features -- --test-threads=1
         language: system
         pass_filenames: false
 
@@ -39,7 +54,22 @@ repos:
                 exit 1
               fi
               state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
+              socket="tenex-mux-pre-commit-$(basename "$state_dir")"
+
+              kill_muxd_for_socket() {
+                local socket="$1"
+                command -v pgrep >/dev/null 2>&1 || return 0
+                for pid in $(pgrep -f "tenex muxd" || true); do
+                  local environ="/proc/${pid}/environ"
+                  [ -r "$environ" ] || continue
+                  if tr '\0' '\n' < "$environ" | grep -Fxq "TENEX_MUX_SOCKET=${socket}"; then
+                    kill -TERM "$pid" >/dev/null 2>&1 || true
+                  fi
+                done
+              }
+
+              trap 'kill_muxd_for_socket "$socket"; rm -rf "$state_dir"' EXIT
+
+              TENEX_MUX_SOCKET="$socket" TENEX_STATE_PATH="$state_dir/state.json" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
         language: system
         pass_filenames: false
