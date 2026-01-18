@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # CI uses a synthetic merge commit and defaults to `fetch-depth: 1`, which leaves
+          # `refs/remotes/origin/*` empty. Some tests exercise branch selector behavior using
+          # the current repo and expect remote branches to exist; without them coverage drops
+          # below the pre-commit threshold.
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
