@@ -442,7 +442,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn test_command() -> Vec<String> {
-        vec!["sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        // Use a long-running process so tests don't race with natural process exit.
+        vec!["sh".to_string(), "-c".to_string(), "sleep 60".to_string()]
     }
 
     fn test_long_command() -> Vec<String> {
@@ -556,6 +557,49 @@ mod tests {
         assert!(Manager::rename_window("tenex-test-nope", 1, "x").is_err());
         assert!(Manager::resize_window("tenex-test-nope", 80, 24).is_err());
         assert!(Manager::send_input("tenex-test-nope", b"").is_err());
+    }
+
+    #[test]
+    fn test_list_pane_pids_success() -> Result<()> {
+        let session_name = "tenex-test-list-pids";
+        let tmp = std::env::temp_dir();
+
+        let _ = Manager::kill(session_name);
+        Manager::create(session_name, &tmp, Some(&test_command()))?;
+
+        let pids = Manager::list_pane_pids(session_name)?;
+        assert!(!pids.is_empty());
+
+        Manager::kill(session_name)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_send_input_success() -> Result<()> {
+        let session_name = "tenex-test-send-input";
+        let tmp = std::env::temp_dir();
+
+        let _ = Manager::kill(session_name);
+        Manager::create(session_name, &tmp, Some(&test_command()))?;
+
+        Manager::send_input(session_name, b"echo tenex\n")?;
+
+        Manager::kill(session_name)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_resize_window_success() -> Result<()> {
+        let session_name = "tenex-test-resize-window";
+        let tmp = std::env::temp_dir();
+
+        let _ = Manager::kill(session_name);
+        Manager::create(session_name, &tmp, Some(&test_command()))?;
+
+        Manager::resize_window(session_name, 80, 24)?;
+
+        Manager::kill(session_name)?;
+        Ok(())
     }
 
     #[test]

@@ -588,6 +588,16 @@ mod tests {
             remote.fetch(&[fetch_ref.as_str()], None, None)?;
         }
 
+        // Ensure we have an origin/HEAD reference so we deterministically exercise the
+        // code path that skips it in list_for_selector (git/libgit2 behavior varies).
+        let origin_head_target = format!("refs/remotes/origin/{current}");
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            &origin_head_target,
+            true,
+            "tenex-tests: set origin/HEAD",
+        )?;
+
         let branches = manager.list_for_selector()?;
         let remote_branch = branches
             .iter()

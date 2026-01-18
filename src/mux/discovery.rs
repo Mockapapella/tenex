@@ -131,6 +131,10 @@ fn probe_session_matches<S: std::hash::BuildHasher>(
 #[cfg(target_os = "linux")]
 fn running_mux_sockets() -> Vec<String> {
     let mut sockets = HashSet::new();
+    #[cfg(test)]
+    let want_path_sockets = super::socket_display()
+        .ok()
+        .is_some_and(|display| display.contains('/') || display.contains('\\'));
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -159,6 +163,13 @@ fn running_mux_sockets() -> Vec<String> {
         if let Some(value) = parse_environ(&environ).get("TENEX_MUX_SOCKET") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
+                #[cfg(test)]
+                {
+                    let is_path = trimmed.contains('/') || trimmed.contains('\\');
+                    if is_path != want_path_sockets {
+                        continue;
+                    }
+                }
                 let _ = sockets.insert(trimmed.to_string());
             }
         }
@@ -261,15 +272,58 @@ mod tests {
         let workdir = TempDir::new()?;
         session_manager.create(&existing_session, workdir.path(), None)?;
 
+        let socket = crate::mux::socket_display()?;
+        let want_path_sockets = socket.contains('/') || socket.contains('\\');
+
+        // Spawn a dummy "muxd" process that advertises a socket but isn't actually listening.
+        // This ensures discovery exercises the probe failure path deterministically.
+        let dummy_socket = if want_path_sockets {
+            std::env::temp_dir()
+                .join(format!(
+                    "tenex-mux-test-unreachable-{}.sock",
+                    uuid::Uuid::new_v4()
+                ))
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            format!("tenex-mux-test-unreachable-{}", uuid::Uuid::new_v4())
+        };
+        let mut dummy = Command::new("bash")
+            .arg("-c")
+            .arg("exec -a muxd sleep 60")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("TENEX_MUX_SOCKET", &dummy_socket)
+            .spawn()?;
+        let dummy_pid = dummy.id();
+
+        let mut found_dummy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if mux_daemon_pids_for_socket(&dummy_socket).contains(&dummy_pid) {
+                found_dummy = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !found_dummy {
+            let _ = dummy.kill();
+            let _ = dummy.wait();
+            return Err(anyhow::anyhow!(
+                "Expected dummy muxd process to be discoverable"
+            ));
+        }
+
         let mut wanted_sessions = HashSet::new();
         wanted_sessions.insert(format!(
             "tenex-test-discovery-missing-{}",
             uuid::Uuid::new_v4()
         ));
 
-        let socket = crate::mux::socket_display()?;
         let discovered = discover_socket_for_sessions(&wanted_sessions, Some(&socket));
         let _ = session_manager.kill(&existing_session);
+        let _ = dummy.kill();
+        let _ = dummy.wait();
         assert!(discovered.is_none());
         Ok(())
     }

@@ -327,10 +327,30 @@ mod tests {
     #[test]
     fn test_running_daemon_version_returns_none_when_not_running()
     -> Result<(), Box<dyn std::error::Error>> {
+        // Ensure the daemon is actually running so we exercise the termination path.
+        // (If it's already stopped, terminate_mux_daemon_for_socket is a no-op.)
+        let _ = SessionManager::new().exists("tenex-version-probe-nonexistent");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if running_daemon_version()?.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
         let endpoint = client::endpoint()?;
-        let _ = terminate_mux_daemon_for_socket(&endpoint.display);
-        assert!(running_daemon_version()?.is_none());
-        Ok(())
+        terminate_mux_daemon_for_socket(&endpoint.display)?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if running_daemon_version()?.is_none() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        Err("Expected mux daemon to be stopped".into())
     }
 
     #[test]

@@ -53,6 +53,10 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
     let output = tenex_bin()
         .args(["reset", "--force"])
         .env("TENEX_STATE_PATH", temp_state.path())
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-reset-{}", std::process::id()),
+        )
         .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);

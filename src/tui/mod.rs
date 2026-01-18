@@ -373,12 +373,14 @@ mod tests {
 
     /// Helper struct that cleans up test worktrees and branches on drop
     struct TestCleanup {
+        repo_path: PathBuf,
         branch_prefix: String,
     }
 
     impl TestCleanup {
         fn new(branch_prefix: &str) -> Self {
             Self {
+                repo_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 branch_prefix: branch_prefix.to_string(),
             }
         }
@@ -387,7 +389,7 @@ mod tests {
     impl Drop for TestCleanup {
         fn drop(&mut self) {
             // Clean up any worktrees/branches created by this test
-            if let Ok(repo) = git2::Repository::open(".") {
+            if let Ok(repo) = git2::Repository::open(&self.repo_path) {
                 // Remove worktrees with our prefix
                 if let Ok(worktrees) = repo.worktrees() {
                     for wt_name in worktrees.iter().flatten() {
