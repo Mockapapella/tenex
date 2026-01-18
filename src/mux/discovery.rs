@@ -280,6 +280,8 @@ mod tests {
         let mut child = Command::new("bash")
             .arg("-c")
             .arg("exec -a muxd sleep 60")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
             .env("TENEX_MUX_SOCKET", &socket)
             .spawn()?;
         let pid = child.id();

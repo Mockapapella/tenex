@@ -7,6 +7,9 @@ repos:
         args:
           - |
               set -euo pipefail
+              if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+                exit 0
+              fi
               hook_path="$(git rev-parse --git-path hooks/post-commit)"
               if [ ! -f "$hook_path" ]; then
                 echo "ERROR: post-commit hook is not installed." >&2
@@ -35,9 +38,61 @@ repos:
         args:
           - |
               set -euo pipefail
+              repo_root="$(git rev-parse --show-toplevel)"
               state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" env -u TENEX_MUX_SOCKET cargo test --all-targets --all-features -- --test-threads=1
+              mux_socket_path="$state_dir/mux.sock"
+
+              cleanup_repo_muxd() {
+                local pids=""
+
+                for proc_dir in /proc/[0-9]*; do
+                  local pid="${proc_dir#/proc/}"
+                  local cmdline
+
+                  cmdline="$(tr '\0' '\n' < "$proc_dir/cmdline" 2>/dev/null || true)"
+                  if [ -z "$cmdline" ]; then
+                    continue
+                  fi
+
+                  local exe="${cmdline%%$'\n'*}"
+                  if [[ "$exe" != "$repo_root/target/"* ]]; then
+                    continue
+                  fi
+
+                  if ! printf '%s\n' "$cmdline" | grep -qx "muxd"; then
+                    continue
+                  fi
+
+                  pids+=" $pid"
+                done
+
+                for pid in $pids; do
+                  kill -TERM "$pid" 2>/dev/null || true
+                done
+
+                local deadline=$((SECONDS + 1))
+                while [ $SECONDS -lt $deadline ]; do
+                  local remaining=""
+                  for pid in $pids; do
+                    if kill -0 "$pid" 2>/dev/null; then
+                      remaining+=" $pid"
+                    fi
+                  done
+                  if [ -z "$remaining" ]; then
+                    return 0
+                  fi
+                  sleep 0.05
+                done
+
+                for pid in $pids; do
+                  kill -KILL "$pid" 2>/dev/null || true
+                done
+              }
+
+              cleanup_repo_muxd || true
+              trap 'cleanup_repo_muxd || true; rm -rf "$state_dir"' EXIT
+
+              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo test --all-targets --all-features -- --test-threads=1
         language: system
         pass_filenames: false
 
@@ -54,9 +109,62 @@ repos:
                 echo "Install: cargo install cargo-llvm-cov --version ${required_version} --locked --force" >&2
                 exit 1
               fi
+              repo_root="$(git rev-parse --show-toplevel)"
               state_dir="$(mktemp -d "${TMPDIR:-/tmp}/tenex-pre-commit-XXXXXX")"
-              trap 'rm -rf "$state_dir"' EXIT
-              TENEX_STATE_PATH="$state_dir/state.json" env -u TENEX_MUX_SOCKET cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
+              mux_socket_path="$state_dir/mux.sock"
+
+              cleanup_repo_muxd() {
+                local pids=""
+
+                for proc_dir in /proc/[0-9]*; do
+                  local pid="${proc_dir#/proc/}"
+                  local cmdline
+
+                  cmdline="$(tr '\0' '\n' < "$proc_dir/cmdline" 2>/dev/null || true)"
+                  if [ -z "$cmdline" ]; then
+                    continue
+                  fi
+
+                  local exe="${cmdline%%$'\n'*}"
+                  if [[ "$exe" != "$repo_root/target/"* ]]; then
+                    continue
+                  fi
+
+                  if ! printf '%s\n' "$cmdline" | grep -qx "muxd"; then
+                    continue
+                  fi
+
+                  pids+=" $pid"
+                done
+
+                for pid in $pids; do
+                  kill -TERM "$pid" 2>/dev/null || true
+                done
+
+                local deadline=$((SECONDS + 1))
+                while [ $SECONDS -lt $deadline ]; do
+                  local remaining=""
+                  for pid in $pids; do
+                    if kill -0 "$pid" 2>/dev/null; then
+                      remaining+=" $pid"
+                    fi
+                  done
+                  if [ -z "$remaining" ]; then
+                    return 0
+                  fi
+                  sleep 0.05
+                done
+
+                for pid in $pids; do
+                  kill -KILL "$pid" 2>/dev/null || true
+                done
+              }
+
+              cleanup_repo_muxd || true
+              trap 'cleanup_repo_muxd || true; rm -rf "$state_dir"' EXIT
+
+              rm -rf target/llvm-cov-target
+              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
         language: system
         pass_filenames: false
 
