@@ -59,8 +59,15 @@ pub fn running_daemon_version() -> Result<Option<String>> {
         return Ok(None);
     };
 
-    ipc::write_json(&mut stream, &protocol::MuxRequest::Ping)?;
-    match ipc::read_json::<_, protocol::MuxResponse>(&mut stream)? {
+    if ipc::write_json(&mut stream, &protocol::MuxRequest::Ping).is_err() {
+        return Ok(None);
+    }
+
+    let Ok(response) = ipc::read_json::<_, protocol::MuxResponse>(&mut stream) else {
+        return Ok(None);
+    };
+
+    match response {
         protocol::MuxResponse::Pong { version } => Ok(Some(version)),
         protocol::MuxResponse::Err { message } => Err(anyhow::anyhow!(message)),
         other => Err(anyhow::anyhow!("Unexpected mux response: {other:?}")),

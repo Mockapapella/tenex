@@ -49,7 +49,7 @@ repos:
                   local pid="${proc_dir#/proc/}"
                   local cmdline
 
-                  cmdline="$(tr '\0' '\n' < "$proc_dir/cmdline" 2>/dev/null || true)"
+                  cmdline="$( { tr '\0' '\n' < "$proc_dir/cmdline"; } 2>/dev/null || true)"
                   if [ -z "$cmdline" ]; then
                     continue
                   fi
@@ -92,7 +92,7 @@ repos:
               cleanup_repo_muxd || true
               trap 'cleanup_repo_muxd || true; rm -rf "$state_dir"' EXIT
 
-              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo test --all-targets --all-features -- --test-threads=1
+              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo test --jobs 1 --all-targets --all-features -- --test-threads=1
         language: system
         pass_filenames: false
 
@@ -120,7 +120,7 @@ repos:
                   local pid="${proc_dir#/proc/}"
                   local cmdline
 
-                  cmdline="$(tr '\0' '\n' < "$proc_dir/cmdline" 2>/dev/null || true)"
+                  cmdline="$( { tr '\0' '\n' < "$proc_dir/cmdline"; } 2>/dev/null || true)"
                   if [ -z "$cmdline" ]; then
                     continue
                   fi
@@ -164,7 +164,7 @@ repos:
               trap 'cleanup_repo_muxd || true; rm -rf "$state_dir"' EXIT
 
               rm -rf target/llvm-cov-target
-              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo llvm-cov --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
+              TENEX_STATE_PATH="$state_dir/state.json" TENEX_MUX_SOCKET="$mux_socket_path" cargo llvm-cov --jobs 1 --all-targets --all-features --profile coverage --fail-under-lines 90 --fail-under-functions 90 --ignore-filename-regex 'crates/vt100-ctt/' -- --test-threads=1
         language: system
         pass_filenames: false
 
