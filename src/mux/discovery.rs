@@ -135,6 +135,11 @@ fn running_mux_sockets() -> Vec<String> {
     let want_path_sockets = super::socket_display()
         .ok()
         .is_some_and(|display| display.contains('/') || display.contains('\\'));
+    #[cfg(test)]
+    let wanted_state_path = std::env::var("TENEX_STATE_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -160,7 +165,16 @@ fn running_mux_sockets() -> Vec<String> {
             continue;
         };
 
-        if let Some(value) = parse_environ(&environ).get("TENEX_MUX_SOCKET") {
+        let parsed = parse_environ(&environ);
+
+        #[cfg(test)]
+        if let Some(wanted_state_path) = wanted_state_path.as_deref()
+            && parsed.get("TENEX_STATE_PATH").map(|value| value.trim()) != Some(wanted_state_path)
+        {
+            continue;
+        }
+
+        if let Some(value) = parsed.get("TENEX_MUX_SOCKET") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
                 #[cfg(test)]
@@ -274,6 +288,11 @@ mod tests {
 
         let socket = crate::mux::socket_display()?;
         let want_path_sockets = socket.contains('/') || socket.contains('\\');
+        let state_path = std::env::var("TENEX_STATE_PATH").unwrap_or_else(|_| {
+            crate::config::Config::state_path()
+                .to_string_lossy()
+                .into_owned()
+        });
 
         // Spawn a dummy "muxd" process that advertises a socket but isn't actually listening.
         // This ensures discovery exercises the probe failure path deterministically.
@@ -294,6 +313,7 @@ mod tests {
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("TENEX_MUX_SOCKET", &dummy_socket)
+            .env("TENEX_STATE_PATH", &state_path)
             .spawn()?;
         let dummy_pid = dummy.id();
 
@@ -331,12 +351,18 @@ mod tests {
     #[test]
     fn test_mux_daemon_pids_for_socket_finds_process() -> Result<(), Box<dyn std::error::Error>> {
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let state_path = std::env::var("TENEX_STATE_PATH").unwrap_or_else(|_| {
+            crate::config::Config::state_path()
+                .to_string_lossy()
+                .into_owned()
+        });
         let mut child = Command::new("bash")
             .arg("-c")
             .arg("exec -a muxd sleep 60")
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("TENEX_MUX_SOCKET", &socket)
+            .env("TENEX_STATE_PATH", &state_path)
             .spawn()?;
         let pid = child.id();
 
