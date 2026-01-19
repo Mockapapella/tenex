@@ -244,6 +244,17 @@ fn confirming_rect(app: &App, action: ConfirmAction, frame_area: Rect) -> Rect {
             confirm_overlay_rect(lines, frame_area)
         }
         ConfirmAction::Reset | ConfirmAction::Quit => confirm_overlay_rect(1, frame_area),
+        ConfirmAction::RestartMuxDaemon => {
+            let lines = app
+                .data
+                .ui
+                .muxd_version_mismatch
+                .as_ref()
+                .map_or(1, |info| {
+                    7usize.saturating_add(usize::from(info.env_mux_socket.is_some()))
+                });
+            confirm_overlay_rect(lines, frame_area)
+        }
         ConfirmAction::Synthesize => {
             let lines = if app.data.selected_agent().is_some() {
                 6
@@ -266,7 +277,7 @@ fn confirm_overlay_rect(base_lines: usize, frame_area: Rect) -> Rect {
 mod tests {
     use super::*;
     use crate::agent::{Agent, Storage};
-    use crate::app::{Settings, WorktreeConflictInfo};
+    use crate::app::{MuxdVersionMismatchInfo, Settings, WorktreeConflictInfo};
     use crate::config::Config;
     use crate::state::{
         BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
@@ -445,6 +456,20 @@ mod tests {
         app.apply_mode(
             ConfirmingMode {
                 action: ConfirmAction::Reset,
+            }
+            .into(),
+        );
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.data.ui.muxd_version_mismatch = Some(MuxdVersionMismatchInfo {
+            socket: "tenex-mux-test.sock".to_string(),
+            daemon_version: "tenex-mux/0.0.0".to_string(),
+            expected_version: "tenex-mux/0.0.1".to_string(),
+            env_mux_socket: None,
+        });
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::RestartMuxDaemon,
             }
             .into(),
         );

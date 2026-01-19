@@ -176,6 +176,78 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         Style::default().fg(colors::TEXT_PRIMARY),
                     ))]
                 }
+                ConfirmAction::RestartMuxDaemon => {
+                    app.data.ui.muxd_version_mismatch.as_ref().map_or_else(
+                        || {
+                            vec![Line::from(Span::styled(
+                                "Restart mux daemon?",
+                                Style::default().fg(colors::TEXT_PRIMARY),
+                            ))]
+                        },
+                        |info| {
+                            let mut lines = vec![
+                                Line::from(Span::styled(
+                                    "Restart mux daemon?",
+                                    Style::default()
+                                        .fg(colors::TEXT_PRIMARY)
+                                        .add_modifier(Modifier::BOLD),
+                                )),
+                                Line::from(""),
+                                Line::from(vec![
+                                    Span::styled(
+                                        "  Daemon: ",
+                                        Style::default().fg(colors::TEXT_DIM),
+                                    ),
+                                    Span::styled(
+                                        info.daemon_version.as_str(),
+                                        Style::default().fg(colors::TEXT_PRIMARY),
+                                    ),
+                                ]),
+                                Line::from(vec![
+                                    Span::styled(
+                                        "  Tenex:  ",
+                                        Style::default().fg(colors::TEXT_DIM),
+                                    ),
+                                    Span::styled(
+                                        info.expected_version.as_str(),
+                                        Style::default().fg(colors::TEXT_PRIMARY),
+                                    ),
+                                ]),
+                                Line::from(vec![
+                                    Span::styled(
+                                        "  Socket: ",
+                                        Style::default().fg(colors::TEXT_DIM),
+                                    ),
+                                    Span::styled(
+                                        info.socket.as_str(),
+                                        Style::default().fg(colors::TEXT_MUTED),
+                                    ),
+                                ]),
+                            ];
+
+                            if let Some(env_socket) = info.env_mux_socket.as_deref() {
+                                lines.push(Line::from(vec![
+                                    Span::styled(
+                                        "  Env:    ",
+                                        Style::default().fg(colors::TEXT_DIM),
+                                    ),
+                                    Span::styled(
+                                        format!("TENEX_MUX_SOCKET={env_socket}"),
+                                        Style::default().fg(colors::TEXT_MUTED),
+                                    ),
+                                ]));
+                            }
+
+                            lines.push(Line::from(""));
+                            lines.push(Line::from(Span::styled(
+                                "All running agent sessions will be restarted.",
+                                Style::default().fg(colors::DIFF_REMOVE),
+                            )));
+
+                            lines
+                        },
+                    )
+                }
                 ConfirmAction::Quit => {
                     vec![Line::from(Span::styled(
                         "Quit with running agents?",
@@ -470,6 +542,33 @@ mod tests {
         app.enter_mode(
             ConfirmingMode {
                 action: ConfirmAction::Quit,
+            }
+            .into(),
+        );
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirming_restart_mux_daemon_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.data.ui.muxd_version_mismatch = Some(crate::app::MuxdVersionMismatchInfo {
+            socket: "tenex-mux-test.sock".to_string(),
+            daemon_version: "tenex-mux/0.0.0".to_string(),
+            expected_version: "tenex-mux/0.0.1".to_string(),
+            env_mux_socket: Some("tenex-mux-test.sock".to_string()),
+        });
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::RestartMuxDaemon,
             }
             .into(),
         );

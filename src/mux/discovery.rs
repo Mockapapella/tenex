@@ -10,6 +10,7 @@ use super::protocol::{MuxRequest, MuxResponse};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 /// Attempt to find a running mux daemon socket that contains at least one of the requested
 /// session names.
@@ -62,6 +63,54 @@ pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
     best.map(|(_, socket)| socket)
 }
 
+pub(super) fn mux_daemon_pids_for_socket(socket: &str) -> Vec<u32> {
+    mux_daemon_pids_for_socket_in_proc_root(Path::new("/proc"), socket)
+}
+
+fn mux_daemon_pids_for_socket_in_proc_root(proc_root: &Path, socket: &str) -> Vec<u32> {
+    let wanted_socket = socket.trim();
+    if wanted_socket.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return Vec::new();
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid_str) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+
+        let base = entry.path();
+        let Ok(cmdline) = std::fs::read(base.join("cmdline")) else {
+            continue;
+        };
+        if !cmdline_contains_muxd(&cmdline) {
+            continue;
+        }
+
+        let Ok(environ) = std::fs::read(base.join("environ")) else {
+            continue;
+        };
+
+        let parsed = parse_environ(&environ);
+        let Some(value) = parsed.get("TENEX_MUX_SOCKET") else {
+            continue;
+        };
+        if value.trim() == wanted_socket {
+            pids.push(pid);
+        }
+    }
+
+    pids
+}
+
 fn probe_session_matches<S: std::hash::BuildHasher>(
     socket: &str,
     wanted_sessions: &HashSet<String, S>,
@@ -86,8 +135,22 @@ fn probe_session_matches<S: std::hash::BuildHasher>(
 
 #[cfg(target_os = "linux")]
 fn running_mux_sockets() -> Vec<String> {
+    running_mux_sockets_in_proc_root(Path::new("/proc"))
+}
+
+#[cfg(target_os = "linux")]
+fn running_mux_sockets_in_proc_root(proc_root: &Path) -> Vec<String> {
     let mut sockets = HashSet::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    #[cfg(test)]
+    let want_path_sockets = super::socket_display()
+        .ok()
+        .is_some_and(|display| display.contains('/') || display.contains('\\'));
+    #[cfg(test)]
+    let wanted_state_path = std::env::var("TENEX_STATE_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
         return Vec::new();
     };
 
@@ -112,9 +175,25 @@ fn running_mux_sockets() -> Vec<String> {
             continue;
         };
 
-        if let Some(value) = parse_environ(&environ).get("TENEX_MUX_SOCKET") {
+        let parsed = parse_environ(&environ);
+
+        #[cfg(test)]
+        if let Some(wanted_state_path) = wanted_state_path.as_deref()
+            && parsed.get("TENEX_STATE_PATH").map(|value| value.trim()) != Some(wanted_state_path)
+        {
+            continue;
+        }
+
+        if let Some(value) = parsed.get("TENEX_MUX_SOCKET") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
+                #[cfg(test)]
+                {
+                    let is_path = trimmed.contains('/') || trimmed.contains('\\');
+                    if is_path != want_path_sockets {
+                        continue;
+                    }
+                }
                 let _ = sockets.insert(trimmed.to_string());
             }
         }
@@ -162,6 +241,9 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use tempfile::TempDir;
+
+    use std::process::Command;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_cmdline_contains_muxd() {
@@ -214,16 +296,226 @@ mod tests {
         let workdir = TempDir::new()?;
         session_manager.create(&existing_session, workdir.path(), None)?;
 
+        let socket = crate::mux::socket_display()?;
+        let want_path_sockets = socket.contains('/') || socket.contains('\\');
+        let state_path = std::env::var("TENEX_STATE_PATH").unwrap_or_else(|_| {
+            crate::config::Config::state_path()
+                .to_string_lossy()
+                .into_owned()
+        });
+
+        // Spawn a dummy "muxd" process that advertises a socket but isn't actually listening.
+        // This ensures discovery exercises the probe failure path deterministically.
+        let dummy_socket = if want_path_sockets {
+            std::env::temp_dir()
+                .join(format!(
+                    "tenex-mux-test-unreachable-{}.sock",
+                    uuid::Uuid::new_v4()
+                ))
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            format!("tenex-mux-test-unreachable-{}", uuid::Uuid::new_v4())
+        };
+        let mut dummy = Command::new("bash")
+            .arg("-c")
+            .arg("exec -a muxd sleep 60")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("TENEX_MUX_SOCKET", &dummy_socket)
+            .env("TENEX_STATE_PATH", &state_path)
+            .spawn()?;
+        let dummy_pid = dummy.id();
+
+        let mut found_dummy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if mux_daemon_pids_for_socket(&dummy_socket).contains(&dummy_pid) {
+                found_dummy = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !found_dummy {
+            let _ = dummy.kill();
+            let _ = dummy.wait();
+            return Err(anyhow::anyhow!(
+                "Expected dummy muxd process to be discoverable"
+            ));
+        }
+
         let mut wanted_sessions = HashSet::new();
         wanted_sessions.insert(format!(
             "tenex-test-discovery-missing-{}",
             uuid::Uuid::new_v4()
         ));
 
-        let socket = crate::mux::socket_display()?;
         let discovered = discover_socket_for_sessions(&wanted_sessions, Some(&socket));
         let _ = session_manager.kill(&existing_session);
+        let _ = dummy.kill();
+        let _ = dummy.wait();
         assert!(discovered.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_mux_daemon_pids_for_socket_finds_process() -> Result<(), Box<dyn std::error::Error>> {
+        let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let state_path = std::env::var("TENEX_STATE_PATH").unwrap_or_else(|_| {
+            crate::config::Config::state_path()
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut child = Command::new("bash")
+            .arg("-c")
+            .arg("exec -a muxd sleep 60")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("TENEX_MUX_SOCKET", &socket)
+            .env("TENEX_STATE_PATH", &state_path)
+            .spawn()?;
+        let pid = child.id();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if mux_daemon_pids_for_socket(&socket).contains(&pid) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        Err("Expected to discover spawned muxd process".into())
+    }
+
+    #[test]
+    fn test_mux_daemon_pids_for_socket_returns_empty_for_empty_socket() {
+        assert!(mux_daemon_pids_for_socket("").is_empty());
+        assert!(mux_daemon_pids_for_socket("   ").is_empty());
+    }
+
+    #[test]
+    fn test_mux_daemon_pids_for_socket_handles_missing_cmdline_files() -> Result<()> {
+        let proc_root = TempDir::new()?;
+
+        // Missing cmdline file should be skipped (covers cmdline read failure path).
+        std::fs::create_dir_all(proc_root.path().join("1000"))?;
+
+        let wanted_socket = "tenex-test-socket";
+        let pid_dir = proc_root.path().join("2000");
+        std::fs::create_dir_all(&pid_dir)?;
+        std::fs::write(pid_dir.join("cmdline"), b"tenex\0muxd\0")?;
+        std::fs::write(
+            pid_dir.join("environ"),
+            format!("TENEX_MUX_SOCKET={wanted_socket}\0").as_bytes(),
+        )?;
+
+        let pids = mux_daemon_pids_for_socket_in_proc_root(proc_root.path(), wanted_socket);
+        assert_eq!(pids, vec![2000]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_running_mux_sockets_handles_missing_cmdline_files() -> Result<()> {
+        let proc_root = TempDir::new()?;
+        std::fs::create_dir_all(proc_root.path().join("1000"))?;
+
+        let want_path_sockets = crate::mux::socket_display()
+            .ok()
+            .is_some_and(|display| display.contains('/') || display.contains('\\'));
+
+        let socket_good = if want_path_sockets {
+            proc_root
+                .path()
+                .join("good.sock")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "tenex-mux-test-good".to_string()
+        };
+
+        let pid_dir = proc_root.path().join("2000");
+        std::fs::create_dir_all(&pid_dir)?;
+        std::fs::write(pid_dir.join("cmdline"), b"tenex\0muxd\0")?;
+
+        let mut environ = format!("TENEX_MUX_SOCKET={socket_good}\0");
+        if let Some(wanted_state_path) = std::env::var("TENEX_STATE_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            environ.push_str("TENEX_STATE_PATH=");
+            environ.push_str(&wanted_state_path);
+            environ.push('\0');
+        }
+        std::fs::write(pid_dir.join("environ"), environ.as_bytes())?;
+
+        let sockets = running_mux_sockets_in_proc_root(proc_root.path());
+        assert!(sockets.contains(&socket_good));
+        Ok(())
+    }
+
+    #[test]
+    fn test_running_mux_sockets_filters_mismatched_state_path() -> Result<()> {
+        let Some(wanted_state_path) = std::env::var("TENEX_STATE_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            // The state-path filter only applies when TENEX_STATE_PATH is set.
+            return Ok(());
+        };
+
+        let want_path_sockets = crate::mux::socket_display()
+            .ok()
+            .is_some_and(|display| display.contains('/') || display.contains('\\'));
+
+        let proc_root = TempDir::new()?;
+        let socket_good = if want_path_sockets {
+            proc_root
+                .path()
+                .join("good.sock")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "tenex-mux-test-good".to_string()
+        };
+        let socket_bad = if want_path_sockets {
+            proc_root
+                .path()
+                .join("bad.sock")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "tenex-mux-test-bad".to_string()
+        };
+
+        let good_pid = proc_root.path().join("1000");
+        std::fs::create_dir_all(&good_pid)?;
+        std::fs::write(good_pid.join("cmdline"), b"tenex\0muxd\0")?;
+        std::fs::write(
+            good_pid.join("environ"),
+            format!("TENEX_MUX_SOCKET={socket_good}\0TENEX_STATE_PATH={wanted_state_path}\0")
+                .as_bytes(),
+        )?;
+
+        let bad_pid = proc_root.path().join("2000");
+        std::fs::create_dir_all(&bad_pid)?;
+        std::fs::write(bad_pid.join("cmdline"), b"tenex\0muxd\0")?;
+        std::fs::write(
+            bad_pid.join("environ"),
+            format!(
+                "TENEX_MUX_SOCKET={socket_bad}\0TENEX_STATE_PATH={wanted_state_path}.mismatch\0"
+            )
+            .as_bytes(),
+        )?;
+
+        let sockets = running_mux_sockets_in_proc_root(proc_root.path());
+        assert!(sockets.contains(&socket_good));
+        assert!(!sockets.contains(&socket_bad));
         Ok(())
     }
 }

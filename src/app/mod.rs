@@ -11,4 +11,7 @@ pub use data::AppData;
 pub use event::{Event, Handler};
 pub use handlers::Actions;
 pub use settings::{AgentProgram, AgentRole, Settings};
-pub use state::{App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, Tab, WorktreeConflictInfo};
+pub use state::{
+    App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, MuxdVersionMismatchInfo, Tab,
+    WorktreeConflictInfo,
+};

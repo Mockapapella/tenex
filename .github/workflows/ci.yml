@@ -15,6 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For pull_request workflows, GitHub Actions uses a synthetic merge commit by default.
+          # We check out the PR head SHA so coverage reports can be compared byte-for-byte with
+          # reports generated locally on the same commit.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Fetch remote branches
+        run: git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -38,3 +46,46 @@ jobs:
         run: python -m pip install --upgrade pip pre-commit
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
+      - name: Export llvm-cov report (per file)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "No coverage artifacts found; skipping llvm-cov report export."
+            exit 0
+          fi
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
+          gzip -9 -f llvm-cov-report.lcov
+          sha256sum llvm-cov-report.txt | tee llvm-cov-report.sha256
+          {
+            echo "git_sha=$(git rev-parse HEAD)"
+            cargo llvm-cov --version
+            rustc -V
+          } > llvm-cov-meta.txt
+          tail -n 3 llvm-cov-report.txt
+      - name: Verify committed llvm-cov report matches
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f ci/llvm-cov-report.txt ]; then
+            echo "ERROR: Missing ci/llvm-cov-report.txt" >&2
+            echo "Run locally: pre-commit install -t post-commit" >&2
+            echo "Then make a commit (it will auto-amend in the report)." >&2
+            exit 1
+          fi
+          diff -u ci/llvm-cov-report.txt llvm-cov-report.txt
+          if [ -f ci/llvm-cov-report.sha256 ]; then
+            sha256sum -c ci/llvm-cov-report.sha256
+          fi
+      - name: Upload llvm-cov report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-report
+          path: |
+            llvm-cov-report.txt
+            llvm-cov-report.lcov.gz
+            llvm-cov-report.sha256
+            llvm-cov-meta.txt
+          if-no-files-found: ignore

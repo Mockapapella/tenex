@@ -8,6 +8,19 @@ use crate::state::{AppMode, ConfirmPushForPRMode, ErrorModalMode};
 
 use super::super::Actions;
 
+#[cfg(test)]
+use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::OnceLock;
+
+#[cfg(test)]
+static GH_BINARY_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(test)]
+pub(super) fn set_gh_binary_override(path: PathBuf) {
+    let _ = GH_BINARY_OVERRIDE.set(path);
+}
+
 impl Actions {
     /// Open a PR for the selected agent's branch (Ctrl+o)
     ///
@@ -240,7 +253,20 @@ impl Actions {
         );
 
         // Use gh pr create with --web flag to open in browser
-        let output = std::process::Command::new("gh")
+        let gh = {
+            #[cfg(test)]
+            {
+                GH_BINARY_OVERRIDE
+                    .get()
+                    .map_or_else(|| std::ffi::OsStr::new("gh"), |path| path.as_os_str())
+            }
+            #[cfg(not(test))]
+            {
+                std::ffi::OsStr::new("gh")
+            }
+        };
+
+        let output = std::process::Command::new(gh)
             .args(["pr", "create", "--web", "--base", &base_branch])
             .current_dir(&worktree_path)
             .output();

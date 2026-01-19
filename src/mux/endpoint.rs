@@ -247,10 +247,9 @@ mod tests {
     #[test]
     fn test_set_socket_override_already_set() -> Result<(), Box<dyn std::error::Error>> {
         let name = format!("tenex-mux-test-{}", std::process::id());
-        if let Err(err) = set_socket_override(&name) {
-            if err.to_string().contains("already set") {
-                return Ok(());
-            }
+        if let Err(err) = set_socket_override(&name)
+            && !err.to_string().contains("already set")
+        {
             return Err(err.into());
         }
 
