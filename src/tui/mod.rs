@@ -466,6 +466,99 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_testcleanup_removes_matching_worktree_and_branch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        fn git(repo: &std::path::Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_COMMON_DIR")
+                .env_remove("GIT_OBJECT_DIRECTORY")
+                .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                .status()?;
+            if !status.success() {
+                return Err(format!("git {args:?} failed with {status}").into());
+            }
+            Ok(())
+        }
+
+        let repo_dir = TempDir::new()?;
+        git(repo_dir.path(), &["init", "-q"])?;
+        git(
+            repo_dir.path(),
+            &["config", "user.email", "test@example.com"],
+        )?;
+        git(repo_dir.path(), &["config", "user.name", "Test"])?;
+        std::fs::write(repo_dir.path().join("README.md"), "test")?;
+        git(repo_dir.path(), &["add", "."])?;
+        git(
+            repo_dir.path(),
+            &["commit", "-q", "--no-verify", "-m", "init"],
+        )?;
+
+        let worktree_parent = TempDir::new()?;
+        let branch_prefix = "tenex-test-cleanup/";
+        let branch_name = format!("{branch_prefix}branch");
+        let worktree_path = worktree_parent
+            .path()
+            .join(branch_prefix.replace('/', "-") + "branch");
+        git(
+            repo_dir.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch_name,
+                worktree_path.to_str().ok_or("worktree path is not utf-8")?,
+            ],
+        )?;
+
+        // Add a second worktree that should NOT match our prefix, so cleanup exercises the
+        // non-matching path deterministically (CI repos typically have no extra worktrees).
+        let other_branch = "other-branch";
+        let other_worktree_path = worktree_parent.path().join("other-worktree");
+        git(
+            repo_dir.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                other_branch,
+                other_worktree_path
+                    .to_str()
+                    .ok_or("other worktree path is not utf-8")?,
+            ],
+        )?;
+
+        let original_dir = std::env::current_dir()?;
+        std::env::set_current_dir(repo_dir.path())?;
+        let cleanup = TestCleanup::new(branch_prefix);
+        std::env::set_current_dir(original_dir)?;
+
+        drop(cleanup);
+
+        assert!(
+            !worktree_path.exists(),
+            "Expected cleanup to remove worktree at {}",
+            worktree_path.display()
+        );
+
+        let repo = git2::Repository::open(repo_dir.path())?;
+        assert!(
+            repo.find_branch(&branch_name, git2::BranchType::Local)
+                .is_err(),
+            "Expected cleanup to delete branch {branch_name}"
+        );
+
+        Ok(())
+    }
+
     /// Test helper that wraps `input::handle_key_event` with an empty `batched_keys` vec
     fn test_key_event(
         app: &mut App,
@@ -922,15 +1015,16 @@ mod tests {
         // 1. Error modal (no git repo)
         // 2. Normal mode (agent created successfully)
         // 3. Confirming(WorktreeConflict) if worktree already exists
+        let is_error_modal = matches!(&app.mode, AppMode::ErrorModal(_));
+        let is_normal = app.mode == AppMode::normal();
+        let is_worktree_conflict = matches!(
+            &app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            })
+        );
         assert!(
-            matches!(&app.mode, AppMode::ErrorModal(_))
-                || app.mode == AppMode::normal()
-                || matches!(
-                    &app.mode,
-                    AppMode::Confirming(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    })
-                ),
+            is_error_modal || is_normal || is_worktree_conflict,
             "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
             app.mode
         );
@@ -938,10 +1032,16 @@ mod tests {
         // - Error was set (no git repo or other failure)
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
+        let has_error = app.data.ui.last_error.is_some();
+        let has_agent = app.data.storage.len() == 1;
+        let has_worktree_conflict = app.data.spawn.worktree_conflict.is_some();
         assert!(
-            app.data.ui.last_error.is_some()
-                || app.data.storage.len() == 1
-                || app.data.spawn.worktree_conflict.is_some()
+            has_error || has_agent || has_worktree_conflict,
+            "Expected error, created agent, or worktree conflict. mode={:?} error={:?} agents={} conflict={:?}",
+            app.mode,
+            app.data.ui.last_error,
+            app.data.storage.len(),
+            app.data.spawn.worktree_conflict
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -965,15 +1065,16 @@ mod tests {
         // 1. Error modal (no git repo)
         // 2. Normal mode (agent created successfully)
         // 3. Confirming(WorktreeConflict) if worktree already exists
+        let is_error_modal = matches!(&app.mode, AppMode::ErrorModal(_));
+        let is_normal = app.mode == AppMode::normal();
+        let is_worktree_conflict = matches!(
+            &app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            })
+        );
         assert!(
-            matches!(&app.mode, AppMode::ErrorModal(_))
-                || app.mode == AppMode::normal()
-                || matches!(
-                    &app.mode,
-                    AppMode::Confirming(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    })
-                ),
+            is_error_modal || is_normal || is_worktree_conflict,
             "Expected ErrorModal, Normal, or Confirming(WorktreeConflict) mode, got {:?}",
             app.mode
         );
@@ -981,10 +1082,16 @@ mod tests {
         // - Error was set (no git repo or other failure)
         // - Agent was created
         // - Worktree conflict detected (waiting for user input)
+        let has_error = app.data.ui.last_error.is_some();
+        let has_agent = app.data.storage.len() == 1;
+        let has_worktree_conflict = app.data.spawn.worktree_conflict.is_some();
         assert!(
-            app.data.ui.last_error.is_some()
-                || app.data.storage.len() == 1
-                || app.data.spawn.worktree_conflict.is_some()
+            has_error || has_agent || has_worktree_conflict,
+            "Expected error, created agent, or worktree conflict. mode={:?} error={:?} agents={} conflict={:?}",
+            app.mode,
+            app.data.ui.last_error,
+            app.data.storage.len(),
+            app.data.spawn.worktree_conflict
         );
         // _cleanup will automatically remove test branches/worktrees when dropped
         Ok(())
@@ -1235,15 +1342,16 @@ mod tests {
 
         // On error, should show error modal; on success with no agent, exits normally
         // Could also enter WorktreeConflict mode if the branch already exists
+        let is_error_modal = matches!(&app.mode, AppMode::ErrorModal(_));
+        let is_normal = app.mode == AppMode::normal();
+        let is_worktree_conflict = matches!(
+            &app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            })
+        );
         assert!(
-            matches!(&app.mode, AppMode::ErrorModal(_))
-                || app.mode == AppMode::normal()
-                || matches!(
-                    &app.mode,
-                    AppMode::Confirming(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    })
-                ),
+            is_error_modal || is_normal || is_worktree_conflict,
             "Expected ErrorModal, Normal, or WorktreeConflict mode, got {:?}",
             app.mode
         );

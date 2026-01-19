@@ -417,6 +417,7 @@ pub struct Window {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_attach_command() {
@@ -444,5 +445,23 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn test_create_returns_error_when_session_already_exists()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let manager = Manager::new();
+        let name = format!("tenex-test-session-{}", uuid::Uuid::new_v4());
+        let workdir = TempDir::new()?;
+
+        manager.create(&name, workdir.path(), None)?;
+        let err = match manager.create(&name, workdir.path(), None) {
+            Ok(()) => return Err("Expected duplicate session creation to fail".into()),
+            Err(err) => err,
+        };
+        assert!(!err.to_string().is_empty());
+
+        let _ = manager.kill(&name);
+        Ok(())
     }
 }

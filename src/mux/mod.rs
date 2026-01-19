@@ -290,31 +290,76 @@ mod tests {
     #[test]
     fn test_terminate_mux_daemon_for_socket_escalates_to_kill_when_ignoring_term()
     -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::process::ExitStatusExt;
+
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
+        let ready_path =
+            std::env::temp_dir().join(format!("tenex-mux-test-ready-{}", uuid::Uuid::new_v4()));
         let mut child = Command::new("python3")
             .arg("-c")
-            .arg("import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)")
+            .arg(
+                r#"
+import os
+import signal
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+ready_path = os.environ.get("TENEX_TEST_READY_PATH")
+if ready_path:
+    with open(ready_path, "w", encoding="utf-8") as f:
+        f.write("ready")
+time.sleep(60)
+"#,
+            )
             .arg("muxd")
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("TENEX_MUX_SOCKET", &socket)
+            .env("TENEX_TEST_READY_PATH", &ready_path)
             .spawn()?;
         let pid = child.id();
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+            if ready_path.exists() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
+        }
+        if !ready_path.exists() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Expected spawned muxd process to signal readiness".into());
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut found = false;
+        while Instant::now() < deadline {
+            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+                found = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !found {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Expected spawned muxd process to be discoverable".into());
         }
 
         terminate_mux_daemon_for_socket(&socket)?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if child.try_wait()?.is_some() {
-                return Ok(());
+            if let Some(status) = child.try_wait()? {
+                if status.signal() == Some(9) {
+                    return Ok(());
+                }
+
+                return Err(format!(
+                    "Expected spawned muxd process to exit with SIGKILL, got status {status:?}"
+                )
+                .into());
             }
             std::thread::sleep(Duration::from_millis(10));
         }

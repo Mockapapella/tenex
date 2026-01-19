@@ -4,7 +4,9 @@ use crate::app::handlers::Actions;
 use crate::app::state::App;
 use crate::config::Config;
 use crate::state::{AppMode, ConfirmPushForPRMode, ConfirmPushMode, RenameBranchMode};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tempfile::{NamedTempFile, TempDir};
 
 fn create_test_app() -> std::io::Result<(App, NamedTempFile)> {
@@ -14,6 +16,45 @@ fn create_test_app() -> std::io::Result<(App, NamedTempFile)> {
         App::new(Config::default(), storage, Settings::default(), false),
         temp_file,
     ))
+}
+
+fn ensure_stub_gh_installed() -> Result<(), Box<dyn std::error::Error>> {
+    static GH_STUB: OnceLock<PathBuf> = OnceLock::new();
+
+    let gh_path = if let Some(path) = GH_STUB.get() {
+        path.clone()
+    } else {
+        let dir = std::env::temp_dir().join(format!(
+            "tenex-gh-stub-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir)?;
+
+        let gh_path = dir.join("gh");
+        std::fs::write(
+            &gh_path,
+            r#"#!/usr/bin/env bash
+
+if [[ "$5" == "main" ]]; then
+  exit 0
+fi
+
+echo "boom" 1>&2
+exit 1
+"#,
+        )?;
+
+        let mut perms = std::fs::metadata(&gh_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&gh_path, perms)?;
+
+        let _ = GH_STUB.set(gh_path.clone());
+        gh_path
+    };
+
+    super::open_pr::set_gh_binary_override(gh_path);
+    Ok(())
 }
 
 #[test]
@@ -190,7 +231,9 @@ fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
-fn test_open_pr_in_browser_missing_gh_sets_error() -> Result<(), Box<dyn std::error::Error>> {
+fn test_open_pr_in_browser_gh_success_clears_state() -> Result<(), Box<dyn std::error::Error>> {
+    ensure_stub_gh_installed()?;
+
     let (mut app, _temp) = create_test_app()?;
     let temp_dir = TempDir::new()?;
     let agent = Agent::new(
@@ -206,16 +249,39 @@ fn test_open_pr_in_browser_missing_gh_sets_error() -> Result<(), Box<dyn std::er
     app.data.git_op.branch_name = "feature/gh-less".to_string();
     app.data.git_op.base_branch = "main".to_string();
 
-    let result = Actions::open_pr_in_browser(&mut app.data);
-
-    // gh may be missing (error modal) or present (status message), but the git op state
-    // should always be cleared after attempting to open the PR.
-    assert!(result.is_ok() || result.is_err());
+    Actions::open_pr_in_browser(&mut app.data)?;
     assert!(app.data.git_op.branch_name.is_empty());
     assert!(app.data.git_op.agent_id.is_none());
-    if result.is_ok() {
-        assert!(app.data.ui.status_message.is_some());
-    }
+    assert!(app.data.ui.status_message.is_some());
+    Ok(())
+}
+
+#[test]
+fn test_open_pr_in_browser_gh_failure_clears_state() -> Result<(), Box<dyn std::error::Error>> {
+    ensure_stub_gh_installed()?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let temp_dir = TempDir::new()?;
+    let agent = Agent::new(
+        "gh-fail".to_string(),
+        "claude".to_string(),
+        "feature/gh-fail".to_string(),
+        temp_dir.path().to_path_buf(),
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/gh-fail".to_string();
+    app.data.git_op.base_branch = "develop".to_string();
+
+    let err = match Actions::open_pr_in_browser(&mut app.data) {
+        Ok(()) => return Err("Expected open_pr_in_browser to fail".into()),
+        Err(err) => err,
+    };
+    assert!(!err.to_string().is_empty());
+    assert!(app.data.git_op.branch_name.is_empty());
+    assert!(app.data.git_op.agent_id.is_none());
     Ok(())
 }
 
