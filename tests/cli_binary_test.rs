@@ -3,10 +3,30 @@
 //! These tests run the actual tenex binary to exercise the CLI code paths.
 
 use std::fs;
+use std::io::Write;
 use std::process::Command;
+use std::process::Stdio;
 
 fn tenex_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tenex"))
+}
+
+fn write_state_with_one_agent(
+    state_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut storage = tenex::agent::Storage::with_path(state_path.to_path_buf());
+    storage.instance_id = Some("deadbeef".to_string());
+
+    let mut agent = tenex::Agent::new(
+        "Test Agent".to_string(),
+        "echo".to_string(),
+        "tenex/test-branch".to_string(),
+        std::env::temp_dir().join("tenex-test-worktree"),
+    );
+    agent.mux_session = format!("{}{}", storage.instance_session_prefix(), agent.short_id());
+    storage.add(agent);
+    storage.save()?;
+    Ok(())
 }
 
 #[test]
@@ -67,6 +87,90 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
             || stdout.contains("Agents to kill")
             || stdout.contains("Orphaned")
     );
+    Ok(())
+}
+
+#[test]
+fn test_cli_reset_interactive_can_abort() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::TempDir;
+
+    let state_dir = TempDir::new()?;
+    let state_path = state_dir.path().join("state.json");
+    write_state_with_one_agent(&state_path)?;
+
+    let run_dir = TempDir::new()?;
+    let mux_socket = format!("tenex-mux-test-reset-interactive-{}", uuid::Uuid::new_v4());
+
+    let mut child = tenex_bin()
+        .arg("reset")
+        .env("TENEX_STATE_PATH", &state_path)
+        .env("TENEX_MUX_SOCKET", &mux_socket)
+        .current_dir(run_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or("Expected stdin to be piped")?
+        // default scope + abort
+        .write_all(b"\nn\n")?;
+
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "tenex reset failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Aborted."), "stdout:\n{stdout}");
+
+    Ok(())
+}
+
+#[test]
+fn test_cli_reset_interactive_can_confirm() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::TempDir;
+
+    let state_dir = TempDir::new()?;
+    let state_path = state_dir.path().join("state.json");
+    write_state_with_one_agent(&state_path)?;
+
+    let run_dir = TempDir::new()?;
+    let mux_socket = format!("tenex-mux-test-reset-interactive-{}", uuid::Uuid::new_v4());
+
+    let mut child = tenex_bin()
+        .arg("reset")
+        .env("TENEX_STATE_PATH", &state_path)
+        .env("TENEX_MUX_SOCKET", &mux_socket)
+        .current_dir(run_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or("Expected stdin to be piped")?
+        // all instances + confirm
+        .write_all(b"all\ny\n")?;
+
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "tenex reset failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reset complete."), "stdout:\n{stdout}");
+
     Ok(())
 }
 
