@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.7] - 2026-01-19
+
+### Fixed
+
+- **Mux daemon upgrades**: Tenex now detects when an older `tenex muxd` is still running after an upgrade and prompts you to restart it.
+
 ## [1.0.6] - 2026-01-17
 
 ### Changed
