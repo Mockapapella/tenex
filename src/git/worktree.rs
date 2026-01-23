@@ -45,23 +45,6 @@ fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_optional_file(src_root: &Path, dst_root: &Path, file_name: &str) -> Result<()> {
-    let src = src_root.join(file_name);
-    if !src.is_file() {
-        return Ok(());
-    }
-
-    let dst = dst_root.join(file_name);
-    if dst.exists() {
-        return Ok(());
-    }
-
-    fs::copy(&src, &dst)
-        .with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))?;
-
-    Ok(())
-}
-
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
@@ -110,8 +93,8 @@ impl<'a> Manager<'a> {
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
 
-        if let Err(err) = self.copy_agent_instruction_files(path) {
-            warn!(?path, error = %err, "Failed to copy instruction files into worktree");
+        if let Err(err) = self.symlink_ignored_files_into_worktree(path) {
+            warn!(?path, error = %err, "Failed to symlink ignored files into worktree");
         }
 
         Ok(())
@@ -179,8 +162,8 @@ impl<'a> Manager<'a> {
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
 
-        if let Err(err) = self.copy_agent_instruction_files(path) {
-            warn!(?path, error = %err, "Failed to copy instruction files into worktree");
+        if let Err(err) = self.symlink_ignored_files_into_worktree(path) {
+            warn!(?path, error = %err, "Failed to symlink ignored files into worktree");
         }
 
         info!(branch, ?path, "Worktree created");
@@ -420,15 +403,104 @@ impl<'a> Manager<'a> {
         Ok((branch_name, short_hash))
     }
 
-    fn copy_agent_instruction_files(&self, worktree_path: &Path) -> Result<()> {
+    fn symlink_ignored_files_into_worktree(&self, worktree_path: &Path) -> Result<()> {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::symlink;
+        use std::path::Component;
+
         let Some(repo_root) = self.repo.workdir() else {
             return Ok(());
         };
 
-        // Git worktrees don't include gitignored files. Copy over common agent
-        // instruction files to keep agent behavior consistent between worktrees.
-        for file in ["CLAUDE.md", "AGENTS.md"] {
-            copy_optional_file(repo_root, worktree_path, file)?;
+        let output = super::git_command()
+            .args([
+                "ls-files",
+                "-o",
+                "-i",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+            ])
+            .current_dir(repo_root)
+            .output()
+            .with_context(|| {
+                format!("Failed to list ignored files from {}", repo_root.display())
+            })?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git ls-files failed (stdout: {stdout}, stderr: {stderr})");
+        }
+
+        for raw_path in output.stdout.split(|byte| *byte == b'\0') {
+            if raw_path.is_empty() {
+                continue;
+            }
+
+            let mut rel = String::from_utf8_lossy(raw_path).into_owned();
+            if rel.ends_with('/') {
+                rel.truncate(rel.trim_end_matches('/').len());
+            }
+
+            if rel.is_empty() {
+                continue;
+            }
+
+            let rel_path = Path::new(&rel);
+            if rel_path.is_absolute()
+                || rel_path.components().any(|c| {
+                    matches!(
+                        c,
+                        Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                    )
+                })
+            {
+                continue;
+            }
+
+            let Some(Component::Normal(top)) = rel_path.components().next() else {
+                continue;
+            };
+            if top == OsStr::new(".git") || top == OsStr::new(".tenex") {
+                continue;
+            }
+
+            let src = repo_root.join(rel_path);
+            if fs::symlink_metadata(&src).is_err() {
+                continue;
+            }
+
+            let dst = worktree_path.join(rel_path);
+            if fs::symlink_metadata(&dst).is_ok() {
+                continue;
+            }
+
+            let Some(parent) = dst.parent() else {
+                continue;
+            };
+
+            let parent_is_symlink = fs::symlink_metadata(parent)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if parent_is_symlink {
+                continue;
+            }
+
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create parent directory {} for ignored file link",
+                    parent.display()
+                )
+            })?;
+
+            symlink(&src, &dst).with_context(|| {
+                format!(
+                    "Failed to symlink ignored path {} -> {}",
+                    dst.display(),
+                    src.display()
+                )
+            })?;
         }
 
         Ok(())
@@ -488,25 +560,56 @@ mod tests {
     }
 
     #[test]
-    fn test_create_with_new_branch_copies_agent_instruction_files()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_create_with_new_branch_symlinks_ignored_files() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
-        fs::write(temp_dir.path().join("CLAUDE.md"), "claude instructions")?;
-        fs::write(temp_dir.path().join("AGENTS.md"), "agent instructions")?;
+        fs::write(
+            temp_dir.path().join(".gitignore"),
+            "ignored.txt\nignored_dir/\n",
+        )?;
 
-        let wt_path = temp_dir.path().join("worktrees").join("feature-copy");
-        manager.create_with_new_branch(&wt_path, "feature-copy-test")?;
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
 
-        assert_eq!(
-            fs::read_to_string(wt_path.join("CLAUDE.md"))?,
-            "claude instructions"
-        );
-        assert_eq!(
-            fs::read_to_string(wt_path.join("AGENTS.md"))?,
-            "agent instructions"
-        );
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        let ignored_file = temp_dir.path().join("ignored.txt");
+        fs::write(&ignored_file, "payload")?;
+
+        let ignored_dir = temp_dir.path().join("ignored_dir");
+        fs::create_dir_all(&ignored_dir)?;
+        fs::write(ignored_dir.join("nested.txt"), "nested")?;
+
+        let wt_path = temp_dir.path().join("worktrees").join("feature-symlinks");
+        manager.create_with_new_branch(&wt_path, "feature-symlinks-test")?;
+
+        let linked_file = wt_path.join("ignored.txt");
+        let linked_meta = fs::symlink_metadata(&linked_file)?;
+        assert!(linked_meta.file_type().is_symlink());
+        assert_eq!(fs::read_link(&linked_file)?, ignored_file);
+
+        let linked_dir = wt_path.join("ignored_dir");
+        let linked_dir_meta = fs::symlink_metadata(&linked_dir)?;
+        assert!(linked_dir_meta.file_type().is_symlink());
+        assert_eq!(fs::read_link(&linked_dir)?, ignored_dir);
+
+        assert_eq!(fs::read_to_string(linked_dir.join("nested.txt"))?, "nested");
+
         Ok(())
     }
 
