@@ -174,7 +174,12 @@ impl AppData {
             return;
         }
 
-        self.selected = (self.selected + 1) % visible_count;
+        let next = (self.selected + 1) % visible_count;
+        if next == self.selected {
+            return;
+        }
+
+        self.selected = next;
         self.ui.reset_scroll();
         self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
@@ -187,7 +192,12 @@ impl AppData {
             return;
         }
 
-        self.selected = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
+        let prev = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
+        if prev == self.selected {
+            return;
+        }
+
+        self.selected = prev;
         self.ui.reset_scroll();
         self.ui.reset_diff_interaction();
         self.ensure_agent_list_scroll();
@@ -829,6 +839,23 @@ mod tests {
     }
 
     #[test]
+    fn test_select_next_one_agent_does_not_reset_diff_hash() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+        data.ui.diff_hash = 123;
+        data.ui.preview_scroll = 0;
+
+        data.select_next();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.diff_hash, 123);
+        assert_eq!(data.ui.preview_scroll, 0);
+    }
+
+    #[test]
     fn test_select_prev_wraps_and_resets_scroll() {
         let mut storage = Storage::new();
         storage.add(make_agent("agent-1"));
@@ -841,6 +868,23 @@ mod tests {
         data.select_prev();
         assert_eq!(data.selected, 1);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_select_prev_one_agent_does_not_reset_diff_hash() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+        data.ui.diff_hash = 123;
+        data.ui.preview_scroll = 0;
+
+        data.select_prev();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.diff_hash, 123);
+        assert_eq!(data.ui.preview_scroll, 0);
     }
 
     #[test]

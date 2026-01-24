@@ -1,7 +1,7 @@
 //! Mouse input handling (click-to-select).
 
 use crate::app::{App, Tab};
-use crate::state::{AppMode, PreviewFocusedMode, ScrollingMode};
+use crate::state::{AppMode, DiffFocusedMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 use ratatui::{
     crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
@@ -191,7 +191,10 @@ fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) -> Result<
     // If a modal is open, only handle outside-click-to-cancel.
     if !matches!(
         &app.mode,
-        AppMode::Normal(_) | AppMode::Scrolling(_) | AppMode::PreviewFocused(_)
+        AppMode::Normal(_)
+            | AppMode::Scrolling(_)
+            | AppMode::PreviewFocused(_)
+            | AppMode::DiffFocused(_)
     ) {
         if let Some(modal_area) = modal_rect(app, frame_area)
             && !rect_contains(modal_area, x, y)
@@ -286,52 +289,66 @@ fn handle_content_pane_click(app: &mut App, x: u16, y: u16, area: Rect) {
         return;
     }
 
-    // Click anywhere else in the preview pane focuses it (attaches).
-    if app.data.active_tab == Tab::Preview && app.data.selected_agent().is_some() {
-        app.data.active_tab = Tab::Preview;
-        app.apply_mode(PreviewFocusedMode.into());
+    // Click in the content body focuses the content pane.
+    match app.data.active_tab {
+        Tab::Preview => {
+            if app.data.selected_agent().is_some() {
+                app.apply_mode(PreviewFocusedMode.into());
+            } else {
+                app.apply_mode(ScrollingMode.into());
+            }
+        }
+        Tab::Diff => {
+            if app.data.selected_agent().is_some() {
+                app.apply_mode(DiffFocusedMode.into());
+            } else {
+                app.apply_mode(ScrollingMode.into());
+            }
+        }
+        Tab::Commits => {
+            app.apply_mode(ScrollingMode.into());
+        }
     }
 }
 
 fn handle_tab_bar_click(app: &mut App, x: u16, tab_bar_area: Rect) {
-    // Keep these in sync with `render::main_layout::tab_bar_line`.
-    const PREVIEW_LABEL: &str = " Preview ";
-    const DIFF_LABEL: &str = " Diff ";
-    const COMMITS_LABEL: &str = " Commits ";
-
     let rel_x = x.saturating_sub(tab_bar_area.x);
-    let preview_w = u16::try_from(PREVIEW_LABEL.chars().count()).unwrap_or(0);
-    let diff_w = u16::try_from(DIFF_LABEL.chars().count()).unwrap_or(0);
-    let commits_w = u16::try_from(COMMITS_LABEL.chars().count()).unwrap_or(0);
+    let Some(tab) = crate::tui::render::main_layout::tab_for_tab_bar_offset(app, rel_x) else {
+        return;
+    };
 
-    if rel_x < preview_w {
-        if app.data.active_tab != Tab::Preview {
-            app.data.active_tab = Tab::Preview;
-            app.data.ui.reset_scroll();
-        }
+    let was_preview_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
+    if was_preview_focused && tab == Tab::Preview {
         return;
     }
 
-    if rel_x < preview_w.saturating_add(diff_w) {
-        if app.data.active_tab != Tab::Diff {
-            app.data.active_tab = Tab::Diff;
-            app.data.ui.reset_scroll();
-        }
-        // Diff view is non-interactive; ensure we aren't "attached" to preview.
-        if matches!(&app.mode, AppMode::PreviewFocused(_)) {
-            app.apply_mode(AppMode::normal());
-        }
+    let was_diff_focused = matches!(&app.mode, AppMode::DiffFocused(_));
+    if was_diff_focused && tab == Tab::Diff {
         return;
     }
 
-    if rel_x < preview_w.saturating_add(diff_w).saturating_add(commits_w) {
-        if app.data.active_tab != Tab::Commits {
-            app.data.active_tab = Tab::Commits;
-            app.data.ui.reset_scroll();
+    if app.data.active_tab != tab {
+        app.data.active_tab = tab;
+        app.data.ui.reset_scroll();
+    }
+
+    match tab {
+        Tab::Preview => {
+            if app.data.selected_agent().is_some() {
+                app.apply_mode(PreviewFocusedMode.into());
+            } else {
+                app.apply_mode(ScrollingMode.into());
+            }
         }
-        // Commits view is non-interactive; ensure we aren't "attached" to preview.
-        if matches!(&app.mode, AppMode::PreviewFocused(_)) {
-            app.apply_mode(AppMode::normal());
+        Tab::Diff => {
+            if app.data.selected_agent().is_some() {
+                app.apply_mode(DiffFocusedMode.into());
+            } else {
+                app.apply_mode(ScrollingMode.into());
+            }
+        }
+        Tab::Commits => {
+            app.apply_mode(ScrollingMode.into());
         }
     }
 }
@@ -352,7 +369,7 @@ mod tests {
     use crate::agent::{Agent, Storage};
     use crate::app::Settings;
     use crate::config::Config;
-    use crate::state::{AppMode, ChildCountMode, NormalMode};
+    use crate::state::{AppMode, ChildCountMode, DiffFocusedMode, NormalMode};
     use ratatui::crossterm::event::KeyModifiers;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -493,6 +510,107 @@ mod tests {
         handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_diff_tab_while_preview_focused_enters_diff_focused_mode() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(PreviewFocusedMode.into());
+        app.data.active_tab = Tab::Preview;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the " Diff " label (after " Preview ").
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let click = left_click(tab_bar.x + preview_w + 1, tab_bar.y);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_diff_tab_with_unseen_dot_selects_diff() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+
+        let agent_id = app
+            .selected_agent()
+            .map(|agent| agent.id)
+            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        app.data.ui.diff_hash = 123;
+        app.data.ui.set_diff_last_seen_hash_for_agent(agent_id, 0);
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the last character of "Diff" when the unseen dot is shown.
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let diff_w = u16::try_from(" ◐ Diff ".chars().count()).unwrap_or(0);
+        let click = left_click(
+            tab_bar
+                .x
+                .saturating_add(preview_w)
+                .saturating_add(diff_w.saturating_sub(2)),
+            tab_bar.y,
+        );
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
         Ok(())
     }
 
@@ -536,6 +654,258 @@ mod tests {
         handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
 
         assert_eq!(app.data.active_tab, Tab::Commits);
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_commits_tab_with_unseen_dot_selects_commits() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+
+        let agent_id = app
+            .selected_agent()
+            .map(|agent| agent.id)
+            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        app.data.ui.diff_hash = 0;
+        app.data.ui.commits_hash = 123;
+        app.data
+            .ui
+            .set_commits_last_seen_hash_for_agent(agent_id, 0);
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the last character of "Commits" when the unseen dot is shown.
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let diff_w = u16::try_from(" Diff ".chars().count()).unwrap_or(0);
+        let commits_w = u16::try_from(" ◐ Commits ".chars().count()).unwrap_or(0);
+        let click = left_click(
+            tab_bar
+                .x
+                .saturating_add(preview_w)
+                .saturating_add(diff_w)
+                .saturating_add(commits_w.saturating_sub(2)),
+            tab_bar.y,
+        );
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Commits);
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_preview_tab_enters_preview_focused_mode() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Diff;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the " Preview " label (first tab).
+        let click = left_click(tab_bar.x + 1, tab_bar.y);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Preview);
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_diff_body_enters_diff_focused_mode() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Diff;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+
+        // Click below the tab bar, inside the diff content body.
+        let click = left_click(content_area.x + 2, content_area.y + 3);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_commits_body_enters_scrolling_mode() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Commits;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+
+        // Click below the tab bar, inside the commits content body.
+        let click = left_click(content_area.x + 2, content_area.y + 3);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Commits);
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_commits_tab_while_diff_focused_switches_tabs() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(DiffFocusedMode.into());
+        app.data.active_tab = Tab::Diff;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the " Commits " label (after " Preview " + " Diff ").
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let diff_w = u16::try_from(" Diff ".chars().count()).unwrap_or(0);
+        let click = left_click(tab_bar.x + preview_w + diff_w + 1, tab_bar.y);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Commits);
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn click_diff_tab_while_diff_focused_keeps_diff_focused() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(DiffFocusedMode.into());
+        app.data.active_tab = Tab::Diff;
+
+        let frame = Rect::new(0, 0, 100, 30);
+        let mut batched_keys = Vec::new();
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 29,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let inner = Rect {
+            x: content_area.x + 1,
+            y: content_area.y + 1,
+            width: content_area.width.saturating_sub(2),
+            height: content_area.height.saturating_sub(2),
+        };
+        let tab_bar = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        // Click inside the " Diff " label (after " Preview ").
+        let preview_w = u16::try_from(" Preview ".chars().count()).unwrap_or(0);
+        let click = left_click(tab_bar.x + preview_w + 1, tab_bar.y);
+        handle_mouse_event(&mut app, click, frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
         Ok(())
     }
 
