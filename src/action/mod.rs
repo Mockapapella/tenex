@@ -237,6 +237,11 @@ pub fn dispatch_preview_focused_mode(
     modifiers: KeyModifiers,
     batched_keys: &mut Vec<String>,
 ) -> Result<()> {
+    // Tab switching is bound to Normal mode only.
+    if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+        return Ok(());
+    }
+
     // Ctrl+q exits preview focus mode (same key quits app when not focused).
     let next = if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
         UnfocusPreviewAction.execute(PreviewFocusedMode, &mut app.data)?
@@ -267,6 +272,11 @@ pub fn dispatch_diff_focused_mode(
     if matches!(code, KeyCode::Char('q' | 'Q')) && modifiers.contains(KeyModifiers::CONTROL) {
         let next = UnfocusDiffAction.execute(DiffFocusedMode, &mut app.data)?;
         app.apply_mode(next);
+        return Ok(());
+    }
+
+    // Tab switching is bound to Normal mode only.
+    if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
         return Ok(());
     }
 

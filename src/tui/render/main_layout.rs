@@ -102,9 +102,9 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let title = format!(" Agents ({}) ", app.data.storage.len());
 
-    // Highlight agents list border only when it has focus.
-    // When a modal is open, the modal should be the highlighted element instead.
-    let border_color = if matches!(&app.mode, AppMode::Normal(_) | AppMode::Scrolling(_)) {
+    // Highlight agents list border only when it has focus. When a modal is open,
+    // the modal should be the highlighted element instead.
+    let border_color = if matches!(&app.mode, AppMode::Normal(_)) {
         colors::SELECTED
     } else {
         colors::BORDER
@@ -156,6 +156,64 @@ pub fn render_content_pane(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 }
 
+fn tab_bar_tab_has_unseen_changes(app: &App, tab: Tab) -> bool {
+    let Some(agent) = app.selected_agent() else {
+        return false;
+    };
+
+    match tab {
+        Tab::Preview => false,
+        Tab::Diff => {
+            if app.data.active_tab == Tab::Diff {
+                return false;
+            }
+
+            let hash = app.data.ui.diff_hash;
+            hash != 0 && hash != app.data.ui.diff_last_seen_hash_for_agent(agent.id)
+        }
+        Tab::Commits => {
+            if app.data.active_tab == Tab::Commits {
+                return false;
+            }
+
+            let hash = app.data.ui.commits_hash;
+            hash != 0 && hash != app.data.ui.commits_last_seen_hash_for_agent(agent.id)
+        }
+    }
+}
+
+fn tab_bar_tab_width(label: &str, has_unseen_changes: bool) -> u16 {
+    let label_width = u16::try_from(label.chars().count()).unwrap_or(0);
+    let decoration_width = if has_unseen_changes { 4 } else { 2 };
+    label_width.saturating_add(decoration_width)
+}
+
+/// Returns the tab corresponding to a horizontal offset within the content pane tab bar.
+#[must_use]
+pub fn tab_for_tab_bar_offset(app: &App, offset_x: u16) -> Option<Tab> {
+    let preview_w = tab_bar_tab_width("Preview", false);
+    let diff_w = tab_bar_tab_width("Diff", tab_bar_tab_has_unseen_changes(app, Tab::Diff));
+    let commits_w = tab_bar_tab_width("Commits", tab_bar_tab_has_unseen_changes(app, Tab::Commits));
+
+    let diff_start = preview_w;
+    let commits_start = diff_start.saturating_add(diff_w);
+    let commits_end = commits_start.saturating_add(commits_w);
+
+    if offset_x < diff_start {
+        return Some(Tab::Preview);
+    }
+
+    if offset_x < commits_start {
+        return Some(Tab::Diff);
+    }
+
+    if offset_x < commits_end {
+        return Some(Tab::Commits);
+    }
+
+    None
+}
+
 fn tab_bar_line(app: &App) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -190,26 +248,12 @@ fn tab_bar_line(app: &App) -> Line<'static> {
     push_tab("Preview", app.data.active_tab == Tab::Preview, false);
 
     let diff_active = app.data.active_tab == Tab::Diff;
-    let diff_has_unseen_changes = if diff_active {
-        false
-    } else if let Some(agent) = app.selected_agent() {
-        let hash = app.data.ui.diff_hash;
-        hash != 0 && hash != app.data.ui.diff_last_seen_hash_for_agent(agent.id)
-    } else {
-        false
-    };
+    let diff_has_unseen_changes = tab_bar_tab_has_unseen_changes(app, Tab::Diff);
 
     push_tab("Diff", diff_active, diff_has_unseen_changes);
 
     let commits_active = app.data.active_tab == Tab::Commits;
-    let commits_has_unseen_changes = if commits_active {
-        false
-    } else if let Some(agent) = app.selected_agent() {
-        let hash = app.data.ui.commits_hash;
-        hash != 0 && hash != app.data.ui.commits_last_seen_hash_for_agent(agent.id)
-    } else {
-        false
-    };
+    let commits_has_unseen_changes = tab_bar_tab_has_unseen_changes(app, Tab::Commits);
 
     push_tab("Commits", commits_active, commits_has_unseen_changes);
 
@@ -224,20 +268,23 @@ fn render_tab_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Render the preview pane
 pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let is_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
+    let no_agent_selected = app.selected_agent().is_none();
 
     let full_text = &app.data.ui.preview_text;
     let line_count = full_text.lines.len();
 
-    // Use highlighted border when focused, show exit hint in title
-    let (border_color, title) = if is_focused {
-        (
-            colors::SELECTED,
-            " Terminal Output (ATTACHED) [Ctrl+q detach] ",
-        )
+    // Use highlighted border when focused, show exit hint in title.
+    let title = if is_focused {
+        " Terminal Output (ATTACHED) [Ctrl+q detach] "
     } else {
-        (colors::BORDER, " Terminal Output (read-only) ")
+        " Terminal Output (read-only) "
     };
 
+    let border_color = if is_focused || matches!(&app.mode, AppMode::Scrolling(_)) {
+        colors::SELECTED
+    } else {
+        colors::BORDER
+    };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -266,7 +313,12 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines: full_text.lines[start..end].to_vec(),
     };
 
-    let paragraph = Paragraph::new(visible_text).style(Style::default().bg(colors::SURFACE));
+    let paragraph_style = if no_agent_selected {
+        Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE)
+    } else {
+        Style::default().bg(colors::SURFACE)
+    };
+    let paragraph = Paragraph::new(visible_text).style(paragraph_style);
     frame.render_widget(paragraph, content_area);
 
     if is_focused {
@@ -353,15 +405,26 @@ fn render_preview_cursor(
     ));
 }
 
+fn diff_selection_range(app: &App) -> Option<(usize, usize)> {
+    let anchor = app.data.ui.diff_visual_anchor?;
+    let cursor = app.data.ui.diff_cursor;
+    Some((anchor.min(cursor), anchor.max(cursor)))
+}
+
 /// Render the diff pane
 pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.data.ui.diff_content;
     let is_focused = matches!(&app.mode, AppMode::DiffFocused(_));
-
-    let (border_color, title) = if is_focused {
-        (colors::SELECTED, " Git Diff (INTERACTIVE) [Ctrl+q exit] ")
+    let no_agent_selected = app.selected_agent().is_none();
+    let title = if is_focused {
+        " Git Diff (INTERACTIVE) [Ctrl+q exit] "
     } else {
-        (colors::BORDER, " Git Diff ")
+        " Git Diff "
+    };
+    let border_color = if is_focused || matches!(&app.mode, AppMode::Scrolling(_)) {
+        colors::SELECTED
+    } else {
+        colors::BORDER
     };
 
     let block = Block::default()
@@ -388,10 +451,7 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let end_line = (scroll + visible_height).min(total_lines);
 
     let selection_range = if is_focused {
-        app.data.ui.diff_visual_anchor.map(|anchor| {
-            let cursor = app.data.ui.diff_cursor;
-            (anchor.min(cursor), anchor.max(cursor))
-        })
+        diff_selection_range(app)
     } else {
         None
     };
@@ -403,6 +463,11 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
     {
         let line_idx = scroll.saturating_add(offset);
         let line = &content[start..end];
+
+        if no_agent_selected {
+            lines.push(Line::styled(line, Style::default().fg(colors::TEXT_MUTED)));
+            continue;
+        }
 
         let meta = app
             .data
@@ -466,10 +531,16 @@ pub fn render_diff(frame: &mut Frame<'_>, app: &App, area: Rect) {
 pub fn render_commits(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let content = &app.data.ui.commits_content;
 
+    let border_color = if matches!(&app.mode, AppMode::Scrolling(_)) {
+        colors::SELECTED
+    } else {
+        colors::BORDER
+    };
+
     let block = Block::default()
         .title(" Git Commits ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(colors::BORDER))
+        .border_style(Style::default().fg(border_color))
         .border_type(colors::BORDER_TYPE)
         .style(Style::default().bg(colors::SURFACE));
     frame.render_widget(block.clone(), area);
@@ -747,6 +818,16 @@ mod tests {
             .join("")
     }
 
+    fn cell_at(
+        buffer: &ratatui::buffer::Buffer,
+        x: u16,
+        y: u16,
+    ) -> anyhow::Result<&ratatui::buffer::Cell> {
+        buffer
+            .cell((x, y))
+            .ok_or_else(|| anyhow::anyhow!("Missing cell at ({x}, {y})"))
+    }
+
     #[test]
     fn test_tab_bar_renders_unseen_diff_dot() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
@@ -813,6 +894,56 @@ mod tests {
 
         let line = tab_bar_line(&app);
         assert!(!line_text(&line).contains('◐'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_agent_selected_placeholder_has_consistent_color_across_tabs() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        app.data.ui.set_preview_content("(No agent selected)");
+        app.data.ui.set_diff_content("(No agent selected)");
+        app.data.ui.set_commits_content("(No agent selected)");
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend)?;
+
+        terminal.draw(|frame| {
+            app.data.active_tab = Tab::Preview;
+            render_preview(frame, &app, frame.area());
+        })?;
+        let preview_fg = {
+            let buffer = terminal.backend().buffer();
+            let cell = cell_at(buffer, 1, 2)?;
+            assert_eq!(cell.symbol(), "(");
+            cell.fg
+        };
+        assert_eq!(preview_fg, colors::TEXT_MUTED);
+
+        terminal.draw(|frame| {
+            app.data.active_tab = Tab::Diff;
+            render_diff(frame, &app, frame.area());
+        })?;
+        let diff_fg = {
+            let buffer = terminal.backend().buffer();
+            let cell = cell_at(buffer, 1, 2)?;
+            assert_eq!(cell.symbol(), "(");
+            cell.fg
+        };
+        assert_eq!(diff_fg, colors::TEXT_MUTED);
+
+        terminal.draw(|frame| {
+            app.data.active_tab = Tab::Commits;
+            render_commits(frame, &app, frame.area());
+        })?;
+        let commits_fg = {
+            let buffer = terminal.backend().buffer();
+            let cell = cell_at(buffer, 1, 2)?;
+            assert_eq!(cell.symbol(), "(");
+            cell.fg
+        };
+        assert_eq!(commits_fg, colors::TEXT_MUTED);
+
         Ok(())
     }
 

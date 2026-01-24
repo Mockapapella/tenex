@@ -147,13 +147,14 @@ pub fn handle_mouse_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Storage;
-    use crate::app::Settings;
+    use crate::agent::{Agent, Status, Storage};
+    use crate::app::{Settings, Tab};
     use crate::config::Config;
     use crate::state::*;
     use crate::update::UpdateInfo;
     use ratatui::crossterm::event::KeyCode;
     use semver::Version;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
@@ -233,6 +234,45 @@ mod tests {
 
         assert_eq!(app.mode, AppMode::normal());
         assert!(!app.data.should_quit);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_diff_focused_tab_does_not_switch_tabs() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::DiffFocused(DiffFocusedMode);
+        app.data.active_tab = Tab::Diff;
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.data.active_tab, Tab::Diff);
+        assert!(matches!(&app.mode, AppMode::DiffFocused(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_preview_focused_tab_is_ignored() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::PreviewFocused(PreviewFocusedMode);
+        app.data.active_tab = Tab::Preview;
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.data.active_tab, Tab::Preview);
+        assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
+        assert!(batched_keys.is_empty());
         Ok(())
     }
 
@@ -591,6 +631,103 @@ mod tests {
         )?;
 
         assert_eq!(app.mode, AppMode::normal());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_scrolling_mode_up_down_scrolls_content_not_agents()
+    -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::Scrolling(ScrollingMode);
+        app.data.active_tab = Tab::Commits;
+
+        app.data.storage.add(Agent::new(
+            "a0".to_string(),
+            "echo".to_string(),
+            "tenex-test/a0".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+        app.data.storage.add(Agent::new(
+            "a1".to_string(),
+            "echo".to_string(),
+            "tenex-test/a1".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+        app.data.selected = 0;
+
+        app.data.ui.set_commits_content(
+            (0..30)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        let mut batched_keys = Vec::new();
+        handle_key_event(
+            &mut app,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(
+            app.data.selected, 0,
+            "Down should not change agent selection"
+        );
+        assert_eq!(
+            app.data.ui.commits_scroll, 1,
+            "Down should scroll commits content"
+        );
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_scrolling_mode_tab_does_not_switch_tabs() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::Scrolling(ScrollingMode);
+        app.data.active_tab = Tab::Preview;
+
+        let mut batched_keys = Vec::new();
+        handle_key_event(
+            &mut app,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.data.active_tab, Tab::Preview);
+        assert!(matches!(&app.mode, AppMode::Scrolling(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_scrolling_mode_ctrl_q_exits_to_normal_instead_of_quit()
+    -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::Scrolling(ScrollingMode);
+        app.data.active_tab = Tab::Commits;
+
+        let mut agent = Agent::new(
+            "a0".to_string(),
+            "echo".to_string(),
+            "tenex-test/a0".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.set_status(Status::Running);
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+
+        let mut batched_keys = Vec::new();
+        handle_key_event(
+            &mut app,
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(!app.data.should_quit);
         Ok(())
     }
 
