@@ -85,13 +85,8 @@ fn handle_scroll_wheel(
             .selected_agent()
             .is_some_and(|agent| is_codex_program(&agent.program));
 
-        // When attached, forward scroll wheel events to the agent's terminal rather than
-        // scrolling Tenex's preview buffer. This allows full-screen TUIs (e.g. Codex) to
-        // handle scroll input normally.
-        //
-        // Some terminals don't report mouse-wheel modifiers reliably. If the preview buffer
-        // isn't scrollable anyway, prefer forwarding to the agent so the wheel still does
-        // something useful.
+        // Some agent UIs (e.g. Codex) run full-screen. If Tenex has no scrollback to scroll,
+        // forward wheel events to the agent so the wheel can still do something useful.
         if preview_focused && preview_tab && preview_is_codex {
             let visible_height = app
                 .data
@@ -99,9 +94,7 @@ fn handle_scroll_wheel(
                 .preview_dimensions
                 .map_or(20, |(_, h)| usize::from(h));
             let can_scroll_preview = app.data.ui.preview_text.lines.len() > visible_height;
-            let forward_to_agent = modifiers.contains(KeyModifiers::ALT) || !can_scroll_preview;
-
-            if forward_to_agent {
+            if !can_scroll_preview {
                 if let Some(sequence) =
                     scroll_wheel_to_sgr_sequence(content_area, x, y, modifiers, direction)
                 {
@@ -1047,9 +1040,9 @@ mod tests {
     }
 
     #[test]
-    fn scroll_wheel_in_preview_focused_mode_for_codex_forwards_to_agent() -> anyhow::Result<()> {
-        // Codex is a full-screen TUI; when attached, forwarding wheel events lets Codex handle
-        // scrolling/viewport changes instead of Tenex scrolling its own preview snapshot.
+    fn scroll_wheel_in_preview_focused_mode_for_codex_scrolls_preview() -> anyhow::Result<()> {
+        // Regression: some terminals report wheel events with ALT set. Codex preview scrolling
+        // should keep working regardless of modifiers.
         let (mut app, _tmp) = create_test_app()?;
         add_agent_with_program(&mut app, "a0", "codex");
         app.apply_mode(PreviewFocusedMode.into());
@@ -1085,8 +1078,8 @@ mod tests {
 
         assert!(matches!(&app.mode, AppMode::PreviewFocused(_)));
         assert!(!app.data.ui.preview_follow);
-        assert_eq!(app.data.ui.preview_scroll, 24);
-        assert_eq!(batched_keys, vec![String::from("\u{1b}[<72;2;1M")]);
+        assert_eq!(app.data.ui.preview_scroll, 21);
+        assert!(batched_keys.is_empty());
 
         Ok(())
     }
