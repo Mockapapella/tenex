@@ -92,6 +92,17 @@ pub fn handle_key_event(
         AppMode::UpdateRequested(_) => {}
 
         // Help, error, and success modes
+        AppMode::Changelog(state) => {
+            let mark_seen_version = state.mark_seen_version.clone();
+            let max_scroll = crate::action::changelog_max_scroll(&app.data, state);
+            crate::action::dispatch_changelog_mode(
+                app,
+                mark_seen_version,
+                max_scroll,
+                code,
+                modifiers,
+            )?;
+        }
         AppMode::Help(_) => {
             crate::action::dispatch_help_mode(app, code, modifiers)?;
         }

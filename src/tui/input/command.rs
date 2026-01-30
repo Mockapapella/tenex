@@ -90,7 +90,8 @@ mod tests {
     fn test_command_palette_enter_runs_help() -> Result<(), Box<dyn std::error::Error>> {
         let (mut app, _temp) = create_test_app()?;
         app.apply_mode(CommandPaletteMode.into());
-        // Navigate to /help (index 1)
+        // Navigate to /help (index 2)
+        handle_command_palette_mode(&mut app, KeyCode::Down)?;
         handle_command_palette_mode(&mut app, KeyCode::Down)?;
 
         handle_command_palette_mode(&mut app, KeyCode::Enter)?;

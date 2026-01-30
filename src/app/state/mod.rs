@@ -52,6 +52,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Configure agent programs (default/planner/review)",
     },
     SlashCommand {
+        name: "/changelog",
+        description: "Show what's new / changelog",
+    },
+    SlashCommand {
         name: "/help",
         description: "Show help",
     },

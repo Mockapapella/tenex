@@ -2,13 +2,14 @@
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use semver::Version;
 use tenex::App;
 use tenex::AppMode;
 use tenex::agent::Storage;
 use tenex::app::{MuxdVersionMismatchInfo, Settings};
 use tenex::config::Config;
 use tenex::mux::SessionManager;
-use tenex::state::{ConfirmAction, ConfirmingMode, UpdatePromptMode};
+use tenex::state::{ChangelogMode, ConfirmAction, ConfirmingMode, UpdatePromptMode};
 
 /// Terminal multiplexer for AI coding agents
 #[derive(Parser)]
@@ -240,6 +241,8 @@ fn run_interactive(
         app.set_error(message);
     }
 
+    maybe_queue_whats_new(&mut app);
+
     if matches!(&app.mode, AppMode::Normal(_)) {
         maybe_prompt_restart_mux_daemon(&mut app);
     }
@@ -278,6 +281,67 @@ fn run_interactive(
     }
 
     Ok(())
+}
+
+fn maybe_queue_whats_new(app: &mut App) {
+    let Ok(current_version) = tenex::release_notes::current_version() else {
+        return;
+    };
+
+    let raw_last_seen = app.data.settings.last_seen_version.clone();
+    let parsed_last_seen = raw_last_seen
+        .as_deref()
+        .and_then(|raw| Version::parse(raw).ok());
+
+    match parsed_last_seen {
+        None => {
+            if raw_last_seen.is_none() {
+                if let Err(e) = app.data.settings.set_last_seen_version(&current_version) {
+                    eprintln!("Warning: Failed to save settings: {e}");
+                }
+                return;
+            }
+
+            // Corrupt or non-semver value: show current release notes once, then overwrite.
+            match tenex::release_notes::changelog_lines_for_version(&current_version) {
+                Ok(lines) => {
+                    app.data.pending_changelog = Some(ChangelogMode {
+                        title: "What's New".to_string(),
+                        lines,
+                        mark_seen_version: Some(current_version),
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to prepare release notes: {e}");
+                }
+            }
+        }
+        Some(last_seen) => {
+            if last_seen > current_version {
+                if let Err(e) = app.data.settings.set_last_seen_version(&current_version) {
+                    eprintln!("Warning: Failed to save settings: {e}");
+                }
+                return;
+            }
+
+            if last_seen == current_version {
+                return;
+            }
+
+            match tenex::release_notes::whats_new_lines(Some(&last_seen), &current_version) {
+                Ok(lines) => {
+                    app.data.pending_changelog = Some(ChangelogMode {
+                        title: "What's New".to_string(),
+                        lines,
+                        mark_seen_version: Some(current_version),
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to prepare release notes: {e}");
+                }
+            }
+        }
+    }
 }
 
 fn maybe_prompt_restart_mux_daemon(app: &mut App) {

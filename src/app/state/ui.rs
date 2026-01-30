@@ -67,6 +67,9 @@ pub struct UiState {
     /// Scroll position in help overlay
     pub help_scroll: usize,
 
+    /// Scroll position in changelog / "What's New" overlay
+    pub changelog_scroll: usize,
+
     /// Whether preview should auto-scroll to bottom on content updates
     /// Set to false when user manually scrolls up, true when they scroll to bottom
     pub preview_follow: bool,
@@ -143,6 +146,9 @@ pub struct UiState {
     /// Request an immediate diff refresh after an edit action
     pub diff_force_refresh: bool,
 
+    /// Cached terminal viewport dimensions (width, height).
+    pub terminal_dimensions: Option<(u16, u16)>,
+
     /// Cached preview pane dimensions (width, height) for mux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
@@ -174,6 +180,7 @@ impl UiState {
             diff_cursor: 0,
             diff_visual_anchor: None,
             help_scroll: 0,
+            changelog_scroll: 0,
             preview_follow: true,
             preview_using_full_history: false,
             preview_content: String::new(),
@@ -201,6 +208,7 @@ impl UiState {
             commits_last_seen_hash_by_agent: Vec::new(),
             commits_has_unseen_changes: false,
             diff_force_refresh: false,
+            terminal_dimensions: None,
             preview_dimensions: None,
             muxd_version_mismatch: None,
             last_error: None,
@@ -729,6 +737,11 @@ impl UiState {
         handled
     }
 
+    /// Set the terminal viewport dimensions.
+    pub const fn set_terminal_dimensions(&mut self, width: u16, height: u16) {
+        self.terminal_dimensions = Some((width, height));
+    }
+
     /// Set the preview pane dimensions for mux window sizing
     pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
         self.preview_dimensions = Some((width, height));
@@ -849,6 +862,7 @@ mod tests {
         assert_eq!(ui.diff_scroll, 0);
         assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 0);
+        assert_eq!(ui.changelog_scroll, 0);
         assert!(ui.preview_follow);
         assert!(ui.preview_content.is_empty());
         assert!(ui.preview_text.lines.is_empty());
@@ -869,6 +883,7 @@ mod tests {
         ui.commits_scroll = 42;
         ui.preview_follow = false;
         ui.help_scroll = 25;
+        ui.changelog_scroll = 17;
 
         ui.reset_scroll();
 
@@ -877,6 +892,7 @@ mod tests {
         assert_eq!(ui.diff_scroll, 0);
         assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 25);
+        assert_eq!(ui.changelog_scroll, 17);
     }
 
     #[test]

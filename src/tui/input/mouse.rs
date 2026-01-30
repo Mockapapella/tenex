@@ -65,6 +65,41 @@ fn handle_scroll_wheel(
     frame_area: Rect,
     batched_keys: &mut Vec<String>,
 ) {
+    // Allow scroll wheel when the changelog modal is open.
+    if matches!(&app.mode, AppMode::Changelog(_)) {
+        let Some(modal_area) = modal_rect(app, frame_area) else {
+            return;
+        };
+        if !rect_contains(modal_area, x, y) {
+            return;
+        }
+
+        let max_scroll = match &app.mode {
+            AppMode::Changelog(state) => crate::action::changelog_max_scroll(&app.data, state),
+            _ => return,
+        };
+
+        app.data.ui.changelog_scroll = app.data.ui.changelog_scroll.min(max_scroll);
+        match direction {
+            ScrollDirection::Up => {
+                app.data.ui.changelog_scroll = app
+                    .data
+                    .ui
+                    .changelog_scroll
+                    .saturating_sub(MOUSE_SCROLL_LINES);
+            }
+            ScrollDirection::Down => {
+                app.data.ui.changelog_scroll = app
+                    .data
+                    .ui
+                    .changelog_scroll
+                    .saturating_add(MOUSE_SCROLL_LINES)
+                    .min(max_scroll);
+            }
+        }
+        return;
+    }
+
     // Ignore scroll wheel while a modal is open or text input is active.
     if !matches!(
         &app.mode,

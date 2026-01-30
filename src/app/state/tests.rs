@@ -507,9 +507,10 @@ fn test_filtered_slash_commands_no_filter() {
     let app = App::default();
     let commands = app.filtered_slash_commands();
 
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 3);
     assert_eq!(commands[0].name, "/agents");
-    assert_eq!(commands[1].name, "/help");
+    assert_eq!(commands[1].name, "/changelog");
+    assert_eq!(commands[2].name, "/help");
 }
 
 #[test]
@@ -540,6 +541,8 @@ fn test_select_next_slash_command() {
     app.select_next_slash_command();
     assert_eq!(app.data.command_palette.selected, 1);
     app.select_next_slash_command();
+    assert_eq!(app.data.command_palette.selected, 2);
+    app.select_next_slash_command();
     assert_eq!(app.data.command_palette.selected, 0);
 }
 
@@ -549,6 +552,8 @@ fn test_select_prev_slash_command() {
     app.start_command_palette();
 
     assert_eq!(app.data.command_palette.selected, 0);
+    app.select_prev_slash_command();
+    assert_eq!(app.data.command_palette.selected, 2);
     app.select_prev_slash_command();
     assert_eq!(app.data.command_palette.selected, 1);
     app.select_prev_slash_command();
@@ -578,7 +583,7 @@ fn test_selected_slash_command() {
     let cmd = app.selected_slash_command();
     assert!(cmd.is_some());
     if let Some(c) = cmd {
-        assert_eq!(c.name, "/help");
+        assert_eq!(c.name, "/changelog");
     }
 }
 
@@ -600,6 +605,16 @@ fn test_run_slash_command_help() {
         description: "test",
     });
     assert_eq!(app.mode, AppMode::Help(HelpMode));
+}
+
+#[test]
+fn test_run_slash_command_changelog() {
+    let mut app = App::default();
+    app.run_slash_command(SlashCommand {
+        name: "/changelog",
+        description: "test",
+    });
+    assert!(matches!(app.mode, AppMode::Changelog(_)));
 }
 
 #[test]
@@ -655,7 +670,7 @@ fn test_submit_slash_command_palette_unknown() {
 fn test_confirm_slash_command_selection() {
     let mut app = App::default();
     app.start_command_palette();
-    app.data.command_palette.selected = 1;
+    app.data.command_palette.selected = 2;
     app.confirm_slash_command_selection();
     assert_eq!(app.mode, AppMode::Help(HelpMode));
 }
