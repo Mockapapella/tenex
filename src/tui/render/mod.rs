@@ -37,6 +37,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     main_layout::render_status_bar(frame, app, chunks[1]);
 
     match &app.mode {
+        AppMode::Changelog(state) => modals::render_changelog_overlay(frame, app, state),
         AppMode::Help(_) => modals::render_help_overlay(frame, app),
         AppMode::CommandPalette(_) => modals::render_command_palette_overlay(frame, app),
         AppMode::Creating(_) => {

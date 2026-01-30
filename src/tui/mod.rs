@@ -77,6 +77,13 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
         app.show_keyboard_remap_prompt();
     }
 
+    // If no higher-priority modal is open, show any deferred "What's New" changelog modal.
+    if matches!(app.mode, AppMode::Normal(_))
+        && let Some(pending) = app.data.pending_changelog.take()
+    {
+        app.apply_mode(pending.into());
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -119,13 +126,15 @@ fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
 }
 
 fn init_preview_dimensions(terminal: &TuiTerminal, app: &mut App, action_handler: Actions) {
-    if app.data.ui.preview_dimensions.is_some() {
+    if app.data.ui.preview_dimensions.is_some() && app.data.ui.terminal_dimensions.is_some() {
         return;
     }
 
     let Ok(size) = terminal.size() else {
         return;
     };
+
+    app.set_terminal_dimensions(size.width, size.height);
 
     let area = Rect::new(0, 0, size.width, size.height);
     let (width, height) = render::calculate_preview_dimensions(area);
@@ -266,6 +275,7 @@ fn run_loop(
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
+            app.set_terminal_dimensions(width, height);
             let (preview_width, preview_height) =
                 render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
             if app.data.ui.preview_dimensions != Some((preview_width, preview_height)) {

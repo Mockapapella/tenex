@@ -16,6 +16,7 @@ pub use confirm::*;
 pub use diff::*;
 pub use git::*;
 pub use misc::*;
+pub(crate) use modal::changelog_max_scroll;
 #[cfg(test)]
 pub(crate) use modal::help_max_scroll;
 pub use modal::{HalfPageDownAction, HalfPageUpAction, PageDownAction, PageUpAction};
@@ -29,17 +30,19 @@ pub use text_input::*;
 use crate::app::{App, AppData};
 use crate::config::Action as KeyAction;
 use crate::state::{
-    BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
-    ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode,
-    CustomAgentCommandMode, DiffFocusedMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
-    MergeBranchSelectorMode, ModelSelectorMode, NormalMode, PreviewFocusedMode, PromptingMode,
-    RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode,
-    ReviewInfoMode, ScrollingMode, SettingsMenuMode, SuccessModalMode, TerminalPromptMode,
-    UpdatePromptMode,
+    AppMode, BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode,
+    CommandPaletteMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode,
+    CreatingMode, CustomAgentCommandMode, DiffFocusedMode, ErrorModalMode, HelpMode,
+    KeyboardRemapPromptMode, MergeBranchSelectorMode, ModelSelectorMode, NormalMode,
+    PreviewFocusedMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode,
+    RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode, SettingsMenuMode,
+    SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use semver::Version;
+use tracing::warn;
 
 /// Marker trait: This action is valid in this state.
 ///
@@ -201,6 +204,89 @@ pub fn dispatch_help_mode(app: &mut App, code: KeyCode, modifiers: KeyModifiers)
     };
 
     app.apply_mode(next);
+    Ok(())
+}
+
+/// Dispatch a raw key event while in `ChangelogMode`.
+///
+/// # Errors
+///
+/// Returns an error if persisting settings fails.
+pub fn dispatch_changelog_mode(
+    app: &mut App,
+    mark_seen_version: Option<Version>,
+    max_scroll: usize,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<()> {
+    match (code, modifiers) {
+        (KeyCode::Up, _) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_sub(1);
+        }
+        (KeyCode::Down, _) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_add(1)
+                .min(max_scroll);
+        }
+        (KeyCode::PageUp, _) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_sub(10);
+        }
+        (KeyCode::PageDown, _) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_add(10)
+                .min(max_scroll);
+        }
+        (KeyCode::Char('u'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_sub(5);
+        }
+        (KeyCode::Char('d'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+            app.data.ui.changelog_scroll = app
+                .data
+                .ui
+                .changelog_scroll
+                .min(max_scroll)
+                .saturating_add(5)
+                .min(max_scroll);
+        }
+        (KeyCode::Char('g') | KeyCode::Home, _) => {
+            app.data.ui.changelog_scroll = 0;
+        }
+        (KeyCode::Char('G') | KeyCode::End, _) => {
+            app.data.ui.changelog_scroll = max_scroll;
+        }
+        (KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q'), _) => {
+            if let Some(version) = mark_seen_version
+                && let Err(e) = app.data.settings.set_last_seen_version(&version)
+            {
+                warn!("Failed to save last_seen_version setting: {}", e);
+            }
+            app.apply_mode(AppMode::normal());
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -944,6 +1030,120 @@ mod tests {
 
         app.enter_mode(DiffFocusedMode.into());
         dispatch_diff_focused_mode(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL)?;
+        assert_eq!(app.mode, AppMode::normal());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_changelog_mode_scroll_and_dismiss() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::Changelog(crate::state::ChangelogMode {
+            title: "Changelog".to_string(),
+            lines: vec!["Line".to_string()],
+            mark_seen_version: None,
+        });
+
+        let max_scroll = 5usize;
+        app.data.ui.changelog_scroll = 100;
+
+        dispatch_changelog_mode(&mut app, None, max_scroll, KeyCode::Up, KeyModifiers::NONE)?;
+        assert_eq!(app.data.ui.changelog_scroll, 4);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 0);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::PageDown,
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 0);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 0);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Char('G'),
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        dispatch_changelog_mode(
+            &mut app,
+            None,
+            max_scroll,
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )?;
+        assert_eq!(app.data.ui.changelog_scroll, 5);
+
+        app.enter_mode(AppMode::Changelog(crate::state::ChangelogMode {
+            title: "Changelog".to_string(),
+            lines: vec!["Line".to_string()],
+            mark_seen_version: None,
+        }));
+
+        dispatch_changelog_mode(
+            &mut app,
+            Some(Version::new(1, 2, 3)),
+            max_scroll,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )?;
         assert_eq!(app.mode, AppMode::normal());
 
         Ok(())

@@ -3,6 +3,23 @@
 use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::mux::SessionManager;
 
+fn wait_for_session(
+    manager: SessionManager,
+    session_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(3);
+    while start.elapsed() < timeout {
+        if manager.exists(session_name) {
+            return Ok(());
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    Err(format!("Session '{session_name}' not found").into())
+}
+
 #[test]
 fn test_mux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
@@ -22,11 +39,7 @@ fn test_mux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     let result = manager.create(&session_name, &fixture.worktree_path(), Some(&command));
     assert!(result.is_ok());
 
-    // Give the mux a moment to start
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    // Verify session exists
-    assert!(manager.exists(&session_name));
+    wait_for_session(manager, &session_name)?;
 
     // Kill session
     let result = manager.kill(&session_name);
@@ -53,7 +66,7 @@ fn test_mux_session_list() -> Result<(), Box<dyn std::error::Error>> {
     let _ = manager.kill(&session_name);
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    wait_for_session(manager, &session_name)?;
 
     // List sessions and verify our session is present
     let sessions = manager.list()?;
@@ -81,7 +94,7 @@ fn test_mux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for_session(manager, &session_name)?;
 
     // Verify session exists
     assert!(
@@ -116,7 +129,7 @@ fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for_session(manager, &session_name)?;
 
     // Verify session exists
     assert!(
@@ -314,7 +327,7 @@ fn test_mux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for_session(manager, &session_name)?;
 
     // Verify session exists
     assert!(
@@ -359,7 +372,7 @@ fn test_mux_send_keys() -> Result<(), Box<dyn std::error::Error>> {
     let _ = manager.kill(&session_name);
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Send keys
     let result = manager.send_keys(&session_name, "echo test");
@@ -387,7 +400,7 @@ fn test_mux_send_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
     }
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Send keys with submit
     let token = format!("__tenex_submit_test_{session_name}__");
@@ -424,7 +437,7 @@ fn test_mux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
     // Create session
     let _ = manager.kill(&session_name);
     manager.create(&session_name, &fixture.worktree_path(), None)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Create a window
     let window_command = vec!["sleep".to_string(), "60".to_string()];
@@ -465,7 +478,7 @@ fn test_mux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
     let _ = manager.kill(&session_name);
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for_session(manager, &session_name)?;
 
     // Capture tail
     let capture = tenex::mux::OutputCapture::new();
@@ -491,7 +504,7 @@ fn test_mux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
     // Create session
     let _ = manager.kill(&session_name);
     manager.create(&session_name, &fixture.worktree_path(), None)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Get pane size
     let capture = tenex::mux::OutputCapture::new();
@@ -522,7 +535,7 @@ fn test_mux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
     // Create session
     let _ = manager.kill(&session_name);
     manager.create(&session_name, &fixture.worktree_path(), None)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Get cursor position
     let capture = tenex::mux::OutputCapture::new();
@@ -549,7 +562,7 @@ fn test_mux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
     let _ = manager.kill(&session_name);
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for_session(manager, &session_name)?;
 
     // Get current command
     let capture = tenex::mux::OutputCapture::new();
@@ -578,7 +591,7 @@ fn test_mux_session_rename() -> Result<(), Box<dyn std::error::Error>> {
     let _ = manager.kill(&old_name);
     let _ = manager.kill(&new_name);
     manager.create(&old_name, &fixture.worktree_path(), None)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &old_name)?;
 
     // Rename
     let result = manager.rename(&old_name, &new_name);
@@ -610,7 +623,7 @@ fn test_mux_paste_keys_and_submit() -> Result<(), Box<dyn std::error::Error>> {
     }
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Send keys with bracketed paste and submit
     let token = format!("__tenex_paste_test_{session_name}__");
@@ -650,7 +663,7 @@ fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error:
     }
     manager.create(&session_name, &fixture.worktree_path(), None)?;
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     // Test default path (uses send_keys + carriage return).
     let token_default = format!("__tenex_submit_default_test_{session_name}__");
@@ -756,6 +769,7 @@ if __name__ == "__main__":
     let cmd = vec![claude_path.to_string_lossy().into_owned()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&cmd))?;
 
+    wait_for_session(manager, &session_name)?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     let result = manager.send_keys_and_submit_for_program(
@@ -858,7 +872,7 @@ fn test_mux_additional_session_ops() -> Result<(), Box<dyn std::error::Error>> {
 
     let command = vec!["sleep".to_string(), "60".to_string()];
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    wait_for_session(manager, &session_name)?;
 
     let pids = manager.list_pane_pids(&session_name)?;
     assert!(

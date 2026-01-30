@@ -17,6 +17,7 @@ pub mod migration;
 pub mod mux;
 pub mod paths;
 pub mod prompts;
+pub mod release_notes;
 pub mod state;
 pub mod tui;
 pub mod update;

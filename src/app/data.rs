@@ -9,7 +9,7 @@ use crate::app::state::{
 };
 use crate::config::Config;
 use crate::state::{
-    AppMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
+    AppMode, ChangelogMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
 };
 
 /// Persistent application data (everything except the current mode).
@@ -57,6 +57,9 @@ pub struct AppData {
     /// User settings (persistent preferences).
     pub settings: Settings,
 
+    /// Deferred changelog modal to show once the app returns to normal mode.
+    pub pending_changelog: Option<crate::state::ChangelogMode>,
+
     /// Whether the terminal supports the keyboard enhancement protocol.
     pub keyboard_enhancement_supported: bool,
 }
@@ -85,6 +88,7 @@ impl AppData {
             model_selector: ModelSelectorState::new(),
             spawn: SpawnState::new(),
             settings,
+            pending_changelog: None,
             keyboard_enhancement_supported,
         }
     }
@@ -520,6 +524,23 @@ impl AppData {
                 self.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
             }
+            "/changelog" => {
+                self.input.clear();
+                match crate::release_notes::current_version()
+                    .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
+                {
+                    Ok(lines) => ChangelogMode {
+                        title: "Changelog".to_string(),
+                        lines,
+                        mark_seen_version: None,
+                    }
+                    .into(),
+                    Err(e) => {
+                        self.set_status(format!("Failed to load changelog: {e}"));
+                        AppMode::normal()
+                    }
+                }
+            }
             "/help" => {
                 self.ui.help_scroll = 0;
                 HelpMode.into()
@@ -588,6 +609,23 @@ impl AppData {
                 self.input.clear();
                 self.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
+            }
+            "/changelog" => {
+                self.input.clear();
+                match crate::release_notes::current_version()
+                    .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
+                {
+                    Ok(lines) => ChangelogMode {
+                        title: "Changelog".to_string(),
+                        lines,
+                        mark_seen_version: None,
+                    }
+                    .into(),
+                    Err(e) => {
+                        self.set_status(format!("Failed to load changelog: {e}"));
+                        AppMode::normal()
+                    }
+                }
             }
             "/help" => {
                 self.ui.help_scroll = 0;
@@ -984,7 +1022,7 @@ mod tests {
             false,
         );
         data.input.buffer = "/".to_string();
-        data.command_palette.selected = 1;
+        data.command_palette.selected = 2;
         data.ui.help_scroll = 123;
 
         let next = data.confirm_slash_command_selection();

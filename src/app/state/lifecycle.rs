@@ -21,8 +21,14 @@ impl App {
 
         match next {
             AppMode::Normal(_) => {
-                self.mode = AppMode::normal();
                 self.data.input.clear();
+
+                if let Some(pending) = self.data.pending_changelog.take() {
+                    self.data.ui.changelog_scroll = 0;
+                    self.mode = pending.into();
+                } else {
+                    self.mode = AppMode::normal();
+                }
             }
             AppMode::CommandPalette(_) => {
                 self.data.command_palette.reset();
@@ -87,6 +93,11 @@ impl App {
             }
             AppMode::SuccessModal(state) => {
                 self.mode = AppMode::SuccessModal(state);
+            }
+            AppMode::Changelog(state) => {
+                self.data.input.clear();
+                self.data.ui.changelog_scroll = 0;
+                self.mode = AppMode::Changelog(state);
             }
             other => {
                 self.mode = other;

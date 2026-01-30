@@ -4,6 +4,7 @@
 //! duplication across the various overlay rendering functions.
 
 mod branch;
+mod changelog;
 mod command_palette;
 mod confirm;
 mod error;
@@ -14,6 +15,7 @@ mod picker;
 mod settings_menu;
 
 pub use branch::render_branch_selector_overlay;
+pub use changelog::render_changelog_overlay;
 pub use command_palette::render_command_palette_overlay;
 pub use confirm::{
     render_confirm_overlay, render_confirm_push_for_pr_overlay, render_confirm_push_overlay,
@@ -62,6 +64,7 @@ pub fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
 #[must_use]
 pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
     match &app.mode {
+        AppMode::Changelog(state) => Some(changelog_rect(state, frame_area)),
         AppMode::Help(_) => Some(help_rect(app, frame_area)),
         AppMode::CommandPalette(_) => Some(command_palette_rect(app, frame_area)),
         AppMode::Creating(_)
@@ -91,6 +94,19 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
         AppMode::Confirming(state) => Some(confirming_rect(app, state.action, frame_area)),
         _ => None,
     }
+}
+
+fn changelog_rect(state: &crate::state::ChangelogMode, frame_area: Rect) -> Rect {
+    let total_lines = state.lines.len();
+
+    let max_height = frame_area.height.saturating_sub(4);
+    let min_height = 12u16.min(max_height);
+    let desired_height = u16::try_from(total_lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let height = desired_height.min(max_height).max(min_height);
+
+    centered_rect_absolute(60, height, frame_area)
 }
 
 fn help_rect(app: &App, frame_area: Rect) -> Rect {
@@ -280,9 +296,9 @@ mod tests {
     use crate::app::{MuxdVersionMismatchInfo, Settings, WorktreeConflictInfo};
     use crate::config::Config;
     use crate::state::{
-        BranchSelectorMode, BroadcastingMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
-        ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, CreatingMode,
-        CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
+        BranchSelectorMode, BroadcastingMode, ChangelogMode, ChildCountMode, ChildPromptMode,
+        CommandPaletteMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode,
+        CreatingMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
         MergeBranchSelectorMode, ModelSelectorMode, PromptingMode, RebaseBranchSelectorMode,
         ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode, ReviewInfoMode,
         SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
@@ -397,6 +413,16 @@ mod tests {
             latest_version: Version::new(1, 0, 1),
         };
         app.apply_mode(UpdatePromptMode { info }.into());
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(
+            ChangelogMode {
+                title: "What's New".to_string(),
+                lines: vec!["hello".to_string()],
+                mark_seen_version: None,
+            }
+            .into(),
+        );
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
         app.apply_mode(KeyboardRemapPromptMode.into());

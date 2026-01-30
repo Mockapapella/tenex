@@ -49,4 +49,9 @@ impl App {
     pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
         self.data.ui.set_preview_dimensions(width, height);
     }
+
+    /// Set the terminal viewport dimensions.
+    pub const fn set_terminal_dimensions(&mut self, width: u16, height: u16) {
+        self.data.ui.set_terminal_dimensions(width, height);
+    }
 }

@@ -22,7 +22,7 @@ impl CommandPaletteState {
 
 use super::{App, SlashCommand};
 use crate::app::AgentRole;
-use crate::state::{AppMode, CommandPaletteMode, HelpMode, SettingsMenuMode};
+use crate::state::{AppMode, ChangelogMode, CommandPaletteMode, HelpMode, SettingsMenuMode};
 
 impl App {
     /// Enter slash command palette mode and pre-fill the leading `/`
@@ -50,6 +50,20 @@ impl App {
                 self.data.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
             }
+            "/changelog" => match crate::release_notes::current_version()
+                .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
+            {
+                Ok(lines) => ChangelogMode {
+                    title: "Changelog".to_string(),
+                    lines,
+                    mark_seen_version: None,
+                }
+                .into(),
+                Err(e) => {
+                    self.set_status(format!("Failed to load changelog: {e}"));
+                    AppMode::normal()
+                }
+            },
             "/help" => {
                 self.data.ui.help_scroll = 0;
                 HelpMode.into()

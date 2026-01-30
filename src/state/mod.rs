@@ -2,6 +2,7 @@
 
 mod branch_selector;
 mod broadcasting;
+mod changelog;
 mod child_count;
 mod child_prompt;
 mod command_palette;
@@ -33,6 +34,7 @@ mod update_requested;
 
 pub use branch_selector::BranchSelectorMode;
 pub use broadcasting::BroadcastingMode;
+pub use changelog::ChangelogMode;
 pub use child_count::ChildCountMode;
 pub use child_prompt::ChildPromptMode;
 pub use command_palette::CommandPaletteMode;
@@ -115,6 +117,8 @@ pub enum AppMode {
     UpdatePrompt(UpdatePromptMode),
     /// Update requested mode (input ignored).
     UpdateRequested(UpdateRequestedMode),
+    /// Changelog / "What's New" modal mode.
+    Changelog(ChangelogMode),
     /// Help overlay mode.
     Help(HelpMode),
     /// Error modal mode.
@@ -294,6 +298,12 @@ impl From<UpdatePromptMode> for AppMode {
 impl From<UpdateRequestedMode> for AppMode {
     fn from(state: UpdateRequestedMode) -> Self {
         Self::UpdateRequested(state)
+    }
+}
+
+impl From<ChangelogMode> for AppMode {
+    fn from(state: ChangelogMode) -> Self {
+        Self::Changelog(state)
     }
 }
 

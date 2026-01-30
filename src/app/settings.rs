@@ -4,6 +4,7 @@
 //! keyboard remapping choices.
 
 use crate::config::Config;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
@@ -107,6 +108,10 @@ pub struct Settings {
     /// Custom review command (used when `review_agent_program == Custom`)
     #[serde(default)]
     pub review_custom_agent_command: String,
+
+    /// The most recent Tenex version for which the user has seen "What's New".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_version: Option<String>,
 }
 
 impl Settings {
@@ -209,6 +214,16 @@ impl Settings {
         Ok(())
     }
 
+    /// Persist that the user has seen release notes for the given version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the settings file cannot be written.
+    pub fn set_last_seen_version(&mut self, version: &Version) -> std::io::Result<()> {
+        self.last_seen_version = Some(version.to_string());
+        self.save()
+    }
+
     /// Enable the merge key remap and save
     ///
     /// # Errors
@@ -254,6 +269,7 @@ mod tests {
         assert!(settings.planner_custom_agent_command.is_empty());
         assert_eq!(settings.review_agent_program, AgentProgram::Claude);
         assert!(settings.review_custom_agent_command.is_empty());
+        assert!(settings.last_seen_version.is_none());
     }
 
     #[test]
@@ -354,6 +370,7 @@ mod tests {
         assert!(settings.planner_custom_agent_command.is_empty());
         assert_eq!(settings.review_agent_program, AgentProgram::Claude);
         assert!(settings.review_custom_agent_command.is_empty());
+        assert!(settings.last_seen_version.is_none());
         Ok(())
     }
 
