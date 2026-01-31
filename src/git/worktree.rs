@@ -827,6 +827,24 @@ mod tests {
 
         fs::write(temp_dir.path().join(".gitignore"), "ignored-link\n")?;
 
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+
         let real = temp_dir.path().join("real.txt");
         fs::write(&real, "payload")?;
 
