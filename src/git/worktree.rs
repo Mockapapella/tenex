@@ -45,6 +45,135 @@ fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn normalize_ignored_rel_path(raw_path: &[u8]) -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::path::Component;
+
+    if raw_path.is_empty() {
+        return None;
+    }
+
+    let mut rel = String::from_utf8_lossy(raw_path).into_owned();
+    rel.truncate(rel.trim_end_matches('/').len());
+
+    if rel.is_empty() {
+        return None;
+    }
+
+    let rel_path = PathBuf::from(rel);
+    if rel_path.is_absolute()
+        || rel_path.components().any(|c| {
+            matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir
+            )
+        })
+    {
+        return None;
+    }
+
+    let Some(Component::Normal(top)) = rel_path.components().next() else {
+        return None;
+    };
+    if top == OsStr::new(".git") || top == OsStr::new(".tenex") {
+        return None;
+    }
+
+    Some(rel_path)
+}
+
+fn list_ignored_rel_paths(repo_root: &Path) -> Result<Vec<PathBuf>> {
+    let output = super::git_command()
+        .args([
+            "ls-files",
+            "-o",
+            "-i",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ])
+        .current_dir(repo_root)
+        .output()
+        .with_context(|| format!("Failed to list ignored files from {}", repo_root.display()))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git ls-files failed (stdout: {stdout}, stderr: {stderr})");
+    }
+
+    Ok(output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .filter_map(normalize_ignored_rel_path)
+        .collect())
+}
+
+fn git_check_ignore_ignored_paths(
+    repo_dir: &Path,
+    rel_paths: &[PathBuf],
+) -> Result<std::collections::HashSet<PathBuf>> {
+    use std::ffi::OsString;
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::Stdio;
+
+    if rel_paths.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let mut child = super::git_command()
+        .args(["check-ignore", "-z", "--stdin"])
+        .current_dir(repo_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn git check-ignore")?;
+
+    {
+        let mut stdin = child.stdin.take().context("Failed to open git stdin")?;
+        for rel_path in rel_paths {
+            stdin
+                .write_all(rel_path.as_os_str().as_bytes())
+                .with_context(|| {
+                    format!(
+                        "Failed to write path {} to git check-ignore stdin",
+                        rel_path.display()
+                    )
+                })?;
+            stdin
+                .write_all(b"\0")
+                .context("Failed to write NUL delimiter to git check-ignore stdin")?;
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("Failed to read git check-ignore output")?;
+
+    if !output.status.success() && output.status.code() != Some(1) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git check-ignore failed (stdout: {stdout}, stderr: {stderr})");
+    }
+
+    let mut fields = output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .collect::<Vec<_>>();
+    if fields.last().is_some_and(|value| value.is_empty()) {
+        fields.pop();
+    }
+
+    Ok(fields
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .map(|value| PathBuf::from(OsString::from_vec(value.to_vec())))
+        .collect())
+}
+
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
@@ -404,104 +533,85 @@ impl<'a> Manager<'a> {
     }
 
     fn symlink_ignored_files_into_worktree(&self, worktree_path: &Path) -> Result<()> {
-        use std::ffi::OsStr;
-        use std::os::unix::fs::symlink;
-        use std::path::Component;
-
         let Some(repo_root) = self.repo.workdir() else {
             return Ok(());
         };
 
-        let output = super::git_command()
-            .args([
-                "ls-files",
-                "-o",
-                "-i",
-                "--exclude-standard",
-                "--directory",
-                "-z",
-            ])
-            .current_dir(repo_root)
-            .output()
-            .with_context(|| {
-                format!("Failed to list ignored files from {}", repo_root.display())
-            })?;
+        let rel_paths = list_ignored_rel_paths(repo_root)?;
+        let ignored_as_file_in_worktree =
+            git_check_ignore_ignored_paths(worktree_path, &rel_paths)?;
 
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("git ls-files failed (stdout: {stdout}, stderr: {stderr})");
+        for rel_path in rel_paths {
+            Self::symlink_ignored_path(
+                repo_root,
+                worktree_path,
+                &rel_path,
+                &ignored_as_file_in_worktree,
+            )?;
         }
 
-        for raw_path in output.stdout.split(|byte| *byte == b'\0') {
-            if raw_path.is_empty() {
-                continue;
-            }
+        Ok(())
+    }
 
-            let mut rel = String::from_utf8_lossy(raw_path).into_owned();
-            if rel.ends_with('/') {
-                rel.truncate(rel.trim_end_matches('/').len());
-            }
+    fn symlink_ignored_path(
+        repo_root: &Path,
+        worktree_path: &Path,
+        rel_path: &Path,
+        ignored_as_file_in_worktree: &std::collections::HashSet<PathBuf>,
+    ) -> Result<()> {
+        use std::os::unix::fs::symlink;
 
-            if rel.is_empty() {
-                continue;
-            }
-
-            let rel_path = Path::new(&rel);
-            if rel_path.is_absolute()
-                || rel_path.components().any(|c| {
-                    matches!(
-                        c,
-                        Component::Prefix(_) | Component::RootDir | Component::ParentDir
-                    )
-                })
-            {
-                continue;
-            }
-
-            let Some(Component::Normal(top)) = rel_path.components().next() else {
-                continue;
-            };
-            if top == OsStr::new(".git") || top == OsStr::new(".tenex") {
-                continue;
-            }
-
-            let src = repo_root.join(rel_path);
-            if fs::symlink_metadata(&src).is_err() {
-                continue;
-            }
-
-            let dst = worktree_path.join(rel_path);
-            if fs::symlink_metadata(&dst).is_ok() {
-                continue;
-            }
-
-            let Some(parent) = dst.parent() else {
-                continue;
-            };
-
-            let parent_is_symlink = fs::symlink_metadata(parent)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-            if parent_is_symlink {
-                continue;
-            }
-
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create parent directory {} for ignored file link",
-                    parent.display()
-                )
-            })?;
-
-            symlink(&src, &dst).with_context(|| {
-                format!(
-                    "Failed to symlink ignored path {} -> {}",
-                    dst.display(),
-                    src.display()
-                )
-            })?;
+        if !ignored_as_file_in_worktree.contains(rel_path) {
+            debug!(
+                "Skipping ignored path {} because it is not ignored as a file in the worktree",
+                rel_path.display()
+            );
+            return Ok(());
         }
+
+        let src = repo_root.join(rel_path);
+        let Ok(src_meta) = fs::symlink_metadata(&src) else {
+            return Ok(());
+        };
+
+        if src_meta.file_type().is_symlink() {
+            return Ok(());
+        }
+
+        if worktree_path.starts_with(&src) {
+            return Ok(());
+        }
+
+        let dst = worktree_path.join(rel_path);
+        if fs::symlink_metadata(&dst).is_ok() {
+            return Ok(());
+        }
+
+        let Some(parent) = dst.parent() else {
+            return Ok(());
+        };
+
+        let parent_is_symlink = fs::symlink_metadata(parent)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if parent_is_symlink {
+            return Ok(());
+        }
+
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create parent directory {} for ignored file link",
+                parent.display()
+            )
+        })?;
+
+        symlink(&src, &dst).with_context(|| {
+            format!(
+                "Failed to symlink ignored path {} -> {}",
+                dst.display(),
+                src.display()
+            )
+        })?;
 
         Ok(())
     }
@@ -603,6 +713,88 @@ mod tests {
         assert!(linked_meta.file_type().is_symlink());
         assert_eq!(fs::read_link(&linked_file)?, ignored_file);
 
+        assert!(fs::symlink_metadata(wt_path.join("ignored_dir")).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_skips_dir_only_ignored_directory_symlinks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join(".gitignore"), ".ruff_cache/\n")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        let cache_dir = temp_dir.path().join(".ruff_cache");
+        fs::create_dir_all(&cache_dir)?;
+        fs::write(cache_dir.join("marker.txt"), "payload")?;
+
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join("feature-ignored-dir");
+        manager.create_with_new_branch(&wt_path, "feature-ignored-dir-test")?;
+
+        assert!(fs::symlink_metadata(wt_path.join(".ruff_cache")).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_symlinks_ignored_dir_when_ignored_as_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join(".gitignore"), "ignored_dir\n")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        let ignored_dir = temp_dir.path().join("ignored_dir");
+        fs::create_dir_all(&ignored_dir)?;
+        fs::write(ignored_dir.join("nested.txt"), "nested")?;
+
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join("feature-ignored-dir-no-slash");
+        manager.create_with_new_branch(&wt_path, "feature-ignored-dir-no-slash-test")?;
+
         let linked_dir = wt_path.join("ignored_dir");
         let linked_dir_meta = fs::symlink_metadata(&linked_dir)?;
         assert!(linked_dir_meta.file_type().is_symlink());
@@ -610,6 +802,59 @@ mod tests {
 
         assert_eq!(fs::read_to_string(linked_dir.join("nested.txt"))?, "nested");
 
+        let status = super::super::git_command()
+            .args(["status", "--porcelain"])
+            .current_dir(&wt_path)
+            .output()?;
+        assert!(status.status.success());
+
+        let stdout = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            !stdout.contains("ignored_dir"),
+            "Expected ignored_dir to be ignored; git status output:\n{stdout}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_skips_ignored_symlink_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join(".gitignore"), "ignored-link\n")?;
+
+        let real = temp_dir.path().join("real.txt");
+        fs::write(&real, "payload")?;
+
+        let link = temp_dir.path().join("ignored-link");
+        symlink(&real, &link)?;
+
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join("feature-symlink-source");
+        manager.create_with_new_branch(&wt_path, "feature-symlink-source-test")?;
+
+        assert!(fs::symlink_metadata(wt_path.join("ignored-link")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_skips_ignored_worktree_ancestor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join(".gitignore"), "worktrees/\n")?;
+
+        let wt_path = temp_dir.path().join("worktrees").join("feature-loop");
+        manager.create_with_new_branch(&wt_path, "feature-loop-test")?;
+
+        assert!(fs::symlink_metadata(wt_path.join("worktrees")).is_err());
         Ok(())
     }
 
