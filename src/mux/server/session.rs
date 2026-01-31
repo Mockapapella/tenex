@@ -617,7 +617,9 @@ mod tests {
         Manager::create_window(session_name, "child", &tmp, Some(&test_long_command()))?;
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while Manager::exists(session_name) && Instant::now() < deadline {
+        let mut first_check = true;
+        while (first_check || Manager::exists(session_name)) && Instant::now() < deadline {
+            first_check = false;
             std::thread::sleep(Duration::from_millis(50));
         }
 
