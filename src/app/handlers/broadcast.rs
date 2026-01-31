@@ -36,7 +36,7 @@ impl Actions {
         for target_id in targets {
             if !app_data.storage.has_children(target_id)
                 && let Some(target_agent) = app_data.storage.get(target_id)
-                && !target_agent.is_terminal
+                && !target_agent.is_terminal_agent()
             {
                 // Determine the mux target (session or window)
                 let target = if let Some(window_idx) = target_agent.window_index {

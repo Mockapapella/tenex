@@ -136,6 +136,14 @@ impl Agent {
         self.parent_id.is_some()
     }
 
+    /// Whether this agent represents an interactive terminal window.
+    ///
+    /// `is_terminal` is the canonical flag, but older state files may only have `program="terminal"`.
+    #[must_use]
+    pub fn is_terminal_agent(&self) -> bool {
+        self.is_terminal || self.program == "terminal"
+    }
+
     /// Get a short display ID (first 8 chars of UUID)
     #[must_use]
     pub fn short_id(&self) -> String {
@@ -344,5 +352,19 @@ mod tests {
         assert!(agent.window_index.is_none());
         assert!(agent.collapsed); // default value
         Ok(())
+    }
+
+    #[test]
+    fn test_is_terminal_agent_true_when_flag_set() {
+        let mut agent = create_test_agent();
+        agent.is_terminal = true;
+        assert!(agent.is_terminal_agent());
+    }
+
+    #[test]
+    fn test_is_terminal_agent_true_when_program_is_terminal() {
+        let mut agent = create_test_agent();
+        agent.program = "terminal".to_string();
+        assert!(agent.is_terminal_agent());
     }
 }

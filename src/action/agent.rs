@@ -178,14 +178,24 @@ impl ValidIn<NormalMode> for SynthesizeAction {
             return Ok(AppMode::normal());
         };
 
-        if app_data.storage.has_children(agent.id) {
+        if !app_data.storage.has_children(agent.id) {
+            Ok(ErrorModalMode {
+                message: "Selected agent has no children to synthesize".to_string(),
+            }
+            .into())
+        } else if app_data
+            .storage
+            .descendants(agent.id)
+            .into_iter()
+            .any(|a| !a.is_terminal_agent())
+        {
             Ok(ConfirmingMode {
                 action: ConfirmAction::Synthesize,
             }
             .into())
         } else {
             Ok(ErrorModalMode {
-                message: "Selected agent has no children to synthesize".to_string(),
+                message: "Selected agent has no non-terminal children to synthesize".to_string(),
             }
             .into())
         }
@@ -200,14 +210,24 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
             return Ok(ScrollingMode.into());
         };
 
-        if app_data.storage.has_children(agent.id) {
+        if !app_data.storage.has_children(agent.id) {
+            Ok(ErrorModalMode {
+                message: "Selected agent has no children to synthesize".to_string(),
+            }
+            .into())
+        } else if app_data
+            .storage
+            .descendants(agent.id)
+            .into_iter()
+            .any(|a| !a.is_terminal_agent())
+        {
             Ok(ConfirmingMode {
                 action: ConfirmAction::Synthesize,
             }
             .into())
         } else {
             Ok(ErrorModalMode {
-                message: "Selected agent has no children to synthesize".to_string(),
+                message: "Selected agent has no non-terminal children to synthesize".to_string(),
             }
             .into())
         }

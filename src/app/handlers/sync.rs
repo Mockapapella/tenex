@@ -621,7 +621,7 @@ fn normalize_tree_running(
 }
 
 fn command_for_agent(agent: &Agent) -> Result<Option<Vec<String>>> {
-    if agent.is_terminal || agent.program == "terminal" {
+    if agent.is_terminal_agent() {
         return Ok(None);
     }
 

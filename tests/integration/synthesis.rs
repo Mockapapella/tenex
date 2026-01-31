@@ -303,6 +303,126 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
+fn test_synthesize_ignores_legacy_terminal_children() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("synth_ignore_legacy_term")?;
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    let handler = tenex::app::Actions::new();
+
+    // Create a swarm with 2 children (non-terminal agents)
+    app.data.spawn.child_count = 2;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-legacy-term-test"));
+    if result.is_err() {
+        return Ok(());
+    }
+
+    // Select root and spawn a terminal
+    app.data.selected = 0;
+    let handler = tenex::app::Actions::new();
+    let result = handler.spawn_terminal(&mut app.data, None);
+    if result.is_err() {
+        let manager = SessionManager::new();
+        for agent in app.data.storage.iter() {
+            let _ = manager.kill(&agent.mux_session);
+        }
+        return Ok(());
+    }
+
+    let root_id = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root")?
+        .id;
+
+    let terminal_id = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.program == "terminal")
+        .ok_or("No terminal")?
+        .id;
+
+    let terminal_title = app
+        .data
+        .storage
+        .get(terminal_id)
+        .ok_or("No terminal")?
+        .title
+        .clone();
+
+    // Simulate old state: `program="terminal"` but `is_terminal` is missing/false.
+    if let Some(terminal) = app.data.storage.get_mut(terminal_id) {
+        terminal.is_terminal = false;
+    }
+
+    // Select root and synthesize
+    app.data.selected = 0;
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
+    let handler = tenex::app::Actions::new();
+    let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
+    assert!(result.is_ok());
+
+    // Should have 2 agents remaining (root + terminal).
+    assert_eq!(app.data.storage.len(), 2);
+
+    let remaining_children = app.data.storage.children(root_id);
+    assert_eq!(remaining_children.len(), 1);
+    assert_eq!(remaining_children[0].id, terminal_id);
+    assert_eq!(remaining_children[0].title, terminal_title);
+
+    // Verify synthesis file was created and excludes the terminal output.
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("Root gone")?;
+    let tenex_dir = root.worktree_path.join(".tenex");
+    assert!(tenex_dir.exists(), ".tenex directory should exist");
+
+    let entries: Vec<_> = std::fs::read_dir(&tenex_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    assert_eq!(entries.len(), 1, "Should have exactly one synthesis file");
+
+    let synthesis = std::fs::read_to_string(entries[0].path())?;
+    assert!(
+        synthesis.contains("2 parallel research sessions"),
+        "Terminal should be excluded from synthesis"
+    );
+    assert!(
+        !synthesis.contains(&terminal_title),
+        "Terminal output should not be included in synthesis"
+    );
+
+    // Cleanup
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
@@ -368,20 +488,9 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     // Select root
     app.data.selected = 0;
 
-    // has_children check passes, so we should enter confirmation mode
+    // Synthesize should fail because all children are terminals
     let handler = tenex::app::Actions::new();
     let result = handler.handle_action(&mut app, tenex::config::Action::Synthesize);
-    assert!(result.is_ok());
-    assert_eq!(
-        app.mode,
-        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
-            action: tenex::app::ConfirmAction::Synthesize,
-        })
-    );
-
-    // Now confirm - this should fail because all children are terminals
-    let handler = tenex::app::Actions::new();
-    let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
     // Should show error modal
