@@ -21,14 +21,6 @@ pub fn parse_command_line(command_line: &str) -> Result<Vec<String>> {
 }
 
 /// Build an argv vector from a configured program string and an optional prompt.
-pub fn build_command_argv(program: &str, prompt: Option<&str>) -> Result<Vec<String>> {
-    let mut argv = parse_command_line(program)?;
-    if let Some(prompt) = prompt {
-        argv.push(prompt.to_string());
-    }
-    Ok(argv)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,17 +52,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_command_argv_appends_prompt() -> Result<(), Box<dyn std::error::Error>> {
-        let argv = build_command_argv("echo hello", Some("prompt"))?;
-        assert_eq!(
-            argv,
-            vec![
-                "echo".to_string(),
-                "hello".to_string(),
-                "prompt".to_string()
-            ]
-        );
-        Ok(())
-    }
+    // `build_spawn_argv` lives in `crate::conversation` and covers Tenex's current spawn needs.
 }

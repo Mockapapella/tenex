@@ -18,6 +18,10 @@ pub struct Agent {
     /// Program being run (e.g., "claude", "aider")
     pub program: String,
 
+    /// Conversation/session id for resuming an agent after a reboot/crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+
     /// Current status of the agent
     pub status: Status,
 
@@ -82,6 +86,7 @@ impl Agent {
             id,
             title,
             program,
+            conversation_id: None,
             status: Status::Starting,
             branch,
             worktree_path,
@@ -111,6 +116,7 @@ impl Agent {
             id,
             title,
             program,
+            conversation_id: None,
             status: Status::Starting,
             branch,
             worktree_path,

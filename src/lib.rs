@@ -7,6 +7,7 @@
 compile_error!("Tenex currently supports Linux only.");
 
 mod command;
+pub(crate) mod conversation;
 
 pub mod action;
 pub mod agent;

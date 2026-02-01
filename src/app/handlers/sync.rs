@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -271,12 +272,35 @@ impl Actions {
                 branch_name.clone(),
                 worktree_path.clone(),
             );
+            let cli = crate::conversation::detect_agent_cli(&program);
+            if cli == crate::conversation::AgentCli::Claude {
+                agent.conversation_id = Some(agent.id.to_string());
+            }
             agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
             // Create mux session and start the agent program
-            let command = crate::command::build_command_argv(&program, None)?;
+            let command = crate::conversation::build_spawn_argv(
+                &program,
+                None,
+                agent.conversation_id.as_deref(),
+            )?;
+            let started_at = SystemTime::now();
             self.session_manager
                 .create(&agent.mux_session, &worktree_path, Some(&command))?;
+            if cli == crate::conversation::AgentCli::Codex {
+                let exclude_ids: HashSet<String> = app
+                    .data
+                    .storage
+                    .iter()
+                    .filter_map(|stored| stored.conversation_id.clone())
+                    .collect();
+                agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                    &worktree_path,
+                    started_at,
+                    &exclude_ids,
+                    Duration::from_millis(500),
+                );
+            }
 
             // Resize the session to match preview dimensions if available
             if let Some((width, height)) = app.data.ui.preview_dimensions {
@@ -625,8 +649,16 @@ fn command_for_agent(agent: &Agent) -> Result<Option<Vec<String>>> {
         return Ok(None);
     }
 
-    Ok(Some(crate::command::build_command_argv(
+    if let Some(conversation_id) = agent.conversation_id.as_deref() {
+        return Ok(Some(crate::conversation::build_resume_argv(
+            &agent.program,
+            conversation_id,
+        )?));
+    }
+
+    Ok(Some(crate::conversation::build_spawn_argv(
         &agent.program,
+        None,
         None,
     )?))
 }
@@ -903,6 +935,51 @@ mod tests {
         // Clean up to avoid leaving long-running processes around.
         let _ = crate::mux::SessionManager::new().kill(&root_session);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_command_for_agent_terminal_returns_none() -> Result<(), Box<dyn std::error::Error>> {
+        let agent = Agent::new(
+            "terminal".to_string(),
+            "terminal".to_string(),
+            "tenex-test/terminal".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        let command = command_for_agent(&agent)?;
+        assert!(command.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_command_for_agent_resumes_when_conversation_id_present()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "claude --debug".to_string(),
+            "tenex-test/agent".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.conversation_id = Some("resume-id".to_string());
+
+        let command = command_for_agent(&agent)?.ok_or("Expected command")?;
+        assert_eq!(command, vec!["claude", "--debug", "--resume", "resume-id"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_command_for_agent_spawns_when_no_conversation_id()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let agent = Agent::new(
+            "agent".to_string(),
+            "claude --debug".to_string(),
+            "tenex-test/agent".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        let command = command_for_agent(&agent)?.ok_or("Expected command")?;
+        assert_eq!(command, vec!["claude", "--debug"]);
         Ok(())
     }
 }

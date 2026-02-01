@@ -4,6 +4,8 @@ use crate::agent::{Agent, ChildConfig};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
+use std::collections::HashSet;
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -93,12 +95,34 @@ impl Actions {
             branch.to_string(),
             worktree_path.to_path_buf(),
         );
+        let cli = crate::conversation::detect_agent_cli(&program);
+        if cli == crate::conversation::AgentCli::Claude {
+            agent.conversation_id = Some(agent.id.to_string());
+        }
         let session_prefix = app_data.storage.instance_session_prefix();
         agent.mux_session = format!("{session_prefix}{}", agent.short_id());
 
-        let command = crate::command::build_command_argv(&program, prompt)?;
+        let command = crate::conversation::build_spawn_argv(
+            &program,
+            prompt,
+            agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
         self.session_manager
             .create(&agent.mux_session, worktree_path, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
 
         // Resize the new session to match preview dimensions
         if let Some((width, height)) = app_data.ui.preview_dimensions {
@@ -131,81 +155,146 @@ impl Actions {
 
         let program = app_data.agent_spawn_command();
 
-        // Check if this is a swarm creation (has child count)
         if let Some(child_count) = conflict.swarm_child_count {
-            // Create root agent for swarm
-            let mut root_agent = Agent::new(
-                conflict.title.clone(),
-                program.clone(),
-                conflict.branch.clone(),
-                conflict.worktree_path.clone(),
-            );
-            let session_prefix = app_data.storage.instance_session_prefix();
-            root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
-
-            let root_session = root_agent.mux_session.clone();
-            let root_id = root_agent.id;
-
-            // Create the root's mux session
-            let command = crate::command::build_command_argv(&program, None)?;
-            self.session_manager
-                .create(&root_session, &conflict.worktree_path, Some(&command))?;
-
-            // Resize the session to match preview dimensions
-            if let Some((width, height)) = app_data.ui.preview_dimensions {
-                let _ = self
-                    .session_manager
-                    .resize_window(&root_session, width, height);
-            }
-
-            app_data.storage.add(root_agent);
-
-            // Now spawn the children
-            let task = conflict.prompt.as_deref().unwrap_or("");
-            let spawn_config = SpawnConfig {
-                root_session,
-                worktree_path: conflict.worktree_path.clone(),
-                branch: conflict.branch.clone(),
-                parent_agent_id: root_id,
-            };
-            self.spawn_children_for_root(app_data, &spawn_config, child_count, task)?;
-
-            info!(title = %conflict.title, branch = %conflict.branch, child_count, "Reconnected swarm to existing worktree");
-            app_data.set_status(format!("Reconnected swarm: {}", conflict.title));
+            self.reconnect_swarm_to_worktree(app_data, &conflict, &program, child_count)?;
         } else {
-            // Single agent reconnect
-            let mut agent = Agent::new(
-                conflict.title.clone(),
-                program.clone(),
-                conflict.branch.clone(),
-                conflict.worktree_path.clone(),
-            );
-            let session_prefix = app_data.storage.instance_session_prefix();
-            agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-            let command = crate::command::build_command_argv(&program, conflict.prompt.as_deref())?;
-
-            self.session_manager.create(
-                &agent.mux_session,
-                &conflict.worktree_path,
-                Some(&command),
-            )?;
-
-            // Resize the new session to match preview dimensions
-            if let Some((width, height)) = app_data.ui.preview_dimensions {
-                let _ = self
-                    .session_manager
-                    .resize_window(&agent.mux_session, width, height);
-            }
-
-            app_data.storage.add(agent);
-
-            info!(title = %conflict.title, branch = %conflict.branch, "Reconnected to existing worktree");
-            app_data.set_status(format!("Reconnected to: {}", conflict.title));
+            self.reconnect_single_to_worktree(app_data, &conflict, &program)?;
         }
 
         app_data.storage.save()?;
         Ok(AppMode::normal())
+    }
+
+    fn reconnect_swarm_to_worktree(
+        self,
+        app_data: &mut AppData,
+        conflict: &WorktreeConflictInfo,
+        program: &str,
+        child_count: usize,
+    ) -> Result<()> {
+        let mut root_agent = Agent::new(
+            conflict.title.clone(),
+            program.to_string(),
+            conflict.branch.clone(),
+            conflict.worktree_path.clone(),
+        );
+        let cli = crate::conversation::detect_agent_cli(program);
+        if cli == crate::conversation::AgentCli::Claude {
+            root_agent.conversation_id = Some(root_agent.id.to_string());
+        }
+        let session_prefix = app_data.storage.instance_session_prefix();
+        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
+
+        let root_session = root_agent.mux_session.clone();
+        let root_id = root_agent.id;
+
+        let command = crate::conversation::build_spawn_argv(
+            program,
+            None,
+            root_agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&root_session, &conflict.worktree_path, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            root_agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                &conflict.worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&root_session, width, height);
+        }
+
+        app_data.storage.add(root_agent);
+
+        let task = conflict.prompt.as_deref().unwrap_or("");
+        let spawn_config = SpawnConfig {
+            root_session,
+            worktree_path: conflict.worktree_path.clone(),
+            branch: conflict.branch.clone(),
+            parent_agent_id: root_id,
+        };
+        self.spawn_children_for_root(app_data, &spawn_config, child_count, task)?;
+
+        info!(
+            title = %conflict.title,
+            branch = %conflict.branch,
+            child_count,
+            "Reconnected swarm to existing worktree"
+        );
+        app_data.set_status(format!("Reconnected swarm: {}", conflict.title));
+
+        Ok(())
+    }
+
+    fn reconnect_single_to_worktree(
+        self,
+        app_data: &mut AppData,
+        conflict: &WorktreeConflictInfo,
+        program: &str,
+    ) -> Result<()> {
+        let mut agent = Agent::new(
+            conflict.title.clone(),
+            program.to_string(),
+            conflict.branch.clone(),
+            conflict.worktree_path.clone(),
+        );
+        let cli = crate::conversation::detect_agent_cli(program);
+        if cli == crate::conversation::AgentCli::Claude {
+            agent.conversation_id = Some(agent.id.to_string());
+        }
+        let session_prefix = app_data.storage.instance_session_prefix();
+        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
+
+        let command = crate::conversation::build_spawn_argv(
+            program,
+            conflict.prompt.as_deref(),
+            agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&agent.mux_session, &conflict.worktree_path, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                &conflict.worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&agent.mux_session, width, height);
+        }
+
+        app_data.storage.add(agent);
+
+        info!(
+            title = %conflict.title,
+            branch = %conflict.branch,
+            "Reconnected to existing worktree"
+        );
+        app_data.set_status(format!("Reconnected to: {}", conflict.title));
+
+        Ok(())
     }
 
     /// Recreate the worktree (user chose to delete and start fresh)
