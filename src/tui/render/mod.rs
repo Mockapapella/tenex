@@ -263,7 +263,19 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ))]
                     },
                     |agent| {
-                        let descendants_count = app.data.storage.descendants(agent.id).len();
+                        let descendants_count = app
+                            .data
+                            .storage
+                            .descendants(agent.id)
+                            .into_iter()
+                            .filter(|a| !a.is_terminal_agent())
+                            .count();
+                        if descendants_count == 0 {
+                            return vec![Line::from(Span::styled(
+                                "No non-terminal descendants to synthesize",
+                                Style::default().fg(colors::TEXT_PRIMARY),
+                            ))];
+                        }
                         let agent_word = if descendants_count == 1 {
                             "agent"
                         } else {
@@ -276,7 +288,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             )),
                             Line::from(""),
                             Line::from(Span::styled(
-                                "This will capture each agent's output, write it to a file,",
+                                "This will capture each non-terminal agent's output, write it to a file,",
                                 Style::default().fg(colors::TEXT_DIM),
                             )),
                             Line::from(Span::styled(
@@ -285,7 +297,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             )),
                             Line::from(""),
                             Line::from(Span::styled(
-                                "All descendant agents will be terminated.",
+                                "All descendant non-terminal agents will be terminated.",
                                 Style::default().fg(colors::DIFF_REMOVE),
                             )),
                         ]
@@ -327,7 +339,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, Status, Storage};
+    use crate::agent::{Agent, ChildConfig, Status, Storage};
     use crate::config::Config;
     use crate::state::*;
     use ratatui::Terminal;
@@ -368,6 +380,15 @@ mod tests {
         storage.add(create_test_agent("agent-3", Status::Running));
 
         App::new(config, storage, crate::app::Settings::default(), false)
+    }
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for cell in &buffer.content {
+            text.push_str(cell.symbol());
+        }
+        text
     }
 
     #[test]
@@ -511,6 +532,117 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirming_synthesize_mode_excludes_terminals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+
+        let config = create_test_config();
+        let mut storage = Storage::new();
+
+        let mut root = create_test_agent("root", Status::Running);
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let root_branch = root.branch.clone();
+        let root_path = root.worktree_path.clone();
+        storage.add(root);
+
+        let child = Agent::new_child(
+            "Child".to_string(),
+            "echo".to_string(),
+            root_branch.clone(),
+            root_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 1,
+            },
+        );
+        storage.add(child);
+
+        let mut terminal_child = Agent::new_child(
+            "Terminal 1".to_string(),
+            "terminal".to_string(),
+            root_branch,
+            root_path,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+            },
+        );
+        terminal_child.is_terminal = true;
+        storage.add(terminal_child);
+
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into(),
+        );
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Synthesize 1 agent?"),
+            "Terminal descendants should not count towards synthesis"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirming_synthesize_mode_only_terminals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+
+        let config = create_test_config();
+        let mut storage = Storage::new();
+
+        let root = create_test_agent("root", Status::Running);
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let root_branch = root.branch.clone();
+        let root_path = root.worktree_path.clone();
+        storage.add(root);
+
+        let mut terminal_child = Agent::new_child(
+            "Terminal 1".to_string(),
+            "terminal".to_string(),
+            root_branch,
+            root_path,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 1,
+            },
+        );
+        terminal_child.is_terminal = true;
+        storage.add(terminal_child);
+
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into(),
+        );
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No non-terminal"));
         Ok(())
     }
 

@@ -447,7 +447,7 @@ impl Actions {
             .storage
             .descendants(parent_id)
             .into_iter()
-            .filter(|d| !d.is_terminal)
+            .filter(|d| !d.is_terminal_agent())
             .collect();
 
         if descendants.is_empty() {
