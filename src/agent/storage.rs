@@ -360,11 +360,17 @@ impl Storage {
 
     /// Remove an agent by ID
     pub fn remove(&mut self, id: Uuid) -> Option<Agent> {
-        if let Some(pos) = self.agents.iter().position(|a| a.id == id) {
-            Some(self.agents.remove(pos))
-        } else {
-            None
+        let removed = self
+            .agents
+            .iter()
+            .position(|a| a.id == id)
+            .map(|pos| self.agents.remove(pos));
+
+        if removed.is_some() && self.agents.is_empty() {
+            self.mux_socket = None;
         }
+
+        removed
     }
 
     /// Get an agent by ID
@@ -412,6 +418,7 @@ impl Storage {
     /// Clear all agents
     pub fn clear(&mut self) {
         self.agents.clear();
+        self.mux_socket = None;
     }
 
     /// Get an iterator over all agents
@@ -827,6 +834,33 @@ mod tests {
         storage.clear();
 
         assert!(storage.is_empty());
+    }
+
+    #[test]
+    fn test_remove_clears_mux_socket_when_last_agent_removed() {
+        let mut storage = Storage::new();
+        storage.mux_socket = Some("tenex-mux-test.sock".to_string());
+
+        let agent = create_test_agent("test");
+        let id = agent.id;
+        storage.add(agent);
+
+        storage.remove(id);
+
+        assert!(storage.is_empty());
+        assert!(storage.mux_socket.is_none());
+    }
+
+    #[test]
+    fn test_clear_clears_mux_socket() {
+        let mut storage = Storage::new();
+        storage.mux_socket = Some("tenex-mux-test.sock".to_string());
+        storage.add(create_test_agent("test"));
+
+        storage.clear();
+
+        assert!(storage.is_empty());
+        assert!(storage.mux_socket.is_none());
     }
 
     #[test]

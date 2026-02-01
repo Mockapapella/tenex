@@ -68,6 +68,14 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
 
     // Use isolated state file to avoid affecting real agents
     let temp_state = NamedTempFile::new()?;
+    fs::write(
+        temp_state.path(),
+        r#"{
+  "agents": [],
+  "mux_socket": "tenex-mux-stale.sock"
+}
+"#,
+    )?;
 
     // reset with --force should succeed (even if no agents)
     let output = tenex_bin()
@@ -87,6 +95,9 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
             || stdout.contains("Agents to kill")
             || stdout.contains("Orphaned")
     );
+
+    let storage = tenex::agent::Storage::load_from(temp_state.path())?;
+    assert!(storage.mux_socket.is_none());
     Ok(())
 }
 

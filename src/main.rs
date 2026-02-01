@@ -59,7 +59,17 @@ fn main() -> Result<()> {
 
             let config = Config::default();
             let (mut storage, storage_load_error) = load_storage_with_error();
-            ensure_instance_initialized(&config, &mut storage)?;
+            let state_path = Config::state_path();
+            let env_mux_socket = std::env::var("TENEX_MUX_SOCKET")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            ensure_instance_initialized(
+                &config,
+                &mut storage,
+                &state_path,
+                env_mux_socket.as_deref(),
+            )?;
             let settings = Settings::load();
 
             run_interactive(config, storage, settings, storage_load_error)
@@ -166,7 +176,12 @@ fn load_storage_with_error() -> (Storage, Option<String>) {
     }
 }
 
-fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result<()> {
+fn ensure_instance_initialized(
+    config: &Config,
+    storage: &mut Storage,
+    state_path: &std::path::Path,
+    env_mux_socket: Option<&str>,
+) -> Result<()> {
     std::fs::create_dir_all(&config.worktree_dir).with_context(|| {
         format!(
             "Failed to create worktrees directory {}",
@@ -174,7 +189,6 @@ fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result
         )
     })?;
 
-    let state_path = Config::state_path();
     let state_existed = state_path.exists();
     let previous_instance_id = storage.instance_id.clone();
     let previous_mux_socket = storage.mux_socket.clone();
@@ -185,12 +199,23 @@ fn ensure_instance_initialized(config: &Config, storage: &mut Storage) -> Result
     // the Tenex binary (and thus the default socket fingerprint) changes across rebuilds/upgrades.
     //
     // Allow users to override via TENEX_MUX_SOCKET without mutating the saved configuration.
-    let env_mux_socket = std::env::var("TENEX_MUX_SOCKET")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    if storage.is_empty() {
+        storage.mux_socket = None;
+    }
 
     if env_mux_socket.is_none() {
+        if storage.is_empty() {
+            // No sessions to preserve, so keep the state file free of a pinned mux socket.
+            // The mux endpoint will be re-derived when the first agent is created.
+            if !state_existed
+                || storage.instance_id != previous_instance_id
+                || storage.mux_socket != previous_mux_socket
+            {
+                storage.save()?;
+            }
+            return Ok(());
+        }
+
         let wanted_sessions: std::collections::HashSet<String> = storage
             .root_agents()
             .into_iter()
@@ -443,6 +468,10 @@ fn cmd_reset(force: bool) -> Result<()> {
     let orphaned_sessions = list_orphaned_sessions(mux, scope, &instance_prefix, &storage_sessions);
 
     if storage.is_empty() && orphaned_sessions.is_empty() {
+        if storage.mux_socket.is_some() {
+            storage.mux_socket = None;
+            storage.save()?;
+        }
         println!("No agents to reset.");
         return Ok(());
     }
@@ -650,5 +679,32 @@ mod tests {
 
         let orphaned = vec!["tenex-orphan-session".to_string()];
         print_reset_plan(&storage, &orphaned);
+    }
+
+    #[test]
+    fn test_ensure_instance_initialized_clears_mux_socket_when_no_agents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let state_path = dir.path().join("state.json");
+
+        std::fs::write(&state_path, "{}")?;
+
+        let config = Config {
+            worktree_dir: dir.path().join("worktrees"),
+            ..Config::default()
+        };
+
+        let mut storage = Storage::with_path(state_path.clone());
+        storage.mux_socket = Some("tenex-mux-stale.sock".to_string());
+
+        ensure_instance_initialized(&config, &mut storage, &state_path, None)?;
+
+        assert!(storage.is_empty());
+        assert!(storage.mux_socket.is_none());
+
+        let loaded = Storage::load_from(&state_path)?;
+        assert!(loaded.is_empty());
+        assert!(loaded.mux_socket.is_none());
+        Ok(())
     }
 }
