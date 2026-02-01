@@ -28,6 +28,7 @@ mod review_info;
 mod scrolling;
 mod settings_menu;
 mod success_modal;
+mod synthesis_prompt;
 mod terminal_prompt;
 mod update_prompt;
 mod update_requested;
@@ -60,6 +61,7 @@ pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
 pub use settings_menu::SettingsMenuMode;
 pub use success_modal::SuccessModalMode;
+pub use synthesis_prompt::SynthesisPromptMode;
 pub use terminal_prompt::TerminalPromptMode;
 pub use update_prompt::UpdatePromptMode;
 pub use update_requested::UpdateRequestedMode;
@@ -85,6 +87,8 @@ pub enum AppMode {
     TerminalPrompt(TerminalPromptMode),
     /// Custom agent command mode.
     CustomAgentCommand(CustomAgentCommandMode),
+    /// Synthesis prompt mode.
+    SynthesisPrompt(SynthesisPromptMode),
     /// Child count picker mode.
     ChildCount(ChildCountMode),
     /// Review child count picker mode.
@@ -202,6 +206,12 @@ impl From<TerminalPromptMode> for AppMode {
 impl From<CustomAgentCommandMode> for AppMode {
     fn from(_: CustomAgentCommandMode) -> Self {
         Self::CustomAgentCommand(CustomAgentCommandMode)
+    }
+}
+
+impl From<SynthesisPromptMode> for AppMode {
+    fn from(_: SynthesisPromptMode) -> Self {
+        Self::SynthesisPrompt(SynthesisPromptMode)
     }
 }
 

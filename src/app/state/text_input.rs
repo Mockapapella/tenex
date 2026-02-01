@@ -21,6 +21,7 @@ impl App {
                 | AppMode::ReconnectPrompt(_)
                 | AppMode::TerminalPrompt(_)
                 | AppMode::CustomAgentCommand(_)
+                | AppMode::SynthesisPrompt(_)
         ) || matches!(self.mode, AppMode::Confirming(_))
     }
 

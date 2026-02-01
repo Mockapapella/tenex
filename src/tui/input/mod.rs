@@ -35,7 +35,8 @@ pub fn handle_key_event(
         | AppMode::Broadcasting(_)
         | AppMode::ReconnectPrompt(_)
         | AppMode::TerminalPrompt(_)
-        | AppMode::CustomAgentCommand(_) => {
+        | AppMode::CustomAgentCommand(_)
+        | AppMode::SynthesisPrompt(_) => {
             text_input::handle_text_input_mode(app, code, modifiers)?;
         }
 

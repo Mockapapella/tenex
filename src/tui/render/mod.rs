@@ -123,6 +123,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 app.data.input.cursor,
             );
         }
+        AppMode::SynthesisPrompt(_) => modals::render_input_overlay(
+            frame,
+            "Synthesize",
+            "Add extra instructions for the parent agent (optional):",
+            &app.data.input.buffer,
+            app.data.input.cursor,
+        ),
         AppMode::Confirming(state) => {
             let action = state.action;
             let lines: Vec<Line<'_>> = match action {
@@ -293,6 +300,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             )),
                             Line::from(Span::styled(
                                 "and send it to the parent for synthesis.",
+                                Style::default().fg(colors::TEXT_DIM),
+                            )),
+                            Line::from(Span::styled(
+                                "You'll be prompted for optional extra instructions.",
                                 Style::default().fg(colors::TEXT_DIM),
                             )),
                             Line::from(""),
