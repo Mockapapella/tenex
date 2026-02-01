@@ -13,6 +13,9 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies which agent CLI a configured program string targets.
 pub enum AgentCli {
@@ -222,10 +225,38 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     })
 }
 
+#[cfg(test)]
+static CODEX_SESSIONS_ROOT_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+#[cfg(test)]
+fn codex_sessions_root_override() -> Option<PathBuf> {
+    let mutex = CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(None));
+    let guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clone()
+}
+
+#[cfg(test)]
+fn set_codex_sessions_root_override_for_tests(new: Option<PathBuf>) -> Option<PathBuf> {
+    let mutex = CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(None));
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    std::mem::replace(&mut *guard, new)
+}
+
 fn codex_sessions_root() -> Option<PathBuf> {
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| crate::paths::home_dir().map(|home| home.join(".codex")))?;
+    #[cfg(test)]
+    if let Some(root) = codex_sessions_root_override() {
+        return Some(root);
+    }
+
+    let codex_home_from_env = std::env::var_os("CODEX_HOME").map(PathBuf::from);
+    let codex_home_from_home = crate::paths::home_dir().map(|home| home.join(".codex"));
+    let codex_home = codex_home_from_env.or(codex_home_from_home)?;
     Some(codex_home.join("sessions"))
 }
 
@@ -267,6 +298,24 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    struct CodexSessionsRootOverrideGuard {
+        previous: Option<PathBuf>,
+    }
+
+    impl CodexSessionsRootOverrideGuard {
+        fn set(new: Option<PathBuf>) -> Self {
+            let previous = set_codex_sessions_root_override_for_tests(new);
+            Self { previous }
+        }
+    }
+
+    impl Drop for CodexSessionsRootOverrideGuard {
+        fn drop(&mut self) {
+            let previous = std::mem::take(&mut self.previous);
+            let _ = set_codex_sessions_root_override_for_tests(previous);
+        }
+    }
 
     #[test]
     fn test_detect_agent_cli() {
@@ -402,7 +451,10 @@ mod tests {
         let temp = TempDir::new()?;
         let workdir = temp.path().join("worktree");
         std::fs::create_dir_all(&workdir)?;
+        let sessions_root = temp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_root)?;
 
+        let _override_guard = CodexSessionsRootOverrideGuard::set(Some(sessions_root));
         let id = try_detect_codex_session_id(
             &workdir,
             SystemTime::UNIX_EPOCH,
@@ -415,6 +467,7 @@ mod tests {
 
     #[test]
     fn test_codex_sessions_root() -> Result<()> {
+        let _override_guard = CodexSessionsRootOverrideGuard::set(None);
         let root =
             codex_sessions_root().ok_or_else(|| anyhow::anyhow!("Missing Codex sessions root"))?;
         assert_eq!(
