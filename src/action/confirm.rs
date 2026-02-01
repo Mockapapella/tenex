@@ -4,8 +4,8 @@ use crate::action::{BackspaceAction, CancelAction, CharInputAction, SubmitAction
 use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, ErrorModalMode,
-    KeyboardRemapPromptMode, ReconnectPromptMode, RenameBranchMode, UpdatePromptMode,
-    UpdateRequestedMode,
+    KeyboardRemapPromptMode, ReconnectPromptMode, RenameBranchMode, SynthesisPromptMode,
+    UpdatePromptMode, UpdateRequestedMode,
 };
 use anyhow::Result;
 use tracing::warn;
@@ -49,7 +49,7 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
                 app_data.should_quit = true;
             }
             ConfirmAction::Synthesize => {
-                return Actions::new().synthesize(app_data);
+                return Ok(SynthesisPromptMode.into());
             }
             ConfirmAction::WorktreeConflict => {}
         }
@@ -326,6 +326,19 @@ mod tests {
         let next = ConfirmYesAction.execute(state, &mut data)?;
         assert_eq!(next, AppMode::normal());
         assert!(data.should_quit);
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_yes_synthesize_enters_synthesis_prompt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::Synthesize,
+        };
+
+        let next = ConfirmYesAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::SynthesisPrompt(SynthesisPromptMode));
         Ok(())
     }
 

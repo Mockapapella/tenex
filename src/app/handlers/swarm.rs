@@ -412,6 +412,21 @@ impl Actions {
     ///
     /// Returns an error if synthesis fails
     pub fn synthesize(self, app_data: &mut AppData) -> Result<AppMode> {
+        self.synthesize_with_prompt(app_data, None)
+    }
+
+    /// Synthesize children into the parent agent with optional extra instructions.
+    ///
+    /// Writes synthesis content to `.tenex/<id>.md` and tells the parent to read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if synthesis fails
+    pub fn synthesize_with_prompt(
+        self,
+        app_data: &mut AppData,
+        prompt: Option<&str>,
+    ) -> Result<AppMode> {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ErrorModalMode {
                 message: "No agent selected".to_string(),
@@ -520,9 +535,15 @@ impl Actions {
         } else {
             "agents"
         };
-        let read_command = format!(
+        let mut read_command = format!(
             "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
         );
+        if let Some(prompt) = prompt.map(str::trim)
+            && !prompt.is_empty()
+        {
+            read_command.push_str("\n\nAdditional instructions:\n");
+            read_command.push_str(prompt);
+        }
         self.session_manager.send_keys_and_submit_for_program(
             &parent_target,
             &parent_program,

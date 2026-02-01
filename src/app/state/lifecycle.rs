@@ -87,6 +87,10 @@ impl App {
                 self.data.input.set(existing);
                 self.mode = AppMode::CustomAgentCommand(state);
             }
+            AppMode::SynthesisPrompt(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::SynthesisPrompt(state);
+            }
             AppMode::ErrorModal(state) => {
                 self.data.ui.set_error(state.message.clone());
                 self.mode = AppMode::ErrorModal(state);

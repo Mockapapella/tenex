@@ -2,7 +2,7 @@ use crate::action::{CancelAction, ValidIn};
 use crate::app::{Actions, App, AppData};
 use crate::state::{
     AppMode, BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode,
-    ErrorModalMode, PromptingMode, ReconnectPromptMode, TerminalPromptMode,
+    ErrorModalMode, PromptingMode, ReconnectPromptMode, SynthesisPromptMode, TerminalPromptMode,
 };
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -195,6 +195,19 @@ impl ValidIn<CustomAgentCommandMode> for CharInputAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for CharInputAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.handle_char(self.0);
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for BackspaceAction {
     type NextState = AppMode;
 
@@ -267,6 +280,19 @@ impl ValidIn<CustomAgentCommandMode> for BackspaceAction {
     ) -> Result<Self::NextState> {
         app_data.handle_backspace();
         Ok(CustomAgentCommandMode.into())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for BackspaceAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.handle_backspace();
+        Ok(SynthesisPromptMode.into())
     }
 }
 
@@ -345,6 +371,19 @@ impl ValidIn<CustomAgentCommandMode> for DeleteAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for DeleteAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.handle_delete();
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for CursorLeftAction {
     type NextState = AppMode;
 
@@ -417,6 +456,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorLeftAction {
     ) -> Result<Self::NextState> {
         app_data.input.cursor_left();
         Ok(CustomAgentCommandMode.into())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for CursorLeftAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_left();
+        Ok(SynthesisPromptMode.into())
     }
 }
 
@@ -495,6 +547,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorRightAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for CursorRightAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_right();
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for CursorUpAction {
     type NextState = AppMode;
 
@@ -567,6 +632,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorUpAction {
     ) -> Result<Self::NextState> {
         app_data.input.cursor_up();
         Ok(CustomAgentCommandMode.into())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for CursorUpAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_up();
+        Ok(SynthesisPromptMode.into())
     }
 }
 
@@ -645,6 +723,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorDownAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for CursorDownAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_down();
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for CursorHomeAction {
     type NextState = AppMode;
 
@@ -717,6 +808,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorHomeAction {
     ) -> Result<Self::NextState> {
         app_data.input.cursor_home();
         Ok(CustomAgentCommandMode.into())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for CursorHomeAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_home();
+        Ok(SynthesisPromptMode.into())
     }
 }
 
@@ -795,6 +899,19 @@ impl ValidIn<CustomAgentCommandMode> for CursorEndAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for CursorEndAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.cursor_end();
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for ClearLineAction {
     type NextState = AppMode;
 
@@ -870,6 +987,19 @@ impl ValidIn<CustomAgentCommandMode> for ClearLineAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for ClearLineAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.clear_line();
+        Ok(SynthesisPromptMode.into())
+    }
+}
+
 impl ValidIn<CreatingMode> for DeleteWordAction {
     type NextState = AppMode;
 
@@ -942,6 +1072,19 @@ impl ValidIn<CustomAgentCommandMode> for DeleteWordAction {
     ) -> Result<Self::NextState> {
         app_data.input.delete_word();
         Ok(CustomAgentCommandMode.into())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for DeleteWordAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.input.delete_word();
+        Ok(SynthesisPromptMode.into())
     }
 }
 
@@ -1129,6 +1272,33 @@ impl ValidIn<CustomAgentCommandMode> for SubmitAction {
     }
 }
 
+impl ValidIn<SynthesisPromptMode> for SubmitAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        let input = app_data.input.buffer.clone();
+        let prompt = input.trim();
+        let prompt = if prompt.is_empty() {
+            None
+        } else {
+            Some(prompt)
+        };
+
+        Actions::new()
+            .synthesize_with_prompt(app_data, prompt)
+            .or_else(|err| {
+                Ok(ErrorModalMode {
+                    message: format!("Failed: {err:#}"),
+                }
+                .into())
+            })
+    }
+}
+
 impl ValidIn<CreatingMode> for CancelAction {
     type NextState = AppMode;
 
@@ -1192,6 +1362,18 @@ impl ValidIn<CustomAgentCommandMode> for CancelAction {
     fn execute(
         self,
         _state: CustomAgentCommandMode,
+        _app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        Ok(AppMode::normal())
+    }
+}
+
+impl ValidIn<SynthesisPromptMode> for CancelAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SynthesisPromptMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
         Ok(AppMode::normal())

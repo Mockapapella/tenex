@@ -73,7 +73,8 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
         | AppMode::Broadcasting(_)
         | AppMode::ReconnectPrompt(_)
         | AppMode::TerminalPrompt(_)
-        | AppMode::CustomAgentCommand(_) => Some(text_input_rect(app, frame_area)),
+        | AppMode::CustomAgentCommand(_)
+        | AppMode::SynthesisPrompt(_) => Some(text_input_rect(app, frame_area)),
         AppMode::ChildCount(_) | AppMode::ReviewChildCount(_) => {
             Some(centered_rect_absolute(40, 12, frame_area))
         }

@@ -36,7 +36,7 @@ use crate::state::{
     KeyboardRemapPromptMode, MergeBranchSelectorMode, ModelSelectorMode, NormalMode,
     PreviewFocusedMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode,
     RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode, SettingsMenuMode,
-    SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
+    SuccessModalMode, SynthesisPromptMode, TerminalPromptMode, UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
@@ -505,6 +505,19 @@ pub fn dispatch_custom_agent_command_mode(
     modifiers: KeyModifiers,
 ) -> Result<()> {
     dispatch_text_input_mode(app, CustomAgentCommandMode, code, modifiers)
+}
+
+/// Dispatch a raw key event while in `SynthesisPromptMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_synthesis_prompt_mode(
+    app: &mut App,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<()> {
+    dispatch_text_input_mode(app, SynthesisPromptMode, code, modifiers)
 }
 
 /// Dispatch a raw key event while in `ChildCountMode`, using typed actions.

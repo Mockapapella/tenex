@@ -7,6 +7,7 @@
 //! - `Broadcasting` (message to leaves)
 //! - `ReconnectPrompt` (reconnect with edited prompt)
 //! - `TerminalPrompt` (terminal startup command)
+//! - `SynthesisPrompt` (extra synthesis instructions)
 
 use crate::app::App;
 use crate::state::AppMode;
@@ -31,6 +32,9 @@ pub fn handle_text_input_mode(app: &mut App, code: KeyCode, modifiers: KeyModifi
         AppMode::CustomAgentCommand(_) => {
             crate::action::dispatch_custom_agent_command_mode(app, code, modifiers)?;
         }
+        AppMode::SynthesisPrompt(_) => {
+            crate::action::dispatch_synthesis_prompt_mode(app, code, modifiers)?;
+        }
         _ => {}
     }
     Ok(())
@@ -44,7 +48,7 @@ mod tests {
     use crate::config::Config;
     use crate::state::{
         AppMode, BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode,
-        PromptingMode, ReconnectPromptMode, TerminalPromptMode,
+        PromptingMode, ReconnectPromptMode, SynthesisPromptMode, TerminalPromptMode,
     };
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
@@ -184,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_text_input_actions_covered_for_all_modes() -> Result<(), Box<dyn std::error::Error>> {
-        let modes: [AppMode; 7] = [
+        let modes: [AppMode; 8] = [
             CreatingMode.into(),
             PromptingMode.into(),
             ChildPromptMode.into(),
@@ -192,6 +196,7 @@ mod tests {
             ReconnectPromptMode.into(),
             TerminalPromptMode.into(),
             CustomAgentCommandMode.into(),
+            SynthesisPromptMode.into(),
         ];
 
         for mode in modes {

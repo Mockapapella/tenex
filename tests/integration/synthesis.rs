@@ -1,6 +1,7 @@
 //! Tests for synthesis functionality
 
 use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use tenex::mux::SessionManager;
 
 #[test]
@@ -174,6 +175,9 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
 
+    assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+
     // Should only have root remaining (all 5 descendants removed)
     assert_eq!(app.data.storage.len(), 1);
 
@@ -270,6 +274,9 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     let handler = tenex::app::Actions::new();
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
+
+    assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
 
     // Should have 2 agents remaining (root + terminal)
     // The 2 non-terminal children should be removed, terminal preserved
@@ -378,6 +385,9 @@ fn test_synthesize_ignores_legacy_terminal_children() -> Result<(), Box<dyn std:
     let handler = tenex::app::Actions::new();
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
+
+    assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
 
     // Should have 2 agents remaining (root + terminal).
     assert_eq!(app.data.storage.len(), 2);
@@ -589,6 +599,9 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
     );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
     assert!(result.is_ok());
+
+    assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
 
     // Should have 3 agents remaining (root + Agent 1 + Agent 2)
     // The 2 grandchildren under Agent 1 should be removed
