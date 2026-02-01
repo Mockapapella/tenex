@@ -483,6 +483,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_detect_codex_session_id_once_in_root_skips_unreadable_dirs() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new()?;
+
+        let workdir = temp.path().join("worktree");
+        std::fs::create_dir_all(&workdir)?;
+
+        let sessions_root = temp.path().join("sessions");
+        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
+        std::fs::create_dir_all(&date_dir)?;
+
+        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(&date_dir, permissions)?;
+
+        let id = detect_codex_session_id_once_in_root(
+            &sessions_root,
+            &workdir,
+            SystemTime::UNIX_EPOCH,
+            &HashSet::new(),
+        );
+        assert!(id.is_none());
+
+        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&date_dir, permissions)?;
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_detect_codex_session_id_once_in_root_skips_metadata_errors() -> Result<()> {
         use std::os::unix::fs::symlink;
 
