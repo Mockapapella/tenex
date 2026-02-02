@@ -178,6 +178,53 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ]
                     },
                 ),
+                ConfirmAction::InterruptAgent => app.selected_agent().map_or_else(
+                    || {
+                        vec![Line::from(Span::styled(
+                            "No agent selected",
+                            Style::default().fg(colors::TEXT_PRIMARY),
+                        ))]
+                    },
+                    |agent| {
+                        vec![
+                            Line::from(Span::styled(
+                                "Send Ctrl+C to this agent?",
+                                Style::default()
+                                    .fg(colors::TEXT_PRIMARY)
+                                    .add_modifier(Modifier::BOLD),
+                            )),
+                            Line::from(""),
+                            Line::from(vec![
+                                Span::styled("  Name:    ", Style::default().fg(colors::TEXT_DIM)),
+                                Span::styled(
+                                    &agent.title,
+                                    Style::default()
+                                        .fg(colors::TEXT_PRIMARY)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("  Branch:  ", Style::default().fg(colors::TEXT_DIM)),
+                                Span::styled(
+                                    &agent.branch,
+                                    Style::default().fg(colors::TEXT_PRIMARY),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("  Session: ", Style::default().fg(colors::TEXT_DIM)),
+                                Span::styled(
+                                    &agent.mux_session,
+                                    Style::default().fg(colors::TEXT_PRIMARY),
+                                ),
+                            ]),
+                            Line::from(""),
+                            Line::from(Span::styled(
+                                "This may terminate the agent and close its pane.",
+                                Style::default().fg(colors::DIFF_REMOVE),
+                            )),
+                        ]
+                    },
+                ),
                 ConfirmAction::Reset => {
                     vec![Line::from(Span::styled(
                         "Reset all agents?",
@@ -533,6 +580,27 @@ mod tests {
         app.enter_mode(
             ConfirmingMode {
                 action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_confirming_interrupt_agent_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::InterruptAgent,
             }
             .into(),
         );

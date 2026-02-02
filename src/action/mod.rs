@@ -328,6 +328,23 @@ pub fn dispatch_preview_focused_mode(
         return Ok(());
     }
 
+    // Ctrl+C is a sharp edge: forwarding it to an agent will interrupt/terminate the agent
+    // process and can cause the agent pane to disappear. Require confirmation for non-terminal
+    // agents while attached.
+    if matches!(code, KeyCode::Char('c' | 'C'))
+        && modifiers.contains(KeyModifiers::CONTROL)
+        && let Some(agent) = app.selected_agent()
+        && !agent.is_terminal_agent()
+    {
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::InterruptAgent,
+            }
+            .into(),
+        );
+        return Ok(());
+    }
+
     // Ctrl+q exits preview focus mode (same key quits app when not focused).
     let next = if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
         UnfocusPreviewAction.execute(PreviewFocusedMode, &mut app.data)?
