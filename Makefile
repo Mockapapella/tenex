@@ -48,6 +48,13 @@ release:
 		exit 1
 	fi
 
+	local_head="$$(git rev-parse HEAD)"
+	remote_head="$$(git rev-parse "$(REMOTE)/$(BRANCH)")"
+	if [[ "$$local_head" != "$$remote_head" ]]; then
+		echo "ERROR: $(BRANCH) is not at $(REMOTE)/$(BRANCH) (run: git push $(REMOTE) $(BRANCH))" >&2
+		exit 1
+	fi
+
 	version="$$(awk -F'\"' '/^version =/ {print $$2; exit}' Cargo.toml)"
 	if [[ -z "$$version" ]]; then
 		echo "ERROR: failed to read version from Cargo.toml" >&2
