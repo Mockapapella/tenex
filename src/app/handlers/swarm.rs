@@ -4,7 +4,7 @@ use crate::agent::{Agent, ChildConfig};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use crate::prompts;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
@@ -25,6 +25,29 @@ pub struct SpawnConfig {
 }
 
 impl Actions {
+    fn build_synthesis_read_command(
+        synthesis_id: uuid::Uuid,
+        descendants_count: usize,
+        prompt: Option<&str>,
+    ) -> String {
+        let agent_word = if descendants_count == 1 {
+            "agent"
+        } else {
+            "agents"
+        };
+
+        let mut read_command = format!(
+            "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
+        );
+        if let Some(prompt) = prompt.map(str::trim)
+            && !prompt.is_empty()
+        {
+            read_command.push_str("\n\nAdditional instructions:\n");
+            read_command.push_str(prompt);
+        }
+        read_command
+    }
+
     /// Spawn child agents under a parent (or create new root with children)
     ///
     /// # Errors
@@ -70,6 +93,14 @@ impl Actions {
 
     /// Get spawn configuration from an existing parent agent
     fn get_existing_parent_config(app_data: &AppData, pid: uuid::Uuid) -> Result<SpawnConfig> {
+        let parent = app_data
+            .storage
+            .get(pid)
+            .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
+        if parent.is_terminal_agent() {
+            bail!("Cannot spawn children under a terminal");
+        }
+
         let root = app_data
             .storage
             .root_ancestor(pid)
@@ -359,6 +390,13 @@ impl Actions {
             .spawn
             .spawning_under
             .ok_or_else(|| anyhow::anyhow!("No agent selected for review"))?;
+        let parent = app_data
+            .storage
+            .get(parent_id)
+            .ok_or_else(|| anyhow::anyhow!("Parent agent not found"))?;
+        if parent.is_terminal_agent() {
+            bail!("Cannot spawn review agents under a terminal");
+        }
         let base_branch = app_data
             .review
             .base_branch
@@ -501,6 +539,13 @@ impl Actions {
             .into());
         };
 
+        if agent.is_terminal_agent() {
+            return Ok(ErrorModalMode {
+                message: "Cannot synthesize into a terminal agent".to_string(),
+            }
+            .into());
+        }
+
         if !app_data.storage.has_children(agent.id) {
             warn!(agent_id = %agent.id, title = %agent.title, "No children to synthesize");
             return Ok(ErrorModalMode {
@@ -597,20 +642,8 @@ impl Actions {
         }
 
         // Now tell the parent to read the file
-        let agent_word = if descendants_count == 1 {
-            "agent"
-        } else {
-            "agents"
-        };
-        let mut read_command = format!(
-            "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
-        );
-        if let Some(prompt) = prompt.map(str::trim)
-            && !prompt.is_empty()
-        {
-            read_command.push_str("\n\nAdditional instructions:\n");
-            read_command.push_str(prompt);
-        }
+        let read_command =
+            Self::build_synthesis_read_command(synthesis_id, descendants_count, prompt);
         self.session_manager.send_keys_and_submit_for_program(
             &parent_target,
             &parent_program,
@@ -747,6 +780,75 @@ mod tests {
 
         let result = handler.spawn_review_agents(&mut app.data);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_children_rejects_terminal_parent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut terminal = Agent::new(
+            "terminal".to_string(),
+            "terminal".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        terminal.is_terminal = true;
+        let terminal_id = terminal.id;
+        app.data.storage.add(terminal);
+
+        app.data.spawn.spawning_under = Some(terminal_id);
+
+        match handler.spawn_children(&mut app.data, Some("test task")) {
+            Ok(_) => return Err("expected terminal parent to be rejected".into()),
+            Err(err) => assert!(err.to_string().contains("terminal")),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_review_agents_rejects_terminal_parent() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut terminal = Agent::new(
+            "terminal".to_string(),
+            "terminal".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        terminal.is_terminal = true;
+        let terminal_id = terminal.id;
+        app.data.storage.add(terminal);
+
+        app.data.spawn.spawning_under = Some(terminal_id);
+        app.data.review.base_branch = Some("main".to_string());
+
+        match handler.spawn_review_agents(&mut app.data) {
+            Ok(()) => return Err("expected terminal parent to be rejected".into()),
+            Err(err) => assert!(err.to_string().contains("terminal")),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_synthesize_terminal_agent() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut terminal = Agent::new(
+            "terminal".to_string(),
+            "terminal".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        terminal.is_terminal = true;
+        app.data.storage.add(terminal);
+
+        let next = handler.synthesize(&mut app.data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
         Ok(())
     }
 

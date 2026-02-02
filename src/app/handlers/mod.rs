@@ -479,6 +479,51 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_action_add_children_terminal() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::{Agent, ChildConfig};
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        let mut terminal = Agent::new_child(
+            "Terminal 1".to_string(),
+            "terminal".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+            },
+        );
+        terminal.is_terminal = true;
+        app.data.storage.add(terminal);
+
+        app.data.selected = 1;
+
+        handler.handle_action(&mut app, Action::AddChildren)?;
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(app.data.spawn.spawning_under.is_none());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Cannot spawn children under a terminal")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_handle_action_synthesize_no_agent() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
@@ -610,6 +655,32 @@ mod tests {
         // No agent - should show ReviewInfo
         handler.handle_action(&mut app, Action::ReviewSwarm)?;
         assert_eq!(app.mode, AppMode::ReviewInfo(ReviewInfoMode));
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_action_review_swarm_terminal() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+        use std::path::PathBuf;
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut terminal = Agent::new(
+            "terminal".to_string(),
+            "terminal".to_string(),
+            "muster/test".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        terminal.is_terminal = true;
+        app.data.storage.add(terminal);
+
+        handler.handle_action(&mut app, Action::ReviewSwarm)?;
+        assert_eq!(app.mode, AppMode::normal());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Select a non-terminal agent for review swarm")
+        );
         Ok(())
     }
 

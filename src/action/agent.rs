@@ -112,12 +112,17 @@ impl ValidIn<NormalMode> for PlanSwarmAction {
     type NextState = AppMode;
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        let Some(agent_id) = app_data.selected_agent().map(|a| a.id) else {
+        let Some(agent) = app_data.selected_agent() else {
             app_data.set_status("Select an agent first (press 'a')");
             return Ok(AppMode::normal());
         };
 
-        app_data.spawn.start_planning_swarm_under(agent_id);
+        if agent.is_terminal_agent() {
+            app_data.set_status("Select a non-terminal agent first (press 'a')");
+            return Ok(AppMode::normal());
+        }
+
+        app_data.spawn.start_planning_swarm_under(agent.id);
         Ok(ChildCountMode.into())
     }
 }
@@ -126,12 +131,17 @@ impl ValidIn<ScrollingMode> for PlanSwarmAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        let Some(agent_id) = app_data.selected_agent().map(|a| a.id) else {
+        let Some(agent) = app_data.selected_agent() else {
             app_data.set_status("Select an agent first (press 'a')");
             return Ok(ScrollingMode.into());
         };
 
-        app_data.spawn.start_planning_swarm_under(agent_id);
+        if agent.is_terminal_agent() {
+            app_data.set_status("Select a non-terminal agent first (press 'a')");
+            return Ok(ScrollingMode.into());
+        }
+
+        app_data.spawn.start_planning_swarm_under(agent.id);
         Ok(ChildCountMode.into())
     }
 }
@@ -144,12 +154,17 @@ impl ValidIn<NormalMode> for AddChildrenAction {
     type NextState = AppMode;
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        if let Some(agent_id) = app_data.selected_agent().map(|a| a.id) {
-            app_data.spawn.start_spawning_under(agent_id);
-            Ok(ChildCountMode.into())
-        } else {
-            Ok(AppMode::normal())
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(AppMode::normal());
+        };
+
+        if agent.is_terminal_agent() {
+            app_data.set_status("Cannot spawn children under a terminal");
+            return Ok(AppMode::normal());
         }
+
+        app_data.spawn.start_spawning_under(agent.id);
+        Ok(ChildCountMode.into())
     }
 }
 
@@ -157,12 +172,17 @@ impl ValidIn<ScrollingMode> for AddChildrenAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        if let Some(agent_id) = app_data.selected_agent().map(|a| a.id) {
-            app_data.spawn.start_spawning_under(agent_id);
-            Ok(ChildCountMode.into())
-        } else {
-            Ok(ScrollingMode.into())
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ScrollingMode.into());
+        };
+
+        if agent.is_terminal_agent() {
+            app_data.set_status("Cannot spawn children under a terminal");
+            return Ok(ScrollingMode.into());
         }
+
+        app_data.spawn.start_spawning_under(agent.id);
+        Ok(ChildCountMode.into())
     }
 }
 
@@ -177,6 +197,13 @@ impl ValidIn<NormalMode> for SynthesizeAction {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(AppMode::normal());
         };
+
+        if agent.is_terminal_agent() {
+            return Ok(ErrorModalMode {
+                message: "Cannot synthesize into a terminal agent".to_string(),
+            }
+            .into());
+        }
 
         if !app_data.storage.has_children(agent.id) {
             Ok(ErrorModalMode {
@@ -209,6 +236,13 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
         let Some(agent) = app_data.selected_agent() else {
             return Ok(ScrollingMode.into());
         };
+
+        if agent.is_terminal_agent() {
+            return Ok(ErrorModalMode {
+                message: "Cannot synthesize into a terminal agent".to_string(),
+            }
+            .into());
+        }
 
         if !app_data.storage.has_children(agent.id) {
             Ok(ErrorModalMode {
@@ -319,14 +353,17 @@ impl ValidIn<NormalMode> for ReviewSwarmAction {
     type NextState = AppMode;
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        let selected = app_data.selected_agent();
-        if selected.is_none() {
+        let Some(selected) = app_data.selected_agent() else {
             return Ok(ReviewInfoMode.into());
+        };
+
+        if selected.is_terminal_agent() {
+            app_data.set_status("Select a non-terminal agent for review swarm");
+            return Ok(AppMode::normal());
         }
 
         // Store the selected agent's ID for later use.
-        let agent_id = selected.map(|a| a.id);
-        app_data.spawn.spawning_under = agent_id;
+        app_data.spawn.spawning_under = Some(selected.id);
 
         // Fetch branches for the selector.
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
@@ -345,14 +382,17 @@ impl ValidIn<ScrollingMode> for ReviewSwarmAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        let selected = app_data.selected_agent();
-        if selected.is_none() {
+        let Some(selected) = app_data.selected_agent() else {
             return Ok(ReviewInfoMode.into());
+        };
+
+        if selected.is_terminal_agent() {
+            app_data.set_status("Select a non-terminal agent for review swarm");
+            return Ok(ScrollingMode.into());
         }
 
         // Store the selected agent's ID for later use.
-        let agent_id = selected.map(|a| a.id);
-        app_data.spawn.spawning_under = agent_id;
+        app_data.spawn.spawning_under = Some(selected.id);
 
         // Fetch branches for the selector.
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
