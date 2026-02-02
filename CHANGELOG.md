@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.8] - 2026-02-02
+
+### Added
+
+- **What's New**: Tenex can show release notes from the changelog after an update.
+- **Synthesis instructions prompt**: Add optional extra instructions before running synthesis.
+
+### Changed
+
+- **Worktrees**: Gitignored files are now symlinked into agent worktrees to keep local tooling/instructions consistent.
+- **Agent resumption**: Persist conversation/session IDs so Tenex can reconnect more reliably after a restart/crash.
+- **Ctrl+C forwarding**: Prompt before forwarding `Ctrl+C` to attached non-terminal agents.
+
+### Fixed
+
+- **Mux socket cleanup**: Clear stale mux socket state when no agents exist.
+- **Focus behavior**: Tab switching no longer triggers while focused in the preview or diff panes.
+- **Codex scroll wheel**: Preview scrolling is no longer impacted by spurious modifier keys from some terminals.
+- **Synthesis**: Terminal panes are excluded from synthesis, including legacy state.
+
 ## [1.0.7] - 2026-01-19
 
 ### Fixed
