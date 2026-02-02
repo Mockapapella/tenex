@@ -145,6 +145,11 @@ impl App {
             return;
         };
 
+        if agent.is_terminal_agent() {
+            self.set_status("Select a non-terminal agent first (press 'a')");
+            return;
+        }
+
         self.data.spawn.start_planning_swarm_under(agent.id);
         self.apply_mode(ChildCountMode.into());
     }

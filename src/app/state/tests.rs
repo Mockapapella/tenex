@@ -413,6 +413,23 @@ fn test_start_planning_swarm() {
 }
 
 #[test]
+fn test_start_planning_swarm_terminal_agent() {
+    let mut app = App::default();
+    let mut agent = create_test_agent("terminal");
+    agent.is_terminal = true;
+    app.data.storage.add(agent);
+
+    app.start_planning_swarm();
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.spawn.spawning_under.is_none());
+    assert!(!app.data.spawn.use_plan_prompt);
+    assert_eq!(
+        app.data.ui.status_message.as_deref(),
+        Some("Select a non-terminal agent first (press 'a')")
+    );
+}
+
+#[test]
 fn test_start_planning_swarm_no_agent() {
     let mut app = App::default();
     app.start_planning_swarm();
