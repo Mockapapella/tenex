@@ -252,7 +252,7 @@ fn confirming_rect(app: &App, action: ConfirmAction, frame_area: Rect) -> Rect {
             let height = u16::try_from(base_lines + 2).unwrap_or(u16::MAX);
             centered_rect_absolute(60, height, frame_area)
         }
-        ConfirmAction::Kill => {
+        ConfirmAction::Kill | ConfirmAction::InterruptAgent => {
             let lines = if app.data.selected_agent().is_some() {
                 7
             } else {
@@ -457,6 +457,14 @@ mod tests {
 
         app.apply_mode(
             ConfirmingMode {
+                action: ConfirmAction::InterruptAgent,
+            }
+            .into(),
+        );
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(
+            ConfirmingMode {
                 action: ConfirmAction::Synthesize,
             }
             .into(),
@@ -467,6 +475,14 @@ mod tests {
         app.apply_mode(
             ConfirmingMode {
                 action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::InterruptAgent,
             }
             .into(),
         );

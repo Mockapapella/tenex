@@ -2015,6 +2015,37 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_key_event_preview_focused_ctrl_c_prompts_for_non_terminal_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = create_test_app();
+        app.data.storage.add(Agent::new(
+            "test-agent".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+        app.data.selected = 0;
+        app.enter_mode(PreviewFocusedMode.into());
+
+        let mut keys = Vec::new();
+        input::handle_key_event(
+            &mut app,
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            &mut keys,
+        )?;
+
+        assert!(keys.is_empty());
+        assert_eq!(
+            app.mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::InterruptAgent
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_handle_key_event_focus_preview_action() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = create_test_app();
         let handler = Actions::new();

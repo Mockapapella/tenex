@@ -4,8 +4,8 @@ use crate::action::{BackspaceAction, CancelAction, CharInputAction, SubmitAction
 use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, ErrorModalMode,
-    KeyboardRemapPromptMode, ReconnectPromptMode, RenameBranchMode, SynthesisPromptMode,
-    UpdatePromptMode, UpdateRequestedMode,
+    KeyboardRemapPromptMode, PreviewFocusedMode, ReconnectPromptMode, RenameBranchMode,
+    SynthesisPromptMode, UpdatePromptMode, UpdateRequestedMode,
 };
 use anyhow::Result;
 use tracing::warn;
@@ -34,6 +34,24 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
             ConfirmAction::Kill => {
                 Actions::new().kill_agent(app_data)?;
             }
+            ConfirmAction::InterruptAgent => {
+                if let Some(agent) = app_data.selected_agent()
+                    && !agent.is_terminal_agent()
+                {
+                    let target = agent.window_index.map_or_else(
+                        || agent.mux_session.clone(),
+                        |idx| format!("{}:{}", agent.mux_session, idx),
+                    );
+                    let keys = [String::from("\u{3}")];
+                    if let Err(err) =
+                        crate::mux::SessionManager::new().send_keys_batch(&target, &keys)
+                    {
+                        warn!("Failed to send Ctrl+C to {target}: {err:#}");
+                    }
+                }
+
+                return Ok(PreviewFocusedMode.into());
+            }
             ConfirmAction::Reset => {
                 Actions::new().reset_all(app_data)?;
             }
@@ -61,7 +79,10 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
 impl ValidIn<ConfirmingMode> for ConfirmNoAction {
     type NextState = AppMode;
 
-    fn execute(self, _state: ConfirmingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+    fn execute(self, state: ConfirmingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        if state.action == ConfirmAction::InterruptAgent {
+            return Ok(PreviewFocusedMode.into());
+        }
         Ok(AppMode::normal())
     }
 }
@@ -72,6 +93,10 @@ impl ValidIn<ConfirmingMode> for CancelAction {
     fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if state.action == ConfirmAction::WorktreeConflict {
             app_data.spawn.worktree_conflict = None;
+            return Ok(AppMode::normal());
+        }
+        if state.action == ConfirmAction::InterruptAgent {
+            return Ok(PreviewFocusedMode.into());
         }
         Ok(AppMode::normal())
     }
@@ -288,6 +313,7 @@ impl ValidIn<UpdatePromptMode> for CancelAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Agent;
     use crate::agent::Storage;
     use crate::app::{Settings, WorktreeConflictInfo};
     use crate::config::Config;
@@ -339,6 +365,66 @@ mod tests {
 
         let next = ConfirmYesAction.execute(state, &mut data)?;
         assert_eq!(next, AppMode::SynthesisPrompt(SynthesisPromptMode));
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_interrupt_agent_yes_returns_to_preview_focus()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::InterruptAgent,
+        };
+
+        let next = ConfirmYesAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::PreviewFocused(PreviewFocusedMode));
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_interrupt_agent_sends_ctrl_c_to_selected_agent_when_present()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.storage.add(Agent::new(
+            "test-agent".to_string(),
+            "bash".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+        data.selected = 0;
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::InterruptAgent,
+        };
+
+        let next = ConfirmYesAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::PreviewFocused(PreviewFocusedMode));
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_interrupt_agent_no_returns_to_preview_focus()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::InterruptAgent,
+        };
+
+        let next = ConfirmNoAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::PreviewFocused(PreviewFocusedMode));
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_interrupt_agent_cancel_returns_to_preview_focus()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let state = ConfirmingMode {
+            action: ConfirmAction::InterruptAgent,
+        };
+
+        let next = CancelAction.execute(state, &mut data)?;
+        assert_eq!(next, AppMode::PreviewFocused(PreviewFocusedMode));
         Ok(())
     }
 

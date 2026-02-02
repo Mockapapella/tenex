@@ -5,6 +5,8 @@
 pub enum ConfirmAction {
     /// Kill an agent.
     Kill,
+    /// Send Ctrl+C to the selected agent (may terminate it).
+    InterruptAgent,
     /// Reset all state.
     Reset,
     /// Restart the mux daemon (kills all agent sessions).
