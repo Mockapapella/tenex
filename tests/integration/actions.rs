@@ -128,6 +128,73 @@ fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
 }
 
 #[test]
+fn test_actions_sync_agent_pane_activity_does_not_mark_unseen_on_resize()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_pane_resize")?;
+    let mut config = fixture.config();
+    config.default_program = "sh".to_string();
+    let storage = TestFixture::create_storage();
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "pane-resize-a", None)?;
+    app.apply_mode(next);
+    let next = handler.create_agent(&mut app.data, "pane-resize-b", None)?;
+    app.apply_mode(next);
+
+    for agent in app.data.storage.iter_mut() {
+        agent.set_status(tenex::agent::Status::Running);
+    }
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    handler.sync_agent_pane_activity(&mut app)?;
+    std::thread::sleep(Duration::from_millis(50));
+    handler.sync_agent_pane_activity(&mut app)?;
+
+    let agent_ids: Vec<_> = app.data.storage.iter().map(|agent| agent.id).collect();
+    for agent_id in agent_ids {
+        app.data.ui.mark_agent_pane_seen(agent_id);
+    }
+
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        manager.resize_window(&agent.mux_session, 120, 40)?;
+    }
+
+    handler.sync_agent_pane_activity(&mut app)?;
+    std::thread::sleep(Duration::from_millis(50));
+    handler.sync_agent_pane_activity(&mut app)?;
+
+    for agent in app.data.storage.iter() {
+        assert!(
+            app.data.ui.agent_is_waiting_for_input(agent.id),
+            "Expected agent {} to be waiting after resize",
+            agent.title
+        );
+        assert!(
+            !app.data.ui.agent_has_unseen_waiting_output(agent.id),
+            "Expected agent {} to remain seen after resize",
+            agent.title
+        );
+    }
+
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash as _, Hasher as _};
+use std::hash::Hasher as _;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
@@ -163,7 +163,7 @@ impl Actions {
                 continue;
             };
 
-            let digest = hash_text(&content);
+            let digest = pane_activity_digest(&content);
             app.data.ui.observe_agent_pane_digest(agent.id, digest);
 
             if selected_agent_id == Some(agent.id) {
@@ -389,10 +389,71 @@ fn mux_target_for_agent(app: &App, agent: &Agent) -> String {
     )
 }
 
-fn hash_text(text: &str) -> u64 {
+const PANE_ACTIVITY_DIGEST_TAIL_BYTES: usize = 4096;
+
+fn pane_activity_digest(captured: &str) -> u64 {
+    // Pane captures are rendered at the current PTY size. When the Tenex TUI resizes it also
+    // resizes every mux window, which can reflow/wrap the same underlying output differently.
+    // Hash a normalized "text stream" so resizes don't trigger `◐` notifications.
+    let mut tail: Vec<u8> = Vec::with_capacity(PANE_ACTIVITY_DIGEST_TAIL_BYTES);
+    let mut line: Vec<u8> = Vec::new();
+
+    for raw_line in captured.as_bytes().split(|b| *b == b'\n') {
+        strip_ansi_into(raw_line, &mut line);
+        trim_ascii_whitespace_end(&mut line);
+
+        if line.is_empty() {
+            continue;
+        }
+
+        tail.extend_from_slice(&line);
+        if tail.len() > PANE_ACTIVITY_DIGEST_TAIL_BYTES {
+            let drain = tail.len().saturating_sub(PANE_ACTIVITY_DIGEST_TAIL_BYTES);
+            tail.drain(0..drain);
+        }
+    }
+
     let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
+    hasher.write(&tail);
     hasher.finish()
+}
+
+fn strip_ansi_into(raw: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    let mut i = 0usize;
+    while i < raw.len() {
+        if raw[i] == 0x1b {
+            i = skip_ansi_escape(raw, i);
+            continue;
+        }
+
+        out.push(raw[i]);
+        i = i.saturating_add(1);
+    }
+}
+
+fn skip_ansi_escape(bytes: &[u8], start: usize) -> usize {
+    let mut i = start.saturating_add(1);
+    if i >= bytes.len() {
+        return bytes.len();
+    }
+
+    if bytes[i] != b'[' && bytes[i] != b']' {
+        return i.saturating_add(1);
+    }
+
+    i = i.saturating_add(1);
+    while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+        i = i.saturating_add(1);
+    }
+
+    i.saturating_add(1).min(bytes.len())
+}
+
+fn trim_ascii_whitespace_end(bytes: &mut Vec<u8>) {
+    while matches!(bytes.last(), Some(last) if last.is_ascii_whitespace()) {
+        bytes.pop();
+    }
 }
 
 #[derive(Default)]
@@ -680,6 +741,23 @@ mod tests {
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
         ))
+    }
+
+    #[test]
+    fn test_pane_activity_digest_ignores_wrapping_padding_and_ansi() {
+        let wrapped = "\x1b[32mHello wor\x1b[0m      \n\x1b[31mld!\x1b[0m          \n\x1b[0m \n";
+        let unwrapped = "\x1b[35mHello world!\x1b[0m\n";
+        assert_eq!(
+            pane_activity_digest(wrapped),
+            pane_activity_digest(unwrapped)
+        );
+    }
+
+    #[test]
+    fn test_pane_activity_digest_changes_when_text_changes() {
+        let a = "\x1b[32mHello world!\x1b[0m\n";
+        let b = "\x1b[32mHello world?\x1b[0m\n";
+        assert_ne!(pane_activity_digest(a), pane_activity_digest(b));
     }
 
     #[test]
