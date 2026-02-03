@@ -70,6 +70,10 @@ fn main() -> Result<()> {
                 &state_path,
                 env_mux_socket.as_deref(),
             )?;
+
+            if storage.backfill_workspace_kinds() {
+                storage.save()?;
+            }
             let settings = Settings::load();
 
             run_interactive(config, storage, settings, storage_load_error)

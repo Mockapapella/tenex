@@ -1,7 +1,8 @@
 //! Agent persistence layer
 
-use super::Agent;
+use super::{Agent, WorkspaceKind};
 use crate::config::Config;
+use crate::git;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -322,6 +323,35 @@ impl Storage {
         let storage: Self = serde_json::from_str(&contents)
             .with_context(|| format!("Failed to parse state from {}", path.display()))?;
         Ok(storage)
+    }
+
+    /// Ensure `workspace_kind` is consistent with the agent's `worktree_path`.
+    ///
+    /// Older Tenex versions did not persist `workspace_kind`, so agents created in non-git
+    /// directories may deserialize as `GitWorktree` by default. When their working directory is
+    /// not inside a git repository, treat them as `PlainDir` so the UI label and behavior remain
+    /// stable across restarts.
+    pub fn backfill_workspace_kinds(&mut self) -> bool {
+        let mut changed = false;
+
+        for agent in &mut self.agents {
+            if agent.workspace_kind != WorkspaceKind::GitWorktree {
+                continue;
+            }
+
+            if !agent.worktree_path.exists() {
+                continue;
+            }
+
+            if git::is_git_repository(&agent.worktree_path) {
+                continue;
+            }
+
+            agent.workspace_kind = WorkspaceKind::PlainDir;
+            changed = true;
+        }
+
+        changed
     }
 
     /// Save state to the configured location (custom path or default)
@@ -694,6 +724,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::WorkspaceKind;
     use crate::agent::{ChildConfig, Status};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -901,6 +932,86 @@ mod tests {
         assert_eq!(storage.len(), loaded.len());
         assert_eq!(storage.agents[0].title, loaded.agents[0].title);
         assert_eq!(storage.agents[1].title, loaded.agents[1].title);
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_workspace_kinds_marks_plain_dirs() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let non_git_path = temp_dir.path().join("plain");
+        std::fs::create_dir_all(&non_git_path)?;
+
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("plain");
+        agent.worktree_path = non_git_path;
+        agent.workspace_kind = WorkspaceKind::GitWorktree;
+        storage.add(agent);
+
+        assert!(storage.backfill_workspace_kinds());
+        let loaded = storage.agents.first().ok_or("missing agent")?;
+        assert_eq!(loaded.workspace_kind, WorkspaceKind::PlainDir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_workspace_kinds_leaves_missing_paths_unchanged()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let missing_path = temp_dir.path().join("missing");
+
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("missing");
+        agent.worktree_path = missing_path;
+        agent.workspace_kind = WorkspaceKind::GitWorktree;
+        storage.add(agent);
+
+        assert!(!storage.backfill_workspace_kinds());
+        let loaded = storage.agents.first().ok_or("missing agent")?;
+        assert_eq!(loaded.workspace_kind, WorkspaceKind::GitWorktree);
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_workspace_kinds_handles_legacy_state_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let plain_dir = temp_dir.path().join("plain");
+        std::fs::create_dir_all(&plain_dir)?;
+
+        let state_path = temp_dir.path().join("state.json");
+        let contents = format!(
+            r#"{{
+  "agents": [
+    {{
+      "id": "11111111-1111-1111-1111-111111111111",
+      "title": "legacy",
+      "program": "sh -c 'sleep 3600'",
+      "status": "running",
+      "branch": "tenex/legacy",
+      "worktree_path": "{}",
+      "mux_session": "tenex-legacy",
+      "created_at": "2026-02-03T00:00:00Z",
+      "updated_at": "2026-02-03T00:00:01Z",
+      "parent_id": null,
+      "window_index": null,
+      "collapsed": true,
+      "is_terminal": false
+    }}
+  ],
+  "version": 1
+}}
+"#,
+            plain_dir.display()
+        );
+        std::fs::write(&state_path, contents)?;
+
+        let mut loaded = Storage::load_from(&state_path)?;
+        let agent = loaded.agents.first().ok_or("missing agent")?;
+        assert_eq!(agent.workspace_kind, WorkspaceKind::GitWorktree);
+
+        assert!(loaded.backfill_workspace_kinds());
+        let agent = loaded.agents.first().ok_or("missing agent")?;
+        assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
         Ok(())
     }
 
