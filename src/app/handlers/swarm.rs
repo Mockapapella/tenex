@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -67,16 +67,86 @@ impl Actions {
             bail!("Base branch cannot be empty for Codex review flow");
         }
 
-        self.session_manager.send_keys(target, "/review")?;
-        std::thread::sleep(Duration::from_millis(25));
+        let poll_interval = Duration::from_millis(50);
+        let step_timeout = Duration::from_secs(10);
+
+        self.session_manager
+            .send_keys_and_submit(target, "/review")?;
+        if !self.wait_for_pane_contains(
+            target,
+            "Select a review preset",
+            step_timeout,
+            poll_interval,
+        ) {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review preset prompt; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
         self.session_manager.send_keys_and_submit(target, "")?;
-        std::thread::sleep(Duration::from_millis(25));
-        self.session_manager.send_keys_and_submit(target, "")?;
-        std::thread::sleep(Duration::from_millis(25));
+        if !self.wait_for_pane_contains(target, "Select a base branch", step_timeout, poll_interval)
+        {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review base branch prompt; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
+        let before_branch = self.output_capture.capture_pane(target)?;
         self.session_manager.paste_keys(target, base_branch)?;
-        std::thread::sleep(Duration::from_millis(25));
+        if !self.wait_for_pane_change(target, &before_branch, step_timeout, poll_interval)? {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review branch filter to update; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
         self.session_manager.send_keys_and_submit(target, "")?;
+        let _ =
+            self.wait_for_pane_contains(target, "Code review started", step_timeout, poll_interval);
+
         Ok(())
+    }
+
+    fn wait_for_pane_contains(
+        self,
+        target: &str,
+        needle: &str,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if let Ok(pane) = self.output_capture.capture_pane(target)
+                && pane.contains(needle)
+            {
+                return true;
+            }
+            std::thread::sleep(poll_interval);
+        }
+        false
+    }
+
+    fn wait_for_pane_change(
+        self,
+        target: &str,
+        baseline: &str,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<bool> {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            let pane = self.output_capture.capture_pane(target)?;
+            if pane != baseline {
+                return Ok(true);
+            }
+            std::thread::sleep(poll_interval);
+        }
+        Ok(false)
     }
 
     fn spawn_review_child_agent(

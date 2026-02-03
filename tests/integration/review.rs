@@ -1,8 +1,44 @@
 //! Tests for [R] review agent functionality
 
-use crate::common::{TestFixture, skip_if_no_mux};
+use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
 use tenex::config::Action;
 use tenex::mux::SessionManager;
+
+#[cfg(unix)]
+use std::path::Path;
+
+#[cfg(unix)]
+const CODEX_REVIEW_FLOW_MOCK_SCRIPT: &str = r#"#!/bin/sh
+echo "codex-mock argv=$#"
+
+IFS= read -r line || exit 0
+printf '%s\n' "$line"
+echo "Select a review preset"
+
+IFS= read -r line || exit 0
+printf '%s\n' "$line"
+echo "Select a base branch"
+
+IFS= read -r line || exit 0
+printf '%s\n' "$line"
+
+IFS= read -r line || exit 0
+printf '%s\n' "$line"
+echo ">> Code review started: changes against 'master' <<"
+
+exec cat
+"#;
+
+#[cfg(unix)]
+fn write_executable_script(path: &Path, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::write(path, contents)?;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
 
 #[test]
 fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::error::Error>> {
@@ -339,20 +375,13 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
     let config = fixture.config();
     let storage = TestFixture::create_storage();
 
-    let original_dir = std::env::current_dir()?;
+    let _dir_guard = DirGuard::new()?;
     std::env::set_current_dir(&fixture.repo_path)?;
 
     let codex_path = fixture.repo_path.join("codex");
-    std::fs::write(
-        &codex_path,
-        "#!/bin/sh\necho \"codex-mock argv=$#\"\nexec cat\n",
-    )?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = std::fs::metadata(&codex_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&codex_path, perms)?;
+        write_executable_script(&codex_path, CODEX_REVIEW_FLOW_MOCK_SCRIPT)?;
     }
 
     let settings = tenex::app::Settings {
@@ -369,7 +398,6 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
     app.data.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app.data, Some("test-swarm"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(());
     }
 
@@ -417,13 +445,6 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
         );
         checked = checked.saturating_add(1);
     }
-
-    // Cleanup.
-    let manager = SessionManager::new();
-    for agent in app.data.storage.iter() {
-        let _ = manager.kill(&agent.mux_session);
-    }
-    std::env::set_current_dir(&original_dir)?;
 
     if result.is_err() {
         return Ok(());
