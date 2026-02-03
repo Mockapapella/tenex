@@ -152,6 +152,11 @@ pub struct UiState {
     /// Cached preview pane dimensions (width, height) for mux window sizing
     pub preview_dimensions: Option<(u16, u16)>,
 
+    /// Whether mux windows were resized since the last pane digest sync.
+    ///
+    /// Used to keep `◐` notifications from appearing due to resize-driven redraws.
+    pub pane_activity_resized: bool,
+
     /// Captured mismatch information when connected to an out-of-date mux daemon.
     pub muxd_version_mismatch: Option<MuxdVersionMismatchInfo>,
 
@@ -210,6 +215,7 @@ impl UiState {
             diff_force_refresh: false,
             terminal_dimensions: None,
             preview_dimensions: None,
+            pane_activity_resized: false,
             muxd_version_mismatch: None,
             last_error: None,
             status_message: None,
@@ -252,6 +258,21 @@ impl UiState {
         self.pane_last_seen_hash_by_agent
             .get(&agent_id)
             .is_none_or(|last_seen| *last_seen != digest.hash)
+    }
+
+    #[must_use]
+    pub fn agent_is_seen_waiting(&self, agent_id: Uuid) -> bool {
+        let Some(digest) = self.pane_digest_by_agent.get(&agent_id) else {
+            return false;
+        };
+
+        if digest.activity != PaneActivity::Waiting {
+            return false;
+        }
+
+        self.pane_last_seen_hash_by_agent
+            .get(&agent_id)
+            .is_some_and(|last_seen| *last_seen == digest.hash)
     }
 
     pub fn mark_agent_pane_seen(&mut self, agent_id: Uuid) {
@@ -745,6 +766,7 @@ impl UiState {
     /// Set the preview pane dimensions for mux window sizing
     pub const fn set_preview_dimensions(&mut self, width: u16, height: u16) {
         self.preview_dimensions = Some((width, height));
+        self.pane_activity_resized = true;
     }
 
     /// Set an error message

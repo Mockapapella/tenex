@@ -156,6 +156,19 @@ fn test_actions_sync_agent_pane_activity_does_not_mark_unseen_on_resize()
 
     std::thread::sleep(Duration::from_millis(300));
 
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let token = format!("__tenex_pane_resize_{}__", agent.short_id());
+        let command = format!(
+            "trap 'set -- $(stty size); cols=$2; printf \"{token}:%s\\n\" \"$cols\"' WINCH; \
+             set -- $(stty size); cols=$2; printf \"{token}:%s\\n\" \"$cols\"; \
+             while true; do sleep 1; done"
+        );
+        manager.send_keys_and_submit(&agent.mux_session, &command)?;
+    }
+
+    std::thread::sleep(Duration::from_secs(1));
+
     handler.sync_agent_pane_activity(&mut app)?;
     std::thread::sleep(Duration::from_millis(50));
     handler.sync_agent_pane_activity(&mut app)?;
@@ -165,10 +178,12 @@ fn test_actions_sync_agent_pane_activity_does_not_mark_unseen_on_resize()
         app.data.ui.mark_agent_pane_seen(agent_id);
     }
 
-    let manager = SessionManager::new();
+    app.set_preview_dimensions(120, 40);
     for agent in app.data.storage.iter() {
         manager.resize_window(&agent.mux_session, 120, 40)?;
     }
+
+    std::thread::sleep(Duration::from_millis(200));
 
     handler.sync_agent_pane_activity(&mut app)?;
     std::thread::sleep(Duration::from_millis(50));

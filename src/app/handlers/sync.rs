@@ -146,6 +146,7 @@ impl Actions {
             return Ok(());
         }
 
+        let resized = std::mem::take(&mut app.data.ui.pane_activity_resized);
         let selected_agent_id = app.selected_agent().map(|agent| agent.id);
 
         let mut keep_ids: HashSet<uuid::Uuid> = HashSet::new();
@@ -158,6 +159,8 @@ impl Actions {
                 continue;
             }
 
+            let preserve_seen_waiting = resized && app.data.ui.agent_is_seen_waiting(agent.id);
+
             let target = mux_target_for_agent(app, agent);
             let Ok(content) = self.output_capture.capture_pane(&target) else {
                 continue;
@@ -166,7 +169,7 @@ impl Actions {
             let digest = pane_activity_digest(&content);
             app.data.ui.observe_agent_pane_digest(agent.id, digest);
 
-            if selected_agent_id == Some(agent.id) {
+            if selected_agent_id == Some(agent.id) || preserve_seen_waiting {
                 app.data
                     .ui
                     .pane_last_seen_hash_by_agent
@@ -394,7 +397,7 @@ const PANE_ACTIVITY_DIGEST_TAIL_BYTES: usize = 4096;
 fn pane_activity_digest(captured: &str) -> u64 {
     // Pane captures are rendered at the current PTY size. When the Tenex TUI resizes it also
     // resizes every mux window, which can reflow/wrap the same underlying output differently.
-    // Hash a normalized "text stream" so resizes don't trigger `◐` notifications.
+    // Hash a normalized "text stream" so simple wrap/padding changes don't trigger `◐`.
     let mut tail: Vec<u8> = Vec::with_capacity(PANE_ACTIVITY_DIGEST_TAIL_BYTES);
     let mut line: Vec<u8> = Vec::new();
 
