@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use super::Actions;
 use super::swarm::SpawnConfig;
@@ -155,6 +156,15 @@ impl Actions {
 
         let program = app_data.agent_spawn_command();
 
+        let removed_agents = self.remove_conflicting_agents(app_data, &conflict);
+        if removed_agents > 0 {
+            debug!(
+                branch = %conflict.branch,
+                removed_agents,
+                "Removed existing agents before reconnect"
+            );
+        }
+
         if let Some(child_count) = conflict.swarm_child_count {
             self.reconnect_swarm_to_worktree(app_data, &conflict, &program, child_count)?;
         } else {
@@ -163,6 +173,52 @@ impl Actions {
 
         app_data.storage.save()?;
         Ok(AppMode::normal())
+    }
+
+    fn remove_conflicting_agents(
+        self,
+        app_data: &mut AppData,
+        conflict: &WorktreeConflictInfo,
+    ) -> usize {
+        let mut ids_to_remove: Vec<Uuid> = Vec::new();
+        let mut sessions_to_consider: HashSet<String> = HashSet::new();
+
+        for agent in app_data.storage.iter() {
+            if agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path {
+                ids_to_remove.push(agent.id);
+                sessions_to_consider.insert(agent.mux_session.clone());
+            }
+        }
+
+        if ids_to_remove.is_empty() {
+            return 0;
+        }
+
+        let ids_set: HashSet<Uuid> = ids_to_remove.iter().copied().collect();
+
+        for session in sessions_to_consider {
+            let session_used_elsewhere = app_data
+                .storage
+                .iter()
+                .any(|agent| agent.mux_session == session && !ids_set.contains(&agent.id));
+            if session_used_elsewhere {
+                continue;
+            }
+            let _ = self.session_manager.kill(&session);
+        }
+
+        let mut removed = 0;
+        for id in ids_to_remove {
+            if app_data.storage.remove(id).is_some() {
+                removed += 1;
+            }
+        }
+
+        if removed > 0 {
+            app_data.validate_selection();
+        }
+
+        removed
     }
 
     fn reconnect_swarm_to_worktree(
@@ -552,6 +608,7 @@ mod tests {
     use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
@@ -570,6 +627,132 @@ mod tests {
         // No conflict info set - should error
         let result = handler.reconnect_to_worktree(&mut app.data);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_removes_existing_agents() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let worktree = TempDir::new()?;
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/asdf".to_string();
+
+        let existing = Agent::new(
+            "asdf".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        let existing_id = existing.id;
+        app.data.storage.add(existing);
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "asdf".to_string(),
+            prompt: None,
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            existing_branch: Some("main".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+
+        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        assert_eq!(next, AppMode::normal());
+
+        assert!(app.data.storage.get(existing_id).is_none());
+        assert_eq!(
+            app.data
+                .storage
+                .iter()
+                .filter(|agent| agent.branch == branch && agent.worktree_path == worktree_path)
+                .count(),
+            1
+        );
+
+        let new_session = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.branch == branch)
+            .ok_or("Expected new agent")?
+            .mux_session
+            .clone();
+        let _ = crate::mux::SessionManager::new().kill(&new_session);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_swarm_removes_existing_agents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let worktree = TempDir::new()?;
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/asdf".to_string();
+
+        let root = Agent::new(
+            "asdf".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.storage.add(Agent::new_child(
+            "child".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+            },
+        ));
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "asdf".to_string(),
+            prompt: Some("do stuff".to_string()),
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            existing_branch: Some("main".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: Some(2),
+        });
+
+        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        assert_eq!(next, AppMode::normal());
+
+        assert_eq!(
+            app.data
+                .storage
+                .iter()
+                .filter(|agent| agent.branch == branch && agent.worktree_path == worktree_path)
+                .count(),
+            3
+        );
+
+        let new_root_session = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.branch == branch && agent.is_root())
+            .ok_or("Expected root agent")?
+            .mux_session
+            .clone();
+        let _ = crate::mux::SessionManager::new().kill(&new_root_session);
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+
         Ok(())
     }
 
