@@ -193,8 +193,9 @@ impl Actions {
         app_data: &AppData,
         config: ReviewChildAgentConfig<'_>,
     ) -> Result<Agent> {
+        let child_title = format!("Reviewer {}", config.reviewer_number);
         let mut child = Agent::new_child(
-            String::new(), // Placeholder
+            child_title.clone(),
             config.program.to_string(),
             config.branch.to_string(),
             config.worktree_path.to_path_buf(),
@@ -205,9 +206,6 @@ impl Actions {
             },
         );
         child.workspace_kind = config.workspace_kind;
-
-        let child_title = format!("Reviewer {} ({})", config.reviewer_number, child.short_id());
-        child.title.clone_from(&child_title);
 
         let cli = crate::conversation::detect_agent_cli(config.program);
         if cli == crate::conversation::AgentCli::Claude {
@@ -536,16 +534,28 @@ impl Actions {
         };
         let child_prompt =
             task.map(|t| Self::build_child_prompt(t, app_data.spawn.use_plan_prompt));
+        let child_title_prefix = if app_data.spawn.use_plan_prompt && child_prompt.is_some() {
+            "Planner"
+        } else {
+            "Agent"
+        };
+        let start_child_number = next_child_number(
+            &app_data.storage,
+            config.parent_agent_id,
+            child_title_prefix,
+        );
 
         for i in 0..count {
             let window_index = start_window_index + u32::try_from(i).unwrap_or(0);
+            let child_number = start_child_number.saturating_add(i);
+            let child_title = format!("{child_title_prefix} {child_number}");
             self.spawn_single_child(
                 app_data,
                 config,
-                i,
                 window_index,
                 &program,
                 child_prompt.as_deref(),
+                &child_title,
             )?;
         }
 
@@ -566,13 +576,13 @@ impl Actions {
         self,
         app_data: &mut AppData,
         config: &SpawnConfig,
-        index: usize,
         window_index: u32,
         program: &str,
         child_prompt: Option<&str>,
+        child_title: &str,
     ) -> Result<()> {
-        let child = Agent::new_child(
-            String::new(),
+        let mut child = Agent::new_child(
+            child_title.to_string(),
             program.to_string(),
             config.branch.clone(),
             config.worktree_path.clone(),
@@ -582,14 +592,6 @@ impl Actions {
                 window_index,
             },
         );
-
-        let child_title = if app_data.spawn.use_plan_prompt && child_prompt.is_some() {
-            format!("Planner {} ({})", index + 1, child.short_id())
-        } else {
-            format!("Agent {} ({})", index + 1, child.short_id())
-        };
-        let mut child = child;
-        child.title.clone_from(&child_title);
         child.workspace_kind = config.workspace_kind;
         let cli = crate::conversation::detect_agent_cli(program);
         if cli == crate::conversation::AgentCli::Claude {
@@ -604,7 +606,7 @@ impl Actions {
         let started_at = SystemTime::now();
         let actual_index = self.session_manager.create_window(
             &config.root_session,
-            &child_title,
+            child_title,
             &config.worktree_path,
             Some(&command),
         )?;
@@ -707,11 +709,13 @@ impl Actions {
         let start_window_index = app_data.storage.reserve_window_indices(parent_id);
         let program = app_data.review_agent_spawn_command();
         let mut codex_review_flows: Vec<(String, String)> = Vec::new();
+        let start_reviewer_number = next_child_number(&app_data.storage, parent_id, "Reviewer");
 
         // Create review child agents
         for i in 0..count {
             let offset = u32::try_from(i).map_or(u32::MAX, |value| value);
             let window_index = start_window_index.saturating_add(offset);
+            let reviewer_number = start_reviewer_number.saturating_add(i);
             let child = self.spawn_review_child_agent(
                 app_data,
                 ReviewChildAgentConfig {
@@ -722,7 +726,7 @@ impl Actions {
                     parent_id,
                     program: program.as_str(),
                     review_prompt: review_prompt.as_str(),
-                    reviewer_number: i + 1,
+                    reviewer_number,
                     reserved_window_index: window_index,
                 },
             )?;
@@ -904,6 +908,25 @@ impl Actions {
         app_data.set_status("Synthesized findings into parent agent");
         Ok(AppMode::normal())
     }
+}
+
+fn next_child_number(
+    storage: &crate::agent::Storage,
+    parent_id: uuid::Uuid,
+    prefix: &str,
+) -> usize {
+    storage
+        .children(parent_id)
+        .into_iter()
+        .filter_map(|agent| parse_agent_title_number(&agent.title, prefix))
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+fn parse_agent_title_number(title: &str, prefix: &str) -> Option<usize> {
+    let rest = title.strip_prefix(prefix)?.trim_start();
+    rest.split_whitespace().next()?.parse().ok()
 }
 
 #[cfg(test)]
