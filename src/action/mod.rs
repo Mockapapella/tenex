@@ -881,11 +881,12 @@ mod tests {
     }
 
     fn add_agent_with_child(app: &mut App) {
+        let worktree_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let root = Agent::new(
             "root".to_string(),
             "claude".to_string(),
             "tenex/root".to_string(),
-            PathBuf::from("/tmp"),
+            worktree_path,
         );
         let root_id = root.id;
         let root_session = root.mux_session.clone();

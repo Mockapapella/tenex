@@ -255,6 +255,7 @@ fn run_interactive(
 ) -> Result<()> {
     // Ensure .tenex/ is excluded from git tracking
     if let Ok(cwd) = std::env::current_dir()
+        && tenex::git::is_git_repository(&cwd)
         && let Err(e) = tenex::git::ensure_tenex_excluded(&cwd)
     {
         eprintln!("Warning: Failed to exclude .tenex from git: {e}");

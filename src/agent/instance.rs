@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// What kind of workspace an agent runs in.
+///
+/// Most agents run in a git worktree managed by Tenex, but Tenex also supports starting in a
+/// regular directory that is not a git repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceKind {
+    /// A git worktree and branch managed by Tenex.
+    #[default]
+    GitWorktree,
+    /// A regular directory (no worktree isolation / git operations).
+    PlainDir,
+}
+
 /// A single agent instance
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
@@ -30,6 +44,10 @@ pub struct Agent {
 
     /// Path to the git worktree
     pub worktree_path: PathBuf,
+
+    /// Whether this agent runs in a Tenex-managed git worktree or a plain directory.
+    #[serde(default)]
+    pub workspace_kind: WorkspaceKind,
 
     /// Mux session name
     #[serde(alias = "tmux_session")]
@@ -90,6 +108,7 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
+            workspace_kind: WorkspaceKind::GitWorktree,
             mux_session,
             created_at: now,
             updated_at: now,
@@ -120,6 +139,7 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
+            workspace_kind: WorkspaceKind::GitWorktree,
             mux_session: config.mux_session,
             created_at: now,
             updated_at: now,
@@ -148,6 +168,12 @@ impl Agent {
     #[must_use]
     pub fn is_terminal_agent(&self) -> bool {
         self.is_terminal || self.program == "terminal"
+    }
+
+    /// Whether this agent supports Tenex git operations (branch/worktree management).
+    #[must_use]
+    pub const fn is_git_workspace(&self) -> bool {
+        matches!(self.workspace_kind, WorkspaceKind::GitWorktree)
     }
 
     /// Get a short display ID (first 8 chars of UUID)

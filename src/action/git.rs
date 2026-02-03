@@ -5,7 +5,7 @@ use crate::state::{
     AppMode, ConfirmPushForPRMode, ConfirmPushMode, ErrorModalMode, MergeBranchSelectorMode,
     NormalMode, RebaseBranchSelectorMode, RenameBranchMode, ScrollingMode,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Normal-mode action: start the git push flow.
 #[derive(Debug, Clone, Copy, Default)]
@@ -18,6 +18,14 @@ impl ValidIn<NormalMode> for PushAction {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Push requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let branch_name = agent.branch.clone();
@@ -34,6 +42,14 @@ impl ValidIn<ScrollingMode> for PushAction {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Push requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let branch_name = agent.branch.clone();
@@ -56,7 +72,7 @@ impl ValidIn<NormalMode> for RenameBranchAction {
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
         let agent_id = agent.id;
-        let is_root = agent.is_root();
+        let is_root = agent.is_root() && agent.is_git_workspace();
         let current_name = agent.title.clone();
 
         app_data
@@ -78,7 +94,7 @@ impl ValidIn<ScrollingMode> for RenameBranchAction {
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
         let agent_id = agent.id;
-        let is_root = agent.is_root();
+        let is_root = agent.is_root() && agent.is_git_workspace();
         let current_name = agent.title.clone();
 
         app_data
@@ -102,6 +118,14 @@ impl ValidIn<NormalMode> for OpenPRAction {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Open PR requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let branch_name = agent.branch.clone();
@@ -130,6 +154,14 @@ impl ValidIn<ScrollingMode> for OpenPRAction {
         let agent = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Open PR requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let branch_name = agent.branch.clone();
@@ -165,13 +197,20 @@ impl ValidIn<NormalMode> for RebaseAction {
             }
             .into());
         };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Rebase requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
         // Fetch branches for selector.
-        let repo_path = std::env::current_dir()?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
@@ -192,13 +231,20 @@ impl ValidIn<ScrollingMode> for RebaseAction {
             }
             .into());
         };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Rebase requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
         // Fetch branches for selector.
-        let repo_path = std::env::current_dir()?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
@@ -223,13 +269,20 @@ impl ValidIn<NormalMode> for MergeAction {
             }
             .into());
         };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Merge requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
         // Fetch branches for selector.
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
@@ -250,13 +303,20 @@ impl ValidIn<ScrollingMode> for MergeAction {
             }
             .into());
         };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message:
+                    "Merge requires a git repository. Start Tenex in a git repo to use worktrees."
+                        .to_string(),
+            }
+            .into());
+        }
 
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
         // Fetch branches for selector.
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 

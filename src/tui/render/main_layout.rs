@@ -1,6 +1,6 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
-use crate::agent::Status;
+use crate::agent::{Status, WorkspaceKind};
 use crate::app::{App, DiffLineMeta, Tab};
 use crate::state::AppMode;
 use ratatui::{
@@ -15,6 +15,77 @@ use ratatui::{
 };
 
 use super::colors;
+
+fn agent_list_item<'a>(
+    app: &App,
+    idx: usize,
+    info: &crate::agent::VisibleAgentInfo<'a>,
+) -> ListItem<'a> {
+    let (status_symbol, status_color) = match info.agent.status {
+        Status::Starting => (info.agent.status.symbol(), colors::STATUS_STARTING),
+        Status::Running => {
+            if app.data.ui.agent_is_waiting_for_input(info.agent.id) {
+                if app.data.ui.agent_has_unseen_waiting_output(info.agent.id) {
+                    ("◐", colors::STATUS_STARTING)
+                } else {
+                    ("○", colors::STATUS_WAITING)
+                }
+            } else {
+                (info.agent.status.symbol(), colors::STATUS_RUNNING)
+            }
+        }
+    };
+
+    let style = if idx == app.data.selected {
+        Style::default()
+            .fg(colors::TEXT_PRIMARY)
+            .bg(colors::SURFACE_HIGHLIGHT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::TEXT_PRIMARY)
+    };
+
+    let indent = "    ".repeat(info.depth);
+    let collapse_indicator = if info.has_children {
+        if info.agent.collapsed { "▶ " } else { "▼ " }
+    } else {
+        ""
+    };
+
+    let count_indicator = if info.child_count > 0 {
+        format!(" ({})", info.child_count)
+    } else {
+        String::new()
+    };
+
+    let mut spans = Vec::new();
+    spans.push(Span::raw(indent));
+    spans.push(Span::styled(
+        format!("{status_symbol} "),
+        Style::default().fg(status_color),
+    ));
+    spans.push(Span::styled(
+        collapse_indicator,
+        Style::default().fg(colors::TEXT_DIM),
+    ));
+    spans.push(Span::styled(&info.agent.title, style));
+    if info.agent.workspace_kind == WorkspaceKind::PlainDir {
+        spans.push(Span::styled(
+            " (no-git)",
+            Style::default().fg(colors::TEXT_MUTED),
+        ));
+    }
+    spans.push(Span::styled(
+        count_indicator,
+        Style::default().fg(colors::TEXT_DIM),
+    ));
+    spans.push(Span::styled(
+        format!(" ({})", info.agent.age_string()),
+        Style::default().fg(colors::TEXT_MUTED),
+    ));
+
+    ListItem::new(Line::from(spans)).style(style)
+}
 
 /// Render the main area (agent list + content pane)
 pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -39,65 +110,7 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let items: Vec<ListItem<'_>> = visible
         .iter()
         .enumerate()
-        .map(|(i, info)| {
-            let (status_symbol, status_color) = match info.agent.status {
-                Status::Starting => (info.agent.status.symbol(), colors::STATUS_STARTING),
-                Status::Running => {
-                    if app.data.ui.agent_is_waiting_for_input(info.agent.id) {
-                        if app.data.ui.agent_has_unseen_waiting_output(info.agent.id) {
-                            ("◐", colors::STATUS_STARTING)
-                        } else {
-                            ("○", colors::STATUS_WAITING)
-                        }
-                    } else {
-                        (info.agent.status.symbol(), colors::STATUS_RUNNING)
-                    }
-                }
-            };
-
-            let style = if i == app.data.selected {
-                Style::default()
-                    .fg(colors::TEXT_PRIMARY)
-                    .bg(colors::SURFACE_HIGHLIGHT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(colors::TEXT_PRIMARY)
-            };
-
-            // Build indentation based on depth
-            let indent = "    ".repeat(info.depth);
-
-            // Collapse/expand indicator (pre-computed)
-            let collapse_indicator = if info.has_children {
-                if info.agent.collapsed { "▶ " } else { "▼ " }
-            } else {
-                ""
-            };
-
-            // Child count indicator (pre-computed)
-            let count_indicator = if info.child_count > 0 {
-                format!(" ({})", info.child_count)
-            } else {
-                String::new()
-            };
-
-            let content = Line::from(vec![
-                Span::raw(indent),
-                Span::styled(
-                    format!("{status_symbol} "),
-                    Style::default().fg(status_color),
-                ),
-                Span::styled(collapse_indicator, Style::default().fg(colors::TEXT_DIM)),
-                Span::styled(&info.agent.title, style),
-                Span::styled(count_indicator, Style::default().fg(colors::TEXT_DIM)),
-                Span::styled(
-                    format!(" ({})", info.agent.age_string()),
-                    Style::default().fg(colors::TEXT_MUTED),
-                ),
-            ]);
-
-            ListItem::new(content).style(style)
-        })
+        .map(|(i, info)| agent_list_item(app, i, info))
         .collect();
 
     let title = format!(" Agents ({}) ", app.data.storage.len());
@@ -789,6 +802,7 @@ mod tests {
     use crate::agent::{Agent, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    use crate::state::{DiffFocusedMode, ScrollingMode};
     use ratatui::{Terminal, backend::TestBackend};
     use tempfile::NamedTempFile;
 
@@ -1022,6 +1036,222 @@ mod tests {
 
         let line = tab_bar_line(&app);
         assert!(!line_text(&line).contains('◐'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_for_tab_bar_offset_selects_commits_and_none_after_end() -> anyhow::Result<()> {
+        let (app, _temp) = create_test_app()?;
+
+        let preview_w = tab_bar_tab_width("Preview", false);
+        let diff_w = tab_bar_tab_width("Diff", false);
+        let commits_w = tab_bar_tab_width("Commits", false);
+
+        let diff_start = preview_w;
+        let commits_start = diff_start.saturating_add(diff_w);
+        let commits_end = commits_start.saturating_add(commits_w);
+
+        assert_eq!(
+            tab_for_tab_bar_offset(&app, commits_start),
+            Some(Tab::Commits)
+        );
+        assert_eq!(tab_for_tab_bar_offset(&app, commits_end), None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tab_bar_tab_has_unseen_changes_preview_is_false() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+
+        assert!(!tab_bar_tab_has_unseen_changes(&app, Tab::Preview));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_content_pane_renders_commits() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Commits;
+        app.data
+            .ui
+            .set_commits_content("Branch: main\nCommits: main..HEAD (0 shown)");
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_content_pane(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Git Commits"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_preview_cursor_returns_on_invalid_state() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend)?;
+
+        terminal.draw(|frame| {
+            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+        })?;
+
+        app.data.ui.preview_cursor_position = Some((0, 0, true));
+        app.data.ui.preview_pane_size = Some((40, 10));
+        terminal.draw(|frame| {
+            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+        })?;
+
+        app.data.ui.preview_cursor_position = Some((0, 0, false));
+        app.data.ui.preview_pane_size = None;
+        terminal.draw(|frame| {
+            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+        })?;
+
+        app.data.ui.preview_cursor_position = Some((0, 0, false));
+        app.data.ui.preview_pane_size = Some((40, 10));
+        terminal.draw(|frame| {
+            render_preview_cursor(frame, &app, frame.area(), 0, 10, 0);
+        })?;
+
+        app.data.ui.preview_cursor_position = Some((0, 0, false));
+        app.data.ui.preview_pane_size = Some((40, 5));
+        terminal.draw(|frame| {
+            render_preview_cursor(frame, &app, frame.area(), 0, 10, 1);
+        })?;
+
+        app.data.ui.preview_cursor_position = Some((0, 0, false));
+        app.data.ui.preview_pane_size = Some((40, 5));
+        terminal.draw(|frame| {
+            let mut area = frame.area();
+            area.width = 0;
+            render_preview_cursor(frame, &app, area, 0, 5, 5);
+        })?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_diff_focused_applies_styles_and_selection() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+
+        let agent = Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.data.storage.add(agent);
+        app.data.selected = 0;
+
+        app.enter_mode(DiffFocusedMode.into());
+        app.data.active_tab = Tab::Diff;
+        let model = crate::git::DiffModel {
+            files: vec![crate::git::DiffFile {
+                path: std::path::PathBuf::from("file.txt"),
+                status: crate::git::FileStatus::Modified,
+                meta: Vec::new(),
+                hunks: vec![crate::git::DiffHunk {
+                    header: "@@ -1,1 +1,2 @@".to_string(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 2,
+                    lines: vec![
+                        crate::git::DiffHunkLine {
+                            origin: '+',
+                            content: "added".to_string(),
+                            old_lineno: None,
+                            new_lineno: Some(1),
+                        },
+                        crate::git::DiffHunkLine {
+                            origin: '-',
+                            content: "removed".to_string(),
+                            old_lineno: Some(1),
+                            new_lineno: None,
+                        },
+                        crate::git::DiffHunkLine {
+                            origin: ' ',
+                            content: "@@ inline".to_string(),
+                            old_lineno: Some(2),
+                            new_lineno: Some(2),
+                        },
+                        crate::git::DiffHunkLine {
+                            origin: ' ',
+                            content: "context".to_string(),
+                            old_lineno: Some(3),
+                            new_lineno: Some(3),
+                        },
+                    ],
+                }],
+                additions: 1,
+                deletions: 1,
+            }],
+            summary: crate::git::DiffSummary {
+                files_changed: 1,
+                additions: 1,
+                deletions: 1,
+            },
+            hash: 1,
+        };
+
+        let (content, meta) = app.data.ui.build_diff_view(&model);
+        app.data.ui.set_diff_view(content, meta);
+        app.data.ui.diff_visual_anchor = Some(3);
+        app.data.ui.diff_cursor = 4;
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_diff(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("INTERACTIVE"));
+        assert!(text.contains("+added"));
+        assert!(text.contains("-removed"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_commits_shows_selected_border_in_scrolling_mode() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.data.active_tab = Tab::Commits;
+        app.data
+            .ui
+            .set_commits_content("Branch: main\nCommits: main..HEAD (0 shown)");
+
+        app.enter_mode(ScrollingMode.into());
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| render_commits(frame, &app, frame.area()))?;
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Git Commits"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_scrollbars_return_when_scrollbar_area_is_empty() -> anyhow::Result<()> {
+        let (_app, _temp) = create_test_app()?;
+
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let content_area = Rect { height: 0, ..area };
+
+            render_commits_scrollbar(frame, area, content_area, 10, 1, 9, 0);
+            render_diff_scrollbar(frame, area, content_area, 10, 1, 9, 0);
+        })?;
+
         Ok(())
     }
 
