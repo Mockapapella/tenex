@@ -325,6 +325,116 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("review_spawn_codex")?;
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let codex_path = fixture.repo_path.join("codex");
+    std::fs::write(
+        &codex_path,
+        "#!/bin/sh\necho \"codex-mock argv=$#\"\nexec cat\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(&codex_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&codex_path, perms)?;
+    }
+
+    let settings = tenex::app::Settings {
+        review_agent_program: tenex::app::AgentProgram::Custom,
+        review_custom_agent_command: codex_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+
+    let mut app = tenex::App::new(config, storage, settings, false);
+    let handler = tenex::app::Actions::new();
+
+    // Create a root agent with children (swarm) to get a proper mux session.
+    app.data.spawn.child_count = 1;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("test-swarm"));
+    if result.is_err() {
+        std::env::set_current_dir(&original_dir)?;
+        return Ok(());
+    }
+
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root agent found")?;
+    let root_id = root.id;
+
+    app.data.spawn.spawning_under = Some(root_id);
+    app.data.spawn.child_count = 1;
+    app.data.review.base_branch = Some("master".to_string());
+
+    let result = handler.spawn_review_agents(&mut app.data);
+
+    std::thread::sleep(std::time::Duration::from_millis(250));
+
+    let capture = tenex::mux::OutputCapture::new();
+    let mut checked = 0usize;
+    for agent in app
+        .data
+        .storage
+        .iter()
+        .filter(|a| a.title.contains("Reviewer"))
+    {
+        let window_index = agent
+            .window_index
+            .ok_or("Missing window index for review agent")?;
+        let target = SessionManager::window_target(&agent.mux_session, window_index);
+        let output = capture.capture_pane_with_history(&target, 200)?;
+
+        assert!(
+            output.contains("codex-mock argv=0"),
+            "Expected Codex review agents to spawn without a prompt argument, got: {output:?}"
+        );
+        assert!(
+            output.contains("/review"),
+            "Expected Codex review agents to type /review, got: {output:?}"
+        );
+        assert!(
+            output.contains("master"),
+            "Expected Codex review agents to enter the base branch, got: {output:?}"
+        );
+        checked = checked.saturating_add(1);
+    }
+
+    // Cleanup.
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+    std::env::set_current_dir(&original_dir)?;
+
+    if result.is_err() {
+        return Ok(());
+    }
+
+    assert!(checked > 0, "Expected at least one Codex review agent");
+
+    Ok(())
+}
+
+#[test]
 fn test_review_prompt_contains_base_branch() {
     let prompt = tenex::prompts::build_review_prompt("main");
 

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
@@ -22,6 +22,19 @@ pub struct SpawnConfig {
     pub worktree_path: PathBuf,
     pub branch: String,
     pub parent_agent_id: uuid::Uuid,
+}
+
+#[derive(Clone, Copy)]
+struct ReviewChildAgentConfig<'a> {
+    root_session: &'a str,
+    worktree_path: &'a Path,
+    branch: &'a str,
+    parent_id: uuid::Uuid,
+    program: &'a str,
+    review_prompt: &'a str,
+    base_branch: &'a str,
+    reviewer_number: usize,
+    reserved_window_index: u32,
 }
 
 impl Actions {
@@ -46,6 +59,98 @@ impl Actions {
             read_command.push_str(prompt);
         }
         read_command
+    }
+
+    fn start_codex_review_flow(self, target: &str, base_branch: &str) -> Result<()> {
+        let base_branch = base_branch.trim();
+        if base_branch.is_empty() {
+            bail!("Base branch cannot be empty for Codex review flow");
+        }
+
+        self.session_manager.send_keys(target, "/review")?;
+        std::thread::sleep(Duration::from_millis(25));
+        self.session_manager.send_keys_and_submit(target, "")?;
+        std::thread::sleep(Duration::from_millis(25));
+        self.session_manager.send_keys_and_submit(target, "")?;
+        std::thread::sleep(Duration::from_millis(25));
+        self.session_manager.paste_keys(target, base_branch)?;
+        std::thread::sleep(Duration::from_millis(25));
+        self.session_manager.send_keys_and_submit(target, "")?;
+        Ok(())
+    }
+
+    fn spawn_review_child_agent(
+        self,
+        app_data: &AppData,
+        config: ReviewChildAgentConfig<'_>,
+    ) -> Result<Agent> {
+        let mut child = Agent::new_child(
+            String::new(), // Placeholder
+            config.program.to_string(),
+            config.branch.to_string(),
+            config.worktree_path.to_path_buf(),
+            ChildConfig {
+                parent_id: config.parent_id,
+                mux_session: config.root_session.to_string(),
+                window_index: config.reserved_window_index,
+            },
+        );
+
+        let child_title = format!("Reviewer {} ({})", config.reviewer_number, child.short_id());
+        child.title.clone_from(&child_title);
+
+        let cli = crate::conversation::detect_agent_cli(config.program);
+        if cli == crate::conversation::AgentCli::Claude {
+            child.conversation_id = Some(child.id.to_string());
+        }
+
+        let prompt = match cli {
+            crate::conversation::AgentCli::Codex => None,
+            _ => Some(config.review_prompt),
+        };
+
+        let command = crate::conversation::build_spawn_argv(
+            config.program,
+            prompt,
+            child.conversation_id.as_deref(),
+        )?;
+
+        let started_at = SystemTime::now();
+        let actual_index = self.session_manager.create_window(
+            config.root_session,
+            &child_title,
+            config.worktree_path,
+            Some(&command),
+        )?;
+
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            child.conversation_id = crate::conversation::try_detect_codex_session_id(
+                config.worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let window_target = SessionManager::window_target(config.root_session, actual_index);
+            let _ = self
+                .session_manager
+                .resize_window(&window_target, width, height);
+        }
+
+        if cli == crate::conversation::AgentCli::Codex {
+            let window_target = SessionManager::window_target(config.root_session, actual_index);
+            self.start_codex_review_flow(&window_target, config.base_branch)?;
+        }
+
+        child.window_index = Some(actual_index);
+        Ok(child)
     }
 
     /// Spawn child agents under a parent (or create new root with children)
@@ -431,64 +536,20 @@ impl Actions {
         for i in 0..count {
             let offset = u32::try_from(i).map_or(u32::MAX, |value| value);
             let window_index = start_window_index.saturating_add(offset);
-
-            let child = Agent::new_child(
-                String::new(), // Placeholder
-                program.clone(),
-                branch.clone(),
-                worktree_path.clone(),
-                ChildConfig {
+            let child = self.spawn_review_child_agent(
+                app_data,
+                ReviewChildAgentConfig {
+                    root_session: root_session.as_str(),
+                    worktree_path: worktree_path.as_path(),
+                    branch: branch.as_str(),
                     parent_id,
-                    mux_session: root_session.clone(),
-                    window_index,
+                    program: program.as_str(),
+                    review_prompt: review_prompt.as_str(),
+                    base_branch: base_branch.as_str(),
+                    reviewer_number: i + 1,
+                    reserved_window_index: window_index,
                 },
-            );
-
-            let child_title = format!("Reviewer {} ({})", i + 1, child.short_id());
-            let mut child = child;
-            child.title.clone_from(&child_title);
-            let cli = crate::conversation::detect_agent_cli(&program);
-            if cli == crate::conversation::AgentCli::Claude {
-                child.conversation_id = Some(child.id.to_string());
-            }
-
-            let command = crate::conversation::build_spawn_argv(
-                &program,
-                Some(review_prompt.as_str()),
-                child.conversation_id.as_deref(),
             )?;
-            let started_at = SystemTime::now();
-            let actual_index = self.session_manager.create_window(
-                &root_session,
-                &child_title,
-                &worktree_path,
-                Some(&command),
-            )?;
-            if cli == crate::conversation::AgentCli::Codex {
-                let exclude_ids: HashSet<String> = app_data
-                    .storage
-                    .iter()
-                    .filter_map(|stored| stored.conversation_id.clone())
-                    .collect();
-                child.conversation_id = crate::conversation::try_detect_codex_session_id(
-                    &worktree_path,
-                    started_at,
-                    &exclude_ids,
-                    Duration::from_millis(500),
-                );
-            }
-
-            // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app_data.ui.preview_dimensions {
-                let window_target = SessionManager::window_target(&root_session, actual_index);
-                let _ = self
-                    .session_manager
-                    .resize_window(&window_target, width, height);
-            }
-
-            // Update window index if it differs
-            child.window_index = Some(actual_index);
-
             app_data.storage.add(child);
         }
 

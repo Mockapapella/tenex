@@ -170,6 +170,19 @@ impl Manager {
         self.send_input_bytes(target, &payload)
     }
 
+    /// Paste keys to a target (bracketed paste).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if keys cannot be pasted.
+    pub fn paste_keys(&self, target: &str, keys: &str) -> Result<()> {
+        let mut payload = Vec::with_capacity(keys.len() + 16);
+        payload.extend_from_slice(b"\x1b[200~");
+        payload.extend_from_slice(keys.as_bytes());
+        payload.extend_from_slice(b"\x1b[201~");
+        self.send_input_bytes(target, &payload)
+    }
+
     /// Send input to an agent program, using a program-specific strategy.
     ///
     /// # Errors
