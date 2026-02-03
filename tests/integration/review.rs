@@ -412,8 +412,6 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     let result = handler.spawn_review_agents(&mut app.data);
 
-    std::thread::sleep(std::time::Duration::from_millis(250));
-
     let capture = tenex::mux::OutputCapture::new();
     let mut checked = 0usize;
     for agent in app
@@ -426,7 +424,29 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             .window_index
             .ok_or("Missing window index for review agent")?;
         let target = SessionManager::window_target(&agent.mux_session, window_index);
-        let output = capture.capture_pane_with_history(&target, 200)?;
+        let output = {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(5);
+            let poll_interval = std::time::Duration::from_millis(50);
+            let mut last_output = String::new();
+
+            loop {
+                match capture.capture_pane_with_history(&target, 200) {
+                    Ok(output) => {
+                        if output.contains("Code review started") {
+                            break output;
+                        }
+                        last_output = output;
+                    }
+                    Err(_) if start.elapsed() < timeout => {}
+                    Err(err) => return Err(err.into()),
+                }
+                if start.elapsed() >= timeout {
+                    break last_output;
+                }
+                std::thread::sleep(poll_interval);
+            }
+        };
 
         assert!(
             output.contains("codex-mock argv=0"),
