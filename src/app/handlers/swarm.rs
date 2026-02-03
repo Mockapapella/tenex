@@ -78,15 +78,19 @@ impl Actions {
             return Ok(());
         }
 
-        self.session_manager
-            .send_keys_and_submit_csi_u_enter(target, "/review")?;
+        self.session_manager.send_keys(target, "/review")?;
+        let command_hint_timeout = Duration::from_secs(5);
+        let _ = self.wait_for_pane_contains_any(
+            target,
+            &["review my current changes", "review current changes"],
+            command_hint_timeout,
+            poll_interval,
+        );
+
+        self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
-            &[
-                "Select a review preset",
-                "Select review preset",
-                "Select a review mode",
-            ],
+            &["review preset", "review mode"],
             step_timeout,
             poll_interval,
         ) {
@@ -98,14 +102,8 @@ impl Actions {
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
-        self.session_manager
-            .send_keys_and_submit_csi_u_enter(target, "")?;
-        if !self.wait_for_pane_contains_any(
-            target,
-            &["Select a base branch", "Select base branch"],
-            step_timeout,
-            poll_interval,
-        ) {
+        self.session_manager.send_keys_and_submit(target, "")?;
+        if !self.wait_for_pane_contains_any(target, &["base branch"], step_timeout, poll_interval) {
             warn!(
                 target,
                 "Timed out waiting for Codex /review base branch prompt; leaving agent for manual review"
@@ -115,8 +113,7 @@ impl Actions {
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.paste_keys(target, base_branch)?;
-        self.session_manager
-            .send_keys_and_submit_csi_u_enter(target, "")?;
+        self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
             &[
@@ -136,10 +133,12 @@ impl Actions {
         Ok(())
     }
 
-    fn start_codex_review_flow_in_background(self, target: String, base_branch: String) {
+    fn start_codex_review_flows_in_background(self, flows: Vec<(String, String)>) {
         std::thread::spawn(move || {
-            if let Err(err) = self.start_codex_review_flow(&target, &base_branch) {
-                warn!(target, error = %err, "Failed to drive Codex /review flow");
+            for (target, base_branch) in flows {
+                if let Err(err) = self.start_codex_review_flow(&target, &base_branch) {
+                    warn!(target, error = %err, "Failed to drive Codex /review flow");
+                }
             }
         });
     }
@@ -677,8 +676,8 @@ impl Actions {
         // Clear review state
         app_data.review.clear();
 
-        for (target, branch) in codex_review_flows {
-            self.start_codex_review_flow_in_background(target, branch);
+        if !codex_review_flows.is_empty() {
+            self.start_codex_review_flows_in_background(codex_review_flows);
         }
 
         Ok(())

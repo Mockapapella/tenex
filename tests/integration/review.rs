@@ -55,6 +55,7 @@ print(f"codex-mock argv={len(sys.argv) - 1}", flush=True)
 state = 0
 buffer = bytearray()
 in_paste = False
+hint_shown = False
 
 while True:
     ch = sys.stdin.buffer.read(1)
@@ -85,6 +86,9 @@ while True:
         continue
 
     buffer += ch
+    if state == 0 and not in_paste and not hint_shown and buffer == b"/review":
+        print("  /review  review my current changes and find issues", flush=True)
+        hint_shown = True
 "#;
 
 #[cfg(unix)]
@@ -487,8 +491,8 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
         let target = SessionManager::window_target(&agent.mux_session, window_index);
         let output = {
             let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(5);
-            let poll_interval = std::time::Duration::from_millis(50);
+            let timeout = std::time::Duration::from_secs(10);
+            let poll_interval = std::time::Duration::from_millis(100);
             let mut last_output = String::new();
 
             loop {
