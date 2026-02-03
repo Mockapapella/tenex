@@ -354,6 +354,40 @@ impl Storage {
         changed
     }
 
+    /// Remove deprecated short IDs from auto-generated child agent titles.
+    ///
+    /// Tenex used to append the agent's short id (e.g. `Agent 1 (deadbeef)`) to make tmux window
+    /// names unique. The UI now provides enough context, so strip the suffix when it matches the
+    /// agent's own short id and the remaining prefix is one of the known auto-generated titles.
+    pub fn backfill_child_titles(&mut self) -> bool {
+        let mut changed = false;
+
+        for agent in &mut self.agents {
+            if agent.parent_id.is_none() {
+                continue;
+            }
+
+            let short_id = agent.short_id();
+            let suffix = format!(" ({short_id})");
+            let Some(stripped) = agent.title.strip_suffix(&suffix) else {
+                continue;
+            };
+
+            let stripped = stripped.trim_end();
+            if matches!(
+                stripped,
+                title if title.starts_with("Agent ")
+                    || title.starts_with("Planner ")
+                    || title.starts_with("Reviewer ")
+            ) {
+                agent.title = stripped.to_string();
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
     /// Save state to the configured location (custom path or default)
     ///
     /// # Errors
@@ -1013,6 +1047,36 @@ mod tests {
         let agent = loaded.agents.first().ok_or("missing agent")?;
         assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
         Ok(())
+    }
+
+    #[test]
+    fn test_backfill_child_titles_strips_short_id_suffix() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+
+        storage.add(root.clone());
+
+        let mut child = create_child_agent(&root, "Agent 1 (deadbeef)", 2);
+        child.id = uuid::Uuid::from_bytes([
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ]);
+        storage.add(child);
+
+        let mut custom = create_child_agent(&root, "My custom title (deadbeef)", 3);
+        custom.id = uuid::Uuid::from_bytes([
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01,
+        ]);
+        storage.add(custom);
+
+        assert!(storage.backfill_child_titles());
+
+        let children = storage.children(root_id);
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].title, "Agent 1");
+        assert_eq!(children[1].title, "My custom title (deadbeef)");
     }
 
     #[test]

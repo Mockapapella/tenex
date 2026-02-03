@@ -165,7 +165,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
-fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::Error>> {
+fn test_child_agent_titles_do_not_include_short_id() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
     }
@@ -197,21 +197,20 @@ fn test_child_agent_titles_include_short_id() -> Result<(), Box<dyn std::error::
         .ok_or("No root")?;
     let root_id = root.id;
 
-    // Check that children have short IDs in their titles
+    // Check that children do not have short IDs in their titles
     let children = app.data.storage.children(root_id);
     for child in &children {
-        // Title should be like "Child 1 (abc12345)"
+        // Title should be like "Agent 1"
         assert!(
-            child.title.contains('(') && child.title.contains(')'),
-            "Child title should contain short ID in parentheses: {}",
+            !child.title.contains('(') && !child.title.contains(')'),
+            "Child title should not contain a short ID in parentheses: {}",
             child.title
         );
 
-        // Extract the ID from the title and verify it matches short_id()
         let short_id = child.short_id();
         assert!(
-            child.title.contains(&short_id),
-            "Child title should contain its short ID. Title: {}, Short ID: {}",
+            !child.title.contains(&short_id),
+            "Child title should not contain its short ID. Title: {}, Short ID: {}",
             child.title,
             short_id
         );
