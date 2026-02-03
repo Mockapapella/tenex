@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -22,6 +22,18 @@ pub struct SpawnConfig {
     pub worktree_path: PathBuf,
     pub branch: String,
     pub parent_agent_id: uuid::Uuid,
+}
+
+#[derive(Clone, Copy)]
+struct ReviewChildAgentConfig<'a> {
+    root_session: &'a str,
+    worktree_path: &'a Path,
+    branch: &'a str,
+    parent_id: uuid::Uuid,
+    program: &'a str,
+    review_prompt: &'a str,
+    reviewer_number: usize,
+    reserved_window_index: u32,
 }
 
 impl Actions {
@@ -46,6 +58,201 @@ impl Actions {
             read_command.push_str(prompt);
         }
         read_command
+    }
+
+    fn start_codex_review_flow(self, target: &str, base_branch: &str) -> Result<()> {
+        let base_branch = base_branch.trim();
+        if base_branch.is_empty() {
+            bail!("Base branch cannot be empty for Codex review flow");
+        }
+
+        let poll_interval = Duration::from_millis(250);
+        let step_timeout = Duration::from_secs(20);
+        let idle_stable_for = Duration::from_millis(200);
+
+        if !self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval) {
+            warn!(
+                target,
+                "Timed out waiting for Codex pane to settle; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
+        self.session_manager.send_keys(target, "/review")?;
+        let command_hint_timeout = Duration::from_secs(5);
+        let _ = self.wait_for_pane_contains_any(
+            target,
+            &["review my current changes", "review current changes"],
+            command_hint_timeout,
+            poll_interval,
+        );
+
+        self.session_manager.send_keys_and_submit(target, "")?;
+        if !self.wait_for_pane_contains_any(
+            target,
+            &["review preset", "review mode"],
+            step_timeout,
+            poll_interval,
+        ) {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review preset prompt; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
+        let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
+        self.session_manager.send_keys_and_submit(target, "")?;
+        if !self.wait_for_pane_contains_any(target, &["base branch"], step_timeout, poll_interval) {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review base branch prompt; leaving agent for manual review"
+            );
+            return Ok(());
+        }
+
+        let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
+        self.session_manager.paste_keys(target, base_branch)?;
+        self.session_manager.send_keys_and_submit(target, "")?;
+        if !self.wait_for_pane_contains_any(
+            target,
+            &[
+                "review started",
+                "Code review started",
+                "Code Review Started",
+            ],
+            step_timeout,
+            poll_interval,
+        ) {
+            warn!(
+                target,
+                "Timed out waiting for Codex /review to start; leaving agent for manual review"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn start_codex_review_flows_in_background(self, flows: Vec<(String, String)>) {
+        std::thread::spawn(move || {
+            for (target, base_branch) in flows {
+                if let Err(err) = self.start_codex_review_flow(&target, &base_branch) {
+                    warn!(target, error = %err, "Failed to drive Codex /review flow");
+                }
+            }
+        });
+    }
+
+    fn wait_for_pane_contains_any(
+        self,
+        target: &str,
+        needles: &[&str],
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if let Ok(pane) = self.output_capture.capture_pane(target)
+                && needles.iter().any(|needle| pane.contains(needle))
+            {
+                return true;
+            }
+            std::thread::sleep(poll_interval);
+        }
+        false
+    }
+
+    fn wait_for_pane_idle(
+        self,
+        target: &str,
+        stable_for: Duration,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> bool {
+        let start = Instant::now();
+        let mut last_change = Instant::now();
+        let mut baseline = String::new();
+        while start.elapsed() < timeout {
+            if let Ok(pane) = self.output_capture.capture_pane(target) {
+                if pane != baseline {
+                    baseline = pane;
+                    last_change = Instant::now();
+                } else if last_change.elapsed() >= stable_for {
+                    return true;
+                }
+            }
+            std::thread::sleep(poll_interval);
+        }
+        false
+    }
+
+    fn spawn_review_child_agent(
+        self,
+        app_data: &AppData,
+        config: ReviewChildAgentConfig<'_>,
+    ) -> Result<Agent> {
+        let mut child = Agent::new_child(
+            String::new(), // Placeholder
+            config.program.to_string(),
+            config.branch.to_string(),
+            config.worktree_path.to_path_buf(),
+            ChildConfig {
+                parent_id: config.parent_id,
+                mux_session: config.root_session.to_string(),
+                window_index: config.reserved_window_index,
+            },
+        );
+
+        let child_title = format!("Reviewer {} ({})", config.reviewer_number, child.short_id());
+        child.title.clone_from(&child_title);
+
+        let cli = crate::conversation::detect_agent_cli(config.program);
+        if cli == crate::conversation::AgentCli::Claude {
+            child.conversation_id = Some(child.id.to_string());
+        }
+
+        let prompt = match cli {
+            crate::conversation::AgentCli::Codex => None,
+            _ => Some(config.review_prompt),
+        };
+
+        let command = crate::conversation::build_spawn_argv(
+            config.program,
+            prompt,
+            child.conversation_id.as_deref(),
+        )?;
+
+        let started_at = SystemTime::now();
+        let actual_index = self.session_manager.create_window(
+            config.root_session,
+            &child_title,
+            config.worktree_path,
+            Some(&command),
+        )?;
+
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            child.conversation_id = crate::conversation::try_detect_codex_session_id(
+                config.worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let window_target = SessionManager::window_target(config.root_session, actual_index);
+            let _ = self
+                .session_manager
+                .resize_window(&window_target, width, height);
+        }
+
+        child.window_index = Some(actual_index);
+        Ok(child)
     }
 
     /// Spawn child agents under a parent (or create new root with children)
@@ -426,69 +633,32 @@ impl Actions {
         // Reserve window indices
         let start_window_index = app_data.storage.reserve_window_indices(parent_id);
         let program = app_data.review_agent_spawn_command();
+        let mut codex_review_flows: Vec<(String, String)> = Vec::new();
 
         // Create review child agents
         for i in 0..count {
             let offset = u32::try_from(i).map_or(u32::MAX, |value| value);
             let window_index = start_window_index.saturating_add(offset);
-
-            let child = Agent::new_child(
-                String::new(), // Placeholder
-                program.clone(),
-                branch.clone(),
-                worktree_path.clone(),
-                ChildConfig {
+            let child = self.spawn_review_child_agent(
+                app_data,
+                ReviewChildAgentConfig {
+                    root_session: root_session.as_str(),
+                    worktree_path: worktree_path.as_path(),
+                    branch: branch.as_str(),
                     parent_id,
-                    mux_session: root_session.clone(),
-                    window_index,
+                    program: program.as_str(),
+                    review_prompt: review_prompt.as_str(),
+                    reviewer_number: i + 1,
+                    reserved_window_index: window_index,
                 },
-            );
-
-            let child_title = format!("Reviewer {} ({})", i + 1, child.short_id());
-            let mut child = child;
-            child.title.clone_from(&child_title);
-            let cli = crate::conversation::detect_agent_cli(&program);
-            if cli == crate::conversation::AgentCli::Claude {
-                child.conversation_id = Some(child.id.to_string());
-            }
-
-            let command = crate::conversation::build_spawn_argv(
-                &program,
-                Some(review_prompt.as_str()),
-                child.conversation_id.as_deref(),
             )?;
-            let started_at = SystemTime::now();
-            let actual_index = self.session_manager.create_window(
-                &root_session,
-                &child_title,
-                &worktree_path,
-                Some(&command),
-            )?;
-            if cli == crate::conversation::AgentCli::Codex {
-                let exclude_ids: HashSet<String> = app_data
-                    .storage
-                    .iter()
-                    .filter_map(|stored| stored.conversation_id.clone())
-                    .collect();
-                child.conversation_id = crate::conversation::try_detect_codex_session_id(
-                    &worktree_path,
-                    started_at,
-                    &exclude_ids,
-                    Duration::from_millis(500),
-                );
+            if crate::conversation::detect_agent_cli(&child.program)
+                == crate::conversation::AgentCli::Codex
+                && let Some(actual_index) = child.window_index
+            {
+                let window_target = SessionManager::window_target(&child.mux_session, actual_index);
+                codex_review_flows.push((window_target, base_branch.clone()));
             }
-
-            // Resize the new window to match preview dimensions
-            if let Some((width, height)) = app_data.ui.preview_dimensions {
-                let window_target = SessionManager::window_target(&root_session, actual_index);
-                let _ = self
-                    .session_manager
-                    .resize_window(&window_target, width, height);
-            }
-
-            // Update window index if it differs
-            child.window_index = Some(actual_index);
-
             app_data.storage.add(child);
         }
 
@@ -505,6 +675,10 @@ impl Actions {
 
         // Clear review state
         app_data.review.clear();
+
+        if !codex_review_flows.is_empty() {
+            self.start_codex_review_flows_in_background(codex_review_flows);
+        }
 
         Ok(())
     }

@@ -1,8 +1,106 @@
 //! Tests for [R] review agent functionality
 
-use crate::common::{TestFixture, skip_if_no_mux};
+use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
 use tenex::config::Action;
 use tenex::mux::SessionManager;
+
+#[cfg(unix)]
+use std::path::Path;
+
+#[cfg(unix)]
+const CODEX_REVIEW_FLOW_MOCK_SCRIPT: &str = r#"#!/usr/bin/env python3
+import sys
+import tty
+
+ENTER_CSI_U = b"\x1b[13;1u"
+PASTE_START = b"\x1b[200~"
+PASTE_END = b"\x1b[201~"
+
+tty.setraw(sys.stdin.fileno())
+
+
+def read_escape_sequence() -> bytes:
+    leader = sys.stdin.buffer.read(1)
+    if leader != b"[":
+        return b"\x1b" + leader
+
+    seq = bytearray(b"\x1b[")
+    while True:
+        ch = sys.stdin.buffer.read(1)
+        if not ch:
+            break
+        seq += ch
+        if ch in b"~uABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz":
+            break
+    return bytes(seq)
+
+
+def handle_submit(state: int, text: str) -> int:
+    print(text, flush=True)
+    if state == 0:
+        print("Select a review preset", flush=True)
+        return 1
+    if state == 1:
+        print("Select a base branch", flush=True)
+        return 2
+    if state == 2:
+        branch = text.strip() or "master"
+        print(f">> Code review started: changes against '{branch}' <<", flush=True)
+        return 3
+    return state
+
+
+print(f"codex-mock argv={len(sys.argv) - 1}", flush=True)
+
+state = 0
+buffer = bytearray()
+in_paste = False
+hint_shown = False
+
+while True:
+    ch = sys.stdin.buffer.read(1)
+    if not ch:
+        break
+
+    if ch == b"\x1b":
+        seq = read_escape_sequence()
+        if seq == ENTER_CSI_U:
+            state = handle_submit(state, buffer.decode(errors="replace"))
+            buffer.clear()
+            continue
+        if seq == PASTE_START:
+            in_paste = True
+            continue
+        if seq == PASTE_END:
+            in_paste = False
+            continue
+        continue
+
+    if ch in (b"\r", b"\n") and not in_paste:
+        state = handle_submit(state, buffer.decode(errors="replace"))
+        buffer.clear()
+        continue
+
+    if ch == b"\x7f" and buffer:
+        buffer.pop()
+        continue
+
+    buffer += ch
+    if state == 0 and not in_paste and not hint_shown and buffer == b"/review":
+        print("  /review  review my current changes and find issues", flush=True)
+        hint_shown = True
+"#;
+
+#[cfg(unix)]
+fn write_executable_script(path: &Path, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::write(path, contents)?;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
 
 #[test]
 fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::error::Error>> {
@@ -320,6 +418,125 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     assert!(app.data.review.branches.is_empty());
     assert!(app.data.review.filter.is_empty());
     assert!(app.data.review.base_branch.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("review_spawn_codex")?;
+    let config = fixture.config();
+    let storage = TestFixture::create_storage();
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let codex_path = fixture.repo_path.join("codex");
+    #[cfg(unix)]
+    {
+        write_executable_script(&codex_path, CODEX_REVIEW_FLOW_MOCK_SCRIPT)?;
+    }
+
+    let settings = tenex::app::Settings {
+        review_agent_program: tenex::app::AgentProgram::Custom,
+        review_custom_agent_command: codex_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+
+    let mut app = tenex::App::new(config, storage, settings, false);
+    let handler = tenex::app::Actions::new();
+
+    // Create a root agent with children (swarm) to get a proper mux session.
+    app.data.spawn.child_count = 1;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("test-swarm"));
+    if result.is_err() {
+        return Ok(());
+    }
+
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|a| a.is_root())
+        .ok_or("No root agent found")?;
+    let root_id = root.id;
+
+    app.data.spawn.spawning_under = Some(root_id);
+    app.data.spawn.child_count = 1;
+    app.data.review.base_branch = Some("master".to_string());
+
+    let result = handler.spawn_review_agents(&mut app.data);
+
+    let capture = tenex::mux::OutputCapture::new();
+    let mut checked = 0usize;
+    for agent in app
+        .data
+        .storage
+        .iter()
+        .filter(|a| a.title.contains("Reviewer"))
+    {
+        let window_index = agent
+            .window_index
+            .ok_or("Missing window index for review agent")?;
+        let target = SessionManager::window_target(&agent.mux_session, window_index);
+        let output = {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(10);
+            let poll_interval = std::time::Duration::from_millis(100);
+            let mut last_output = String::new();
+
+            loop {
+                match capture.capture_pane_with_history(&target, 200) {
+                    Ok(output) => {
+                        if output.contains("review started") {
+                            break output;
+                        }
+                        last_output = output;
+                    }
+                    Err(_) if start.elapsed() < timeout => {}
+                    Err(err) => return Err(err.into()),
+                }
+                if start.elapsed() >= timeout {
+                    break last_output;
+                }
+                std::thread::sleep(poll_interval);
+            }
+        };
+
+        assert!(
+            output.contains("codex-mock argv=0"),
+            "Expected Codex review agents to spawn without a prompt argument, got: {output:?}"
+        );
+        assert!(
+            output.contains("/review"),
+            "Expected Codex review agents to type /review, got: {output:?}"
+        );
+        assert!(
+            output.contains("master"),
+            "Expected Codex review agents to enter the base branch, got: {output:?}"
+        );
+        assert!(
+            output.contains("review started"),
+            "Expected Codex review agents to start the review, got: {output:?}"
+        );
+        checked = checked.saturating_add(1);
+    }
+
+    if result.is_err() {
+        return Ok(());
+    }
+
+    assert!(checked > 0, "Expected at least one Codex review agent");
 
     Ok(())
 }

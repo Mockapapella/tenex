@@ -735,7 +735,7 @@ CSI_U_ENTER = b"\x1b[13;1u"
 
 def main() -> int:
     tty.setraw(sys.stdin.fileno())
-    deadline = time.time() + 2.0
+    deadline = time.time() + 5.0
     while time.time() < deadline:
         r, _, _ = select.select([sys.stdin], [], [], 0.1)
         if not r:
