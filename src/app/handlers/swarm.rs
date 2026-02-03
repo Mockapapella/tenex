@@ -68,7 +68,16 @@ impl Actions {
         }
 
         let poll_interval = Duration::from_millis(50);
-        let step_timeout = Duration::from_secs(10);
+        let step_timeout = Duration::from_secs(20);
+        let idle_stable_for = Duration::from_millis(200);
+
+        if !self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval) {
+            warn!(
+                target,
+                "Timed out waiting for Codex pane to settle; leaving agent for manual review"
+            );
+            return Ok(());
+        }
 
         self.session_manager
             .send_keys_and_submit(target, "/review")?;
@@ -85,6 +94,7 @@ impl Actions {
             return Ok(());
         }
 
+        let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains(target, "Select a base branch", step_timeout, poll_interval)
         {
@@ -95,19 +105,16 @@ impl Actions {
             return Ok(());
         }
 
-        let before_branch = self.output_capture.capture_pane(target)?;
+        let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.paste_keys(target, base_branch)?;
-        if !self.wait_for_pane_change(target, &before_branch, step_timeout, poll_interval)? {
+        self.session_manager.send_keys_and_submit(target, "")?;
+        if !self.wait_for_pane_contains(target, "Code review started", step_timeout, poll_interval)
+        {
             warn!(
                 target,
-                "Timed out waiting for Codex /review branch filter to update; leaving agent for manual review"
+                "Timed out waiting for Codex /review to start; leaving agent for manual review"
             );
-            return Ok(());
         }
-
-        self.session_manager.send_keys_and_submit(target, "")?;
-        let _ =
-            self.wait_for_pane_contains(target, "Code review started", step_timeout, poll_interval);
 
         Ok(())
     }
@@ -131,22 +138,28 @@ impl Actions {
         false
     }
 
-    fn wait_for_pane_change(
+    fn wait_for_pane_idle(
         self,
         target: &str,
-        baseline: &str,
+        stable_for: Duration,
         timeout: Duration,
         poll_interval: Duration,
-    ) -> Result<bool> {
+    ) -> bool {
         let start = Instant::now();
+        let mut last_change = Instant::now();
+        let mut baseline = String::new();
         while start.elapsed() < timeout {
-            let pane = self.output_capture.capture_pane(target)?;
-            if pane != baseline {
-                return Ok(true);
+            if let Ok(pane) = self.output_capture.capture_pane(target) {
+                if pane != baseline {
+                    baseline = pane;
+                    last_change = Instant::now();
+                } else if last_change.elapsed() >= stable_for {
+                    return true;
+                }
             }
             std::thread::sleep(poll_interval);
         }
-        Ok(false)
+        false
     }
 
     fn spawn_review_child_agent(

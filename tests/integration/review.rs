@@ -21,9 +21,6 @@ echo "Select a base branch"
 
 IFS= read -r line || exit 0
 printf '%s\n' "$line"
-
-IFS= read -r line || exit 0
-printf '%s\n' "$line"
 echo ">> Code review started: changes against 'master' <<"
 
 exec cat
@@ -442,6 +439,10 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
         assert!(
             output.contains("master"),
             "Expected Codex review agents to enter the base branch, got: {output:?}"
+        );
+        assert!(
+            output.contains("Code review started"),
+            "Expected Codex review agents to start the review, got: {output:?}"
         );
         checked = checked.saturating_add(1);
     }
