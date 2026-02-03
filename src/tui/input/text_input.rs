@@ -44,6 +44,7 @@ pub fn handle_text_input_mode(app: &mut App, code: KeyCode, modifiers: KeyModifi
 mod tests {
     use super::*;
     use crate::agent::Storage;
+    use crate::agent::WorkspaceKind;
     use crate::app::Settings;
     use crate::config::Config;
     use crate::state::{
@@ -250,55 +251,96 @@ mod tests {
 
     #[test]
     fn test_text_input_submit_error_paths() -> Result<(), Box<dyn std::error::Error>> {
+        struct RestoreCwd(std::path::PathBuf);
+
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
         let original_dir = std::env::current_dir()?;
+        let _guard = RestoreCwd(original_dir);
         let non_git_dir = TempDir::new()?;
         std::env::set_current_dir(non_git_dir.path())?;
 
-        let (mut app, _temp) = create_test_app()?;
+        // CreatingMode should succeed by creating a plain-directory agent.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(CreatingMode.into());
+            app.data.input.buffer = "agent".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert_eq!(app.mode, AppMode::normal());
+            let agent = app.data.storage.iter().next().ok_or("Missing agent")?;
+            assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
 
-        app.apply_mode(CreatingMode.into());
-        app.data.input.buffer = "agent".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // PromptingMode should also succeed outside git.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(PromptingMode.into());
+            app.data.input.buffer = "prompt".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert_eq!(app.mode, AppMode::normal());
+            let agent = app.data.storage.iter().next().ok_or("Missing agent")?;
+            assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
 
-        app.apply_mode(PromptingMode.into());
-        app.data.input.buffer = "prompt".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // ChildPromptMode: force an error by pointing to a missing parent agent.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.data.spawn.spawning_under = Some(uuid::Uuid::new_v4());
+            app.apply_mode(ChildPromptMode.into());
+            app.data.input.buffer = "task".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        }
 
-        app.apply_mode(ChildPromptMode.into());
-        app.data.input.buffer = "task".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // BroadcastingMode: errors without a selected agent.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(BroadcastingMode.into());
+            app.data.input.buffer = "msg".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        }
 
-        app.apply_mode(BroadcastingMode.into());
-        app.data.input.buffer = "msg".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // ReconnectPromptMode: errors without conflict info.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(ReconnectPromptMode.into());
+            app.data.input.buffer = "new prompt".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        }
 
-        app.apply_mode(ReconnectPromptMode.into());
-        app.data.input.buffer = "new prompt".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // TerminalPromptMode: errors without a selected agent.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(TerminalPromptMode.into());
+            app.data.input.buffer = "echo hi".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        }
 
-        app.apply_mode(TerminalPromptMode.into());
-        app.data.input.buffer = "echo hi".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+        // Custom agent command: empty input should stay in mode and set a status message.
+        {
+            let (mut app, _temp) = create_test_app()?;
+            app.apply_mode(CustomAgentCommandMode.into());
+            app.data.input.buffer = "   ".to_string();
+            app.data.input.cursor = app.data.input.buffer.len();
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            assert_eq!(app.mode, CustomAgentCommandMode.into());
+        }
 
-        app.apply_mode(CustomAgentCommandMode.into());
-        app.data.input.buffer = "   ".to_string();
-        app.data.input.cursor = app.data.input.buffer.len();
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-        assert_eq!(app.mode, CustomAgentCommandMode.into());
-
-        std::env::set_current_dir(original_dir)?;
         Ok(())
     }
 }

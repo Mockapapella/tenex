@@ -1,6 +1,6 @@
 //! Swarm operations: spawn children, spawn review agents, synthesize
 
-use crate::agent::{Agent, ChildConfig};
+use crate::agent::{Agent, ChildConfig, WorkspaceKind};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use crate::prompts;
@@ -21,6 +21,7 @@ pub struct SpawnConfig {
     pub root_session: String,
     pub worktree_path: PathBuf,
     pub branch: String,
+    pub workspace_kind: WorkspaceKind,
     pub parent_agent_id: uuid::Uuid,
 }
 
@@ -29,6 +30,7 @@ struct ReviewChildAgentConfig<'a> {
     root_session: &'a str,
     worktree_path: &'a Path,
     branch: &'a str,
+    workspace_kind: WorkspaceKind,
     parent_id: uuid::Uuid,
     program: &'a str,
     review_prompt: &'a str,
@@ -202,6 +204,7 @@ impl Actions {
                 window_index: config.reserved_window_index,
             },
         );
+        child.workspace_kind = config.workspace_kind;
 
         let child_title = format!("Reviewer {} ({})", config.reviewer_number, child.short_id());
         child.title.clone_from(&child_title);
@@ -316,6 +319,7 @@ impl Actions {
             root_session: root.mux_session.clone(),
             worktree_path: root.worktree_path.clone(),
             branch: root.branch.clone(),
+            workspace_kind: root.workspace_kind,
             parent_agent_id: pid,
         })
     }
@@ -328,10 +332,13 @@ impl Actions {
         count: usize,
     ) -> Result<Option<SpawnConfig>> {
         let root_title = Self::generate_root_title(task);
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let Ok(repo) = git::open_repository(&repo_path) else {
+            let config = self.create_plain_dir_root_for_swarm(app_data, root_title, repo_path)?;
+            return Ok(Some(config));
+        };
         let branch = app_data.config.generate_branch_name(&root_title);
         let worktree_path = app_data.config.worktree_dir.join(&branch);
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
@@ -400,8 +407,69 @@ impl Actions {
             root_session,
             worktree_path,
             branch,
+            workspace_kind: WorkspaceKind::GitWorktree,
             parent_agent_id: root_id,
         }))
+    }
+
+    fn create_plain_dir_root_for_swarm(
+        self,
+        app_data: &mut AppData,
+        root_title: String,
+        workdir: PathBuf,
+    ) -> Result<SpawnConfig> {
+        let program = app_data.agent_spawn_command();
+        let branch = app_data.config.generate_branch_name(&root_title);
+
+        let mut root_agent =
+            Agent::new(root_title, program.clone(), branch.clone(), workdir.clone());
+        root_agent.workspace_kind = WorkspaceKind::PlainDir;
+        let cli = crate::conversation::detect_agent_cli(&program);
+        if cli == crate::conversation::AgentCli::Claude {
+            root_agent.conversation_id = Some(root_agent.id.to_string());
+        }
+        let session_prefix = app_data.storage.instance_session_prefix();
+        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
+
+        let root_session = root_agent.mux_session.clone();
+        let root_id = root_agent.id;
+
+        let command = crate::conversation::build_spawn_argv(
+            &program,
+            None,
+            root_agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&root_session, &workdir, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            root_agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                &workdir,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&root_session, width, height);
+        }
+
+        app_data.storage.add(root_agent);
+        Ok(SpawnConfig {
+            root_session,
+            worktree_path: workdir,
+            branch,
+            workspace_kind: WorkspaceKind::PlainDir,
+            parent_agent_id: root_id,
+        })
     }
 
     /// Generate a title for a new root swarm agent
@@ -522,6 +590,7 @@ impl Actions {
         };
         let mut child = child;
         child.title.clone_from(&child_title);
+        child.workspace_kind = config.workspace_kind;
         let cli = crate::conversation::detect_agent_cli(program);
         if cli == crate::conversation::AgentCli::Claude {
             child.conversation_id = Some(child.id.to_string());
@@ -626,6 +695,10 @@ impl Actions {
         let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
+        let root_workspace_kind = root.workspace_kind;
+        if root_workspace_kind != WorkspaceKind::GitWorktree {
+            bail!("Review swarm requires a git repository");
+        }
 
         // Build the review prompt
         let review_prompt = prompts::build_review_prompt(&base_branch);
@@ -645,6 +718,7 @@ impl Actions {
                     root_session: root_session.as_str(),
                     worktree_path: worktree_path.as_path(),
                     branch: branch.as_str(),
+                    workspace_kind: root_workspace_kind,
                     parent_id,
                     program: program.as_str(),
                     review_prompt: review_prompt.as_str(),
@@ -872,12 +946,55 @@ mod tests {
             root_session: "nonexistent-session".to_string(),
             worktree_path: PathBuf::from("/tmp"),
             branch: "test-branch".to_string(),
+            workspace_kind: WorkspaceKind::GitWorktree,
             parent_agent_id: root_id,
         };
         let result = handler.spawn_children_for_root(&mut app.data, &spawn_config, 2, "test task");
 
         // This should error because the session doesn't exist
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_spawn_children_creates_plain_dir_root_outside_git()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct RestoreCwd(std::path::PathBuf);
+
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let original_cwd = std::env::current_dir()?;
+        let _guard = RestoreCwd(original_cwd);
+
+        let non_git_dir = tempfile::TempDir::new()?;
+        std::env::set_current_dir(non_git_dir.path())?;
+
+        app.data.spawn.child_count = 1;
+        app.data.spawn.spawning_under = None;
+
+        let next = handler.spawn_children(&mut app.data, Some("plain-root-task"))?;
+        assert_eq!(next, AppMode::normal());
+
+        let root = app
+            .data
+            .storage
+            .root_agents()
+            .into_iter()
+            .next()
+            .ok_or("Expected root agent")?;
+        assert_eq!(root.workspace_kind, WorkspaceKind::PlainDir);
+        assert_eq!(app.data.storage.len(), 2);
+
+        // Stop the session to avoid leaking `sleep` processes.
+        let _ = crate::mux::SessionManager::new().kill(&root.mux_session);
+
         Ok(())
     }
 

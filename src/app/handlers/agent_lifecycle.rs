@@ -5,6 +5,7 @@ use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -31,10 +32,13 @@ impl Actions {
     ) -> Result<AppMode> {
         debug!(title, prompt, "Creating new agent");
 
+        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let Ok(repo) = git::open_repository(&repo_path) else {
+            self.create_agent_in_plain_dir(app_data, title, prompt, &repo_path)?;
+            return Ok(AppMode::normal());
+        };
         let branch = app_data.config.generate_branch_name(title);
         let worktree_path = app_data.config.worktree_dir.join(&branch);
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
@@ -72,6 +76,67 @@ impl Actions {
 
         self.create_agent_internal(app_data, title, prompt, &branch, &worktree_path)?;
         Ok(AppMode::normal())
+    }
+
+    fn create_agent_in_plain_dir(
+        self,
+        app_data: &mut AppData,
+        title: &str,
+        prompt: Option<&str>,
+        workdir: &Path,
+    ) -> Result<()> {
+        let program = app_data.agent_spawn_command();
+        let branch = app_data.config.generate_branch_name(title);
+
+        let mut agent = Agent::new(
+            title.to_string(),
+            program.clone(),
+            branch,
+            workdir.to_path_buf(),
+        );
+        agent.workspace_kind = crate::agent::WorkspaceKind::PlainDir;
+
+        let cli = crate::conversation::detect_agent_cli(&program);
+        if cli == crate::conversation::AgentCli::Claude {
+            agent.conversation_id = Some(agent.id.to_string());
+        }
+        let session_prefix = app_data.storage.instance_session_prefix();
+        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
+
+        let command = crate::conversation::build_spawn_argv(
+            &program,
+            prompt,
+            agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&agent.mux_session, workdir, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                workdir,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&agent.mux_session, width, height);
+        }
+
+        app_data.storage.add(agent);
+        app_data.storage.save()?;
+
+        info!(title, "Agent created in plain directory");
+        app_data.set_status(format!("Created agent: {title}"));
+        Ok(())
     }
 
     /// Internal function to actually create the agent after conflict resolution
@@ -279,6 +344,7 @@ impl Actions {
             root_session,
             worktree_path: conflict.worktree_path.clone(),
             branch: conflict.branch.clone(),
+            workspace_kind: crate::agent::WorkspaceKind::GitWorktree,
             parent_agent_id: root_id,
         };
         self.spawn_children_for_root(app_data, &spawn_config, child_count, task)?;
@@ -559,6 +625,7 @@ impl Actions {
             },
         );
         terminal.is_terminal = true;
+        terminal.workspace_kind = root.workspace_kind;
 
         // Create window in the root's session (no command - just a shell)
         let actual_index =
@@ -603,6 +670,7 @@ mod tests {
     use super::*;
     use crate::App;
     use crate::agent::Storage;
+    use crate::agent::WorkspaceKind;
     use crate::app::Settings;
     use crate::config::Config;
     use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
@@ -683,6 +751,43 @@ mod tests {
             .mux_session
             .clone();
         let _ = crate::mux::SessionManager::new().kill(&new_session);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_agent_outside_git_uses_plain_dir_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct RestoreCwd(PathBuf);
+
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let original_cwd = std::env::current_dir()?;
+        let _guard = RestoreCwd(original_cwd);
+
+        let workdir = TempDir::new()?;
+        std::env::set_current_dir(workdir.path())?;
+
+        let next = handler.create_agent(&mut app.data, "plain-dir-agent", None)?;
+        assert_eq!(next, AppMode::normal());
+
+        let created = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.title == "plain-dir-agent")
+            .ok_or("Expected agent to be created")?;
+        assert_eq!(created.workspace_kind, WorkspaceKind::PlainDir);
+
+        // Stop the session to avoid leaking `sleep` processes.
+        let _ = crate::mux::SessionManager::new().kill(&created.mux_session);
 
         Ok(())
     }

@@ -6,7 +6,7 @@ use crate::state::{
     DiffFocusedMode, ErrorModalMode, NormalMode, PromptingMode, ReviewChildCountMode,
     ReviewInfoMode, ScrollingMode, TerminalPromptMode,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Normal-mode action: enter agent creation mode.
 #[derive(Debug, Clone, Copy, Default)]
@@ -357,17 +357,23 @@ impl ValidIn<NormalMode> for ReviewSwarmAction {
             return Ok(ReviewInfoMode.into());
         };
 
-        if selected.is_terminal_agent() {
+        let selected_id = selected.id;
+        let selected_worktree_path = selected.worktree_path.clone();
+        let selected_is_terminal = selected.is_terminal_agent();
+
+        if selected_is_terminal {
             app_data.set_status("Select a non-terminal agent for review swarm");
             return Ok(AppMode::normal());
         }
 
         // Store the selected agent's ID for later use.
-        app_data.spawn.spawning_under = Some(selected.id);
+        app_data.spawn.spawning_under = Some(selected_id);
 
         // Fetch branches for the selector.
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let Ok(repo) = git::open_repository(&selected_worktree_path) else {
+            app_data.set_status("Review swarm requires a git repository");
+            return Ok(AppMode::normal());
+        };
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 
@@ -386,17 +392,23 @@ impl ValidIn<ScrollingMode> for ReviewSwarmAction {
             return Ok(ReviewInfoMode.into());
         };
 
-        if selected.is_terminal_agent() {
+        let selected_id = selected.id;
+        let selected_worktree_path = selected.worktree_path.clone();
+        let selected_is_terminal = selected.is_terminal_agent();
+
+        if selected_is_terminal {
             app_data.set_status("Select a non-terminal agent for review swarm");
             return Ok(ScrollingMode.into());
         }
 
         // Store the selected agent's ID for later use.
-        app_data.spawn.spawning_under = Some(selected.id);
+        app_data.spawn.spawning_under = Some(selected_id);
 
         // Fetch branches for the selector.
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let Ok(repo) = git::open_repository(&selected_worktree_path) else {
+            app_data.set_status("Review swarm requires a git repository");
+            return Ok(ScrollingMode.into());
+        };
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
 

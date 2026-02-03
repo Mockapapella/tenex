@@ -141,6 +141,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ))]
                     },
                     |agent| {
+                        let warning = if agent.is_root() && agent.is_git_workspace() {
+                            "This will delete the worktree and branch."
+                        } else if agent.is_root() {
+                            "This will close the session and stop the agent."
+                        } else {
+                            "This will close the window and stop the agent."
+                        };
+
                         vec![
                             Line::from(Span::styled(
                                 "Kill this agent?",
@@ -172,7 +180,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             ]),
                             Line::from(""),
                             Line::from(Span::styled(
-                                "This will delete the worktree and branch.",
+                                warning,
                                 Style::default().fg(colors::DIFF_REMOVE),
                             )),
                         ]
@@ -397,7 +405,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, ChildConfig, Status, Storage};
+    use crate::agent::{Agent, ChildConfig, Status, Storage, WorkspaceKind};
+    use crate::app::WorktreeConflictInfo;
     use crate::config::Config;
     use crate::state::*;
     use ratatui::Terminal;
@@ -447,6 +456,122 @@ mod tests {
             text.push_str(cell.symbol());
         }
         text
+    }
+
+    #[test]
+    fn test_render_agent_list_labels_plain_dir_agents() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+
+        let mut app = create_test_app_with_agents();
+        let id = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.title == "agent-1")
+            .ok_or("missing agent-1")?
+            .id;
+        if let Some(agent) = app.data.storage.get_mut(id) {
+            agent.workspace_kind = WorkspaceKind::PlainDir;
+        }
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("no-git"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_changelog_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(
+            ChangelogMode {
+                title: "What's New".to_string(),
+                lines: vec!["Hello".to_string()],
+                mark_seen_version: None,
+            }
+            .into(),
+        );
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("What's New"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_reconnect_prompt_swarm_title() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(ReconnectPromptMode.into());
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "agent".to_string(),
+            prompt: None,
+            branch: "branch".to_string(),
+            worktree_path: PathBuf::from("/tmp"),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: Some(3),
+        });
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Reconnect Swarm"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_terminal_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(TerminalPromptMode.into());
+        app.data.input.buffer = "echo hi".to_string();
+        app.data.input.cursor = app.data.input.buffer.len();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("New Terminal"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_synthesis_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend)?;
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(SynthesisPromptMode.into());
+        app.data.input.buffer = "extra".to_string();
+        app.data.input.cursor = app.data.input.buffer.len();
+
+        terminal.draw(|frame| {
+            render(frame, &app);
+        })?;
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Synthesize"));
+        Ok(())
     }
 
     #[test]
