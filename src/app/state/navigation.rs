@@ -8,38 +8,24 @@ impl App {
     /// Get the currently selected agent (from visible agents list)
     #[must_use]
     pub fn selected_agent(&self) -> Option<&Agent> {
-        self.data.storage.visible_agent_at(self.data.selected)
+        self.data.selected_agent()
     }
 
     /// Get a mutable reference to the currently selected agent
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
         // Get the ID first, then get mutable reference
-        let agent_id = self.data.storage.visible_agent_at(self.data.selected)?.id;
+        let agent_id = self.data.selected_agent()?.id;
         self.data.storage.get_mut(agent_id)
     }
 
     /// Move selection to the next agent (in visible list)
     pub fn select_next(&mut self) {
-        let visible_count = self.data.storage.visible_count();
-        if visible_count > 0 {
-            self.data.selected = (self.data.selected + 1) % visible_count;
-            self.reset_scroll();
-            self.ensure_agent_list_scroll();
-        }
+        self.data.select_next();
     }
 
     /// Move selection to the previous agent (in visible list)
     pub fn select_prev(&mut self) {
-        let visible_count = self.data.storage.visible_count();
-        if visible_count > 0 {
-            self.data.selected = self
-                .data
-                .selected
-                .checked_sub(1)
-                .unwrap_or(visible_count - 1);
-            self.reset_scroll();
-            self.ensure_agent_list_scroll();
-        }
+        self.data.select_prev();
     }
 
     /// Switch between detail pane tabs (forward)
@@ -54,7 +40,7 @@ impl App {
 
     /// Ensure the selection index is valid for the current visible agents
     pub fn validate_selection(&mut self) {
-        let visible_count = self.data.storage.visible_count();
+        let visible_count = self.data.sidebar_len();
         if visible_count == 0 {
             self.data.selected = 0;
         } else if self.data.selected >= visible_count {
@@ -65,7 +51,7 @@ impl App {
 
     /// Ensure the agent list scroll offset keeps the selected agent visible.
     pub fn ensure_agent_list_scroll(&mut self) {
-        let visible_count = self.data.storage.visible_count();
+        let visible_count = self.data.sidebar_len();
         if visible_count == 0 {
             self.data.ui.agent_list_scroll = 0;
             return;

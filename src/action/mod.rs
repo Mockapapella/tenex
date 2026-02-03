@@ -902,6 +902,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 1,
+                repo_root: None,
             },
         );
         app.data.storage.add(child);

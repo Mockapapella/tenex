@@ -69,7 +69,7 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
     }
 
     // Select root agent
-    app.data.selected = 0;
+    app.data.selected = 1;
 
     // Synthesize action should enter confirmation mode
     let result = handler.handle_action(&mut app, tenex::config::Action::Synthesize);
@@ -163,7 +163,7 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     assert_eq!(app.data.storage.len(), 6);
 
     // Select root and synthesize
-    app.data.selected = 0;
+    app.data.selected = 1;
 
     // Enter confirmation mode and confirm
     app.enter_mode(
@@ -230,7 +230,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     assert_eq!(app.data.storage.len(), 3);
 
     // Select root and spawn a terminal
-    app.data.selected = 0;
+    app.data.selected = 1;
     let handler = tenex::app::Actions::new();
     let result = handler.spawn_terminal(&mut app.data, None);
     if result.is_err() {
@@ -262,7 +262,7 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
     assert_eq!(terminal_count, 1, "Should have exactly 1 terminal");
 
     // Select root and synthesize
-    app.data.selected = 0;
+    app.data.selected = 1;
 
     // Enter confirmation mode and confirm
     app.enter_mode(
@@ -334,7 +334,7 @@ fn test_synthesize_ignores_legacy_terminal_children() -> Result<(), Box<dyn std:
     }
 
     // Select root and spawn a terminal
-    app.data.selected = 0;
+    app.data.selected = 1;
     let handler = tenex::app::Actions::new();
     let result = handler.spawn_terminal(&mut app.data, None);
     if result.is_err() {
@@ -375,7 +375,7 @@ fn test_synthesize_ignores_legacy_terminal_children() -> Result<(), Box<dyn std:
     }
 
     // Select root and synthesize
-    app.data.selected = 0;
+    app.data.selected = 1;
     app.enter_mode(
         tenex::state::ConfirmingMode {
             action: tenex::app::ConfirmAction::Synthesize,
@@ -496,7 +496,7 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
     );
 
     // Select root
-    app.data.selected = 0;
+    app.data.selected = 1;
 
     // Synthesize should fail because all children are terminals
     let handler = tenex::app::Actions::new();
@@ -587,7 +587,7 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
 
     // Select Agent 1 (which has grandchildren) and synthesize just its children
     if let Some(idx) = app.data.storage.visible_index_of(child1_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     // Enter confirmation mode and confirm

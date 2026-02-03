@@ -176,6 +176,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         ));
 
@@ -226,6 +227,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: 2,
+                repo_root: None,
             },
         );
         let deleted_id = deleted_child.id;
@@ -240,6 +242,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 4,
+                repo_root: None,
             },
         );
         let surviving_id = surviving_child.id;
@@ -281,6 +284,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 5,
+                repo_root: None,
             },
         );
         let surviving_id = surviving_child.id;
@@ -322,6 +326,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 1,
+                repo_root: None,
             },
         );
         let child_id = child.id;

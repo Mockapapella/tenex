@@ -388,6 +388,33 @@ impl Storage {
         changed
     }
 
+    /// Backfill the repository/workspace root for agents created by older Tenex versions.
+    ///
+    /// Tenex stores agents in a global state file, so it can load agents created from different
+    /// repositories. The UI groups agents by this root, and agent creation uses it to ensure new
+    /// worktrees are created in the highlighted repository instead of the process CWD.
+    pub fn backfill_repo_roots(&mut self) -> bool {
+        let mut changed = false;
+
+        for agent in &mut self.agents {
+            if agent.repo_root.is_some() {
+                continue;
+            }
+
+            let root = if agent.worktree_path.exists() {
+                git::repository_workspace_root(&agent.worktree_path)
+                    .unwrap_or_else(|_| agent.worktree_path.clone())
+            } else {
+                agent.worktree_path.clone()
+            };
+
+            agent.repo_root = Some(root);
+            changed = true;
+        }
+
+        changed
+    }
+
     /// Save state to the configured location (custom path or default)
     ///
     /// # Errors
@@ -1107,6 +1134,7 @@ mod tests {
                 parent_id: parent.id,
                 mux_session: parent.mux_session.clone(),
                 window_index,
+                repo_root: parent.repo_root.clone(),
             },
         )
     }
@@ -1187,6 +1215,7 @@ mod tests {
                 parent_id: child.id,
                 mux_session: root.mux_session.clone(),
                 window_index: 3,
+                repo_root: root.repo_root.clone(),
             },
         );
         let grandchild_id = grandchild.id;
@@ -1232,6 +1261,7 @@ mod tests {
                 parent_id: child1.id,
                 mux_session: root.mux_session.clone(),
                 window_index: 4,
+                repo_root: root.repo_root.clone(),
             },
         );
 
@@ -1260,6 +1290,7 @@ mod tests {
                 parent_id: child.id,
                 mux_session: root.mux_session.clone(),
                 window_index: 3,
+                repo_root: root.repo_root.clone(),
             },
         );
         let grandchild_id = grandchild.id;
@@ -1360,6 +1391,7 @@ mod tests {
                 parent_id: child1.id,
                 mux_session: root.mux_session.clone(),
                 window_index: 4,
+                repo_root: root.repo_root.clone(),
             },
         );
 

@@ -69,7 +69,7 @@ fn setup_app_with_repo(fixture: &TestFixture) -> tenex::App {
         fixture.session_name("diff"),
         fixture.repo_path.clone(),
     ));
-    app.data.selected = 0;
+    app.data.selected = 1;
     app.data.active_tab = Tab::Diff;
 
     app

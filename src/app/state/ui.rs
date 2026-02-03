@@ -1,6 +1,7 @@
 //! UI-related state: scroll positions, preview content, dimensions
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use std::path::PathBuf;
@@ -166,6 +167,9 @@ pub struct UiState {
 
     /// The pane digest hash the user last saw per agent (used for the `◐` "unseen waiting" indicator).
     pub pane_last_seen_hash_by_agent: BTreeMap<Uuid, u64>,
+
+    /// Collapsed project sections in the sidebar (keyed by repository/workspace root path).
+    pub collapsed_projects: BTreeSet<std::path::PathBuf>,
 }
 
 impl UiState {
@@ -215,6 +219,7 @@ impl UiState {
             status_message: None,
             pane_digest_by_agent: BTreeMap::new(),
             pane_last_seen_hash_by_agent: BTreeMap::new(),
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -283,6 +288,13 @@ impl UiState {
         F: FnMut(&Uuid) -> bool,
     {
         self.pane_last_seen_hash_by_agent.retain(|id, _| keep(id));
+    }
+
+    pub fn toggle_project_collapsed(&mut self, project_root: &std::path::Path) {
+        if self.collapsed_projects.remove(project_root) {
+            return;
+        }
+        self.collapsed_projects.insert(project_root.to_path_buf());
     }
 
     /// Set diff content and refresh cached line ranges

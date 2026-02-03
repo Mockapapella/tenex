@@ -66,7 +66,7 @@ fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
         agent.set_status(tenex::agent::Status::Running);
     }
 
-    app.data.selected = 0;
+    app.data.selected = 1;
     app.validate_selection();
     assert_eq!(
         app.selected_agent().map(|a| a.title.as_str()),

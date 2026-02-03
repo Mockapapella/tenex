@@ -2024,7 +2024,7 @@ mod tests {
             "branch".to_string(),
             PathBuf::from("/tmp"),
         ));
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.enter_mode(PreviewFocusedMode.into());
 
         let mut keys = Vec::new();

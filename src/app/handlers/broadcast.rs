@@ -155,6 +155,7 @@ mod tests {
                     parent_id: root_id,
                     mux_session: root_session.clone(),
                     window_index: i + 2,
+                    repo_root: None,
                 },
             ));
         }

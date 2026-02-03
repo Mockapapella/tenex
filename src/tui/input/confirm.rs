@@ -78,6 +78,7 @@ mod tests {
             prompt: Some("test prompt".to_string()),
             branch: "test-branch".to_string(),
             worktree_path: PathBuf::from("/tmp/test-worktree"),
+            repo_root: PathBuf::from("/tmp"),
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),

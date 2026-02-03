@@ -520,6 +520,7 @@ mod tests {
             prompt: None,
             branch: "branch".to_string(),
             worktree_path: PathBuf::from("/tmp"),
+            repo_root: PathBuf::from("/tmp"),
             existing_branch: None,
             existing_commit: None,
             current_branch: "main".to_string(),
@@ -765,6 +766,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: 1,
+                repo_root: None,
             },
         );
         storage.add(child);
@@ -778,6 +780,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         );
         terminal_child.is_terminal = true;
@@ -828,6 +831,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 1,
+                repo_root: None,
             },
         );
         terminal_child.is_terminal = true;
@@ -1229,6 +1233,7 @@ mod tests {
                 parent_id: expanded_root_id,
                 mux_session: expanded_root_mux_session,
                 window_index: 1,
+                repo_root: None,
             },
         ));
 
@@ -1246,6 +1251,7 @@ mod tests {
                 parent_id: collapsed_root_id,
                 mux_session: collapsed_root_mux_session,
                 window_index: 1,
+                repo_root: None,
             },
         ));
 
@@ -1431,6 +1437,7 @@ mod tests {
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/worktrees/test-agent"),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("tenex/test-agent".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -1467,6 +1474,7 @@ mod tests {
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm-root".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/worktrees/swarm-root"),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("tenex/swarm-root".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -1503,6 +1511,7 @@ mod tests {
             prompt: Some("original prompt".to_string()),
             branch: "tenex/test-agent".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/worktrees/test-agent"),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("tenex/test-agent".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -1868,7 +1877,7 @@ mod tests {
         let mut app = create_test_app_with_agents();
 
         // Get first agent's ID
-        let agent_id = app.data.storage.visible_agent_at(0).map(|a| a.id);
+        let agent_id = app.data.storage.iter().next().map(|a| a.id);
         app.data.git_op.agent_id = agent_id;
         app.data.git_op.branch_name = "feature/test".to_string();
         app.enter_mode(ConfirmPushMode.into());

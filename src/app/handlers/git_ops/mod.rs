@@ -59,6 +59,7 @@ impl Actions {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index,
+                repo_root: root.repo_root.clone(),
             },
         );
         terminal.is_terminal = true;

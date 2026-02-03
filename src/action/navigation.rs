@@ -308,25 +308,25 @@ mod tests {
     fn test_next_prev_agent_actions_update_selection() -> Result<(), Box<dyn std::error::Error>> {
         let (mut data, _temp) = create_test_data()?;
 
-        assert_eq!(data.selected, 0);
-        assert_eq!(
-            NextAgentAction.execute(NormalMode, &mut data)?,
-            AppMode::normal()
-        );
-        assert_eq!(data.selected, 0);
-
-        add_two_agents(&mut data);
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         assert_eq!(
             NextAgentAction.execute(NormalMode, &mut data)?,
             AppMode::normal()
         );
         assert_eq!(data.selected, 1);
+
+        add_two_agents(&mut data);
+        assert_eq!(data.selected, 1);
+        assert_eq!(
+            NextAgentAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 2);
         assert_eq!(
             PrevAgentAction.execute(ScrollingMode, &mut data)?,
             ScrollingMode.into()
         );
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         Ok(())
     }
 

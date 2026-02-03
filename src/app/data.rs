@@ -3,6 +3,7 @@
 use super::{AgentProgram, Settings, Tab};
 use crate::agent::{Agent, Status, Storage};
 use crate::app::AgentRole;
+use crate::app::SidebarItem;
 use crate::app::state::{
     CommandPaletteState, GitOpState, InputState, ModelSelectorState, ReviewState,
     SettingsMenuState, SpawnState, UiState,
@@ -76,7 +77,7 @@ impl AppData {
         Self {
             config,
             storage,
-            selected: 0,
+            selected: 1,
             active_tab: Tab::Preview,
             should_quit: false,
             input: InputState::new(),
@@ -147,7 +148,10 @@ impl AppData {
     /// Get the currently selected agent (from visible agents list).
     #[must_use]
     pub(crate) fn selected_agent(&self) -> Option<&Agent> {
-        self.storage.visible_agent_at(self.selected)
+        match self.selected_sidebar_item() {
+            Some(SidebarItem::Agent(agent)) => Some(agent.info.agent),
+            _ => None,
+        }
     }
 
     /// Check if there are any running agents.
@@ -173,12 +177,31 @@ impl AppData {
 
     /// Move selection to the next agent (in visible list).
     pub(crate) fn select_next(&mut self) {
-        let visible_count = self.storage.visible_count();
-        if visible_count == 0 {
+        let items = self.sidebar_items();
+        let agent_indices: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| matches!(item, SidebarItem::Agent(_)).then_some(idx))
+            .collect();
+
+        if agent_indices.is_empty() {
             return;
         }
 
-        let next = (self.selected + 1) % visible_count;
+        let next = agent_indices
+            .iter()
+            .position(|idx| *idx == self.selected)
+            .map_or_else(
+                || {
+                    agent_indices
+                        .iter()
+                        .copied()
+                        .find(|idx| *idx > self.selected)
+                        .unwrap_or(agent_indices[0])
+                },
+                |pos| agent_indices[(pos + 1) % agent_indices.len()],
+            );
+
         if next == self.selected {
             return;
         }
@@ -191,12 +214,32 @@ impl AppData {
 
     /// Move selection to the previous agent (in visible list).
     pub(crate) fn select_prev(&mut self) {
-        let visible_count = self.storage.visible_count();
-        if visible_count == 0 {
+        let items = self.sidebar_items();
+        let agent_indices: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| matches!(item, SidebarItem::Agent(_)).then_some(idx))
+            .collect();
+
+        if agent_indices.is_empty() {
             return;
         }
 
-        let prev = self.selected.checked_sub(1).unwrap_or(visible_count - 1);
+        let Some(&last_agent_index) = agent_indices.last() else {
+            return;
+        };
+
+        let prev = match agent_indices.iter().position(|idx| *idx == self.selected) {
+            Some(0) => last_agent_index,
+            Some(pos) => agent_indices[pos - 1],
+            None => agent_indices
+                .iter()
+                .copied()
+                .rev()
+                .find(|idx| *idx < self.selected)
+                .unwrap_or(last_agent_index),
+        };
+
         if prev == self.selected {
             return;
         }
@@ -209,7 +252,7 @@ impl AppData {
 
     /// Ensure the agent list scroll offset keeps the selected agent visible.
     pub(crate) fn ensure_agent_list_scroll(&mut self) {
-        let visible_count = self.storage.visible_count();
+        let visible_count = self.sidebar_len();
         if visible_count == 0 {
             self.ui.agent_list_scroll = 0;
             return;
@@ -239,7 +282,7 @@ impl AppData {
 
     /// Ensure the selection index is valid for the current visible agents.
     pub(crate) fn validate_selection(&mut self) {
-        let visible_count = self.storage.visible_count();
+        let visible_count = self.sidebar_len();
         if visible_count == 0 {
             self.selected = 0;
         } else if self.selected >= visible_count {
@@ -663,12 +706,14 @@ mod tests {
 
     fn make_agent(title: &str) -> Agent {
         let pid = std::process::id();
-        Agent::new(
+        let mut agent = Agent::new(
             title.to_string(),
             "echo".to_string(),
             format!("tenex-app-data-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/{title}")),
-        )
+        );
+        agent.repo_root = Some(PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}")));
+        agent
     }
 
     fn make_local_branch(name: &str) -> BranchInfo {
@@ -866,13 +911,13 @@ mod tests {
         data.ui.diff_scroll = 42;
 
         data.select_next();
-        assert_eq!(data.selected, 1);
+        assert_eq!(data.selected, 2);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
         assert_eq!(data.ui.diff_scroll, 0);
 
         data.ui.preview_scroll = 0;
         data.select_next();
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
@@ -882,13 +927,12 @@ mod tests {
         storage.add(make_agent("agent-1"));
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
-        data.selected = 0;
         data.ui.diff_hash = 123;
         data.ui.preview_scroll = 0;
 
         data.select_next();
 
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         assert_eq!(data.ui.diff_hash, 123);
         assert_eq!(data.ui.preview_scroll, 0);
     }
@@ -900,11 +944,10 @@ mod tests {
         storage.add(make_agent("agent-2"));
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
-        data.selected = 0;
         data.ui.preview_scroll = 0;
 
         data.select_prev();
-        assert_eq!(data.selected, 1);
+        assert_eq!(data.selected, 2);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
@@ -914,13 +957,12 @@ mod tests {
         storage.add(make_agent("agent-1"));
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
-        data.selected = 0;
         data.ui.diff_hash = 123;
         data.ui.preview_scroll = 0;
 
         data.select_prev();
 
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         assert_eq!(data.ui.diff_hash, 123);
         assert_eq!(data.ui.preview_scroll, 0);
     }
@@ -934,7 +976,7 @@ mod tests {
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.selected = 100;
         data.validate_selection();
-        assert_eq!(data.selected, 1);
+        assert_eq!(data.selected, 2);
     }
 
     #[test]

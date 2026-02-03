@@ -106,7 +106,7 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 
     // Select grandchild2 and delete it
     if let Some(idx) = app.data.storage.visible_index_of(grandchild2_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     app.enter_mode(
@@ -269,7 +269,7 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
 
     // Kill the root (which should kill all children in descending order)
     if let Some(idx) = app.data.storage.visible_index_of(root_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     app.enter_mode(
@@ -362,7 +362,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
 
     // Select the root agent and start rename
     if let Some(idx) = app.data.storage.visible_index_of(root_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     // Simulate the rename flow: start rename -> enter new name -> confirm
@@ -544,7 +544,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
 
     // Select the root agent and start rename
     if let Some(idx) = app.data.storage.visible_index_of(root_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     // Simulate the rename flow
@@ -650,7 +650,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     // (This was the original bug - rename changed the branch but not worktree path,
     // so kill couldn't find the worktree to remove it)
     if let Some(idx) = app.data.storage.visible_index_of(root_id) {
-        app.data.selected = idx;
+        app.data.selected = idx + 1;
     }
 
     app.enter_mode(

@@ -334,6 +334,7 @@ mod tests {
             prompt: prompt.map(str::to_string),
             branch: "tenex/conflict-title".to_string(),
             worktree_path: PathBuf::from("/tmp/tenex-confirm-action-conflict"),
+            repo_root: PathBuf::from("/tmp"),
             existing_branch: Some("tenex/conflict-title".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),

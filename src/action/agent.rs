@@ -1,5 +1,5 @@
 use crate::action::ValidIn;
-use crate::app::{Actions, AppData, Tab};
+use crate::app::{Actions, AppData, SidebarItem, Tab};
 use crate::git;
 use crate::state::{
     AppMode, BroadcastingMode, ChildCountMode, ConfirmAction, ConfirmingMode, CreatingMode,
@@ -91,6 +91,7 @@ impl ValidIn<NormalMode> for SpawnChildrenAction {
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.spawn.start_spawning_root();
+        app_data.spawn.root_repo_path = app_data.selected_project_root();
         Ok(ChildCountMode.into())
     }
 }
@@ -100,6 +101,7 @@ impl ValidIn<ScrollingMode> for SpawnChildrenAction {
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         app_data.spawn.start_spawning_root();
+        app_data.spawn.root_repo_path = app_data.selected_project_root();
         Ok(ChildCountMode.into())
     }
 }
@@ -276,14 +278,21 @@ impl ValidIn<NormalMode> for ToggleCollapseAction {
     type NextState = AppMode;
 
     fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        if let Some(agent) = app_data.selected_agent() {
-            let agent_id = agent.id;
-            if app_data.storage.has_children(agent_id)
-                && let Some(agent) = app_data.storage.get_mut(agent_id)
-            {
-                agent.collapsed = !agent.collapsed;
-                app_data.storage.save()?;
+        match app_data.selected_sidebar_item() {
+            Some(SidebarItem::Project(project)) => {
+                app_data.ui.toggle_project_collapsed(&project.root);
+                app_data.ensure_agent_list_scroll();
             }
+            Some(SidebarItem::Agent(agent)) => {
+                let agent_id = agent.info.agent.id;
+                if app_data.storage.has_children(agent_id)
+                    && let Some(agent) = app_data.storage.get_mut(agent_id)
+                {
+                    agent.collapsed = !agent.collapsed;
+                    app_data.storage.save()?;
+                }
+            }
+            None => {}
         }
         Ok(AppMode::normal())
     }
@@ -293,14 +302,21 @@ impl ValidIn<ScrollingMode> for ToggleCollapseAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        if let Some(agent) = app_data.selected_agent() {
-            let agent_id = agent.id;
-            if app_data.storage.has_children(agent_id)
-                && let Some(agent) = app_data.storage.get_mut(agent_id)
-            {
-                agent.collapsed = !agent.collapsed;
-                app_data.storage.save()?;
+        match app_data.selected_sidebar_item() {
+            Some(SidebarItem::Project(project)) => {
+                app_data.ui.toggle_project_collapsed(&project.root);
+                app_data.ensure_agent_list_scroll();
             }
+            Some(SidebarItem::Agent(agent)) => {
+                let agent_id = agent.info.agent.id;
+                if app_data.storage.has_children(agent_id)
+                    && let Some(agent) = app_data.storage.get_mut(agent_id)
+                {
+                    agent.collapsed = !agent.collapsed;
+                    app_data.storage.save()?;
+                }
+            }
+            None => {}
         }
         Ok(ScrollingMode.into())
     }
@@ -605,6 +621,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         ));
 

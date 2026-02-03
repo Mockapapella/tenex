@@ -272,6 +272,7 @@ impl Actions {
                 branch_name.clone(),
                 worktree_path.clone(),
             );
+            agent.repo_root = Some(repo_path.clone());
             let cli = crate::conversation::detect_agent_cli(&program);
             if cli == crate::conversation::AgentCli::Claude {
                 agent.conversation_id = Some(agent.id.to_string());
@@ -846,6 +847,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: 1,
+                repo_root: None,
             },
         );
 
