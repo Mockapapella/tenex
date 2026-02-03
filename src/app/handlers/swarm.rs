@@ -78,9 +78,8 @@ impl Actions {
             return Ok(());
         }
 
-        self.session_manager.send_keys(target, "/review")?;
-        std::thread::sleep(Duration::from_millis(10));
-        self.session_manager.send_keys_and_submit(target, "")?;
+        self.session_manager
+            .send_keys_and_submit_csi_u_enter(target, "/review")?;
         if !self.wait_for_pane_contains_any(
             target,
             &[
@@ -99,7 +98,8 @@ impl Actions {
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
-        self.session_manager.send_keys_and_submit(target, "")?;
+        self.session_manager
+            .send_keys_and_submit_csi_u_enter(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
             &["Select a base branch", "Select base branch"],
@@ -115,10 +115,15 @@ impl Actions {
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.paste_keys(target, base_branch)?;
-        self.session_manager.send_keys_and_submit(target, "")?;
+        self.session_manager
+            .send_keys_and_submit_csi_u_enter(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
-            &["Code review started", "Code Review Started"],
+            &[
+                "review started",
+                "Code review started",
+                "Code Review Started",
+            ],
             step_timeout,
             poll_interval,
         ) {

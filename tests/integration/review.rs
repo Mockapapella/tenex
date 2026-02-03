@@ -8,22 +8,83 @@ use tenex::mux::SessionManager;
 use std::path::Path;
 
 #[cfg(unix)]
-const CODEX_REVIEW_FLOW_MOCK_SCRIPT: &str = r#"#!/bin/sh
-echo "codex-mock argv=$#"
+const CODEX_REVIEW_FLOW_MOCK_SCRIPT: &str = r#"#!/usr/bin/env python3
+import sys
+import tty
 
-IFS= read -r line || exit 0
-printf '%s\n' "$line"
-echo "Select a review preset"
+ENTER_CSI_U = b"\x1b[13;1u"
+PASTE_START = b"\x1b[200~"
+PASTE_END = b"\x1b[201~"
 
-IFS= read -r line || exit 0
-printf '%s\n' "$line"
-echo "Select a base branch"
+tty.setraw(sys.stdin.fileno())
 
-IFS= read -r line || exit 0
-printf '%s\n' "$line"
-echo ">> Code review started: changes against 'master' <<"
 
-exec cat
+def read_escape_sequence() -> bytes:
+    leader = sys.stdin.buffer.read(1)
+    if leader != b"[":
+        return b"\x1b" + leader
+
+    seq = bytearray(b"\x1b[")
+    while True:
+        ch = sys.stdin.buffer.read(1)
+        if not ch:
+            break
+        seq += ch
+        if ch in b"~uABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz":
+            break
+    return bytes(seq)
+
+
+def handle_submit(state: int, text: str) -> int:
+    print(text, flush=True)
+    if state == 0:
+        print("Select a review preset", flush=True)
+        return 1
+    if state == 1:
+        print("Select a base branch", flush=True)
+        return 2
+    if state == 2:
+        branch = text.strip() or "master"
+        print(f">> Code review started: changes against '{branch}' <<", flush=True)
+        return 3
+    return state
+
+
+print(f"codex-mock argv={len(sys.argv) - 1}", flush=True)
+
+state = 0
+buffer = bytearray()
+in_paste = False
+
+while True:
+    ch = sys.stdin.buffer.read(1)
+    if not ch:
+        break
+
+    if ch == b"\x1b":
+        seq = read_escape_sequence()
+        if seq == ENTER_CSI_U:
+            state = handle_submit(state, buffer.decode(errors="replace"))
+            buffer.clear()
+            continue
+        if seq == PASTE_START:
+            in_paste = True
+            continue
+        if seq == PASTE_END:
+            in_paste = False
+            continue
+        continue
+
+    if ch in (b"\r", b"\n") and not in_paste:
+        state = handle_submit(state, buffer.decode(errors="replace"))
+        buffer.clear()
+        continue
+
+    if ch == b"\x7f" and buffer:
+        buffer.pop()
+        continue
+
+    buffer += ch
 "#;
 
 #[cfg(unix)]
@@ -433,7 +494,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             loop {
                 match capture.capture_pane_with_history(&target, 200) {
                     Ok(output) => {
-                        if output.contains("Code review started") {
+                        if output.contains("review started") {
                             break output;
                         }
                         last_output = output;
@@ -461,7 +522,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             "Expected Codex review agents to enter the base branch, got: {output:?}"
         );
         assert!(
-            output.contains("Code review started"),
+            output.contains("review started"),
             "Expected Codex review agents to start the review, got: {output:?}"
         );
         checked = checked.saturating_add(1);
