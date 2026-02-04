@@ -70,6 +70,9 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
                 return Ok(SynthesisPromptMode.into());
             }
             ConfirmAction::WorktreeConflict => {}
+            ConfirmAction::SwitchBranch => {
+                return Actions::new().switch_branch(app_data);
+            }
         }
 
         Ok(AppMode::normal())
@@ -79,9 +82,13 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
 impl ValidIn<ConfirmingMode> for ConfirmNoAction {
     type NextState = AppMode;
 
-    fn execute(self, state: ConfirmingMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+    fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         if state.action == ConfirmAction::InterruptAgent {
             return Ok(PreviewFocusedMode.into());
+        }
+        if state.action == ConfirmAction::SwitchBranch {
+            app_data.git_op.clear();
+            app_data.review.clear();
         }
         Ok(AppMode::normal())
     }
@@ -97,6 +104,10 @@ impl ValidIn<ConfirmingMode> for CancelAction {
         }
         if state.action == ConfirmAction::InterruptAgent {
             return Ok(PreviewFocusedMode.into());
+        }
+        if state.action == ConfirmAction::SwitchBranch {
+            app_data.git_op.clear();
+            app_data.review.clear();
         }
         Ok(AppMode::normal())
     }
@@ -502,6 +513,78 @@ mod tests {
         assert_eq!(next, state.into());
         assert!(data.input.buffer.is_empty());
         assert_eq!(data.input.cursor, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_yes_switch_branch_returns_error_and_clears_state_without_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.git_op.branch_name = "main".to_string();
+        data.git_op.target_branch = "feature".to_string();
+        data.review.filter = "m".to_string();
+        data.review.selected = 3;
+        data.review.base_branch = Some("main".to_string());
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::SwitchBranch,
+        };
+        let next = ConfirmYesAction.execute(state, &mut data)?;
+
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        assert!(data.git_op.agent_id.is_none());
+        assert!(data.git_op.branch_name.is_empty());
+        assert!(data.git_op.target_branch.is_empty());
+        assert!(data.review.filter.is_empty());
+        assert_eq!(data.review.selected, 0);
+        assert!(data.review.base_branch.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_no_switch_branch_clears_git_state() -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.git_op.branch_name = "main".to_string();
+        data.git_op.target_branch = "feature".to_string();
+        data.review.filter = "m".to_string();
+        data.review.selected = 1;
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::SwitchBranch,
+        };
+        let next = ConfirmNoAction.execute(state, &mut data)?;
+
+        assert_eq!(next, AppMode::normal());
+        assert!(data.git_op.agent_id.is_none());
+        assert!(data.git_op.branch_name.is_empty());
+        assert!(data.git_op.target_branch.is_empty());
+        assert!(data.review.branches.is_empty());
+        assert!(data.review.filter.is_empty());
+        assert_eq!(data.review.selected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cancel_action_switch_branch_clears_git_state() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut data = empty_data();
+        data.git_op.branch_name = "main".to_string();
+        data.git_op.target_branch = "feature".to_string();
+        data.review.filter = "m".to_string();
+        data.review.selected = 1;
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::SwitchBranch,
+        };
+        let next = CancelAction.execute(state, &mut data)?;
+
+        assert_eq!(next, AppMode::normal());
+        assert!(data.git_op.agent_id.is_none());
+        assert!(data.git_op.branch_name.is_empty());
+        assert!(data.git_op.target_branch.is_empty());
+        assert!(data.review.branches.is_empty());
+        assert!(data.review.filter.is_empty());
+        assert_eq!(data.review.selected, 0);
         Ok(())
     }
 }

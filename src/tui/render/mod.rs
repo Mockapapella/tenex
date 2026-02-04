@@ -142,7 +142,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     },
                     |agent| {
                         let warning = if agent.is_root() && agent.is_git_workspace() {
-                            "This will delete the worktree and branch."
+                            let delete_branch =
+                                agent.branch.starts_with(&app.data.config.branch_prefix)
+                                    || agent.branch.starts_with("tenex/");
+                            if delete_branch {
+                                "This will delete the worktree and branch."
+                            } else {
+                                "This will delete the worktree."
+                            }
                         } else if agent.is_root() {
                             "This will close the session and stop the agent."
                         } else {
@@ -373,6 +380,48 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     // This case is handled by render_worktree_conflict_overlay
                     vec![]
                 }
+                ConfirmAction::SwitchBranch => {
+                    let from_branch = app.data.git_op.branch_name.clone();
+                    let to_branch = app.data.git_op.target_branch.clone();
+                    let to_display = if to_branch.is_empty() {
+                        "<none selected>".to_string()
+                    } else {
+                        to_branch
+                    };
+
+                    vec![
+                        Line::from(Span::styled(
+                            "Switch Branch?",
+                            Style::default().fg(colors::TEXT_PRIMARY),
+                        )),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("  From: ", Style::default().fg(colors::TEXT_DIM)),
+                            Span::styled(
+                                from_branch,
+                                Style::default().fg(colors::TEXT_PRIMARY),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("  To:   ", Style::default().fg(colors::TEXT_DIM)),
+                            Span::styled(
+                                to_display,
+                                Style::default()
+                                    .fg(colors::TEXT_PRIMARY)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "Kills current agent and all children.",
+                            Style::default().fg(colors::DIFF_REMOVE),
+                        )),
+                        Line::from(Span::styled(
+                            "Deletes old worktree; uncommitted work is lost.",
+                            Style::default().fg(colors::DIFF_REMOVE),
+                        )),
+                    ]
+                }
             };
 
             // Special handling for worktree conflict with different buttons
@@ -387,7 +436,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         AppMode::ReviewChildCount(_) => modals::render_review_count_picker_overlay(frame, app),
         AppMode::BranchSelector(_)
         | AppMode::RebaseBranchSelector(_)
-        | AppMode::MergeBranchSelector(_) => {
+        | AppMode::MergeBranchSelector(_)
+        | AppMode::SwitchBranchSelector(_) => {
             modals::render_branch_selector_overlay(frame, app);
         }
         AppMode::ModelSelector(_) => modals::render_model_selector_overlay(frame, app),

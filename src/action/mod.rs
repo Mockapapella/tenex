@@ -36,7 +36,8 @@ use crate::state::{
     KeyboardRemapPromptMode, MergeBranchSelectorMode, ModelSelectorMode, NormalMode,
     PreviewFocusedMode, PromptingMode, RebaseBranchSelectorMode, ReconnectPromptMode,
     RenameBranchMode, ReviewChildCountMode, ReviewInfoMode, ScrollingMode, SettingsMenuMode,
-    SuccessModalMode, SynthesisPromptMode, TerminalPromptMode, UpdatePromptMode,
+    SuccessModalMode, SwitchBranchSelectorMode, SynthesisPromptMode, TerminalPromptMode,
+    UpdatePromptMode,
 };
 use crate::update::UpdateInfo;
 use anyhow::Result;
@@ -104,6 +105,7 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::OpenPR => OpenPRAction.execute(NormalMode, &mut app.data)?,
         KeyAction::Rebase => RebaseAction.execute(NormalMode, &mut app.data)?,
         KeyAction::Merge => MergeAction.execute(NormalMode, &mut app.data)?,
+        KeyAction::SwitchBranch => SwitchBranchAction.execute(NormalMode, &mut app.data)?,
         KeyAction::CommandPalette => CommandPaletteAction.execute(NormalMode, &mut app.data)?,
         KeyAction::Cancel => CancelAction.execute(NormalMode, &mut app.data)?,
 
@@ -167,6 +169,7 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::OpenPR => OpenPRAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::Rebase => RebaseAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::Merge => MergeAction.execute(ScrollingMode, &mut app.data)?,
+        KeyAction::SwitchBranch => SwitchBranchAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::CommandPalette => CommandPaletteAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::Cancel => CancelAction.execute(ScrollingMode, &mut app.data)?,
 
@@ -671,6 +674,29 @@ pub fn dispatch_merge_branch_selector_mode(app: &mut App, code: KeyCode) -> Resu
     Ok(())
 }
 
+/// Dispatch a raw key event while in `SwitchBranchSelectorMode`, using typed actions.
+///
+/// # Errors
+///
+/// Returns an error if the dispatched action fails.
+pub fn dispatch_switch_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    let next = {
+        let app_data = &mut app.data;
+        match code {
+            KeyCode::Enter => SelectAction.execute(SwitchBranchSelectorMode, app_data)?,
+            KeyCode::Esc => CancelAction.execute(SwitchBranchSelectorMode, app_data)?,
+            KeyCode::Up => NavigateUpAction.execute(SwitchBranchSelectorMode, app_data)?,
+            KeyCode::Down => NavigateDownAction.execute(SwitchBranchSelectorMode, app_data)?,
+            KeyCode::Char(c) => CharInputAction(c).execute(SwitchBranchSelectorMode, app_data)?,
+            KeyCode::Backspace => BackspaceAction.execute(SwitchBranchSelectorMode, app_data)?,
+            _ => SwitchBranchSelectorMode.into(),
+        }
+    };
+
+    app.apply_mode(next);
+    Ok(())
+}
+
 /// Dispatch a raw key event while in `ModelSelectorMode`, using typed actions.
 ///
 /// # Errors
@@ -878,7 +904,8 @@ mod tests {
     use crate::state::{
         AppMode, BroadcastingMode, ChildCountMode, CommandPaletteMode, ConfirmPushMode,
         CreatingMode, HelpMode, MergeBranchSelectorMode, PromptingMode, RebaseBranchSelectorMode,
-        RenameBranchMode, ReviewChildCountMode, ScrollingMode, TerminalPromptMode,
+        RenameBranchMode, ReviewChildCountMode, ScrollingMode, SwitchBranchSelectorMode,
+        TerminalPromptMode,
     };
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -1003,6 +1030,14 @@ mod tests {
         assert_eq!(
             app.mode,
             AppMode::MergeBranchSelector(MergeBranchSelectorMode)
+        );
+        app.exit_mode();
+        app.enter_mode(ScrollingMode.into());
+
+        dispatch_scrolling_mode(&mut app, KeyAction::SwitchBranch)?;
+        assert_eq!(
+            app.mode,
+            AppMode::SwitchBranchSelector(SwitchBranchSelectorMode)
         );
         app.exit_mode();
         app.enter_mode(ScrollingMode.into());

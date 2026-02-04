@@ -1,7 +1,8 @@
 //! Tests for Actions handler with real operations
 
-use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+use crate::common::{DirGuard, TestFixture, git_command, skip_if_no_mux};
 use std::time::Duration;
+use tenex::agent::Storage;
 use tenex::mux::SessionManager;
 
 #[test]
@@ -35,6 +36,169 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
 
     assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.data.storage.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_switch_branch_integration() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_switch_branch")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "switchable", None)?;
+    app.apply_mode(next);
+
+    let root = app
+        .selected_agent()
+        .ok_or_else(|| std::io::Error::other("Expected an agent to be selected"))?
+        .clone();
+
+    let target_branch = format!("{}/target-branch", fixture.session_prefix);
+    let output = git_command()
+        .args(["branch", &target_branch])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "git branch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    app.data.git_op.agent_id = Some(root.id);
+    app.data.git_op.branch_name = root.branch.clone();
+    app.data.git_op.target_branch = target_branch.clone();
+
+    let next = handler.switch_branch(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, tenex::AppMode::normal());
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_ref()
+            .is_some_and(|msg| msg.contains("Switched to branch")),
+        "Expected a switch status message"
+    );
+
+    assert_eq!(app.data.storage.len(), 1);
+    let new_root = app
+        .selected_agent()
+        .ok_or_else(|| std::io::Error::other("Expected an agent after switching branches"))?;
+
+    assert_eq!(new_root.title, "target-branch");
+    assert_eq!(new_root.branch, target_branch);
+    assert_ne!(new_root.id, root.id);
+
+    assert!(
+        !root.worktree_path.exists(),
+        "Expected old worktree to be deleted"
+    );
+    assert!(new_root.worktree_path.exists());
+
+    let expected_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &target_branch);
+    crate::common::assert_paths_eq(
+        &new_root.worktree_path,
+        &expected_path,
+        "Expected Tenex to use the canonical worktree path",
+    );
+
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    assert!(!worktree_mgr.exists(&root.branch));
+    assert!(worktree_mgr.exists(&target_branch));
+
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_switch_branch_from_remote_integration() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_switch_branch_remote")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let _dir_guard = DirGuard::new()?;
+    std::env::set_current_dir(&fixture.repo_path)?;
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "switchable", None)?;
+    app.apply_mode(next);
+
+    let root = app
+        .selected_agent()
+        .ok_or_else(|| std::io::Error::other("Expected an agent to be selected"))?
+        .clone();
+
+    let remote_ref = "refs/remotes/origin/remote-target";
+    let output = git_command()
+        .args(["update-ref", remote_ref, "HEAD"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "git update-ref failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    app.data.git_op.agent_id = Some(root.id);
+    app.data.git_op.branch_name = root.branch.clone();
+    app.data.git_op.target_branch = "origin/remote-target".to_string();
+
+    let next = handler.switch_branch(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, tenex::AppMode::normal());
+    assert_eq!(app.data.storage.len(), 1);
+
+    let new_root = app
+        .selected_agent()
+        .ok_or_else(|| std::io::Error::other("Expected an agent after switching branches"))?;
+
+    assert_eq!(new_root.title, "remote-target");
+    assert_eq!(new_root.branch, "remote-target");
+    assert_ne!(new_root.id, root.id);
+
+    assert!(
+        !root.worktree_path.exists(),
+        "Expected old worktree to be deleted"
+    );
+    assert!(new_root.worktree_path.exists());
+
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let branch_mgr = tenex::git::BranchManager::new(&repo);
+    assert!(branch_mgr.exists("remote-target"));
+
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
 
     Ok(())
 }

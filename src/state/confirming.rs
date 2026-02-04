@@ -17,6 +17,8 @@ pub enum ConfirmAction {
     Synthesize,
     /// Worktree already exists - ask to reconnect or recreate.
     WorktreeConflict,
+    /// Switch branches (kills root agent tree and restarts).
+    SwitchBranch,
 }
 
 /// Confirming mode - yes/no (or special) confirmations for various actions.

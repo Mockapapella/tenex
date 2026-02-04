@@ -81,7 +81,8 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
         AppMode::ReviewInfo(_) => Some(centered_rect_absolute(50, 9, frame_area)),
         AppMode::BranchSelector(_)
         | AppMode::RebaseBranchSelector(_)
-        | AppMode::MergeBranchSelector(_) => Some(centered_rect_absolute(60, 20, frame_area)),
+        | AppMode::MergeBranchSelector(_)
+        | AppMode::SwitchBranchSelector(_) => Some(centered_rect_absolute(60, 20, frame_area)),
         AppMode::ModelSelector(_) => Some(centered_rect_absolute(55, 12, frame_area)),
         AppMode::SettingsMenu(_) => Some(centered_rect_absolute(60, 9, frame_area)),
         AppMode::ConfirmPush(_) => Some(confirm_push_rect(app, frame_area)),
@@ -280,6 +281,7 @@ fn confirming_rect(app: &App, action: ConfirmAction, frame_area: Rect) -> Rect {
             };
             confirm_overlay_rect(lines, frame_area)
         }
+        ConfirmAction::SwitchBranch => confirm_overlay_rect(7, frame_area),
     }
 }
 
@@ -302,7 +304,7 @@ mod tests {
         CreatingMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
         MergeBranchSelectorMode, ModelSelectorMode, PromptingMode, RebaseBranchSelectorMode,
         ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode, ReviewInfoMode,
-        SuccessModalMode, TerminalPromptMode, UpdatePromptMode,
+        SuccessModalMode, SwitchBranchSelectorMode, TerminalPromptMode, UpdatePromptMode,
     };
     use crate::update::UpdateInfo;
     use semver::Version;
@@ -391,6 +393,9 @@ mod tests {
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
         app.apply_mode(MergeBranchSelectorMode.into());
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(SwitchBranchSelectorMode.into());
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
         app.apply_mode(ModelSelectorMode.into());

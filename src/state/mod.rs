@@ -28,6 +28,7 @@ mod review_info;
 mod scrolling;
 mod settings_menu;
 mod success_modal;
+mod switch_branch_selector;
 mod synthesis_prompt;
 mod terminal_prompt;
 mod update_prompt;
@@ -61,6 +62,7 @@ pub use review_info::ReviewInfoMode;
 pub use scrolling::ScrollingMode;
 pub use settings_menu::SettingsMenuMode;
 pub use success_modal::SuccessModalMode;
+pub use switch_branch_selector::SwitchBranchSelectorMode;
 pub use synthesis_prompt::SynthesisPromptMode;
 pub use terminal_prompt::TerminalPromptMode;
 pub use update_prompt::UpdatePromptMode;
@@ -101,6 +103,8 @@ pub enum AppMode {
     RebaseBranchSelector(RebaseBranchSelectorMode),
     /// Merge branch selector mode.
     MergeBranchSelector(MergeBranchSelectorMode),
+    /// Switch branch selector mode.
+    SwitchBranchSelector(SwitchBranchSelectorMode),
     /// Model selector mode.
     ModelSelector(ModelSelectorMode),
     /// Settings menu mode.
@@ -248,6 +252,12 @@ impl From<RebaseBranchSelectorMode> for AppMode {
 impl From<MergeBranchSelectorMode> for AppMode {
     fn from(_: MergeBranchSelectorMode) -> Self {
         Self::MergeBranchSelector(MergeBranchSelectorMode)
+    }
+}
+
+impl From<SwitchBranchSelectorMode> for AppMode {
+    fn from(_: SwitchBranchSelectorMode) -> Self {
+        Self::SwitchBranchSelector(SwitchBranchSelectorMode)
     }
 }
 

@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::Repository;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use tracing::{debug, info, warn};
 
 fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
@@ -220,16 +221,60 @@ impl<'a> Manager<'a> {
         // Worktree name cannot contain slashes (it becomes a directory name in .git/worktrees/)
         let worktree_name = branch.replace('/', "-");
 
-        self.repo
-            .worktree(
-                &worktree_name,
-                path,
-                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
-            )
-            .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
+        let mut add_opts = git2::WorktreeAddOptions::new();
+        add_opts.reference(Some(&reference));
+
+        if let Err(err) = self.repo.worktree(&worktree_name, path, Some(&add_opts)) {
+            if Self::should_force_worktree_add(path, &worktree_name, &err) {
+                self.create_with_git_force(path, branch)
+                    .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
+            } else {
+                return Err(err)
+                    .with_context(|| format!("Failed to create worktree at {}", path.display()));
+            }
+        }
 
         if let Err(err) = self.symlink_ignored_files_into_worktree(path) {
             warn!(?path, error = %err, "Failed to symlink ignored files into worktree");
+        }
+
+        Ok(())
+    }
+
+    fn should_force_worktree_add(path: &Path, worktree_name: &str, err: &git2::Error) -> bool {
+        if err.class() != git2::ErrorClass::Worktree {
+            return false;
+        }
+        if !err.message().contains("already checked out") {
+            return false;
+        }
+
+        let Some(leaf) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+
+        leaf == worktree_name
+    }
+
+    fn create_with_git_force(&self, path: &Path, branch: &str) -> Result<()> {
+        let repo_root = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
+
+        let output = super::git_command()
+            .args(["worktree", "add", "--force"])
+            .arg(path)
+            .arg(branch)
+            .current_dir(repo_root)
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| format!("Failed to run git worktree add for branch '{branch}'"))?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git worktree add failed (stdout: {stdout}, stderr: {stderr})");
         }
 
         Ok(())
@@ -437,6 +482,71 @@ impl<'a> Manager<'a> {
         let _ = branch_mgr.delete(name);
 
         info!(name, "Worktree removed");
+        Ok(())
+    }
+
+    /// Remove a worktree but keep its associated branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worktree exists but cannot be removed after retries.
+    /// Does not return errors for missing worktrees.
+    pub fn remove_worktree_only(&self, name: &str) -> Result<()> {
+        debug!(name, "Removing worktree (keeping branch)");
+
+        // Worktree name has slashes replaced with dashes
+        let worktree_name = name.replace('/', "-");
+
+        // Try to remove the worktree with retries (may already be gone)
+        if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
+            let wt_path = worktree.path().to_path_buf();
+
+            // Retry prune up to 3 times with increasing delays
+            // This handles race conditions where processes are still terminating
+            let mut prune_succeeded = false;
+            for attempt in 0u64..3 {
+                if attempt > 0 {
+                    debug!(name, attempt, "Retrying worktree prune");
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                }
+
+                match worktree.prune(Some(
+                    git2::WorktreePruneOptions::new()
+                        .valid(true)
+                        .working_tree(true),
+                )) {
+                    Ok(()) => {
+                        prune_succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        debug!(name, error = %e, attempt, "Worktree prune failed");
+                    }
+                }
+            }
+
+            // Ensure libgit2 doesn't keep the worktree alive on platforms with strict file locking.
+            drop(worktree);
+
+            // Always try to remove the directory even if prune failed (may take time for processes
+            // to release handles).
+            if let Err(e) = remove_dir_all_with_retries(&wt_path) {
+                warn!(name, path = ?wt_path, error = %e, "Failed to remove worktree directory");
+                return Err(e);
+            }
+
+            // Verify the worktree is actually gone from git's perspective
+            if !prune_succeeded && self.repo.find_worktree(&worktree_name).is_ok() {
+                warn!(name, "Worktree still exists in git after prune attempts");
+                return Err(anyhow::anyhow!(
+                    "Failed to remove worktree '{name}' - it may still be in use"
+                ));
+            }
+
+            debug!(name, "Worktree pruned");
+        }
+
+        info!(name, "Worktree removed (branch preserved)");
         Ok(())
     }
 
@@ -983,6 +1093,28 @@ mod tests {
         manager.create(&wt_path, "existing-branch")?;
 
         assert!(wt_path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_checked_out_branch_uses_git_force() -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let head = repo.head()?;
+        let branch = head
+            .shorthand()
+            .ok_or_else(|| std::io::Error::other("Expected HEAD to be a branch"))?
+            .to_string();
+
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join(branch.replace('/', "-"));
+        manager.create(&wt_path, &branch)?;
+
+        assert!(wt_path.exists());
+        assert!(manager.exists(&branch));
         Ok(())
     }
 

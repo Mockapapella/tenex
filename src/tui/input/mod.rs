@@ -79,6 +79,9 @@ pub fn handle_key_event(
         AppMode::MergeBranchSelector(_) => {
             picker::handle_merge_branch_selector_mode(app, code)?;
         }
+        AppMode::SwitchBranchSelector(_) => {
+            picker::handle_switch_branch_selector_mode(app, code)?;
+        }
 
         // Keyboard remap prompt
         AppMode::KeyboardRemapPrompt(_) => {
@@ -546,6 +549,23 @@ mod tests {
     fn test_handle_key_event_merge_branch_selector_mode() -> anyhow::Result<()> {
         let (mut app, _temp) = create_test_app()?;
         app.mode = AppMode::MergeBranchSelector(MergeBranchSelectorMode);
+        let mut batched_keys = Vec::new();
+
+        handle_key_event(
+            &mut app,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            &mut batched_keys,
+        )?;
+
+        assert_eq!(app.mode, AppMode::normal());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_key_event_switch_branch_selector_mode() -> anyhow::Result<()> {
+        let (mut app, _temp) = create_test_app()?;
+        app.mode = AppMode::SwitchBranchSelector(SwitchBranchSelectorMode);
         let mut batched_keys = Vec::new();
 
         handle_key_event(

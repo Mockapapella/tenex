@@ -5,6 +5,9 @@
 //! - `ReviewChildCount` (selecting number of review agents)
 //! - `ReviewInfo` (info popup before review)
 //! - `BranchSelector` (selecting a branch)
+//! - `RebaseBranchSelector` (selecting a rebase target)
+//! - `MergeBranchSelector` (selecting a merge source)
+//! - `SwitchBranchSelector` (selecting a branch to switch to)
 
 use crate::app::App;
 use anyhow::Result;
@@ -40,6 +43,11 @@ pub fn handle_merge_branch_selector_mode(app: &mut App, code: KeyCode) -> Result
     crate::action::dispatch_merge_branch_selector_mode(app, code)
 }
 
+/// Handle key events in `SwitchBranchSelector` mode
+pub fn handle_switch_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
+    crate::action::dispatch_switch_branch_selector_mode(app, code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,7 +57,7 @@ mod tests {
     use crate::git::BranchInfo;
     use crate::state::{
         AppMode, BranchSelectorMode, ChildCountMode, ChildPromptMode, MergeBranchSelectorMode,
-        RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode,
+        RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode, SwitchBranchSelectorMode,
     };
     use ratatui::crossterm::event::KeyCode;
     use tempfile::NamedTempFile;
@@ -374,6 +382,63 @@ mod tests {
         app.apply_mode(MergeBranchSelectorMode.into());
         handle_merge_branch_selector_mode(&mut app, KeyCode::Tab)?;
         assert_eq!(app.mode, MergeBranchSelectorMode.into());
+        Ok(())
+    }
+
+    // ========== SwitchBranchSelector mode tests ==========
+
+    #[test]
+    fn test_handle_switch_branch_selector_mode_esc() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SwitchBranchSelectorMode.into());
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Esc)?;
+        assert_eq!(app.mode, AppMode::normal());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_switch_branch_selector_mode_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SwitchBranchSelectorMode.into());
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Char('m'))?;
+        assert_eq!(app.data.review.filter, "m");
+
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Backspace)?;
+        assert_eq!(app.data.review.filter, "");
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_switch_branch_selector_mode_navigation_up()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SwitchBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 1;
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Up)?;
+        assert_eq!(app.data.review.selected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_switch_branch_selector_mode_navigation_down()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SwitchBranchSelectorMode.into());
+        app.data.review.branches = test_branches();
+        app.data.review.selected = 0;
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Down)?;
+        assert_eq!(app.data.review.selected, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_switch_branch_selector_mode_other_key_ignored()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        app.apply_mode(SwitchBranchSelectorMode.into());
+        handle_switch_branch_selector_mode(&mut app, KeyCode::Tab)?;
+        assert_eq!(app.mode, SwitchBranchSelectorMode.into());
         Ok(())
     }
 }

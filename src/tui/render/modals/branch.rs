@@ -25,6 +25,7 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let title = match &app.mode {
         AppMode::RebaseBranchSelector(_) => " Rebase onto Branch ",
         AppMode::MergeBranchSelector(_) => " Merge Branch ",
+        AppMode::SwitchBranchSelector(_) => " Switch to Branch ",
         _ => " Select Base Branch ",
     };
 
@@ -84,6 +85,18 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
                     " onto selected branch",
                     Style::default().fg(colors::TEXT_DIM),
                 ),
+            ]));
+        }
+        AppMode::SwitchBranchSelector(_) => {
+            lines.push(Line::from(vec![
+                Span::styled("Switch from ", Style::default().fg(colors::TEXT_DIM)),
+                Span::styled(
+                    current_branch.clone(),
+                    Style::default()
+                        .fg(colors::ACCENT_POSITIVE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" to selected branch", Style::default().fg(colors::TEXT_DIM)),
             ]));
         }
         _ => {
