@@ -424,13 +424,11 @@ fn is_session_alive(
 ) -> bool {
     const ROOT_RESTART_MAX_ATTEMPTS: u32 = 3;
     const ROOT_RESTART_COOLDOWN_SECS: i64 = 1;
-    const ROOT_RESTART_GRACE_SECS: i64 = 60;
 
-    let (session_name, created, windows, root_restart_attempts, last_root_restart) = {
+    let (session_name, windows, root_restart_attempts, last_root_restart) = {
         let guard = session.lock();
         (
             guard.name.clone(),
-            guard.created,
             guard.windows.clone(),
             guard.root_restart_attempts,
             guard.last_root_restart,
@@ -461,11 +459,6 @@ fn is_session_alive(
     }
 
     let now = unix_timestamp();
-    let session_age = now.saturating_sub(created);
-    if session_age > ROOT_RESTART_GRACE_SECS {
-        return false;
-    }
-
     if !should_restart_root_window(
         root_restart_attempts,
         now,
@@ -825,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn test_root_window_restarts_during_grace_period() -> Result<()> {
+    fn test_root_window_restarts_when_root_exits_without_children() -> Result<()> {
         let session_name = "tenex-test-root-restart-grace";
         let tmp = TempDir::new()?;
         let marker = tmp.path().join("updated");
