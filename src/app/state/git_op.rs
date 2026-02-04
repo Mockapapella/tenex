@@ -7,6 +7,8 @@ pub enum GitOperationType {
     Rebase,
     /// Merge target branch into current branch
     Merge,
+    /// Switch the root agent's branch
+    SwitchBranch,
 }
 
 /// State for git operations (push, rename, open PR, rebase, merge)
@@ -115,6 +117,13 @@ impl GitOpState {
         self.operation_type = Some(GitOperationType::Merge);
     }
 
+    /// Start the switch-branch flow
+    pub fn start_switch_branch(&mut self, agent_id: uuid::Uuid, current_branch: String) {
+        self.agent_id = Some(agent_id);
+        self.branch_name = current_branch;
+        self.operation_type = Some(GitOperationType::SwitchBranch);
+    }
+
     /// Set the target branch for rebase/merge
     pub fn set_target_branch(&mut self, target: String) {
         self.target_branch = target;
@@ -208,7 +217,15 @@ impl App {
     /// Confirm branch selection for rebase/merge and set target branch
     pub fn confirm_rebase_merge_branch(&mut self) -> bool {
         if let Some(branch) = self.data.review.selected_branch() {
-            self.data.git_op.set_target_branch(branch.name.clone());
+            let target = if branch.is_remote {
+                branch.remote.as_deref().map_or_else(
+                    || branch.name.clone(),
+                    |remote| format!("{remote}/{}", branch.name),
+                )
+            } else {
+                branch.name.clone()
+            };
+            self.data.git_op.set_target_branch(target);
             true
         } else {
             false
@@ -331,6 +348,18 @@ mod tests {
         assert_eq!(state.agent_id, Some(agent_id));
         assert_eq!(state.branch_name, "feature-branch");
         assert_eq!(state.operation_type, Some(GitOperationType::Merge));
+    }
+
+    #[test]
+    fn test_start_switch_branch() {
+        let mut state = GitOpState::new();
+        let agent_id = uuid::Uuid::new_v4();
+
+        state.start_switch_branch(agent_id, "feature-branch".to_string());
+
+        assert_eq!(state.agent_id, Some(agent_id));
+        assert_eq!(state.branch_name, "feature-branch");
+        assert_eq!(state.operation_type, Some(GitOperationType::SwitchBranch));
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::git;
 use crate::state::{
     AppMode, ConfirmPushForPRMode, ConfirmPushMode, ErrorModalMode, MergeBranchSelectorMode,
     NormalMode, RebaseBranchSelectorMode, RenameBranchMode, ScrollingMode,
+    SwitchBranchSelectorMode,
 };
 use anyhow::Result;
 
@@ -327,12 +328,92 @@ impl ValidIn<ScrollingMode> for MergeAction {
     }
 }
 
+/// Normal-mode action: switch the selected root agent's branch (branch selector).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SwitchBranchAction;
+
+impl ValidIn<NormalMode> for SwitchBranchAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to switch branches.".to_string(),
+            }
+            .into());
+        };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message: "Switch branch requires a git repository. Start Tenex in a git repo to use worktrees."
+                    .to_string(),
+            }
+            .into());
+        }
+
+        let root = app_data
+            .storage
+            .root_ancestor(agent.id)
+            .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
+        let root_id = root.id;
+        let root_branch = root.branch.clone();
+
+        // Fetch branches for selector.
+        let repo = git::open_repository(&root.worktree_path)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        let branches = branch_mgr.list_for_selector()?;
+
+        app_data.git_op.start_switch_branch(root_id, root_branch);
+        app_data.review.start(branches);
+
+        Ok(SwitchBranchSelectorMode.into())
+    }
+}
+
+impl ValidIn<ScrollingMode> for SwitchBranchAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        let Some(agent) = app_data.selected_agent() else {
+            return Ok(ErrorModalMode {
+                message: "No agent selected. Select an agent first to switch branches.".to_string(),
+            }
+            .into());
+        };
+        if !agent.is_git_workspace() {
+            return Ok(ErrorModalMode {
+                message: "Switch branch requires a git repository. Start Tenex in a git repo to use worktrees."
+                    .to_string(),
+            }
+            .into());
+        }
+
+        let root = app_data
+            .storage
+            .root_ancestor(agent.id)
+            .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
+        let root_id = root.id;
+        let root_branch = root.branch.clone();
+
+        // Fetch branches for selector.
+        let repo = git::open_repository(&root.worktree_path)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        let branches = branch_mgr.list_for_selector()?;
+
+        app_data.git_op.start_switch_branch(root_id, root_branch);
+        app_data.review.start(branches);
+
+        Ok(SwitchBranchSelectorMode.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, Storage};
+    use crate::agent::{Agent, Storage, WorkspaceKind};
     use crate::config::Config;
-    use std::path::PathBuf;
+    use git2::{Repository, RepositoryInitOptions, Signature};
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
 
     fn make_agent(title: &str) -> Agent {
         let pid = std::process::id();
@@ -342,6 +423,34 @@ mod tests {
             format!("tenex-action-git-test-{pid}/{title}"),
             PathBuf::from(format!("/tmp/tenex-action-git-test-{pid}/{title}")),
         )
+    }
+
+    fn init_repo() -> Result<(TempDir, PathBuf)> {
+        let dir = TempDir::new()?;
+        let path = dir.path().to_path_buf();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+
+        let repo = Repository::init_opts(&path, &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+        {
+            let mut config = repo.config()?;
+            config.set_str("user.name", "Test")?;
+            config.set_str("user.email", "test@test.com")?;
+            config.set_str("commit.gpgsign", "false")?;
+        }
+
+        std::fs::write(path.join("README.md"), "# Test\n")?;
+        let sig = Signature::now("Test", "test@test.com")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        Ok((dir, path))
     }
 
     fn new_data_with_agent(agent: Agent) -> AppData {
@@ -370,6 +479,21 @@ mod tests {
 
         let next = PushAction.execute(ScrollingMode, &mut data)?;
         assert!(matches!(next, AppMode::ConfirmPush(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_push_action_returns_error_modal_when_not_git_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = make_agent("agent-1");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        let mut data = new_data_with_agent(agent);
+
+        let next = PushAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+
+        let next = PushAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
         Ok(())
     }
 
@@ -407,6 +531,45 @@ mod tests {
     }
 
     #[test]
+    fn test_open_pr_action_returns_error_modal_when_not_git_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = make_agent("agent-1");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        let mut data = new_data_with_agent(agent);
+
+        let next = OpenPRAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = OpenPRAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_pr_action_enters_confirm_push_for_pr_when_unpushed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_dir, repo_path) = init_repo()?;
+
+        let agent = Agent::new(
+            "agent-1".to_string(),
+            "echo".to_string(),
+            "master".to_string(),
+            repo_path,
+        );
+        let agent_id = agent.id;
+        let mut data = new_data_with_agent(agent);
+
+        let next = OpenPRAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ConfirmPushForPR(_)));
+        assert_eq!(data.git_op.agent_id, Some(agent_id));
+        assert_eq!(data.git_op.branch_name, "master");
+        assert!(data.git_op.has_unpushed);
+
+        let next = OpenPRAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ConfirmPushForPR(_)));
+        Ok(())
+    }
+
+    #[test]
     fn test_rebase_action_returns_error_modal_without_selected_agent()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut data = AppData::new(
@@ -415,6 +578,20 @@ mod tests {
             crate::app::Settings::default(),
             false,
         );
+
+        let next = RebaseAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = RebaseAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rebase_action_returns_error_modal_when_not_git_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = make_agent("agent-1");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        let mut data = new_data_with_agent(agent);
 
         let next = RebaseAction.execute(NormalMode, &mut data)?;
         assert!(matches!(next, AppMode::ErrorModal(_)));
@@ -437,6 +614,82 @@ mod tests {
         assert!(matches!(next, AppMode::ErrorModal(_)));
         let next = MergeAction.execute(ScrollingMode, &mut data)?;
         assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_action_returns_error_modal_when_not_git_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = make_agent("agent-1");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        let mut data = new_data_with_agent(agent);
+
+        let next = MergeAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = MergeAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_action_returns_error_modal_without_selected_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            crate::app::Settings::default(),
+            false,
+        );
+
+        let next = SwitchBranchAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = SwitchBranchAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_action_returns_error_modal_when_not_git_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut agent = make_agent("agent-1");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        let mut data = new_data_with_agent(agent);
+
+        let next = SwitchBranchAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = SwitchBranchAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_action_enters_branch_selector_and_sets_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_dir, repo_path) = init_repo()?;
+
+        let repo = git::open_repository(&repo_path)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature")?;
+
+        let agent = Agent::new(
+            "agent-1".to_string(),
+            "echo".to_string(),
+            "master".to_string(),
+            repo_path,
+        );
+        let agent_id = agent.id;
+        let mut data = new_data_with_agent(agent);
+
+        let next = SwitchBranchAction.execute(NormalMode, &mut data)?;
+        assert!(matches!(next, AppMode::SwitchBranchSelector(_)));
+        assert_eq!(data.git_op.agent_id, Some(agent_id));
+        assert_eq!(data.git_op.branch_name, "master");
+        assert!(data.review.filter.is_empty());
+        assert!(!data.review.branches.is_empty());
+
+        let next = SwitchBranchAction.execute(ScrollingMode, &mut data)?;
+        assert!(matches!(next, AppMode::SwitchBranchSelector(_)));
+
         Ok(())
     }
 }

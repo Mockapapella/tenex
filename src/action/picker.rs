@@ -7,8 +7,9 @@ use crate::action::{
 use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, BranchSelectorMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
-    ErrorModalMode, MergeBranchSelectorMode, ModelSelectorMode, RebaseBranchSelectorMode,
-    ReviewChildCountMode, ReviewInfoMode, SettingsMenuMode,
+    ConfirmAction, ConfirmingMode, ErrorModalMode, MergeBranchSelectorMode, ModelSelectorMode,
+    RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode, SettingsMenuMode,
+    SwitchBranchSelectorMode,
 };
 use anyhow::Result;
 
@@ -177,6 +178,20 @@ impl ValidIn<MergeBranchSelectorMode> for CancelAction {
     }
 }
 
+impl ValidIn<SwitchBranchSelectorMode> for CancelAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.git_op.clear();
+        app_data.review.clear();
+        Ok(AppMode::normal())
+    }
+}
+
 impl ValidIn<ModelSelectorMode> for CancelAction {
     type NextState = AppMode;
 
@@ -281,6 +296,32 @@ impl ValidIn<MergeBranchSelectorMode> for NavigateDownAction {
     ) -> Result<Self::NextState> {
         app_data.select_next_branch();
         Ok(MergeBranchSelectorMode.into())
+    }
+}
+
+impl ValidIn<SwitchBranchSelectorMode> for NavigateUpAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.select_prev_branch();
+        Ok(SwitchBranchSelectorMode.into())
+    }
+}
+
+impl ValidIn<SwitchBranchSelectorMode> for NavigateDownAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.select_next_branch();
+        Ok(SwitchBranchSelectorMode.into())
     }
 }
 
@@ -409,6 +450,25 @@ impl ValidIn<MergeBranchSelectorMode> for SelectAction {
     }
 }
 
+impl ValidIn<SwitchBranchSelectorMode> for SelectAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        if !app_data.confirm_rebase_merge_branch() {
+            return Ok(state.into());
+        }
+
+        Ok(ConfirmingMode {
+            action: ConfirmAction::SwitchBranch,
+        }
+        .into())
+    }
+}
+
 impl ValidIn<ModelSelectorMode> for SelectAction {
     type NextState = AppMode;
 
@@ -512,6 +572,32 @@ impl ValidIn<MergeBranchSelectorMode> for BackspaceAction {
     ) -> Result<Self::NextState> {
         app_data.handle_branch_filter_backspace();
         Ok(MergeBranchSelectorMode.into())
+    }
+}
+
+impl ValidIn<SwitchBranchSelectorMode> for CharInputAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.handle_branch_filter_char(self.0);
+        Ok(SwitchBranchSelectorMode.into())
+    }
+}
+
+impl ValidIn<SwitchBranchSelectorMode> for BackspaceAction {
+    type NextState = AppMode;
+
+    fn execute(
+        self,
+        _state: SwitchBranchSelectorMode,
+        app_data: &mut AppData,
+    ) -> Result<Self::NextState> {
+        app_data.handle_branch_filter_backspace();
+        Ok(SwitchBranchSelectorMode.into())
     }
 }
 
@@ -741,6 +827,37 @@ mod tests {
         let state = MergeBranchSelectorMode;
         let next = SelectAction.execute(state, &mut data)?;
         assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_action_in_switch_branch_selector_noops_without_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = Vec::new();
+
+        let state = SwitchBranchSelectorMode;
+        let next = SelectAction.execute(state, &mut data)?;
+        assert_eq!(next, state.into());
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_action_in_switch_branch_selector_enters_confirming()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        data.review.branches = vec![make_local_branch("main"), make_local_branch("feature")];
+        data.review.selected = 1;
+
+        let state = SwitchBranchSelectorMode;
+        let next = SelectAction.execute(state, &mut data)?;
+        assert!(matches!(
+            next,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::SwitchBranch
+            })
+        ));
+        assert_eq!(data.git_op.target_branch, "feature");
         Ok(())
     }
 

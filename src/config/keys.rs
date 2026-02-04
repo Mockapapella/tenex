@@ -81,6 +81,8 @@ pub enum Action {
     Rebase,
     /// Merge selected branch into current branch
     Merge,
+    /// Switch the current agent's branch
+    SwitchBranch,
     /// Open slash command palette
     CommandPalette,
 }
@@ -360,6 +362,11 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::CONTROL,
         action: Action::Merge,
     },
+    Binding {
+        code: KeyCode::Char('s'),
+        modifiers: KeyModifiers::CONTROL,
+        action: Action::SwitchBranch,
+    },
     // Hidden (not shown in help but still functional)
     Binding {
         code: KeyCode::Esc,
@@ -416,6 +423,7 @@ impl Action {
             Self::SpawnTerminalPrompted => "[T]erminal with command",
             Self::Rebase => "[Ctrl+r]ebase onto branch",
             Self::Merge => "[Ctrl+m]erge branch",
+            Self::SwitchBranch => "[Ctrl+s]witch branch",
             Self::CommandPalette => "[/] commands",
         }
     }
@@ -460,6 +468,7 @@ impl Action {
             Self::SpawnTerminalPrompted => "T",
             Self::Rebase => "Ctrl+r",
             Self::Merge => "Ctrl+m",
+            Self::SwitchBranch => "Ctrl+s",
             Self::CommandPalette => "/",
         }
     }
@@ -478,9 +487,12 @@ impl Action {
             | Self::Broadcast
             | Self::ReviewSwarm => ActionGroup::Agents,
             Self::SpawnTerminal | Self::SpawnTerminalPrompted => ActionGroup::Terminals,
-            Self::Push | Self::RenameBranch | Self::OpenPR | Self::Rebase | Self::Merge => {
-                ActionGroup::GitOps
-            }
+            Self::Push
+            | Self::RenameBranch
+            | Self::OpenPR
+            | Self::Rebase
+            | Self::Merge
+            | Self::SwitchBranch => ActionGroup::GitOps,
             Self::FocusPreview
             | Self::UnfocusPreview
             | Self::ToggleCollapse
@@ -533,6 +545,7 @@ impl Action {
         Self::OpenPR,
         Self::Rebase,
         Self::Merge,
+        Self::SwitchBranch,
         // Other
         Self::Help,
         Self::CommandPalette,
@@ -631,6 +644,10 @@ mod tests {
         assert_eq!(
             get_action(KeyCode::Char('q'), KeyModifiers::CONTROL),
             Some(Action::Quit)
+        );
+        assert_eq!(
+            get_action(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            Some(Action::SwitchBranch)
         );
     }
 

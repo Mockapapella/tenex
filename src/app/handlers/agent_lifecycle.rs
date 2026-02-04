@@ -13,7 +13,14 @@ use uuid::Uuid;
 use super::Actions;
 use super::swarm::SpawnConfig;
 use crate::app::{AppData, WorktreeConflictInfo};
-use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
+use crate::config::Config;
+use crate::state::{AppMode, ConfirmAction, ConfirmingMode, ErrorModalMode};
+
+#[derive(Debug)]
+struct BranchSwitchTarget {
+    branch: String,
+    worktree_path: std::path::PathBuf,
+}
 
 impl Actions {
     /// Create a new agent
@@ -483,6 +490,7 @@ impl Actions {
             let worktree_name = agent.branch.clone();
             let window_index = agent.window_index;
             let title = agent.title.clone();
+            let repo_root = agent.repo_root.clone();
 
             info!(
                 %title,
@@ -531,10 +539,18 @@ impl Actions {
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // Remove worktree
-                let repo_path = std::env::current_dir()?;
-                if let Ok(repo) = git::open_repository(&repo_path) {
+                if let Some(repo_path) = repo_root.or_else(|| std::env::current_dir().ok())
+                    && let Ok(repo) = git::open_repository(&repo_path)
+                {
                     let worktree_mgr = WorktreeManager::new(&repo);
-                    if let Err(e) = worktree_mgr.remove(&worktree_name) {
+                    let delete_branch = worktree_name.starts_with(&app_data.config.branch_prefix)
+                        || worktree_name.starts_with("tenex/");
+                    let result = if delete_branch {
+                        worktree_mgr.remove(&worktree_name)
+                    } else {
+                        worktree_mgr.remove_worktree_only(&worktree_name)
+                    };
+                    if let Err(e) = result {
                         warn!("Failed to remove worktree: {e}");
                         app_data.set_status(format!("Warning: {e}"));
                     }
@@ -587,6 +603,307 @@ impl Actions {
 
             app_data.set_status("Agent killed");
         }
+        Ok(())
+    }
+
+    /// Switch the root agent to a different branch.
+    ///
+    /// This is a restart-on-branch operation: it kills the root agent and all children, deletes the
+    /// old worktree, and starts a fresh root agent in a worktree for the selected branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if starting the new agent fails.
+    pub fn switch_branch(self, app_data: &mut AppData) -> Result<AppMode> {
+        self.try_switch_branch(app_data).or_else(|err| {
+            Self::clear_switch_branch_state(app_data);
+            Ok(ErrorModalMode {
+                message: format!("Switch branch failed: {err:#}"),
+            }
+            .into())
+        })
+    }
+
+    fn try_switch_branch(self, app_data: &mut AppData) -> Result<AppMode> {
+        let Some(root_id) = app_data.git_op.agent_id else {
+            return Ok(Self::switch_branch_user_error(
+                app_data,
+                "No agent selected for branch switch.",
+            ));
+        };
+
+        let target_raw = app_data.git_op.target_branch.trim().to_string();
+        if target_raw.is_empty() {
+            return Ok(Self::switch_branch_user_error(
+                app_data,
+                "No target branch selected.",
+            ));
+        }
+
+        let current_branch = app_data.git_op.branch_name.clone();
+        if target_raw == current_branch {
+            Self::clear_switch_branch_state(app_data);
+            app_data.set_status(format!("Already on branch: {current_branch}"));
+            return Ok(AppMode::normal());
+        }
+
+        let Some(root) = app_data.storage.get(root_id) else {
+            return Ok(Self::switch_branch_user_error(
+                app_data,
+                "Root agent not found.",
+            ));
+        };
+
+        let title = root.title.clone();
+        let program = root.program.clone();
+        let repo_root = root
+            .repo_root
+            .clone()
+            .unwrap_or_else(|| root.worktree_path.clone());
+
+        let Some(target) =
+            Self::prepare_branch_switch_target(&app_data.config, &repo_root, &target_raw)?
+        else {
+            Self::clear_switch_branch_state(app_data);
+            return Ok(ErrorModalMode {
+                message: format!("Branch not found: {target_raw}"),
+            }
+            .into());
+        };
+
+        if !target.worktree_path.exists() {
+            Self::clear_switch_branch_state(app_data);
+            return Ok(ErrorModalMode {
+                message: format!(
+                    "Worktree path does not exist: {}",
+                    target.worktree_path.display()
+                ),
+            }
+            .into());
+        }
+
+        self.kill_root_agent_tree(app_data, root_id, false)?;
+
+        let new_id = self.spawn_root_agent_in_worktree(
+            app_data,
+            title,
+            program,
+            repo_root,
+            target.branch.clone(),
+            target.worktree_path,
+        )?;
+
+        app_data.select_agent_by_id(new_id);
+        Self::clear_switch_branch_state(app_data);
+        app_data.set_status(format!("Switched to branch: {}", target.branch));
+        Ok(AppMode::normal())
+    }
+
+    fn switch_branch_user_error(app_data: &mut AppData, message: &str) -> AppMode {
+        Self::clear_switch_branch_state(app_data);
+        ErrorModalMode {
+            message: message.to_string(),
+        }
+        .into()
+    }
+
+    fn clear_switch_branch_state(app_data: &mut AppData) {
+        app_data.git_op.clear();
+        app_data.review.clear();
+    }
+
+    fn prepare_branch_switch_target(
+        config: &Config,
+        repo_root: &Path,
+        target_raw: &str,
+    ) -> Result<Option<BranchSwitchTarget>> {
+        let repo = git::open_repository(repo_root)?;
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let branch_mgr = git::BranchManager::new(&repo);
+
+        let Some(branch) = Self::resolve_target_branch(&repo, &branch_mgr, target_raw)? else {
+            return Ok(None);
+        };
+
+        if !branch_mgr.exists(&branch) {
+            return Ok(None);
+        }
+
+        let worktree_path =
+            Self::ensure_worktree_for_branch(config, repo_root, &worktree_mgr, &branch)?;
+        Ok(Some(BranchSwitchTarget {
+            branch,
+            worktree_path,
+        }))
+    }
+
+    fn resolve_target_branch(
+        repo: &git2::Repository,
+        branch_mgr: &git::BranchManager<'_>,
+        target_raw: &str,
+    ) -> Result<Option<String>> {
+        if branch_mgr.exists(target_raw) {
+            return Ok(Some(target_raw.to_string()));
+        }
+
+        let Ok(remote_branch) = repo.find_branch(target_raw, git2::BranchType::Remote) else {
+            return Ok(None);
+        };
+
+        let local_name = target_raw
+            .split_once('/')
+            .map_or(target_raw, |(_, name)| name)
+            .to_string();
+
+        if !branch_mgr.exists(&local_name) {
+            let commit = remote_branch.get().peel_to_commit().with_context(|| {
+                format!("Failed to read commit for remote branch '{target_raw}'")
+            })?;
+
+            let mut created = repo
+                .branch(&local_name, &commit, false)
+                .with_context(|| format!("Failed to create local branch '{local_name}'"))?;
+
+            let _ = created.set_upstream(Some(target_raw));
+        }
+
+        Ok(Some(local_name))
+    }
+
+    fn ensure_worktree_for_branch(
+        config: &Config,
+        repo_root: &Path,
+        worktree_mgr: &WorktreeManager<'_>,
+        branch: &str,
+    ) -> Result<std::path::PathBuf> {
+        if worktree_mgr.exists(branch) {
+            return Ok(worktree_mgr
+                .worktree_path(branch)
+                .unwrap_or_else(|| config.worktree_path_for_repo_root(repo_root, branch)));
+        }
+
+        let worktree_path = config.worktree_path_for_repo_root(repo_root, branch);
+        worktree_mgr.create(&worktree_path, branch)?;
+        Ok(worktree_path)
+    }
+
+    fn spawn_root_agent_in_worktree(
+        self,
+        app_data: &mut AppData,
+        title: String,
+        program: String,
+        repo_root: std::path::PathBuf,
+        branch: String,
+        worktree_path: std::path::PathBuf,
+    ) -> Result<Uuid> {
+        let mut agent = Agent::new(title, program, branch, worktree_path);
+        agent.repo_root = Some(repo_root);
+
+        let cli = crate::conversation::detect_agent_cli(&agent.program);
+        if cli == crate::conversation::AgentCli::Claude {
+            agent.conversation_id = Some(agent.id.to_string());
+        }
+        let session_prefix = app_data.storage.instance_session_prefix();
+        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
+
+        let command = crate::conversation::build_spawn_argv(
+            &agent.program,
+            None,
+            agent.conversation_id.as_deref(),
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&agent.mux_session, &agent.worktree_path, Some(&command))?;
+        if cli == crate::conversation::AgentCli::Codex {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                &agent.worktree_path,
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self
+                .session_manager
+                .resize_window(&agent.mux_session, width, height);
+        }
+
+        let new_id = agent.id;
+        app_data.storage.add(agent);
+        app_data.storage.save()?;
+        Ok(new_id)
+    }
+
+    fn kill_root_agent_tree(
+        self,
+        app_data: &mut AppData,
+        root_id: Uuid,
+        delete_branch: bool,
+    ) -> Result<()> {
+        let Some(root) = app_data.storage.get(root_id) else {
+            return Ok(());
+        };
+
+        let session = root.mux_session.clone();
+        let worktree_name = root.branch.clone();
+        let repo_root = root.repo_root.clone();
+
+        let pane_pids = self
+            .session_manager
+            .list_pane_pids(&session)
+            .unwrap_or_default();
+
+        // First kill all descendant windows in descending order.
+        let descendants = app_data.storage.descendants(root_id);
+        let mut indices: Vec<u32> = descendants
+            .iter()
+            .filter_map(|desc| desc.window_index)
+            .collect();
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in indices {
+            let _ = self.session_manager.kill_window(&session, idx);
+        }
+
+        // Kill the session
+        let _ = self.session_manager.kill(&session);
+
+        // Ensure any remaining pane processes are terminated before removing the worktree.
+        for pid in pane_pids {
+            let _ = std::process::Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        if let Some(repo_path) = repo_root.or_else(|| std::env::current_dir().ok())
+            && let Ok(repo) = git::open_repository(&repo_path)
+        {
+            let worktree_mgr = WorktreeManager::new(&repo);
+            let result = if delete_branch {
+                worktree_mgr.remove(&worktree_name)
+            } else {
+                worktree_mgr.remove_worktree_only(&worktree_name)
+            };
+            if let Err(e) = result {
+                warn!("Failed to remove worktree: {e}");
+                app_data.set_status(format!("Warning: {e}"));
+            }
+        }
+
+        app_data.storage.remove_with_descendants(root_id);
+        app_data.validate_selection();
+        app_data.storage.save()?;
         Ok(())
     }
 
@@ -689,6 +1006,7 @@ mod tests {
     use crate::app::Settings;
     use crate::config::Config;
     use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
@@ -700,6 +1018,36 @@ mod tests {
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
         ))
+    }
+
+    fn init_repo() -> Result<(TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
+        use git2::{Repository, RepositoryInitOptions, Signature};
+
+        let dir = TempDir::new()?;
+        let path = dir.path().to_path_buf();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+
+        let repo = Repository::init_opts(&path, &init_opts)?;
+        repo.set_head("refs/heads/master")?;
+        {
+            let mut config = repo.config()?;
+            config.set_str("user.name", "Test")?;
+            config.set_str("user.email", "test@test.com")?;
+            config.set_str("commit.gpgsign", "false")?;
+        }
+
+        std::fs::write(path.join("README.md"), "# Test\n")?;
+        let sig = Signature::now("Test", "test@test.com")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+        Ok((dir, path))
     }
 
     #[test]
@@ -887,6 +1235,155 @@ mod tests {
         // No conflict info set - should error
         let result = handler.recreate_worktree(&mut app.data);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_repo_root_invalid()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.repo_root = Some(PathBuf::from("/tmp/tenex-nonexistent-repo-root"));
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        app.data.git_op.agent_id = Some(root_id);
+        app.data.git_op.branch_name = "main".to_string();
+        app.data.git_op.target_branch = "feature".to_string();
+        app.data.review.filter = "m".to_string();
+
+        let next = handler.switch_branch(&mut app.data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+        assert!(app.data.review.filter.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_target_branch_empty()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "main".to_string();
+        app.data.git_op.target_branch = "   ".to_string();
+        app.data.review.filter = "m".to_string();
+
+        let next = handler.switch_branch(&mut app.data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+        assert!(app.data.review.filter.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_noops_when_already_on_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "main".to_string();
+        app.data.git_op.target_branch = "main".to_string();
+
+        let next = handler.switch_branch(&mut app.data)?;
+        assert_eq!(next, AppMode::normal());
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Already on branch: main"))
+        );
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_root_agent_missing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+        app.data.git_op.branch_name = "main".to_string();
+        app.data.git_op.target_branch = "feature".to_string();
+
+        let next = handler.switch_branch(&mut app.data)?;
+        assert!(matches!(next, AppMode::ErrorModal(_)));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_branch_missing_in_repo()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let (_repo_dir, repo_path) = init_repo()?;
+        let root = Agent::new(
+            "root".to_string(),
+            "sh -c 'sleep 3600'".to_string(),
+            "master".to_string(),
+            repo_path,
+        );
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        app.data.git_op.agent_id = Some(root_id);
+        app.data.git_op.branch_name = "master".to_string();
+        app.data.git_op.target_branch = "branch-does-not-exist".to_string();
+
+        let next = handler.switch_branch(&mut app.data)?;
+        let AppMode::ErrorModal(modal) = next else {
+            return Err("Expected error modal".into());
+        };
+        assert!(modal.message.contains("Branch not found"));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure_worktree_for_branch_reuses_existing_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_repo_dir, repo_root) = init_repo()?;
+        let worktree_dir = TempDir::new()?;
+
+        let config = Config {
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            branch_prefix: "tenex-test/".to_string(),
+            ..Config::default()
+        };
+
+        let repo = git::open_repository(&repo_root)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature")?;
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
+        worktree_mgr.create(&worktree_path, "feature")?;
+
+        let reused =
+            Actions::ensure_worktree_for_branch(&config, &repo_root, &worktree_mgr, "feature")?;
+        assert!(reused.exists());
         Ok(())
     }
 

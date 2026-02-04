@@ -98,16 +98,33 @@ impl Actions {
 
     /// Reset all agents and state
     pub(crate) fn reset_all(self, app_data: &mut AppData) -> Result<()> {
-        let repo_path = std::env::current_dir()?;
-        let repo = git::open_repository(&repo_path).ok();
-
         for agent in app_data.storage.iter() {
             let _ = self.session_manager.kill(&agent.mux_session);
 
-            if let Some(ref repo) = repo {
-                let worktree_mgr = WorktreeManager::new(repo);
-                let _ = worktree_mgr.remove(&agent.branch);
+            if !agent.is_git_workspace() {
+                continue;
             }
+
+            let repo_path = agent
+                .repo_root
+                .clone()
+                .or_else(|| std::env::current_dir().ok());
+            let Some(repo_path) = repo_path else {
+                continue;
+            };
+
+            let Ok(repo) = git::open_repository(&repo_path) else {
+                continue;
+            };
+
+            let worktree_mgr = WorktreeManager::new(&repo);
+            let delete_branch = agent.branch.starts_with(&app_data.config.branch_prefix)
+                || agent.branch.starts_with("tenex/");
+            let _ = if delete_branch {
+                worktree_mgr.remove(&agent.branch)
+            } else {
+                worktree_mgr.remove_worktree_only(&agent.branch)
+            };
         }
 
         app_data.storage.clear();

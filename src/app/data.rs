@@ -13,6 +13,7 @@ use crate::state::{
     AppMode, ChangelogMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
 };
 use std::path::PathBuf;
+use uuid::Uuid;
 
 /// Persistent application data (everything except the current mode).
 #[derive(Debug)]
@@ -336,6 +337,26 @@ impl AppData {
         self.ensure_agent_list_scroll();
     }
 
+    /// Select a specific agent by its ID, if present.
+    pub(crate) fn select_agent_by_id(&mut self, agent_id: Uuid) {
+        let items = self.sidebar_items();
+        let Some(target) = items.iter().enumerate().find_map(|(idx, item)| match item {
+            SidebarItem::Agent(agent) if agent.info.agent.id == agent_id => Some(idx),
+            _ => None,
+        }) else {
+            return;
+        };
+
+        if target == self.selected {
+            return;
+        }
+
+        self.selected = target;
+        self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
+        self.ensure_agent_list_scroll();
+    }
+
     /// Ensure the agent list scroll offset keeps the selected agent visible.
     pub(crate) fn ensure_agent_list_scroll(&mut self) {
         let visible_count = self.sidebar_len();
@@ -451,7 +472,15 @@ impl AppData {
     /// Confirm branch selection for rebase/merge and set `git_op.target_branch`.
     pub(crate) fn confirm_rebase_merge_branch(&mut self) -> bool {
         if let Some(branch) = self.review.selected_branch() {
-            self.git_op.set_target_branch(branch.name.clone());
+            let target = if branch.is_remote {
+                branch.remote.as_deref().map_or_else(
+                    || branch.name.clone(),
+                    |remote| format!("{remote}/{}", branch.name),
+                )
+            } else {
+                branch.name.clone()
+            };
+            self.git_op.set_target_branch(target);
             true
         } else {
             false
@@ -820,6 +849,16 @@ mod tests {
             full_name: format!("refs/heads/{name}"),
             is_remote: false,
             remote: None,
+            last_commit_time: None,
+        }
+    }
+
+    fn make_remote_branch(remote: &str, name: &str) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            full_name: format!("refs/remotes/{remote}/{name}"),
+            is_remote: true,
+            remote: Some(remote.to_string()),
             last_commit_time: None,
         }
     }
@@ -1257,6 +1296,21 @@ mod tests {
 
         assert!(data.confirm_rebase_merge_branch());
         assert_eq!(data.git_op.target_branch, "main");
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_sets_remote_target_branch() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.review.branches = vec![make_remote_branch("origin", "main")];
+        data.review.selected = 0;
+
+        assert!(data.confirm_rebase_merge_branch());
+        assert_eq!(data.git_op.target_branch, "origin/main");
     }
 
     #[test]

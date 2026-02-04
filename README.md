@@ -91,6 +91,7 @@ tenex
 | `Ctrl+r` | Rebase onto selected branch |
 | `Ctrl+m` | Merge selected branch into current |
 | `Ctrl+n` | Merge (fallback for terminals that can't distinguish Ctrl+m from Enter) |
+| `Ctrl+s` | Switch branch (restart agent) |
 
 ### Navigation
 
