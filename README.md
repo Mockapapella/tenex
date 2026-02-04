@@ -188,6 +188,16 @@ On first launch, Tenex checks if your terminal supports the Kitty keyboard proto
 
 ## Troubleshooting
 
+### Copying text / mouse selection
+
+Tenex does not capture the mouse by default, so you can click + drag in your terminal to select and copy agent output.
+
+To enable Tenex mouse support (wheel scrolling + click selection), run:
+
+```bash
+TENEX_ENABLE_MOUSE=1 tenex
+```
+
 ### Agents Disappear Immediately
 
 If a newly-created agent flashes into existence and vanishes a few seconds later, it usually means the underlying agent process exited during startup (Tenex then prunes the agent because its mux session is gone).

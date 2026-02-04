@@ -40,6 +40,30 @@ const STATE_FILE_SYNC_INTERVAL_MS: u64 = 250;
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
 
+fn mouse_capture_enabled() -> bool {
+    mouse_capture_enabled_from_env(std::env::var("TENEX_ENABLE_MOUSE").ok().as_deref())
+}
+
+fn mouse_capture_enabled_from_env(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+
+    let value = value.trim();
+    value == "1"
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
+}
+
+fn enter_tui_screen(stdout: &mut impl io::Write, enable_mouse_capture: bool) -> Result<()> {
+    execute!(stdout, EnterAlternateScreen)?;
+    if enable_mouse_capture {
+        execute!(stdout, EnableMouseCapture)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StateFileStamp {
     modified: SystemTime,
@@ -156,7 +180,7 @@ impl StateFileTracker {
 pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    enter_tui_screen(&mut stdout, mouse_capture_enabled())?;
 
     // Enable Kitty keyboard protocol to disambiguate Ctrl+M from Enter
     // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
@@ -574,6 +598,51 @@ mod tests {
             crate::app::Settings::default(),
             false,
         )
+    }
+
+    #[test]
+    fn test_mouse_capture_enabled_defaults_to_false() {
+        assert!(!mouse_capture_enabled_from_env(None));
+    }
+
+    #[test]
+    fn test_mouse_capture_enabled_accepts_truthy_values() {
+        for value in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(
+                mouse_capture_enabled_from_env(Some(value)),
+                "expected truthy for {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mouse_capture_enabled_rejects_falsy_values() {
+        for value in ["", "0", "false", "no", "off"] {
+            assert!(
+                !mouse_capture_enabled_from_env(Some(value)),
+                "expected falsy for {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_enter_tui_screen_writes_output() -> Result<()> {
+        let mut buffer: Vec<u8> = Vec::new();
+        enter_tui_screen(&mut buffer, false)?;
+        assert!(!buffer.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enter_tui_screen_mouse_capture_writes_more_output() -> Result<()> {
+        let mut without_mouse: Vec<u8> = Vec::new();
+        enter_tui_screen(&mut without_mouse, false)?;
+
+        let mut with_mouse: Vec<u8> = Vec::new();
+        enter_tui_screen(&mut with_mouse, true)?;
+
+        assert!(with_mouse.len() > without_mouse.len());
+        Ok(())
     }
 
     fn create_test_app_with_cleanup() -> (App, TestCleanup) {
