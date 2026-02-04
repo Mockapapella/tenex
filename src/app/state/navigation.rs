@@ -3,8 +3,19 @@
 use crate::agent::{Agent, Status};
 
 use super::{App, Tab};
+use std::path::PathBuf;
 
 impl App {
+    /// Set the repository/workspace root corresponding to the process CWD.
+    ///
+    /// Tenex stores agents in a global state file, so a new client can start in a different
+    /// repository than any existing agents. This value ensures the sidebar shows the current
+    /// project even when no agents exist yet.
+    pub fn set_cwd_project_root(&mut self, root: Option<PathBuf>) {
+        self.data.cwd_project_root = root;
+        self.data.select_cwd_project();
+    }
+
     /// Get the currently selected agent (from visible agents list)
     #[must_use]
     pub fn selected_agent(&self) -> Option<&Agent> {

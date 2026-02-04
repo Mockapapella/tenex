@@ -4,8 +4,10 @@ use super::{Agent, WorkspaceKind};
 use crate::config::Config;
 use crate::git;
 use anyhow::{Context, Result};
+use fs4::fs_std::FileExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 #[cfg(target_os = "linux")]
@@ -43,6 +45,14 @@ fn backup_state_path(path: &Path) -> std::path::PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("state.json");
     path.with_file_name(format!("{name}.bak"))
+}
+
+fn lock_state_path(path: &Path) -> std::path::PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.json");
+    path.with_file_name(format!("{name}.lock"))
 }
 
 fn temp_state_path(path: &Path) -> std::path::PathBuf {
@@ -168,6 +178,35 @@ pub struct Storage {
     /// When None, uses `Config::state_path()`
     #[serde(skip)]
     pub state_path: Option<std::path::PathBuf>,
+
+    #[serde(skip)]
+    last_loaded: Option<StorageSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct StorageSnapshot {
+    agents_by_id: HashMap<Uuid, Agent>,
+    version: u32,
+    instance_id: Option<String>,
+    mux_socket: Option<String>,
+}
+
+impl StorageSnapshot {
+    fn capture(storage: &Storage) -> Self {
+        let agents_by_id = storage
+            .agents
+            .iter()
+            .cloned()
+            .map(|agent| (agent.id, agent))
+            .collect();
+
+        Self {
+            agents_by_id,
+            version: storage.version,
+            instance_id: storage.instance_id.clone(),
+            mux_socket: storage.mux_socket.clone(),
+        }
+    }
 }
 
 impl Default for Storage {
@@ -190,6 +229,7 @@ impl Storage {
             instance_id: None,
             mux_socket: None,
             state_path: None,
+            last_loaded: None,
         }
     }
 
@@ -203,6 +243,7 @@ impl Storage {
             instance_id: None,
             mux_socket: None,
             state_path: Some(path),
+            last_loaded: None,
         }
     }
 
@@ -320,8 +361,9 @@ impl Storage {
     pub fn load_from(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed to read state from {}", path.display()))?;
-        let storage: Self = serde_json::from_str(&contents)
+        let mut storage: Self = serde_json::from_str(&contents)
             .with_context(|| format!("Failed to parse state from {}", path.display()))?;
+        storage.last_loaded = Some(StorageSnapshot::capture(&storage));
         Ok(storage)
     }
 
@@ -420,7 +462,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error if the state directory cannot be created or the file cannot be written
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
         let path = self.state_path.clone().unwrap_or_else(Config::state_path);
         self.save_to(&path)
     }
@@ -430,18 +472,82 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error if the file cannot be written
-    pub fn save_to(&self, path: &Path) -> Result<()> {
+    pub fn save_to(&mut self, path: &Path) -> Result<()> {
         let path = resolve_state_path(path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create state directory {}", parent.display())
             })?;
         }
-        let contents = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
+
+        let lock_path = lock_state_path(&path);
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("Failed to open state lock {}", lock_path.display()))?;
+        lock_file
+            .lock_exclusive()
+            .with_context(|| format!("Failed to lock state {}", lock_path.display()))?;
+
+        let disk = if path.exists()
+            && fs::metadata(&path)
+                .ok()
+                .is_some_and(|metadata| metadata.len() == 0)
+        {
+            Self::new()
+        } else if path.exists() {
+            match Self::load_from(&path) {
+                Ok(storage) => storage,
+                Err(err) => {
+                    let backup_path = backup_state_path(&path);
+                    if backup_path.exists() {
+                        warn!(
+                            error = %err,
+                            path = %path.display(),
+                            backup_path = %backup_path.display(),
+                            "Failed to load state file while saving; attempting backup"
+                        );
+                        Self::load_from(&backup_path)?
+                    } else {
+                        warn!(
+                            error = %err,
+                            path = %path.display(),
+                            "Failed to load state file while saving; overwriting with in-memory state"
+                        );
+                        Self::new()
+                    }
+                }
+            }
+        } else {
+            Self::new()
+        };
+
+        let baseline = self
+            .last_loaded
+            .clone()
+            .unwrap_or_else(|| StorageSnapshot::capture(&disk));
+
+        let merged = merge_storage_three_way(&baseline, &disk, self);
+        let contents =
+            serde_json::to_string_pretty(&merged).context("Failed to serialize state")?;
 
         // Write atomically to avoid corrupting the state file if we're interrupted mid-write.
         write_state_atomically(&path, &contents)?;
+
+        let custom_path = self.state_path.clone();
+        *self = merged;
+        self.state_path = custom_path;
+        self.last_loaded = Some(StorageSnapshot::capture(self));
+
         Ok(())
+    }
+
+    pub(crate) fn resolved_state_path(&self) -> std::path::PathBuf {
+        let configured = self.state_path.clone().unwrap_or_else(Config::state_path);
+        resolve_state_path(&configured)
     }
 
     /// Add a new agent
@@ -782,11 +888,130 @@ impl Storage {
     }
 }
 
+fn merge_storage_three_way(baseline: &StorageSnapshot, disk: &Storage, ours: &Storage) -> Storage {
+    let mut merged = disk.clone();
+    merged.state_path = None;
+    merged.last_loaded = None;
+
+    if ours.version != baseline.version {
+        merged.version = ours.version;
+    }
+
+    if ours.instance_id != baseline.instance_id {
+        merged.instance_id.clone_from(&ours.instance_id);
+    }
+
+    if ours.mux_socket != baseline.mux_socket {
+        merged.mux_socket.clone_from(&ours.mux_socket);
+    }
+
+    let mut ours_by_id: HashMap<Uuid, &Agent> = HashMap::new();
+    for agent in &ours.agents {
+        ours_by_id.insert(agent.id, agent);
+    }
+
+    let deleted_ids: HashSet<Uuid> = baseline
+        .agents_by_id
+        .keys()
+        .copied()
+        .filter(|id| !ours_by_id.contains_key(id))
+        .collect();
+    if !deleted_ids.is_empty() {
+        merged
+            .agents
+            .retain(|agent| !deleted_ids.contains(&agent.id));
+    }
+
+    let mut merged_index_by_id: HashMap<Uuid, usize> = HashMap::new();
+    for (idx, agent) in merged.agents.iter().enumerate() {
+        merged_index_by_id.insert(agent.id, idx);
+    }
+
+    for (id, ours_agent) in &ours_by_id {
+        let Some(baseline_agent) = baseline.agents_by_id.get(id) else {
+            continue;
+        };
+        let Some(index) = merged_index_by_id.get(id).copied() else {
+            continue;
+        };
+
+        let disk_agent = &mut merged.agents[index];
+        apply_agent_changes(disk_agent, baseline_agent, ours_agent);
+    }
+
+    for agent in &ours.agents {
+        if baseline.agents_by_id.contains_key(&agent.id) {
+            continue;
+        }
+        if merged_index_by_id.contains_key(&agent.id) {
+            continue;
+        }
+
+        merged_index_by_id.insert(agent.id, merged.agents.len());
+        merged.agents.push(agent.clone());
+    }
+
+    if merged.agents.is_empty() {
+        merged.mux_socket = None;
+    }
+
+    merged
+}
+
+fn apply_agent_changes(target: &mut Agent, baseline: &Agent, ours: &Agent) {
+    if ours.title != baseline.title {
+        target.title.clone_from(&ours.title);
+    }
+    if ours.program != baseline.program {
+        target.program.clone_from(&ours.program);
+    }
+    if ours.conversation_id != baseline.conversation_id {
+        target.conversation_id.clone_from(&ours.conversation_id);
+    }
+    if ours.status != baseline.status {
+        target.status = ours.status;
+    }
+    if ours.branch != baseline.branch {
+        target.branch.clone_from(&ours.branch);
+    }
+    if ours.worktree_path != baseline.worktree_path {
+        target.worktree_path.clone_from(&ours.worktree_path);
+    }
+    if ours.repo_root != baseline.repo_root {
+        target.repo_root.clone_from(&ours.repo_root);
+    }
+    if ours.workspace_kind != baseline.workspace_kind {
+        target.workspace_kind = ours.workspace_kind;
+    }
+    if ours.mux_session != baseline.mux_session {
+        target.mux_session.clone_from(&ours.mux_session);
+    }
+    if ours.created_at != baseline.created_at {
+        target.created_at = ours.created_at;
+    }
+    if ours.updated_at != baseline.updated_at {
+        target.updated_at = ours.updated_at;
+    }
+    if ours.parent_id != baseline.parent_id {
+        target.parent_id = ours.parent_id;
+    }
+    if ours.window_index != baseline.window_index {
+        target.window_index = ours.window_index;
+    }
+    if ours.collapsed != baseline.collapsed {
+        target.collapsed = ours.collapsed;
+    }
+    if ours.is_terminal != baseline.is_terminal {
+        target.is_terminal = ours.is_terminal;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::WorkspaceKind;
     use crate::agent::{ChildConfig, Status};
+    use chrono::Duration;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -993,6 +1218,140 @@ mod tests {
         assert_eq!(storage.len(), loaded.len());
         assert_eq!(storage.agents[0].title, loaded.agents[0].title);
         assert_eq!(storage.agents[1].title, loaded.agents[1].title);
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_merges_new_agents_from_other_clients() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut initial = Storage::new();
+        initial.add(create_test_agent("one"));
+        initial.save_to(&state_path)?;
+
+        let mut client_a = Storage::load_from(&state_path)?;
+        let mut client_b = Storage::load_from(&state_path)?;
+
+        client_a.add(create_test_agent("two"));
+        client_a.save_to(&state_path)?;
+
+        if let Some(agent) = client_b.agents.first_mut() {
+            agent.set_status(Status::Running);
+        }
+        client_b.save_to(&state_path)?;
+
+        let merged = Storage::load_from(&state_path)?;
+        assert_eq!(merged.agents.len(), 2);
+        assert!(merged.agents.iter().any(|agent| agent.title == "two"));
+        assert!(
+            merged
+                .agents
+                .iter()
+                .any(|agent| agent.title == "one" && agent.status == Status::Running)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_does_not_resurrect_deleted_agents() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut initial = Storage::new();
+        let agent = create_test_agent("one");
+        let agent_id = agent.id;
+        initial.add(agent);
+        initial.save_to(&state_path)?;
+
+        let mut client_a = Storage::load_from(&state_path)?;
+        let mut client_b = Storage::load_from(&state_path)?;
+
+        client_a.remove(agent_id);
+        client_a.save_to(&state_path)?;
+
+        if let Some(agent) = client_b.agents.first_mut() {
+            agent.set_status(Status::Running);
+        }
+        client_b.save_to(&state_path)?;
+
+        let merged = Storage::load_from(&state_path)?;
+        assert!(merged.get(agent_id).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_applies_field_updates_from_ours() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut initial = Storage::new();
+        let agent = create_test_agent("one");
+        let agent_id = agent.id;
+        initial.add(agent);
+        initial.save_to(&state_path)?;
+
+        let mut client = Storage::load_from(&state_path)?;
+        client.version = 2;
+        client.instance_id = Some("deadbeef".to_string());
+        client.mux_socket = Some("socket".to_string());
+
+        let agent = client.get_mut(agent_id).ok_or("missing agent")?;
+        let baseline_created_at = agent.created_at;
+        let baseline_updated_at = agent.updated_at;
+
+        agent.title = "updated".to_string();
+        agent.program = "updated-program".to_string();
+        agent.conversation_id = Some("conv".to_string());
+        agent.status = Status::Running;
+        agent.branch = "updated-branch".to_string();
+        agent.worktree_path = PathBuf::from("/tmp/tenex-storage-test/worktree");
+        agent.repo_root = Some(PathBuf::from("/tmp/tenex-storage-test/repo"));
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        agent.mux_session = "mux-session".to_string();
+        agent.created_at = baseline_created_at + Duration::seconds(1);
+        agent.updated_at = baseline_updated_at + Duration::seconds(2);
+        agent.parent_id = Some(Uuid::new_v4());
+        agent.window_index = Some(42);
+        agent.collapsed = false;
+        agent.is_terminal = true;
+
+        client.save_to(&state_path)?;
+
+        let merged = Storage::load_from(&state_path)?;
+        assert_eq!(merged.version, 2);
+        assert_eq!(merged.instance_id.as_deref(), Some("deadbeef"));
+        assert_eq!(merged.mux_socket.as_deref(), Some("socket"));
+
+        let merged_agent = merged.get(agent_id).ok_or("missing agent")?;
+        assert_eq!(merged_agent.title, "updated");
+        assert_eq!(merged_agent.program, "updated-program");
+        assert_eq!(merged_agent.conversation_id.as_deref(), Some("conv"));
+        assert_eq!(merged_agent.status, Status::Running);
+        assert_eq!(merged_agent.branch, "updated-branch");
+        assert_eq!(
+            merged_agent.worktree_path,
+            PathBuf::from("/tmp/tenex-storage-test/worktree")
+        );
+        assert_eq!(
+            merged_agent.repo_root.as_deref(),
+            Some(PathBuf::from("/tmp/tenex-storage-test/repo").as_path())
+        );
+        assert_eq!(merged_agent.workspace_kind, WorkspaceKind::PlainDir);
+        assert_eq!(merged_agent.mux_session, "mux-session");
+        assert_eq!(
+            merged_agent.created_at,
+            baseline_created_at + Duration::seconds(1)
+        );
+        assert_eq!(
+            merged_agent.updated_at,
+            baseline_updated_at + Duration::seconds(2)
+        );
+        assert!(merged_agent.parent_id.is_some());
+        assert_eq!(merged_agent.window_index, Some(42));
+        assert!(!merged_agent.collapsed);
+        assert!(merged_agent.is_terminal);
+
         Ok(())
     }
 

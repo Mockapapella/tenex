@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::state::{
     AppMode, ChangelogMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
 };
+use std::path::PathBuf;
 
 /// Persistent application data (everything except the current mode).
 #[derive(Debug)]
@@ -21,6 +22,9 @@ pub struct AppData {
 
     /// Agent storage.
     pub storage: Storage,
+
+    /// Repository/workspace root for the process CWD (used to show an empty project header).
+    pub cwd_project_root: Option<PathBuf>,
 
     /// Currently selected agent index (in visible agents list).
     pub selected: usize,
@@ -77,6 +81,7 @@ impl AppData {
         Self {
             config,
             storage,
+            cwd_project_root: None,
             selected: 1,
             active_tab: Tab::Preview,
             should_quit: false,
@@ -163,6 +168,116 @@ impl AppData {
     /// Set a status message to display.
     pub(crate) fn set_status(&mut self, message: impl Into<String>) {
         self.ui.set_status(message);
+    }
+
+    pub(crate) fn select_cwd_project(&mut self) {
+        let Some(cwd_root) = self.cwd_project_root.as_deref() else {
+            return;
+        };
+
+        let items = self.sidebar_items();
+        if items.is_empty() {
+            return;
+        }
+
+        let mut header_index: Option<usize> = None;
+        let mut first_agent_index: Option<usize> = None;
+
+        for (idx, item) in items.iter().enumerate() {
+            match item {
+                SidebarItem::Project(project) if project.root == cwd_root => {
+                    header_index = Some(idx);
+                }
+                SidebarItem::Agent(agent) => {
+                    let agent_root = agent
+                        .info
+                        .agent
+                        .repo_root
+                        .as_deref()
+                        .unwrap_or(agent.info.agent.worktree_path.as_path());
+                    if agent_root == cwd_root {
+                        first_agent_index.get_or_insert(idx);
+                    }
+                }
+                SidebarItem::Project(_) => {}
+            }
+        }
+
+        let Some(target) = first_agent_index.or(header_index) else {
+            return;
+        };
+
+        if target == self.selected {
+            return;
+        }
+
+        self.selected = target;
+        self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
+        self.ensure_agent_list_scroll();
+    }
+
+    pub(crate) fn select_project_header(&mut self) {
+        let Some(project_root) = self.selected_project_root() else {
+            return;
+        };
+
+        let items = self.sidebar_items();
+        let Some(target) = items.iter().position(|item| match item {
+            SidebarItem::Project(project) => project.root == project_root,
+            SidebarItem::Agent(_) => false,
+        }) else {
+            return;
+        };
+
+        if target == self.selected {
+            return;
+        }
+
+        self.selected = target;
+        self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
+        self.ensure_agent_list_scroll();
+    }
+
+    pub(crate) fn select_first_agent_in_selected_project(&mut self) {
+        if !matches!(self.selected_sidebar_item(), Some(SidebarItem::Project(_))) {
+            return;
+        }
+
+        let Some(project_root) = self.selected_project_root() else {
+            return;
+        };
+
+        let items = self.sidebar_items();
+        let mut in_project = false;
+        let mut target: Option<usize> = None;
+
+        for (idx, item) in items.iter().enumerate() {
+            match item {
+                SidebarItem::Project(project) => {
+                    in_project = project.root == project_root;
+                }
+                SidebarItem::Agent(_) if in_project => {
+                    target = Some(idx);
+                    break;
+                }
+                SidebarItem::Agent(_) => {}
+            }
+        }
+
+        let Some(target) = target else {
+            return;
+        };
+
+        if target == self.selected {
+            return;
+        }
+
+        self.selected = target;
+        self.ui.reset_scroll();
+        self.ui.reset_diff_interaction();
+        self.ensure_agent_list_scroll();
     }
 
     /// Switch between detail pane tabs (forward).
@@ -702,7 +817,7 @@ mod tests {
     use super::*;
     use crate::agent::{Agent, Storage};
     use crate::git::BranchInfo;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn make_agent(title: &str) -> Agent {
         let pid = std::process::id();
@@ -713,6 +828,18 @@ mod tests {
             PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/{title}")),
         );
         agent.repo_root = Some(PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}")));
+        agent
+    }
+
+    fn make_agent_in_repo(title: &str, repo_root: &Path) -> Agent {
+        let pid = std::process::id();
+        let mut agent = Agent::new(
+            title.to_string(),
+            "echo".to_string(),
+            format!("tenex-app-data-test-{pid}/{title}"),
+            repo_root.join(format!("worktree-{title}")),
+        );
+        agent.repo_root = Some(repo_root.to_path_buf());
         agent
     }
 
@@ -880,6 +1007,123 @@ mod tests {
 
         let data = AppData::new(Config::default(), Storage::default(), settings, false);
         assert_eq!(data.review_agent_spawn_command(), "my-agent");
+    }
+
+    #[test]
+    fn test_select_cwd_project_prefers_first_agent_in_cwd_project() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+        storage.add(make_agent_in_repo("agent-b", &repo_b));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.cwd_project_root = Some(repo_b.clone());
+        data.selected = 3;
+        data.ui.preview_scroll = 0;
+        data.ui.diff_scroll = 7;
+
+        data.select_cwd_project();
+
+        assert_eq!(data.selected_project_root(), Some(repo_b));
+        assert!(matches!(
+            data.selected_sidebar_item(),
+            Some(SidebarItem::Agent(_))
+        ));
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+        assert_eq!(data.ui.diff_scroll, 0);
+    }
+
+    #[test]
+    fn test_select_cwd_project_selects_header_when_project_has_no_agents() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.cwd_project_root = Some(repo_b.clone());
+        data.selected = 2;
+
+        data.select_cwd_project();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected_project_root(), Some(repo_b));
+        assert!(matches!(
+            data.selected_sidebar_item(),
+            Some(SidebarItem::Project(_))
+        ));
+    }
+
+    #[test]
+    fn test_select_project_header_moves_selection_to_project_header() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+        storage.add(make_agent_in_repo("agent-b", &repo_b));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 1;
+
+        data.select_project_header();
+
+        assert!(matches!(
+            data.selected_sidebar_item(),
+            Some(SidebarItem::Project(_))
+        ));
+        assert_eq!(data.selected_project_root(), Some(repo_a));
+    }
+
+    #[test]
+    fn test_select_first_agent_in_selected_project_selects_first_agent() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+        storage.add(make_agent_in_repo("agent-b", &repo_b));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+
+        data.select_first_agent_in_selected_project();
+
+        assert!(matches!(
+            data.selected_sidebar_item(),
+            Some(SidebarItem::Agent(_))
+        ));
+        assert_eq!(data.selected_project_root(), Some(repo_a));
+    }
+
+    #[test]
+    fn test_select_first_agent_in_selected_project_is_noop_when_empty() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.cwd_project_root = Some(repo_b.clone());
+        data.selected = 0;
+
+        data.select_first_agent_in_selected_project();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected_project_root(), Some(repo_b));
+        assert!(matches!(
+            data.selected_sidebar_item(),
+            Some(SidebarItem::Project(_))
+        ));
     }
 
     #[test]
@@ -1106,5 +1350,69 @@ mod tests {
         let next = data.submit_slash_command_palette();
         assert!(matches!(next, AppMode::Help(_)));
         assert_eq!(data.ui.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection_empty_is_noop() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = String::new();
+        data.command_palette.selected = 99;
+
+        let next = data.confirm_slash_command_selection();
+        assert_eq!(next, AppMode::normal());
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection_agents_opens_settings_menu() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/agents".to_string();
+        data.command_palette.selected = 99;
+
+        let next = data.confirm_slash_command_selection();
+        assert!(matches!(next, AppMode::SettingsMenu(_)));
+        assert!(data.input.buffer.is_empty());
+        assert_eq!(data.model_selector.role, AgentRole::Default);
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_accepts_missing_leading_slash() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "help".to_string();
+        data.ui.help_scroll = 123;
+
+        let next = data.submit_slash_command_palette();
+        assert!(matches!(next, AppMode::Help(_)));
+        assert_eq!(data.ui.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_submit_slash_command_palette_agents_opens_settings_menu() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/agents".to_string();
+
+        let next = data.submit_slash_command_palette();
+        assert!(matches!(next, AppMode::SettingsMenu(_)));
+        assert!(data.input.buffer.is_empty());
+        assert_eq!(data.model_selector.role, AgentRole::Default);
     }
 }

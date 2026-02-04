@@ -260,10 +260,16 @@ fn run_interactive(
     settings: Settings,
     storage_load_error: Option<String>,
 ) -> Result<()> {
+    let cwd = std::env::current_dir().ok();
+
+    let cwd_project_root = cwd
+        .as_ref()
+        .map(|cwd| tenex::git::repository_workspace_root(cwd).unwrap_or_else(|_| cwd.clone()));
+
     // Ensure .tenex/ is excluded from git tracking
-    if let Ok(cwd) = std::env::current_dir()
-        && tenex::git::is_git_repository(&cwd)
-        && let Err(e) = tenex::git::ensure_tenex_excluded(&cwd)
+    if let Some(cwd) = cwd.as_ref()
+        && tenex::git::is_git_repository(cwd)
+        && let Err(e) = tenex::git::ensure_tenex_excluded(cwd)
     {
         eprintln!("Warning: Failed to exclude .tenex from git: {e}");
     }
@@ -273,6 +279,7 @@ fn run_interactive(
     if let Some(message) = storage_load_error {
         app.set_error(message);
     }
+    app.set_cwd_project_root(cwd_project_root);
 
     maybe_queue_whats_new(&mut app);
 

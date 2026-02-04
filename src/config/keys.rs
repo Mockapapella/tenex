@@ -39,6 +39,10 @@ pub enum Action {
     NextAgent,
     /// Select previous agent
     PrevAgent,
+    /// Highlight the selected agent's project header
+    SelectProjectHeader,
+    /// Highlight the first agent under the selected project
+    SelectProjectFirstAgent,
     /// Show help
     Help,
     /// Quit application
@@ -243,6 +247,16 @@ const BINDINGS: &[Binding] = &[
         action: Action::PrevAgent,
     },
     Binding {
+        code: KeyCode::Left,
+        modifiers: KeyModifiers::NONE,
+        action: Action::SelectProjectHeader,
+    },
+    Binding {
+        code: KeyCode::Right,
+        modifiers: KeyModifiers::NONE,
+        action: Action::SelectProjectFirstAgent,
+    },
+    Binding {
         code: KeyCode::Tab,
         modifiers: KeyModifiers::NONE,
         action: Action::SwitchTab,
@@ -381,6 +395,8 @@ impl Action {
             Self::DiffRedo => "[Ctrl+y] redo diff edit",
             Self::NextAgent => "[↓] next agent",
             Self::PrevAgent => "[↑] prev agent",
+            Self::SelectProjectHeader => "[←] highlight project",
+            Self::SelectProjectFirstAgent => "[→] highlight first agent",
             Self::Help => "[?] help",
             Self::Quit => "[Ctrl+q]uit",
             Self::ScrollUp => "[Ctrl+u] scroll preview/diff/commits up",
@@ -415,6 +431,8 @@ impl Action {
             Self::SwitchTab => "Tab",
             Self::DiffCursorUp | Self::PrevAgent => "↑",
             Self::DiffCursorDown | Self::NextAgent => "↓",
+            Self::SelectProjectHeader => "←",
+            Self::SelectProjectFirstAgent => "→",
             Self::DiffToggleVisual => "shift+v",
             Self::DiffDeleteLine => "x",
             Self::DiffUndo => "Ctrl+z",
@@ -468,6 +486,8 @@ impl Action {
             | Self::ToggleCollapse
             | Self::NextAgent
             | Self::PrevAgent
+            | Self::SelectProjectHeader
+            | Self::SelectProjectFirstAgent
             | Self::SwitchTab
             | Self::ScrollUp
             | Self::ScrollDown
@@ -491,6 +511,8 @@ impl Action {
         Self::FocusPreview,
         Self::UnfocusPreview,
         Self::ToggleCollapse,
+        Self::SelectProjectHeader,
+        Self::SelectProjectFirstAgent,
         Self::SwitchTab,
         // Agents
         Self::NewAgent,

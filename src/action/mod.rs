@@ -77,6 +77,12 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::SwitchTab => SwitchTabAction.execute(NormalMode, &mut app.data)?,
         KeyAction::NextAgent => NextAgentAction.execute(NormalMode, &mut app.data)?,
         KeyAction::PrevAgent => PrevAgentAction.execute(NormalMode, &mut app.data)?,
+        KeyAction::SelectProjectHeader => {
+            SelectProjectHeaderAction.execute(NormalMode, &mut app.data)?
+        }
+        KeyAction::SelectProjectFirstAgent => {
+            SelectProjectFirstAgentAction.execute(NormalMode, &mut app.data)?
+        }
         KeyAction::ScrollUp => ScrollUpAction.execute(NormalMode, &mut app.data)?,
         KeyAction::ScrollDown => ScrollDownAction.execute(NormalMode, &mut app.data)?,
         KeyAction::ScrollTop => ScrollTopAction.execute(NormalMode, &mut app.data)?,
@@ -134,6 +140,12 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::SwitchTab => SwitchTabAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::NextAgent => NextAgentAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::PrevAgent => PrevAgentAction.execute(ScrollingMode, &mut app.data)?,
+        KeyAction::SelectProjectHeader => {
+            SelectProjectHeaderAction.execute(ScrollingMode, &mut app.data)?
+        }
+        KeyAction::SelectProjectFirstAgent => {
+            SelectProjectFirstAgentAction.execute(ScrollingMode, &mut app.data)?
+        }
         KeyAction::ScrollUp => ScrollUpAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::ScrollDown => ScrollDownAction.execute(ScrollingMode, &mut app.data)?,
         KeyAction::ScrollTop => ScrollTopAction.execute(ScrollingMode, &mut app.data)?,

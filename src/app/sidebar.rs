@@ -90,6 +90,16 @@ impl AppData {
             roots_by_project.entry(project_root).or_default().push(root);
         }
 
+        if let Some(cwd_root) = self.cwd_project_root.clone() {
+            if let Some(pos) = project_order.iter().position(|root| *root == cwd_root) {
+                let existing = project_order.remove(pos);
+                project_order.insert(0, existing);
+            } else {
+                project_order.insert(0, cwd_root.clone());
+            }
+            agent_counts_by_project.entry(cwd_root).or_insert(0);
+        }
+
         let mut name_counts: HashMap<String, usize> = HashMap::new();
         for project_root in &project_order {
             let base = project_base_name(project_root);
