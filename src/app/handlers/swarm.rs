@@ -346,18 +346,23 @@ impl Actions {
             return Ok(Some(config));
         };
         let branch = app_data.config.generate_branch_name(&root_title);
-        let worktree_path = app_data.config.worktree_dir.join(&branch);
+        let worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
         if worktree_mgr.exists(&branch) {
+            let conflict_worktree_path = worktree_mgr
+                .worktree_path(&branch)
+                .unwrap_or_else(|| worktree_path.clone());
             Self::setup_worktree_conflict(
                 app_data,
                 &worktree_mgr,
                 root_title,
                 task,
                 branch,
-                worktree_path,
+                conflict_worktree_path,
                 count,
                 repo_path,
             );

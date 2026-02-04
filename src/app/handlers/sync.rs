@@ -193,6 +193,10 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if worktrees cannot be listed or agent creation fails
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Auto-connect is easier to audit as a single flow"
+    )]
     pub fn auto_connect_worktrees(self, app: &mut App) -> Result<()> {
         let repo_path = std::env::current_dir().context("Failed to get current directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
@@ -246,9 +250,12 @@ impl Actions {
                 }
             };
 
-            // Only process worktrees that match our branch prefix
-            if !branch_name.starts_with(&app.data.config.branch_prefix) {
-                debug!(branch = %branch_name, prefix = %app.data.config.branch_prefix, "Skipping worktree with different prefix");
+            if !is_tenex_managed_branch(&branch_name, &app.data.config.branch_prefix) {
+                debug!(
+                    branch = %branch_name,
+                    prefix = %app.data.config.branch_prefix,
+                    "Skipping worktree with different prefix"
+                );
                 continue;
             }
 
@@ -267,7 +274,7 @@ impl Actions {
 
             // Create an agent for this worktree
             let mut agent = Agent::new(
-                branch_name.clone(), // Use branch name as title
+                title_for_branch(&branch_name, &app.data.config.branch_prefix),
                 program.clone(),
                 branch_name.clone(),
                 worktree_path.clone(),
@@ -601,6 +608,22 @@ fn has_isolated_state_marker(worktree_path: &Path, stop_at: &Path) -> bool {
             return false;
         };
         current = parent;
+    }
+}
+
+fn is_tenex_managed_branch(branch: &str, branch_prefix: &str) -> bool {
+    (!branch_prefix.is_empty() && branch.starts_with(branch_prefix)) || branch.starts_with("tenex/")
+}
+
+fn title_for_branch(branch: &str, branch_prefix: &str) -> String {
+    let stripped = branch
+        .strip_prefix(branch_prefix)
+        .or_else(|| branch.strip_prefix("tenex/"))
+        .unwrap_or(branch);
+    if stripped.is_empty() {
+        branch.to_string()
+    } else {
+        stripped.to_string()
     }
 }
 

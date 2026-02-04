@@ -405,6 +405,16 @@ impl<'a> Manager<'a> {
         self.repo.find_worktree(&worktree_name).is_ok()
     }
 
+    /// Returns the filesystem path for a worktree, if present.
+    #[must_use]
+    pub fn worktree_path(&self, name: &str) -> Option<PathBuf> {
+        let worktree_name = name.replace('/', "-");
+        self.repo
+            .find_worktree(&worktree_name)
+            .ok()
+            .map(|wt| wt.path().to_path_buf())
+    }
+
     /// Lock a worktree to prevent it from being pruned
     ///
     /// # Errors

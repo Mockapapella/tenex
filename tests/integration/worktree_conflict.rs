@@ -300,7 +300,10 @@ fn test_worktree_conflict_reconnect_swarm_creates_children()
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let task = "swarm-reconnect-task";
     let branch_name = app.data.config.generate_branch_name(task);
-    let worktree_path = app.data.config.worktree_dir.join(&branch_name);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Set up for swarm spawning

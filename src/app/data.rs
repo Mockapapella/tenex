@@ -293,29 +293,15 @@ impl AppData {
     /// Move selection to the next agent (in visible list).
     pub(crate) fn select_next(&mut self) {
         let items = self.sidebar_items();
-        let agent_indices: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| matches!(item, SidebarItem::Agent(_)).then_some(idx))
-            .collect();
-
-        if agent_indices.is_empty() {
+        if items.is_empty() {
             return;
         }
 
-        let next = agent_indices
-            .iter()
-            .position(|idx| *idx == self.selected)
-            .map_or_else(
-                || {
-                    agent_indices
-                        .iter()
-                        .copied()
-                        .find(|idx| *idx > self.selected)
-                        .unwrap_or(agent_indices[0])
-                },
-                |pos| agent_indices[(pos + 1) % agent_indices.len()],
-            );
+        let next = if self.selected >= items.len() {
+            0
+        } else {
+            (self.selected + 1) % items.len()
+        };
 
         if next == self.selected {
             return;
@@ -330,29 +316,14 @@ impl AppData {
     /// Move selection to the previous agent (in visible list).
     pub(crate) fn select_prev(&mut self) {
         let items = self.sidebar_items();
-        let agent_indices: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| matches!(item, SidebarItem::Agent(_)).then_some(idx))
-            .collect();
-
-        if agent_indices.is_empty() {
+        if items.is_empty() {
             return;
         }
 
-        let Some(&last_agent_index) = agent_indices.last() else {
-            return;
-        };
-
-        let prev = match agent_indices.iter().position(|idx| *idx == self.selected) {
-            Some(0) => last_agent_index,
-            Some(pos) => agent_indices[pos - 1],
-            None => agent_indices
-                .iter()
-                .copied()
-                .rev()
-                .find(|idx| *idx < self.selected)
-                .unwrap_or(last_agent_index),
+        let prev = if self.selected == 0 || self.selected >= items.len() {
+            items.len() - 1
+        } else {
+            self.selected - 1
         };
 
         if prev == self.selected {
@@ -1161,12 +1132,12 @@ mod tests {
 
         data.ui.preview_scroll = 0;
         data.select_next();
-        assert_eq!(data.selected, 1);
+        assert_eq!(data.selected, 0);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
     #[test]
-    fn test_select_next_one_agent_does_not_reset_diff_hash() {
+    fn test_select_next_one_agent_resets_diff_hash() {
         let mut storage = Storage::new();
         storage.add(make_agent("agent-1"));
 
@@ -1176,9 +1147,9 @@ mod tests {
 
         data.select_next();
 
-        assert_eq!(data.selected, 1);
-        assert_eq!(data.ui.diff_hash, 123);
-        assert_eq!(data.ui.preview_scroll, 0);
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.diff_hash, 0);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
     #[test]
@@ -1191,12 +1162,12 @@ mod tests {
         data.ui.preview_scroll = 0;
 
         data.select_prev();
-        assert_eq!(data.selected, 2);
+        assert_eq!(data.selected, 0);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
     #[test]
-    fn test_select_prev_one_agent_does_not_reset_diff_hash() {
+    fn test_select_prev_one_agent_resets_diff_hash() {
         let mut storage = Storage::new();
         storage.add(make_agent("agent-1"));
 
@@ -1206,9 +1177,9 @@ mod tests {
 
         data.select_prev();
 
-        assert_eq!(data.selected, 1);
-        assert_eq!(data.ui.diff_hash, 123);
-        assert_eq!(data.ui.preview_scroll, 0);
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.diff_hash, 0);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
     }
 
     #[test]

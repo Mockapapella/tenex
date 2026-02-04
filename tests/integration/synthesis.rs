@@ -26,8 +26,6 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
     };
     app.apply_mode(next);
 
-    app.select_next();
-
     // Try to synthesize - should show error since no children
     let result = handler.handle_action(&mut app, tenex::config::Action::Synthesize);
     assert!(result.is_ok());
@@ -453,8 +451,6 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
         return Ok(());
     };
     app.apply_mode(next);
-
-    app.select_next();
 
     // Spawn two terminals as children
     let handler = tenex::app::Actions::new();

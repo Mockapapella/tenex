@@ -149,8 +149,6 @@ fn test_review_action_with_agent_selected_shows_count_picker()
     app.apply_mode(next);
     assert_eq!(app.data.storage.len(), 1);
 
-    // Select the agent
-    app.select_next();
     assert!(app.selected_agent().is_some());
 
     // Trigger review action

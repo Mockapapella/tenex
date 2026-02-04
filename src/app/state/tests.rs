@@ -35,6 +35,8 @@ fn test_select_next() {
     app.select_next();
     assert_eq!(app.data.selected, 3);
     app.select_next();
+    assert_eq!(app.data.selected, 0);
+    app.select_next();
     assert_eq!(app.data.selected, 1);
 }
 
@@ -46,6 +48,8 @@ fn test_select_prev() {
     app.data.storage.add(create_test_agent("agent3"));
 
     assert_eq!(app.data.selected, 1);
+    app.select_prev();
+    assert_eq!(app.data.selected, 0);
     app.select_prev();
     assert_eq!(app.data.selected, 3);
     app.select_prev();

@@ -41,13 +41,18 @@ impl Actions {
             return Ok(AppMode::normal());
         };
         let branch = app_data.config.generate_branch_name(title);
-        let worktree_path = app_data.config.worktree_dir.join(&branch);
+        let worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
         // Check if worktree/branch already exists - prompt user for action
         if worktree_mgr.exists(&branch) {
             debug!(branch, "Worktree already exists, prompting user");
+            let conflict_worktree_path = worktree_mgr
+                .worktree_path(&branch)
+                .unwrap_or_else(|| worktree_path.clone());
 
             // Get current HEAD info for new worktree context
             let (current_branch, current_commit) = worktree_mgr
@@ -64,7 +69,7 @@ impl Actions {
                 title: title.to_string(),
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
-                worktree_path: worktree_path.clone(),
+                worktree_path: conflict_worktree_path,
                 repo_root: repo_path.clone(),
                 existing_branch,
                 existing_commit,
