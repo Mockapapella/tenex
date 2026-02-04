@@ -522,6 +522,7 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
             parent_id: root_id,
             mux_session: root_session,
             window_index: 2,
+            repo_root: Some(fixture.repo_path.clone()),
         },
     );
     let child_id = child.id;
@@ -972,6 +973,7 @@ fn test_execute_rename_with_descendants() -> Result<(), Box<dyn std::error::Erro
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: i + 2,
+                repo_root: Some(fixture.repo_path.clone()),
             },
         );
         app.data.storage.add(child);

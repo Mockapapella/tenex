@@ -24,8 +24,10 @@ use ratatui::{
     },
     layout::Rect,
 };
+use std::fs;
 use std::io;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
 const UI_FRAME_INTERVAL_MS: u64 = 33;
@@ -33,9 +35,114 @@ const PREVIEW_SMOOTH_REFRESH_MS: u64 = 33;
 const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
 const MIN_OUTPUT_REFRESH_MS: u64 = 16;
 const MIN_PANE_ACTIVITY_SYNC_MS: u64 = 500;
+const STATE_FILE_SYNC_INTERVAL_MS: u64 = 250;
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StateFileStamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+fn state_file_stamp(path: &Path) -> Option<StateFileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    Some(StateFileStamp {
+        modified,
+        len: metadata.len(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectedSidebarKey {
+    Agent(uuid::Uuid),
+    Project(PathBuf),
+}
+
+fn selected_sidebar_key(app: &App) -> Option<SelectedSidebarKey> {
+    match app.data.selected_sidebar_item()? {
+        crate::app::SidebarItem::Agent(agent) => {
+            Some(SelectedSidebarKey::Agent(agent.info.agent.id))
+        }
+        crate::app::SidebarItem::Project(project) => {
+            Some(SelectedSidebarKey::Project(project.root))
+        }
+    }
+}
+
+fn restore_sidebar_selection(app: &mut App, key: Option<SelectedSidebarKey>) {
+    let Some(key) = key else {
+        app.validate_selection();
+        return;
+    };
+
+    let items = app.data.sidebar_items();
+    let index = items.iter().position(|item| match (item, &key) {
+        (crate::app::SidebarItem::Agent(agent), SelectedSidebarKey::Agent(id)) => {
+            agent.info.agent.id == *id
+        }
+        (crate::app::SidebarItem::Project(project), SelectedSidebarKey::Project(root)) => {
+            &project.root == root
+        }
+        _ => false,
+    });
+
+    if let Some(index) = index {
+        app.data.selected = index;
+    }
+
+    app.validate_selection();
+}
+
+struct StateFileTracker {
+    path: PathBuf,
+    last_stamp: Option<StateFileStamp>,
+    last_check: Instant,
+}
+
+impl StateFileTracker {
+    fn new(app: &App) -> Self {
+        let path = app.data.storage.resolved_state_path();
+        let last_stamp = state_file_stamp(&path);
+        Self {
+            path,
+            last_stamp,
+            last_check: Instant::now(),
+        }
+    }
+
+    fn maybe_reload_state(&mut self, app: &mut App) -> bool {
+        if self.last_check.elapsed() < Duration::from_millis(STATE_FILE_SYNC_INTERVAL_MS) {
+            return false;
+        }
+        self.last_check = Instant::now();
+
+        let Some(stamp) = state_file_stamp(&self.path) else {
+            return false;
+        };
+
+        if self.last_stamp.is_some_and(|last| last == stamp) {
+            return false;
+        }
+
+        let previous_key = selected_sidebar_key(app);
+        let previous_custom_path = app.data.storage.state_path.clone();
+
+        let Ok(mut storage) = crate::agent::Storage::load_from(&self.path) else {
+            return false;
+        };
+
+        storage.state_path = previous_custom_path;
+        storage.apply_local_agent_fields_from(&app.data.storage);
+        app.data.storage = storage;
+        restore_sidebar_selection(app, previous_key);
+
+        self.last_stamp = Some(stamp);
+        true
+    }
+}
 
 /// Run the TUI application
 ///
@@ -241,6 +348,8 @@ fn run_loop(
 ) -> Result<Option<UpdateInfo>> {
     init_preview_dimensions(terminal, app, action_handler);
 
+    let mut state_tracker = StateFileTracker::new(app);
+
     // Track selection to detect changes
     let mut last_selected = app.data.selected;
     // Track active tab so we can refresh content when switching tabs
@@ -283,6 +392,11 @@ fn run_loop(
                 action_handler.resize_agent_windows(app);
                 app.ensure_agent_list_scroll();
             }
+        }
+
+        if state_tracker.maybe_reload_state(app) {
+            needs_content_update = true;
+            last_selected = app.data.selected;
         }
 
         // Detect selection change
@@ -474,6 +588,147 @@ mod tests {
             ),
             cleanup,
         )
+    }
+
+    fn agent_in_repo(title: &str, repo_root: PathBuf) -> Agent {
+        let mut agent = Agent::new(
+            title.to_string(),
+            "echo".to_string(),
+            format!("branch/{title}"),
+            repo_root.join("worktree"),
+        );
+        agent.repo_root = Some(repo_root);
+        agent
+    }
+
+    #[test]
+    fn test_state_file_stamp_returns_none_for_missing_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new()?;
+        let missing = dir.path().join("missing.json");
+        assert!(state_file_stamp(&missing).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_state_file_tracker_reload_restores_sidebar_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new()?;
+        let state_path = dir.path().join("state.json");
+        let repo_a = dir.path().join("repo-a");
+        let repo_b = dir.path().join("repo-b");
+
+        std::fs::create_dir_all(&repo_a)?;
+        std::fs::create_dir_all(&repo_b)?;
+
+        let mut storage = Storage::with_path(state_path.clone());
+        let agent_a = agent_in_repo("agent-a", repo_a.clone());
+        let agent_b = agent_in_repo("agent-b", repo_b.clone());
+        let selected_agent_id = agent_b.id;
+        storage.add(agent_a);
+        storage.add(agent_b);
+        storage.save()?;
+
+        let config = create_test_config();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+
+        // Select agent-b.
+        let agent_b_index = app
+            .data
+            .sidebar_items()
+            .iter()
+            .position(|item| match item {
+                crate::app::SidebarItem::Agent(agent) => agent.info.agent.id == selected_agent_id,
+                crate::app::SidebarItem::Project(_) => false,
+            })
+            .ok_or("Expected agent-b to be present in the sidebar")?;
+        app.data.selected = agent_b_index;
+        assert_eq!(
+            selected_sidebar_key(&app),
+            Some(SelectedSidebarKey::Agent(selected_agent_id))
+        );
+
+        let mut tracker = StateFileTracker::new(&app);
+
+        // Another client writes a new agent to disk.
+        let mut disk = Storage::load_from(&state_path)?;
+        let agent_c = agent_in_repo("agent-c", repo_a);
+        let added_agent_id = agent_c.id;
+        disk.add(agent_c);
+        disk.save_to(&state_path)?;
+
+        tracker.last_check = Instant::now()
+            .checked_sub(Duration::from_millis(STATE_FILE_SYNC_INTERVAL_MS + 1))
+            .unwrap_or_else(Instant::now);
+        assert!(tracker.maybe_reload_state(&mut app));
+        assert!(app.data.storage.get(added_agent_id).is_some());
+        assert_eq!(
+            selected_sidebar_key(&app),
+            Some(SelectedSidebarKey::Agent(selected_agent_id))
+        );
+        assert_eq!(app.data.storage.state_path, Some(state_path.clone()));
+
+        // Select repo-b project header and reload again.
+        let repo_b_header_index = app
+            .data
+            .sidebar_items()
+            .iter()
+            .position(|item| match item {
+                crate::app::SidebarItem::Project(project) => project.root == repo_b,
+                crate::app::SidebarItem::Agent(_) => false,
+            })
+            .ok_or("Expected repo-b project header to be present in the sidebar")?;
+        app.data.selected = repo_b_header_index;
+        let selected_key = selected_sidebar_key(&app).ok_or("Expected sidebar selection")?;
+        match selected_key {
+            SelectedSidebarKey::Project(root) => assert_eq!(root, repo_b),
+            SelectedSidebarKey::Agent(_) => return Err("Expected project selection".into()),
+        }
+
+        let mut disk = Storage::load_from(&state_path)?;
+        let agent_d = agent_in_repo("agent-d", repo_b.clone());
+        disk.add(agent_d);
+        disk.save_to(&state_path)?;
+
+        tracker.last_check = Instant::now()
+            .checked_sub(Duration::from_millis(STATE_FILE_SYNC_INTERVAL_MS + 1))
+            .unwrap_or_else(Instant::now);
+        assert!(tracker.maybe_reload_state(&mut app));
+        let selected_key = selected_sidebar_key(&app).ok_or("Expected sidebar selection")?;
+        match selected_key {
+            SelectedSidebarKey::Project(root) => assert_eq!(root, repo_b),
+            SelectedSidebarKey::Agent(_) => return Err("Expected project selection".into()),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_state_file_tracker_does_not_reload_when_interval_not_elapsed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new()?;
+        let state_path = dir.path().join("state.json");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo)?;
+
+        let mut storage = Storage::with_path(state_path);
+        storage.add(agent_in_repo("agent", repo));
+        storage.save()?;
+
+        let config = create_test_config();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+
+        let mut tracker = StateFileTracker::new(&app);
+        tracker.last_check = Instant::now();
+        assert!(!tracker.maybe_reload_state(&mut app));
+
+        Ok(())
     }
 
     #[test]
@@ -2024,7 +2279,7 @@ mod tests {
             "branch".to_string(),
             PathBuf::from("/tmp"),
         ));
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.enter_mode(PreviewFocusedMode.into());
 
         let mut keys = Vec::new();

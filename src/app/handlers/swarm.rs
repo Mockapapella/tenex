@@ -203,6 +203,10 @@ impl Actions {
                 parent_id: config.parent_id,
                 mux_session: config.root_session.to_string(),
                 window_index: config.reserved_window_index,
+                repo_root: app_data
+                    .storage
+                    .get(config.parent_id)
+                    .and_then(|agent| agent.repo_root.clone()),
             },
         );
         child.workspace_kind = config.workspace_kind;
@@ -330,25 +334,37 @@ impl Actions {
         count: usize,
     ) -> Result<Option<SpawnConfig>> {
         let root_title = Self::generate_root_title(task);
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo_path = app_data
+            .spawn
+            .root_repo_path
+            .clone()
+            .or_else(|| app_data.selected_project_root())
+            .or_else(|| std::env::current_dir().ok())
+            .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
             let config = self.create_plain_dir_root_for_swarm(app_data, root_title, repo_path)?;
             return Ok(Some(config));
         };
         let branch = app_data.config.generate_branch_name(&root_title);
-        let worktree_path = app_data.config.worktree_dir.join(&branch);
+        let worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
         if worktree_mgr.exists(&branch) {
+            let conflict_worktree_path = worktree_mgr
+                .worktree_path(&branch)
+                .unwrap_or_else(|| worktree_path.clone());
             Self::setup_worktree_conflict(
                 app_data,
                 &worktree_mgr,
                 root_title,
                 task,
                 branch,
-                worktree_path,
+                conflict_worktree_path,
                 count,
+                repo_path,
             );
             return Ok(None);
         }
@@ -362,6 +378,7 @@ impl Actions {
             branch.clone(),
             worktree_path.clone(),
         );
+        root_agent.repo_root = Some(repo_path);
         let cli = crate::conversation::detect_agent_cli(&program);
         if cli == crate::conversation::AgentCli::Claude {
             root_agent.conversation_id = Some(root_agent.id.to_string());
@@ -422,6 +439,7 @@ impl Actions {
         let mut root_agent =
             Agent::new(root_title, program.clone(), branch.clone(), workdir.clone());
         root_agent.workspace_kind = WorkspaceKind::PlainDir;
+        root_agent.repo_root = Some(workdir.clone());
         let cli = crate::conversation::detect_agent_cli(&program);
         if cli == crate::conversation::AgentCli::Claude {
             root_agent.conversation_id = Some(root_agent.id.to_string());
@@ -483,6 +501,10 @@ impl Actions {
     }
 
     /// Setup worktree conflict info for user to resolve
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Worktree conflict setup needs repo, branch, and UI context"
+    )]
     fn setup_worktree_conflict(
         app_data: &mut AppData,
         worktree_mgr: &WorktreeManager<'_>,
@@ -491,6 +513,7 @@ impl Actions {
         branch: String,
         worktree_path: PathBuf,
         count: usize,
+        repo_root: PathBuf,
     ) {
         debug!(branch, "Worktree already exists for swarm, prompting user");
 
@@ -508,6 +531,7 @@ impl Actions {
             prompt: task.map(String::from),
             branch,
             worktree_path,
+            repo_root,
             existing_branch,
             existing_commit,
             current_branch,
@@ -590,6 +614,10 @@ impl Actions {
                 parent_id: config.parent_agent_id,
                 mux_session: config.root_session.clone(),
                 window_index,
+                repo_root: app_data
+                    .storage
+                    .get(config.parent_agent_id)
+                    .and_then(|agent| agent.repo_root.clone()),
             },
         );
         child.workspace_kind = config.workspace_kind;
@@ -1193,6 +1221,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: 2,
+                repo_root: None,
             },
         );
         app.data.storage.add(child);
@@ -1207,6 +1236,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 3,
+                repo_root: None,
             },
         );
         terminal.is_terminal = true;

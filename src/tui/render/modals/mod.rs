@@ -531,6 +531,7 @@ mod tests {
             prompt: None,
             branch: "wt-branch".to_string(),
             worktree_path: PathBuf::from("/tmp/wt"),
+            repo_root: PathBuf::from("/tmp"),
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),

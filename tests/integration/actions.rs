@@ -66,7 +66,7 @@ fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
         agent.set_status(tenex::agent::Status::Running);
     }
 
-    app.data.selected = 0;
+    app.data.selected = 1;
     app.validate_selection();
     assert_eq!(
         app.selected_agent().map(|a| a.title.as_str()),
@@ -181,9 +181,6 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
     app.apply_mode(next);
     assert_eq!(app.data.storage.len(), 1);
 
-    // Select the agent
-    app.select_next();
-
     // Now kill it via confirm action
     app.enter_mode(
         tenex::state::ConfirmingMode {
@@ -220,7 +217,6 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
     // Create an agent
     let next = handler.create_agent(&mut app.data, "preview-test", None)?;
     app.apply_mode(next);
-    app.select_next();
 
     // Wait for session
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -269,7 +265,6 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
     // Create an agent.
     let next = handler.create_agent(&mut app.data, "preview-scroll-test", None)?;
     app.apply_mode(next);
-    app.select_next();
 
     let session = app
         .selected_agent()
@@ -372,7 +367,6 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
     // Create an agent
     let next = handler.create_agent(&mut app.data, "diff-test", None)?;
     app.apply_mode(next);
-    app.select_next();
 
     // Update diff
     let result = handler.update_diff(&mut app);
@@ -410,7 +404,6 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
     // Create an agent
     let next = handler.create_agent(&mut app.data, "focusable", None)?;
     app.apply_mode(next);
-    app.select_next();
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -503,7 +496,9 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    app.select_next();
+    if let Ok(next) = create_result {
+        app.apply_mode(next);
+    }
 
     // Push action (just sets status message, doesn't actually push in test)
     let result = handler.handle_action(&mut app, tenex::config::Action::Push);

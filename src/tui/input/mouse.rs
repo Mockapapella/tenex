@@ -285,7 +285,7 @@ fn handle_agent_list_click(app: &mut App, x: u16, y: u16, area: Rect) {
 
     let row = usize::from(y.saturating_sub(inner.y));
     let idx = app.data.ui.agent_list_scroll.saturating_add(row);
-    let visible_count = app.data.storage.visible_count();
+    let visible_count = app.data.sidebar_len();
     if idx >= visible_count {
         return;
     }

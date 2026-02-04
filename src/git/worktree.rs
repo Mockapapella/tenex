@@ -45,6 +45,12 @@ fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_empty_dir(path: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("Failed to read directory {}", path.display()))?;
+    Ok(entries.next().is_none())
+}
+
 fn normalize_ignored_rel_path(raw_path: &[u8]) -> Option<PathBuf> {
     use std::ffi::OsStr;
     use std::path::Component;
@@ -266,6 +272,8 @@ impl<'a> Manager<'a> {
             }
         }
 
+        self.cleanup_orphaned_worktree_admin_dir(&worktree_name)?;
+
         // Now delete the branch if it exists
         let branch_mgr = super::BranchManager::new(self.repo);
         if branch_mgr.exists(branch) {
@@ -280,9 +288,6 @@ impl<'a> Manager<'a> {
 
         let reference = branch_ref.into_reference();
 
-        // Worktree name cannot contain slashes (it becomes a directory name in .git/worktrees/)
-        let worktree_name = branch.replace('/', "-");
-
         self.repo
             .worktree(
                 &worktree_name,
@@ -296,6 +301,66 @@ impl<'a> Manager<'a> {
         }
 
         info!(branch, ?path, "Worktree created");
+        Ok(())
+    }
+
+    fn cleanup_orphaned_worktree_admin_dir(&self, worktree_name: &str) -> Result<()> {
+        let admin_dir = self.repo.path().join("worktrees").join(worktree_name);
+        if !admin_dir.exists() {
+            return Ok(());
+        }
+
+        if !admin_dir.is_dir() {
+            bail!(
+                "Worktree admin path exists but is not a directory: {}",
+                admin_dir.display()
+            );
+        }
+
+        if is_empty_dir(&admin_dir)? {
+            warn!(?admin_dir, "Removing orphaned worktree admin directory");
+            remove_dir_all_with_retries(&admin_dir)?;
+            return Ok(());
+        }
+
+        let gitdir_path = admin_dir.join("gitdir");
+        if !gitdir_path.exists() {
+            warn!(
+                ?admin_dir,
+                "Removing invalid worktree admin directory (missing gitdir)"
+            );
+            remove_dir_all_with_retries(&admin_dir)?;
+            return Ok(());
+        }
+
+        let raw_gitdir = fs::read_to_string(&gitdir_path)
+            .with_context(|| format!("Failed to read {}", gitdir_path.display()))?;
+        let gitdir = raw_gitdir.trim();
+        if gitdir.is_empty() {
+            warn!(
+                ?admin_dir,
+                "Removing invalid worktree admin directory (empty gitdir)"
+            );
+            remove_dir_all_with_retries(&admin_dir)?;
+            return Ok(());
+        }
+
+        let candidate = PathBuf::from(gitdir);
+        let resolved = if candidate.is_absolute() {
+            candidate
+        } else {
+            admin_dir.join(candidate)
+        };
+
+        if !resolved.exists() {
+            warn!(
+                ?admin_dir,
+                gitdir = %resolved.display(),
+                "Removing stale worktree admin directory"
+            );
+            remove_dir_all_with_retries(&admin_dir)?;
+        }
+
         Ok(())
     }
 
@@ -403,6 +468,16 @@ impl<'a> Manager<'a> {
     pub fn exists(&self, name: &str) -> bool {
         let worktree_name = name.replace('/', "-");
         self.repo.find_worktree(&worktree_name).is_ok()
+    }
+
+    /// Returns the filesystem path for a worktree, if present.
+    #[must_use]
+    pub fn worktree_path(&self, name: &str) -> Option<PathBuf> {
+        let worktree_name = name.replace('/', "-");
+        self.repo
+            .find_worktree(&worktree_name)
+            .ok()
+            .map(|wt| wt.path().to_path_buf())
     }
 
     /// Lock a worktree to prevent it from being pruned
@@ -666,6 +741,25 @@ mod tests {
 
         assert!(wt_path.exists());
         assert!(manager.exists("feature-test"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_removes_orphaned_admin_dir()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        let admin_dir = repo.path().join("worktrees").join("agent-asdf");
+        fs::create_dir_all(&admin_dir)?;
+        assert!(is_empty_dir(&admin_dir)?);
+
+        let wt_path = temp_dir.path().join("worktrees").join("asdf");
+        manager.create_with_new_branch(&wt_path, "agent/asdf")?;
+
+        assert!(wt_path.exists());
+        assert!(manager.exists("agent/asdf"));
+        assert!(admin_dir.join("gitdir").exists());
         Ok(())
     }
 

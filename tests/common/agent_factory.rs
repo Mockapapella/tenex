@@ -13,6 +13,7 @@ pub fn create_child_agent(parent: &Agent, title: &str, window_index: u32) -> Age
             parent_id: parent.id,
             mux_session: parent.mux_session.clone(),
             window_index,
+            repo_root: parent.repo_root.clone(),
         },
     )
 }

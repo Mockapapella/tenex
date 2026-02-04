@@ -16,7 +16,7 @@ fn create_test_agent(title: &str) -> Agent {
 #[test]
 fn test_app_new() {
     let app = App::default();
-    assert_eq!(app.data.selected, 0);
+    assert_eq!(app.data.selected, 1);
     assert_eq!(app.mode, AppMode::normal());
     assert_eq!(app.data.active_tab, Tab::Preview);
     assert!(!app.data.should_quit);
@@ -29,13 +29,15 @@ fn test_select_next() {
     app.data.storage.add(create_test_agent("agent2"));
     app.data.storage.add(create_test_agent("agent3"));
 
-    assert_eq!(app.data.selected, 0);
-    app.select_next();
     assert_eq!(app.data.selected, 1);
     app.select_next();
     assert_eq!(app.data.selected, 2);
     app.select_next();
+    assert_eq!(app.data.selected, 3);
+    app.select_next();
     assert_eq!(app.data.selected, 0);
+    app.select_next();
+    assert_eq!(app.data.selected, 1);
 }
 
 #[test]
@@ -45,20 +47,22 @@ fn test_select_prev() {
     app.data.storage.add(create_test_agent("agent2"));
     app.data.storage.add(create_test_agent("agent3"));
 
+    assert_eq!(app.data.selected, 1);
+    app.select_prev();
     assert_eq!(app.data.selected, 0);
     app.select_prev();
-    assert_eq!(app.data.selected, 2);
+    assert_eq!(app.data.selected, 3);
     app.select_prev();
-    assert_eq!(app.data.selected, 1);
+    assert_eq!(app.data.selected, 2);
 }
 
 #[test]
 fn test_select_empty_storage() {
     let mut app = App::default();
     app.select_next();
-    assert_eq!(app.data.selected, 0);
+    assert_eq!(app.data.selected, 1);
     app.select_prev();
-    assert_eq!(app.data.selected, 0);
+    assert_eq!(app.data.selected, 1);
 }
 
 #[test]

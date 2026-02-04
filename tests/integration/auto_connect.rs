@@ -30,7 +30,10 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/my-feature", fixture.session_prefix);
-    let worktree_path = fixture.worktree_path().join(&branch_name);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Verify the worktree exists
@@ -57,9 +60,12 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
         agent.branch, branch_name,
         "Agent branch should match the worktree branch"
     );
+    let expected_title = branch_name
+        .strip_prefix(&app.data.config.branch_prefix)
+        .unwrap_or(branch_name.as_str());
     assert_eq!(
-        agent.title, branch_name,
-        "Agent title should be the branch name"
+        agent.title, expected_title,
+        "Agent title should be derived from the branch name"
     );
     assert_paths_eq(
         &agent.worktree_path,
@@ -94,7 +100,10 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = format!("{}/existing-agent", fixture.session_prefix);
-    let worktree_path = fixture.worktree_path().join(&branch_name);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
 
     // Create an agent for this worktree first (simulating it already being tracked)
@@ -152,7 +161,10 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
     let repo = git2::Repository::open(&fixture.repo_path)?;
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     let branch_name = "other-prefix/some-feature";
-    let worktree_path = fixture.worktree_path().join(branch_name);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
 
     // Call auto_connect_worktrees
@@ -193,15 +205,24 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
 
     let branch1 = format!("{}/feature-one", fixture.session_prefix);
-    let path1 = fixture.worktree_path().join(&branch1);
+    let path1 = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch1);
     worktree_mgr.create_with_new_branch(&path1, &branch1)?;
 
     let branch2 = format!("{}/feature-two", fixture.session_prefix);
-    let path2 = fixture.worktree_path().join(&branch2);
+    let path2 = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch2);
     worktree_mgr.create_with_new_branch(&path2, &branch2)?;
 
     let branch3 = format!("{}/feature-three", fixture.session_prefix);
-    let path3 = fixture.worktree_path().join(&branch3);
+    let path3 = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch3);
     worktree_mgr.create_with_new_branch(&path3, &branch3)?;
 
     // Call auto_connect_worktrees
@@ -299,9 +320,6 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
     );
 
     // Step 2: Delete the agent (simulating kill_agent)
-    // Select the agent first
-    app.select_next();
-
     // Enter confirming mode and confirm the kill
     app.enter_mode(
         tenex::state::ConfirmingMode {

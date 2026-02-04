@@ -2,6 +2,7 @@
 
 use crate::agent::{Status, WorkspaceKind};
 use crate::app::{App, DiffLineMeta, Tab};
+use crate::app::{SidebarItem, SidebarProject};
 use crate::state::AppMode;
 use ratatui::{
     Frame,
@@ -87,6 +88,30 @@ fn agent_list_item<'a>(
     ListItem::new(Line::from(spans)).style(style)
 }
 
+fn project_list_item<'a>(app: &App, idx: usize, project: &'a SidebarProject) -> ListItem<'a> {
+    let style = if idx == app.data.selected {
+        Style::default()
+            .fg(colors::TEXT_PRIMARY)
+            .bg(colors::SURFACE_HIGHLIGHT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(colors::TEXT_DIM)
+            .bg(colors::SURFACE)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let collapse_indicator = if project.collapsed { "▶ " } else { "▼ " };
+    let count = format!(" ({})", project.agent_count);
+
+    ListItem::new(Line::from(vec![
+        Span::styled(collapse_indicator, Style::default().fg(colors::TEXT_DIM)),
+        Span::styled(&project.label, style),
+        Span::styled(count, Style::default().fg(colors::TEXT_DIM)),
+    ]))
+    .style(style)
+}
+
 /// Render the main area (agent list + content pane)
 pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
@@ -101,7 +126,7 @@ pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Render the agent list panel
 pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Use optimized method that pre-computes child info in O(n) instead of O(n²)
-    let visible = app.data.storage.visible_agents_with_info();
+    let visible = app.data.sidebar_items();
     let total_items = visible.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
     let max_scroll = total_items.saturating_sub(visible_height);
@@ -110,7 +135,10 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let items: Vec<ListItem<'_>> = visible
         .iter()
         .enumerate()
-        .map(|(i, info)| agent_list_item(app, i, info))
+        .map(|(i, item)| match item {
+            SidebarItem::Project(project) => project_list_item(app, i, project),
+            SidebarItem::Agent(agent) => agent_list_item(app, i, &agent.info),
+        })
         .collect();
 
     let title = format!(" Agents ({}) ", app.data.storage.len());
@@ -854,7 +882,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Preview;
 
         app.data.ui.diff_hash = 123;
@@ -877,7 +905,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Diff;
 
         app.data.ui.diff_hash = 123;
@@ -900,7 +928,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Preview;
 
         app.data.ui.diff_hash = 123;
@@ -973,7 +1001,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Preview;
 
         app.data.ui.diff_hash = 0;
@@ -999,7 +1027,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Commits;
 
         app.data.ui.diff_hash = 0;
@@ -1025,7 +1053,7 @@ mod tests {
         );
         let agent_id = agent.id;
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
         app.data.active_tab = Tab::Preview;
 
         app.data.ui.diff_hash = 0;
@@ -1070,7 +1098,7 @@ mod tests {
             std::path::PathBuf::from("/tmp"),
         );
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
 
         assert!(!tab_bar_tab_has_unseen_changes(&app, Tab::Preview));
         Ok(())
@@ -1150,7 +1178,7 @@ mod tests {
             std::path::PathBuf::from("/tmp"),
         );
         app.data.storage.add(agent);
-        app.data.selected = 0;
+        app.data.selected = 1;
 
         app.enter_mode(DiffFocusedMode.into());
         app.data.active_tab = Tab::Diff;

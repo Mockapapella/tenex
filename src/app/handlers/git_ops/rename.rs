@@ -131,13 +131,20 @@ impl Actions {
             .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
+        let repo_root = agent
+            .repo_root
+            .clone()
+            .or_else(|| crate::git::repository_workspace_root(&agent.worktree_path).ok())
+            .unwrap_or_else(|| agent.worktree_path.clone());
         let worktree_path = agent.worktree_path.clone();
         let old_branch = agent.branch.clone();
         let mux_session = agent.mux_session.clone();
 
         // Generate new branch name from new title
         let new_branch = app_data.config.generate_branch_name(new_name);
-        let new_worktree_path = app_data.config.worktree_dir.join(&new_branch);
+        let new_worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &new_branch);
 
         // Check if remote branch exists before we start
         let remote_exists = Self::check_remote_branch_exists(&worktree_path, &old_branch)?;
@@ -162,6 +169,7 @@ impl Actions {
                 &new_worktree_path,
                 &old_branch,
                 &new_branch,
+                &repo_root,
             )? {
                 effective_worktree_path.clone_from(&new_worktree_path);
             } else {
@@ -199,6 +207,7 @@ impl Actions {
         new_path: &std::path::Path,
         old_branch: &str,
         new_branch: &str,
+        repo_root: &std::path::Path,
     ) -> Result<bool> {
         // Ensure parent directory exists
         if let Some(parent) = new_path.parent() {
@@ -216,8 +225,7 @@ impl Actions {
                 |path: &std::path::Path| -> String { path.to_string_lossy().to_string() };
 
             let old_worktree_name = old_branch.replace('/', "-");
-            let repo_path = std::env::current_dir()?;
-            let worktree_meta_dir = repo_path
+            let worktree_meta_dir = repo_root
                 .join(".git")
                 .join("worktrees")
                 .join(&old_worktree_name);
@@ -235,7 +243,7 @@ impl Actions {
 
                 // Rename the worktree metadata directory
                 let new_worktree_name = new_branch.replace('/', "-");
-                let new_worktree_meta_dir = repo_path
+                let new_worktree_meta_dir = repo_root
                     .join(".git")
                     .join("worktrees")
                     .join(&new_worktree_name);

@@ -45,6 +45,12 @@ pub struct Agent {
     /// Path to the git worktree
     pub worktree_path: PathBuf,
 
+    /// Root directory of the repository/workspace this agent belongs to.
+    ///
+    /// For git worktrees this is the main repository root (not the worktree path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_root: Option<PathBuf>,
+
     /// Whether this agent runs in a Tenex-managed git worktree or a plain directory.
     #[serde(default)]
     pub workspace_kind: WorkspaceKind,
@@ -67,8 +73,8 @@ pub struct Agent {
     #[serde(default)]
     pub window_index: Option<u32>,
 
-    /// Whether children are collapsed in the UI (default: true)
-    #[serde(default = "default_collapsed")]
+    /// Whether children are collapsed in this client (default: true).
+    #[serde(skip, default = "default_collapsed")]
     pub collapsed: bool,
 
     /// Whether this is a terminal (not a Claude agent) - excluded from broadcast
@@ -90,6 +96,8 @@ pub struct ChildConfig {
     pub mux_session: String,
     /// Window index in the session
     pub window_index: u32,
+    /// Repository/workspace root for the agent.
+    pub repo_root: Option<PathBuf>,
 }
 
 impl Agent {
@@ -108,6 +116,7 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
+            repo_root: None,
             workspace_kind: WorkspaceKind::GitWorktree,
             mux_session,
             created_at: now,
@@ -139,6 +148,7 @@ impl Agent {
             status: Status::Starting,
             branch,
             worktree_path,
+            repo_root: config.repo_root,
             workspace_kind: WorkspaceKind::GitWorktree,
             mux_session: config.mux_session,
             created_at: now,
@@ -328,6 +338,7 @@ mod tests {
                 parent_id: parent.id,
                 mux_session: parent.mux_session.clone(),
                 window_index: 2,
+                repo_root: None,
             },
         );
 
@@ -351,6 +362,7 @@ mod tests {
                 parent_id: parent.id,
                 mux_session: parent.mux_session,
                 window_index: 2,
+                repo_root: None,
             },
         );
 

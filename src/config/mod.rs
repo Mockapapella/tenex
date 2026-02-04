@@ -40,7 +40,7 @@ impl Default for Config {
             } else {
                 "claude --allow-dangerously-skip-permissions".to_string()
             },
-            branch_prefix: "tenex/".to_string(),
+            branch_prefix: "agent/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
             worktree_dir: Self::default_worktree_dir(),
@@ -123,6 +123,35 @@ impl Config {
         Self::instance_root().join("worktrees")
     }
 
+    fn project_dir_name(repo_root: &Path) -> String {
+        repo_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .map_or_else(|| "project".to_string(), str::to_string)
+    }
+
+    fn worktree_leaf_dir_name(branch: &str, branch_prefix: &str) -> String {
+        let leaf = branch
+            .strip_prefix(branch_prefix)
+            .or_else(|| branch.strip_prefix("tenex/"))
+            .unwrap_or(branch);
+        leaf.replace('/', "-")
+    }
+
+    /// Returns the directory Tenex should store worktrees for a given repo root under.
+    #[must_use]
+    pub fn worktree_dir_for_repo_root(&self, repo_root: &Path) -> PathBuf {
+        self.worktree_dir.join(Self::project_dir_name(repo_root))
+    }
+
+    /// Returns the worktree path for a given repo root and branch name.
+    #[must_use]
+    pub fn worktree_path_for_repo_root(&self, repo_root: &Path, branch: &str) -> PathBuf {
+        self.worktree_dir_for_repo_root(repo_root)
+            .join(Self::worktree_leaf_dir_name(branch, &self.branch_prefix))
+    }
+
     /// Generate a branch name for a new agent
     #[must_use]
     pub fn generate_branch_name(&self, title: &str) -> String {
@@ -154,7 +183,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.default_program, "sh -c 'sleep 3600'");
-        assert_eq!(config.branch_prefix, "tenex/");
+        assert_eq!(config.branch_prefix, "agent/");
         assert!(!config.auto_yes);
         assert_eq!(config.poll_interval_ms, 100);
     }
@@ -165,13 +194,13 @@ mod tests {
 
         assert_eq!(
             config.generate_branch_name("Fix Auth Bug"),
-            "tenex/fix-auth-bug"
+            "agent/fix-auth-bug"
         );
         assert_eq!(
             config.generate_branch_name("hello_world"),
-            "tenex/hello-world"
+            "agent/hello-world"
         );
-        assert_eq!(config.generate_branch_name("  spaces  "), "tenex/spaces");
+        assert_eq!(config.generate_branch_name("  spaces  "), "agent/spaces");
     }
 
     #[test]
@@ -207,11 +236,11 @@ mod tests {
         // Test various special characters
         assert_eq!(
             config.generate_branch_name("fix@#$%bug"),
-            "tenex/fix----bug"
+            "agent/fix----bug"
         );
         assert_eq!(
             config.generate_branch_name("hello/world"),
-            "tenex/hello-world"
+            "agent/hello-world"
         );
     }
 

@@ -18,7 +18,7 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     // Create agent manually (simulating cmd_new)
     let title = "test-workflow";
     let branch = config.generate_branch_name(title);
-    let worktree_path = config.worktree_dir.join(&branch);
+    let worktree_path = config.worktree_path_for_repo_root(&fixture.repo_path, &branch);
     let session_name = branch.replace('/', "-");
 
     // Create git worktree
@@ -179,7 +179,7 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create an agent (simulate `muster new`)
     let title = "workflow-agent";
     let branch = config.generate_branch_name(title);
-    let worktree_path = config.worktree_dir.join(&branch);
+    let worktree_path = config.worktree_path_for_repo_root(&fixture.repo_path, &branch);
     let session_name = branch.replace('/', "-");
 
     let repo = tenex::git::open_repository(&fixture.repo_path)?;

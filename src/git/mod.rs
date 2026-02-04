@@ -11,6 +11,7 @@ pub use diff::{
 pub use worktree::{Info as WorktreeInfo, Manager as WorktreeManager};
 
 use anyhow::{Context, Result};
+use std::borrow::Cow;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -66,6 +67,56 @@ pub fn repository_root(path: &Path) -> Result<PathBuf> {
     let repo = open_repository(path)?;
     repo.workdir()
         .map(std::path::Path::to_path_buf)
+        .context("Repository has no working directory")
+}
+
+fn resolve_repo_common_dir(git_dir: &Path) -> Result<Cow<'_, Path>> {
+    let commondir_path = git_dir.join("commondir");
+    if !commondir_path.exists() {
+        return Ok(Cow::Borrowed(git_dir));
+    }
+
+    let raw = fs::read_to_string(&commondir_path)
+        .with_context(|| format!("Failed to read {}", commondir_path.display()))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Cow::Borrowed(git_dir));
+    }
+
+    let path = PathBuf::from(trimmed);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        git_dir.join(path)
+    };
+
+    let canonical = resolved.canonicalize().unwrap_or(resolved);
+    Ok(Cow::Owned(canonical))
+}
+
+/// Get the workspace root of the repository that owns the given path.
+///
+/// For a normal repository this returns the repository root. For git worktrees
+/// this returns the main repository root (not the worktree directory).
+///
+/// # Errors
+///
+/// Returns an error if the path is not inside a git repository.
+pub fn repository_workspace_root(path: &Path) -> Result<PathBuf> {
+    let repo = open_repository(path)?;
+    let git_dir = repo.path();
+    let common_dir = resolve_repo_common_dir(git_dir)?;
+
+    if common_dir.file_name().is_some_and(|name| name == ".git") {
+        return Ok(common_dir
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf());
+    }
+
+    repo.workdir()
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| common_dir.parent().map(Path::to_path_buf))
         .context("Repository has no working directory")
 }
 
@@ -136,6 +187,36 @@ mod tests {
         Ok(temp_dir)
     }
 
+    fn init_test_repo_with_commit() -> Result<TempDir, Box<dyn std::error::Error>> {
+        let temp_dir = init_test_repo()?;
+
+        let output = git_command()
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp_dir.path())
+            .output()?;
+        if !output.status.success() {
+            return Err("Failed to configure test git user email".into());
+        }
+
+        let output = git_command()
+            .args(["config", "user.name", "Tenex Test"])
+            .current_dir(temp_dir.path())
+            .output()?;
+        if !output.status.success() {
+            return Err("Failed to configure test git user name".into());
+        }
+
+        let output = git_command()
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(temp_dir.path())
+            .output()?;
+        if !output.status.success() {
+            return Err("Failed to create initial test commit".into());
+        }
+
+        Ok(temp_dir)
+    }
+
     #[test]
     fn test_is_git_repository() -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = init_test_repo()?;
@@ -164,6 +245,81 @@ mod tests {
         let expected = temp_dir.path().canonicalize()?;
         let actual = root.canonicalize()?;
         assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_workspace_root_regular_repo() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = init_test_repo()?;
+        let root = repository_workspace_root(temp_dir.path())?;
+        assert_eq!(root.canonicalize()?, temp_dir.path().canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_repo_common_dir_empty_commondir_file_returns_git_dir()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let git_dir = dir.path();
+        std::fs::write(git_dir.join("commondir"), "  \n")?;
+
+        let common_dir = resolve_repo_common_dir(git_dir)?;
+        assert_eq!(common_dir.as_ref(), git_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_repo_common_dir_absolute_path() -> Result<(), Box<dyn std::error::Error>> {
+        let git_dir = TempDir::new()?;
+        let common_dir = TempDir::new()?;
+
+        std::fs::write(
+            git_dir.path().join("commondir"),
+            common_dir.path().to_string_lossy().as_ref(),
+        )?;
+
+        assert_eq!(
+            resolve_repo_common_dir(git_dir.path())?
+                .as_ref()
+                .canonicalize()?,
+            common_dir.path().canonicalize()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_workspace_root_worktree() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = init_test_repo_with_commit()?;
+
+        let worktree_path = temp_dir.path().join("worktree");
+        let output = git_command()
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature/test-worktree",
+                worktree_path.to_str().ok_or("invalid worktree path")?,
+            ])
+            .current_dir(temp_dir.path())
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to create test worktree: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+
+        let root = repository_workspace_root(&worktree_path)?;
+        assert_eq!(root.canonicalize()?, temp_dir.path().canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_workspace_root_errors_for_non_repo() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = TempDir::new()?;
+        assert!(repository_workspace_root(dir.path()).is_err());
         Ok(())
     }
 

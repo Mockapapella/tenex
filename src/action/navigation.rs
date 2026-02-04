@@ -78,6 +78,50 @@ impl ValidIn<ScrollingMode> for PrevAgentAction {
     }
 }
 
+/// Normal-mode action: highlight the selected agent's project header.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SelectProjectHeaderAction;
+
+impl ValidIn<NormalMode> for SelectProjectHeaderAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_project_header();
+        Ok(AppMode::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for SelectProjectHeaderAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_project_header();
+        Ok(ScrollingMode.into())
+    }
+}
+
+/// Normal-mode action: highlight the first agent under the selected project.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SelectProjectFirstAgentAction;
+
+impl ValidIn<NormalMode> for SelectProjectFirstAgentAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_first_agent_in_selected_project();
+        Ok(AppMode::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for SelectProjectFirstAgentAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.select_first_agent_in_selected_project();
+        Ok(ScrollingMode.into())
+    }
+}
+
 /// Normal-mode action: scroll up in the active view.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollUpAction;
@@ -308,25 +352,25 @@ mod tests {
     fn test_next_prev_agent_actions_update_selection() -> Result<(), Box<dyn std::error::Error>> {
         let (mut data, _temp) = create_test_data()?;
 
-        assert_eq!(data.selected, 0);
-        assert_eq!(
-            NextAgentAction.execute(NormalMode, &mut data)?,
-            AppMode::normal()
-        );
-        assert_eq!(data.selected, 0);
-
-        add_two_agents(&mut data);
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         assert_eq!(
             NextAgentAction.execute(NormalMode, &mut data)?,
             AppMode::normal()
         );
         assert_eq!(data.selected, 1);
+
+        add_two_agents(&mut data);
+        assert_eq!(data.selected, 1);
+        assert_eq!(
+            NextAgentAction.execute(NormalMode, &mut data)?,
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 2);
         assert_eq!(
             PrevAgentAction.execute(ScrollingMode, &mut data)?,
             ScrollingMode.into()
         );
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, 1);
         Ok(())
     }
 

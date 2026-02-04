@@ -376,6 +376,7 @@ fn test_rename_subagent_flow_state_transitions() -> Result<(), Box<dyn std::erro
             parent_id: root.id,
             mux_session: root.mux_session,
             window_index: 1,
+            repo_root: None,
         },
     );
     let child_id = child.id;
@@ -570,6 +571,7 @@ fn test_handle_rename_with_subagent() -> Result<(), Box<dyn std::error::Error>> 
             parent_id: root_id,
             mux_session: root.mux_session,
             window_index: 1,
+            repo_root: None,
         },
     );
     let child_id = child.id;

@@ -222,11 +222,11 @@ mod tests {
             ));
         }
 
-        assert_eq!(app.data.selected, 0);
-        handler.handle_action(&mut app, Action::NextAgent)?;
         assert_eq!(app.data.selected, 1);
+        handler.handle_action(&mut app, Action::NextAgent)?;
+        assert_eq!(app.data.selected, 2);
         handler.handle_action(&mut app, Action::PrevAgent)?;
-        assert_eq!(app.data.selected, 0);
+        assert_eq!(app.data.selected, 1);
         Ok(())
     }
 
@@ -506,12 +506,13 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         );
         terminal.is_terminal = true;
         app.data.storage.add(terminal);
 
-        app.data.selected = 1;
+        app.data.selected = 2;
 
         handler.handle_action(&mut app, Action::AddChildren)?;
         assert_eq!(app.mode, AppMode::normal());
@@ -761,6 +762,7 @@ mod tests {
             prompt: Some("test prompt".to_string()),
             branch: "tenex/test".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/test"),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("tenex/test".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -796,6 +798,7 @@ mod tests {
             prompt: Some("swarm task".to_string()),
             branch: "tenex/swarm".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/swarm"),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("tenex/swarm".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -911,6 +914,7 @@ mod tests {
                 parent_id: uuid::Uuid::new_v4(),
                 mux_session: "test-session".to_string(),
                 window_index: 2,
+                repo_root: None,
             },
         );
         terminal.is_terminal = true;

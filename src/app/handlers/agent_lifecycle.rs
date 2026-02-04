@@ -32,19 +32,27 @@ impl Actions {
     ) -> Result<AppMode> {
         debug!(title, prompt, "Creating new agent");
 
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo_path = app_data
+            .selected_project_root()
+            .or_else(|| std::env::current_dir().ok())
+            .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
             self.create_agent_in_plain_dir(app_data, title, prompt, &repo_path)?;
             return Ok(AppMode::normal());
         };
         let branch = app_data.config.generate_branch_name(title);
-        let worktree_path = app_data.config.worktree_dir.join(&branch);
+        let worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
         // Check if worktree/branch already exists - prompt user for action
         if worktree_mgr.exists(&branch) {
             debug!(branch, "Worktree already exists, prompting user");
+            let conflict_worktree_path = worktree_mgr
+                .worktree_path(&branch)
+                .unwrap_or_else(|| worktree_path.clone());
 
             // Get current HEAD info for new worktree context
             let (current_branch, current_commit) = worktree_mgr
@@ -61,7 +69,8 @@ impl Actions {
                 title: title.to_string(),
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
-                worktree_path: worktree_path.clone(),
+                worktree_path: conflict_worktree_path,
+                repo_root: repo_path.clone(),
                 existing_branch,
                 existing_commit,
                 current_branch,
@@ -74,7 +83,7 @@ impl Actions {
             .into());
         }
 
-        self.create_agent_internal(app_data, title, prompt, &branch, &worktree_path)?;
+        self.create_agent_internal(app_data, &repo_path, title, prompt, &branch, &worktree_path)?;
         Ok(AppMode::normal())
     }
 
@@ -95,6 +104,7 @@ impl Actions {
             workdir.to_path_buf(),
         );
         agent.workspace_kind = crate::agent::WorkspaceKind::PlainDir;
+        agent.repo_root = Some(workdir.to_path_buf());
 
         let cli = crate::conversation::detect_agent_cli(&program);
         if cli == crate::conversation::AgentCli::Claude {
@@ -143,13 +153,13 @@ impl Actions {
     pub(crate) fn create_agent_internal(
         self,
         app_data: &mut AppData,
+        repo_path: &Path,
         title: &str,
         prompt: Option<&str>,
         branch: &str,
         worktree_path: &std::path::Path,
     ) -> Result<()> {
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(repo_path)?;
         let worktree_mgr = WorktreeManager::new(&repo);
 
         worktree_mgr.create_with_new_branch(worktree_path, branch)?;
@@ -161,6 +171,7 @@ impl Actions {
             branch.to_string(),
             worktree_path.to_path_buf(),
         );
+        agent.repo_root = Some(repo_path.to_path_buf());
         let cli = crate::conversation::detect_agent_cli(&program);
         if cli == crate::conversation::AgentCli::Claude {
             agent.conversation_id = Some(agent.id.to_string());
@@ -299,6 +310,7 @@ impl Actions {
             conflict.branch.clone(),
             conflict.worktree_path.clone(),
         );
+        root_agent.repo_root = Some(conflict.repo_root.clone());
         let cli = crate::conversation::detect_agent_cli(program);
         if cli == crate::conversation::AgentCli::Claude {
             root_agent.conversation_id = Some(root_agent.id.to_string());
@@ -372,6 +384,7 @@ impl Actions {
             conflict.branch.clone(),
             conflict.worktree_path.clone(),
         );
+        agent.repo_root = Some(conflict.repo_root.clone());
         let cli = crate::conversation::detect_agent_cli(program);
         if cli == crate::conversation::AgentCli::Claude {
             agent.conversation_id = Some(agent.id.to_string());
@@ -434,8 +447,7 @@ impl Actions {
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Recreating worktree from scratch");
 
         // Remove existing worktree first
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-        let repo = git::open_repository(&repo_path)?;
+        let repo = git::open_repository(&conflict.repo_root)?;
         let worktree_mgr = WorktreeManager::new(&repo);
         worktree_mgr.remove(&conflict.branch)?;
 
@@ -444,6 +456,7 @@ impl Actions {
             // Set up app state for spawn_children
             app_data.spawn.spawning_under = None;
             app_data.spawn.child_count = child_count;
+            app_data.spawn.root_repo_path = Some(conflict.repo_root.clone());
 
             // Call spawn_children with the task/prompt (if any)
             self.spawn_children(app_data, conflict.prompt.as_deref())
@@ -451,6 +464,7 @@ impl Actions {
             // Single agent creation
             self.create_agent_internal(
                 app_data,
+                &conflict.repo_root,
                 &conflict.title,
                 conflict.prompt.as_deref(),
                 &conflict.branch,
@@ -622,6 +636,7 @@ impl Actions {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index,
+                repo_root: root.repo_root.clone(),
             },
         );
         terminal.is_terminal = true;
@@ -722,6 +737,7 @@ mod tests {
             prompt: None,
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -820,6 +836,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index: 2,
+                repo_root: None,
             },
         ));
 
@@ -828,6 +845,7 @@ mod tests {
             prompt: Some("do stuff".to_string()),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
+            repo_root: std::path::PathBuf::from("/tmp"),
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -945,6 +963,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         );
         app.data.storage.add(child);
@@ -986,6 +1005,7 @@ mod tests {
                     parent_id: root_id,
                     mux_session: root_session.clone(),
                     window_index: i + 2,
+                    repo_root: None,
                 },
             ));
         }
@@ -1023,6 +1043,7 @@ mod tests {
                 parent_id: root_id,
                 mux_session: root_session,
                 window_index: 2,
+                repo_root: None,
             },
         );
         let child_id = child.id;
