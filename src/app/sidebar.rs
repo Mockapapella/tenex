@@ -91,11 +91,8 @@ impl AppData {
         }
 
         if let Some(cwd_root) = self.cwd_project_root.clone() {
-            if let Some(pos) = project_order.iter().position(|root| *root == cwd_root) {
-                let existing = project_order.remove(pos);
-                project_order.insert(0, existing);
-            } else {
-                project_order.insert(0, cwd_root.clone());
+            if !project_order.contains(&cwd_root) {
+                project_order.push(cwd_root.clone());
             }
             agent_counts_by_project.entry(cwd_root).or_insert(0);
         }
@@ -106,11 +103,25 @@ impl AppData {
             *name_counts.entry(base).or_insert(0) += 1;
         }
 
+        let mut project_order = project_order
+            .into_iter()
+            .map(|project_root| {
+                let label = project_label_for_root(&project_root, &name_counts);
+                let sort_key = label.to_lowercase();
+                (sort_key, label, project_root)
+            })
+            .collect::<Vec<_>>();
+        project_order.sort_by(|(a_key, a_label, a_root), (b_key, b_label, b_root)| {
+            a_key
+                .cmp(b_key)
+                .then_with(|| a_label.cmp(b_label))
+                .then_with(|| a_root.cmp(b_root))
+        });
+
         let mut result: Vec<SidebarItem<'_>> = Vec::new();
 
-        for project_root in project_order {
+        for (_, label, project_root) in project_order {
             let collapsed = self.ui.collapsed_projects.contains(&project_root);
-            let label = project_label_for_root(&project_root, &name_counts);
             let agent_count = agent_counts_by_project
                 .get(&project_root)
                 .copied()
@@ -288,15 +299,6 @@ mod tests {
         let repo_one = PathBuf::from("/tmp/one/repo");
         let repo_two = PathBuf::from("/tmp/two/repo");
 
-        let mut root_one = Agent::new(
-            "one".to_string(),
-            "echo".to_string(),
-            "branch-one".to_string(),
-            PathBuf::from("/tmp/one/repo-wt"),
-        );
-        root_one.repo_root = Some(repo_one);
-        app_data.storage.add(root_one);
-
         let mut root_two = Agent::new(
             "two".to_string(),
             "echo".to_string(),
@@ -305,6 +307,15 @@ mod tests {
         );
         root_two.repo_root = Some(repo_two);
         app_data.storage.add(root_two);
+
+        let mut root_one = Agent::new(
+            "one".to_string(),
+            "echo".to_string(),
+            "branch-one".to_string(),
+            PathBuf::from("/tmp/one/repo-wt"),
+        );
+        root_one.repo_root = Some(repo_one);
+        app_data.storage.add(root_one);
 
         let labels: Vec<String> = app_data
             .sidebar_items()
@@ -316,6 +327,48 @@ mod tests {
             .collect();
 
         assert_eq!(labels, vec!["one/repo".to_string(), "two/repo".to_string()]);
+    }
+
+    #[test]
+    fn test_project_headers_are_sorted_alphabetically() {
+        let mut app_data = AppData::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+
+        let mut root_b = Agent::new(
+            "root-b".to_string(),
+            "echo".to_string(),
+            "branch-b".to_string(),
+            PathBuf::from("/tmp/repo-b-wt"),
+        );
+        root_b.repo_root = Some(repo_b);
+        app_data.storage.add(root_b);
+
+        let mut root_a = Agent::new(
+            "root-a".to_string(),
+            "echo".to_string(),
+            "branch-a".to_string(),
+            PathBuf::from("/tmp/repo-a-wt"),
+        );
+        root_a.repo_root = Some(repo_a);
+        app_data.storage.add(root_a);
+
+        let labels: Vec<String> = app_data
+            .sidebar_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                SidebarItem::Project(project) => Some(project.label),
+                SidebarItem::Agent(_) => None,
+            })
+            .collect();
+
+        assert_eq!(labels, vec!["repo-a".to_string(), "repo-b".to_string()]);
     }
 
     #[test]

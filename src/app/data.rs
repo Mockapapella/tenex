@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_cwd_project_prefers_first_agent_in_cwd_project() {
+    fn test_select_cwd_project_prefers_first_agent_in_cwd_project() -> Result<(), String> {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -992,7 +992,11 @@ mod tests {
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
-        data.selected = 3;
+        let items = data.sidebar_items();
+        data.selected = items
+            .iter()
+            .position(|item| matches!(item, SidebarItem::Agent(agent) if agent.info.agent.title == "agent-a"))
+            .ok_or("missing agent-a")?;
         data.ui.preview_scroll = 0;
         data.ui.diff_scroll = 7;
 
@@ -1005,10 +1009,11 @@ mod tests {
         ));
         assert_eq!(data.ui.preview_scroll, usize::MAX);
         assert_eq!(data.ui.diff_scroll, 0);
+        Ok(())
     }
 
     #[test]
-    fn test_select_cwd_project_selects_header_when_project_has_no_agents() {
+    fn test_select_cwd_project_selects_header_when_project_has_no_agents() -> Result<(), String> {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -1018,16 +1023,20 @@ mod tests {
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
-        data.selected = 2;
+        let items = data.sidebar_items();
+        data.selected = items
+            .iter()
+            .position(|item| matches!(item, SidebarItem::Agent(agent) if agent.info.agent.title == "agent-a"))
+            .ok_or("missing agent-a")?;
 
         data.select_cwd_project();
 
-        assert_eq!(data.selected, 0);
         assert_eq!(data.selected_project_root(), Some(repo_b));
         assert!(matches!(
             data.selected_sidebar_item(),
             Some(SidebarItem::Project(_))
         ));
+        Ok(())
     }
 
     #[test]
@@ -1075,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_first_agent_in_selected_project_is_noop_when_empty() {
+    fn test_select_first_agent_in_selected_project_is_noop_when_empty() -> Result<(), String> {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -1085,16 +1094,25 @@ mod tests {
 
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
-        data.selected = 0;
+        let items = data.sidebar_items();
+        data.selected = items
+            .iter()
+            .position(|item| match item {
+                SidebarItem::Project(project) => project.root == repo_b,
+                SidebarItem::Agent(_) => false,
+            })
+            .ok_or("missing repo-b project header")?;
+        let initial_selected = data.selected;
 
         data.select_first_agent_in_selected_project();
 
-        assert_eq!(data.selected, 0);
+        assert_eq!(data.selected, initial_selected);
         assert_eq!(data.selected_project_root(), Some(repo_b));
         assert!(matches!(
             data.selected_sidebar_item(),
             Some(SidebarItem::Project(_))
         ));
+        Ok(())
     }
 
     #[test]

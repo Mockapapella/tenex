@@ -1256,7 +1256,10 @@ mod tests {
         ));
 
         for i in 0..30 {
-            storage.add(create_test_agent(&format!("agent-{i:02}"), Status::Running));
+            storage.add(create_test_agent(
+                &format!("zz-agent-{i:02}"),
+                Status::Running,
+            ));
         }
 
         let mut app = App::new(config, storage, crate::app::Settings::default(), false);
