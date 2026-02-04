@@ -34,6 +34,10 @@ pub struct MuxSession {
     pub name: String,
     /// Unix timestamp when the session was created.
     pub created: i64,
+    /// Number of times the root window has been restarted after exiting.
+    pub root_restart_attempts: u32,
+    /// Unix timestamp of the most recent root window restart.
+    pub last_root_restart: i64,
     /// Windows in index order (index 0 is the root window).
     pub windows: Vec<Arc<Mutex<MuxWindow>>>,
 }

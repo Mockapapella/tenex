@@ -33,6 +33,8 @@ impl Manager {
                 std::sync::Arc::new(parking_lot::Mutex::new(super::super::backend::MuxSession {
                     name: name.to_string(),
                     created: unix_timestamp(),
+                    root_restart_attempts: 0,
+                    last_root_restart: 0,
                     windows: vec![window],
                 })),
             );
@@ -420,26 +422,163 @@ fn renumber_windows(
 fn is_session_alive(
     session: &std::sync::Arc<parking_lot::Mutex<super::super::backend::MuxSession>>,
 ) -> bool {
-    let root = {
+    const ROOT_RESTART_MAX_ATTEMPTS: u32 = 3;
+    const ROOT_RESTART_COOLDOWN_SECS: i64 = 1;
+
+    let (session_name, windows, root_restart_attempts, last_root_restart) = {
         let guard = session.lock();
-        guard.windows.first().cloned()
+        (
+            guard.name.clone(),
+            guard.windows.clone(),
+            guard.root_restart_attempts,
+            guard.last_root_restart,
+        )
     };
 
-    let Some(root) = root else {
+    let Some(root) = windows.first().cloned() else {
         return false;
     };
 
-    let mut guard = root.lock();
-    match guard.child.try_wait() {
-        Ok(Some(_)) => false,
-        Ok(None) | Err(_) => true,
+    let root_alive = window_is_alive(&root);
+    if root_alive {
+        return true;
     }
+
+    let non_root_alive = windows.iter().skip(1).any(window_is_alive);
+    if non_root_alive {
+        if should_restart_root_window(
+            root_restart_attempts,
+            unix_timestamp(),
+            last_root_restart,
+            ROOT_RESTART_MAX_ATTEMPTS,
+            ROOT_RESTART_COOLDOWN_SECS,
+        ) {
+            restart_root_window(session, &session_name);
+        }
+        return true;
+    }
+
+    let now = unix_timestamp();
+    if !should_restart_root_window(
+        root_restart_attempts,
+        now,
+        last_root_restart,
+        ROOT_RESTART_MAX_ATTEMPTS,
+        ROOT_RESTART_COOLDOWN_SECS,
+    ) {
+        return false;
+    }
+
+    restart_root_window(session, &session_name)
+}
+
+fn window_is_alive(
+    window: &std::sync::Arc<parking_lot::Mutex<super::super::backend::MuxWindow>>,
+) -> bool {
+    let mut guard = window.lock();
+    match guard.child.try_wait() {
+        Ok(None) | Err(_) => true,
+        Ok(Some(_)) => false,
+    }
+}
+
+const fn should_restart_root_window(
+    attempts: u32,
+    now: i64,
+    last_restart: i64,
+    max_attempts: u32,
+    cooldown_secs: i64,
+) -> bool {
+    if attempts >= max_attempts {
+        return false;
+    }
+
+    let since_last = now.saturating_sub(last_restart);
+    since_last >= cooldown_secs
+}
+
+fn restart_root_window(
+    session: &std::sync::Arc<parking_lot::Mutex<super::super::backend::MuxSession>>,
+    session_name: &str,
+) -> bool {
+    if !session_still_registered(session_name, session) {
+        return false;
+    }
+
+    let (working_dir, command, size) = {
+        let root = {
+            let guard = session.lock();
+            guard.windows.first().cloned()
+        };
+
+        let Some(root) = root else {
+            return false;
+        };
+
+        let guard = root.lock();
+        (guard.working_dir.clone(), guard.command.clone(), guard.size)
+    };
+
+    let new_root = match spawn_window(
+        0,
+        session_name,
+        &working_dir,
+        if command.is_empty() {
+            None
+        } else {
+            Some(&command)
+        },
+        size,
+    ) {
+        Ok(window) => window,
+        Err(err) => {
+            warn!(
+                session = session_name,
+                error = %err,
+                "Failed to restart root mux window"
+            );
+            return false;
+        }
+    };
+
+    if !session_still_registered(session_name, session) {
+        let _ = kill_window_handle(&new_root);
+        return false;
+    }
+
+    let now = unix_timestamp();
+    {
+        let mut guard = session.lock();
+        if guard.windows.is_empty() {
+            let _ = kill_window_handle(&new_root);
+            return false;
+        }
+
+        guard.windows[0] = new_root;
+        guard.root_restart_attempts = guard.root_restart_attempts.saturating_add(1);
+        guard.last_root_restart = now;
+    }
+
+    info!(session = session_name, "Restarted root mux window");
+    true
+}
+
+fn session_still_registered(
+    session_name: &str,
+    session: &std::sync::Arc<parking_lot::Mutex<super::super::backend::MuxSession>>,
+) -> bool {
+    let state = global_state().lock();
+    state
+        .sessions
+        .get(session_name)
+        .is_some_and(|stored| std::sync::Arc::ptr_eq(stored, session))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    use tempfile::TempDir;
 
     fn test_command() -> Vec<String> {
         // Use a long-running process so tests don't race with natural process exit.
@@ -452,6 +591,17 @@ mod tests {
 
     fn test_exit_command() -> Vec<String> {
         vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+    }
+
+    fn test_update_like_root_command(marker_path: &Path) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "if [ ! -f '{marker}' ]; then touch '{marker}'; exit 0; else sleep 60; fi",
+                marker = marker_path.display()
+            ),
+        ]
     }
 
     #[test]
@@ -616,17 +766,8 @@ mod tests {
         Manager::create(session_name, &tmp, Some(&test_exit_command()))?;
         Manager::create_window(session_name, "child", &tmp, Some(&test_long_command()))?;
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut first_check = true;
-        while (first_check || Manager::exists(session_name)) && Instant::now() < deadline {
-            first_check = false;
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        assert!(
-            !Manager::exists(session_name),
-            "Expected session to be considered dead once the root window exits"
-        );
+        // Give the root window time to exit.
+        std::thread::sleep(Duration::from_millis(200));
 
         let child_running = {
             let session_ref = {
@@ -655,18 +796,88 @@ mod tests {
             "Expected child window process to still be running"
         );
 
+        assert!(Manager::exists(session_name));
+
         assert!(
-            !Manager::list().iter().any(|s| s.name == session_name),
-            "Did not expect session list to include {session_name} after root exit"
+            Manager::list().iter().any(|s| s.name == session_name),
+            "Expected session list to include {session_name} after root exit"
         );
 
-        assert!(Manager::list_pane_pids(session_name).is_err());
+        let pids = Manager::list_pane_pids(session_name)?;
+        assert!(
+            !pids.is_empty(),
+            "Expected at least one pane PID after root exit"
+        );
 
         if let Err(err) = Manager::kill(session_name)
             && !err.to_string().contains("not found")
         {
             return Err(err);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_root_window_restarts_when_root_exits_without_children() -> Result<()> {
+        let session_name = "tenex-test-root-restart-grace";
+        let tmp = TempDir::new()?;
+        let marker = tmp.path().join("updated");
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+
+        Manager::create(
+            session_name,
+            tmp.path(),
+            Some(&test_update_like_root_command(&marker)),
+        )?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let _ = Manager::exists(session_name);
+
+            let restarted = {
+                let state = global_state().lock();
+                state
+                    .sessions
+                    .get(session_name)
+                    .is_some_and(|session_ref| session_ref.lock().root_restart_attempts >= 1)
+            };
+
+            if restarted {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(marker.exists(), "Expected restart marker to be created");
+        assert!(
+            Manager::exists(session_name),
+            "Expected session to remain alive after root restart"
+        );
+
+        let restarted = {
+            let state = global_state().lock();
+            state
+                .sessions
+                .get(session_name)
+                .is_some_and(|session_ref| session_ref.lock().root_restart_attempts >= 1)
+        };
+        assert!(
+            restarted,
+            "Expected root window to be restarted at least once"
+        );
+
+        if let Err(err) = Manager::kill(session_name)
+            && !err.to_string().contains("not found")
+        {
+            return Err(err);
+        }
+
         Ok(())
     }
 }
