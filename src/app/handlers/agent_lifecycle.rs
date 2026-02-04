@@ -654,7 +654,6 @@ impl Actions {
             ));
         };
 
-        let title = root.title.clone();
         let program = root.program.clone();
         let repo_root = root
             .repo_root
@@ -670,6 +669,13 @@ impl Actions {
             }
             .into());
         };
+
+        let title = target
+            .worktree_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&target.branch)
+            .to_string();
 
         if !target.worktree_path.exists() {
             Self::clear_switch_branch_state(app_data);

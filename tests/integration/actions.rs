@@ -98,7 +98,7 @@ fn test_actions_switch_branch_integration() -> Result<(), Box<dyn std::error::Er
         .selected_agent()
         .ok_or_else(|| std::io::Error::other("Expected an agent after switching branches"))?;
 
-    assert_eq!(new_root.title, root.title);
+    assert_eq!(new_root.title, "target-branch");
     assert_eq!(new_root.branch, target_branch);
     assert_ne!(new_root.id, root.id);
 
@@ -181,7 +181,7 @@ fn test_actions_switch_branch_from_remote_integration() -> Result<(), Box<dyn st
         .selected_agent()
         .ok_or_else(|| std::io::Error::other("Expected an agent after switching branches"))?;
 
-    assert_eq!(new_root.title, root.title);
+    assert_eq!(new_root.title, "remote-target");
     assert_eq!(new_root.branch, "remote-target");
     assert_ne!(new_root.id, root.id);
 
