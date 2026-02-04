@@ -289,7 +289,7 @@ impl ValidIn<NormalMode> for ToggleCollapseAction {
                     && let Some(agent) = app_data.storage.get_mut(agent_id)
                 {
                     agent.collapsed = !agent.collapsed;
-                    app_data.storage.save()?;
+                    app_data.ensure_agent_list_scroll();
                 }
             }
             None => {}
@@ -313,7 +313,7 @@ impl ValidIn<ScrollingMode> for ToggleCollapseAction {
                     && let Some(agent) = app_data.storage.get_mut(agent_id)
                 {
                     agent.collapsed = !agent.collapsed;
-                    app_data.storage.save()?;
+                    app_data.ensure_agent_list_scroll();
                 }
             }
             None => {}

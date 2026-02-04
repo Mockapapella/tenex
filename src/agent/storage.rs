@@ -530,7 +530,8 @@ impl Storage {
             .clone()
             .unwrap_or_else(|| StorageSnapshot::capture(&disk));
 
-        let merged = merge_storage_three_way(&baseline, &disk, self);
+        let mut merged = merge_storage_three_way(&baseline, &disk, self);
+        merged.apply_local_agent_fields_from(self);
         let contents =
             serde_json::to_string_pretty(&merged).context("Failed to serialize state")?;
 
@@ -548,6 +549,20 @@ impl Storage {
     pub(crate) fn resolved_state_path(&self) -> std::path::PathBuf {
         let configured = self.state_path.clone().unwrap_or_else(Config::state_path);
         resolve_state_path(&configured)
+    }
+
+    pub(crate) fn apply_local_agent_fields_from(&mut self, other: &Self) {
+        let collapsed_by_id: HashMap<Uuid, bool> = other
+            .agents
+            .iter()
+            .map(|agent| (agent.id, agent.collapsed))
+            .collect();
+
+        for agent in &mut self.agents {
+            if let Some(collapsed) = collapsed_by_id.get(&agent.id) {
+                agent.collapsed = *collapsed;
+            }
+        }
     }
 
     /// Add a new agent
@@ -998,9 +1013,6 @@ fn apply_agent_changes(target: &mut Agent, baseline: &Agent, ours: &Agent) {
     if ours.window_index != baseline.window_index {
         target.window_index = ours.window_index;
     }
-    if ours.collapsed != baseline.collapsed {
-        target.collapsed = ours.collapsed;
-    }
     if ours.is_terminal != baseline.is_terminal {
         target.is_terminal = ours.is_terminal;
     }
@@ -1313,7 +1325,6 @@ mod tests {
         agent.updated_at = baseline_updated_at + Duration::seconds(2);
         agent.parent_id = Some(Uuid::new_v4());
         agent.window_index = Some(42);
-        agent.collapsed = false;
         agent.is_terminal = true;
 
         client.save_to(&state_path)?;
@@ -1349,9 +1360,41 @@ mod tests {
         );
         assert!(merged_agent.parent_id.is_some());
         assert_eq!(merged_agent.window_index, Some(42));
-        assert!(!merged_agent.collapsed);
         assert!(merged_agent.is_terminal);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_does_not_persist_collapsed_state() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        let root_id = root.id;
+        root.collapsed = false;
+        let root_session = root.mux_session.clone();
+        storage.add(root);
+
+        storage.add(Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp/worktree"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        ));
+
+        storage.save_to(&state_path)?;
+
+        let loaded = Storage::load_from(&state_path)?;
+        let loaded_root = loaded.get(root_id).ok_or("missing root")?;
+        assert!(loaded_root.collapsed);
         Ok(())
     }
 

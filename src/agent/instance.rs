@@ -73,8 +73,8 @@ pub struct Agent {
     #[serde(default)]
     pub window_index: Option<u32>,
 
-    /// Whether children are collapsed in the UI (default: true)
-    #[serde(default = "default_collapsed")]
+    /// Whether children are collapsed in this client (default: true).
+    #[serde(skip, default = "default_collapsed")]
     pub collapsed: bool,
 
     /// Whether this is a terminal (not a Claude agent) - excluded from broadcast

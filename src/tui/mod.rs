@@ -135,6 +135,7 @@ impl StateFileTracker {
         };
 
         storage.state_path = previous_custom_path;
+        storage.apply_local_agent_fields_from(&app.data.storage);
         app.data.storage = storage;
         restore_sidebar_selection(app, previous_key);
 
