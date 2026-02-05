@@ -1660,6 +1660,7 @@ version = "1.0.8"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "fs4",

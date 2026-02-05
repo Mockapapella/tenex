@@ -35,6 +35,7 @@ interprocess = { version = "2.2.3", default-features = false }
 git2 = { version = "0.19", default-features = false }
 ureq = { version = "3.1.4", default-features = false, features = ["json", "rustls"] }
 fs4 = { version = "0.13.1", default-features = false, features = ["sync"] }
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3.19"

@@ -348,11 +348,13 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = app.data.ui.preview_scroll.min(max_scroll);
     let start = scroll.min(line_count);
     let end = start.saturating_add(visible_height).min(line_count);
-    let visible_text = Text {
+    let mut visible_text = Text {
         alignment: full_text.alignment,
         style: full_text.style,
         lines: full_text.lines[start..end].to_vec(),
     };
+
+    apply_preview_line_selection(app, start, &mut visible_text);
 
     let paragraph_style = if no_agent_selected {
         Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE)
@@ -389,6 +391,34 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .viewport_content_length(visible_height);
 
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
+}
+
+fn apply_preview_line_selection(app: &App, start_line: usize, visible_text: &mut Text<'static>) {
+    if !app.data.ui.preview_selection_dragging {
+        return;
+    }
+
+    let Some(anchor) = app.data.ui.preview_selection_anchor else {
+        return;
+    };
+
+    let cursor = app.data.ui.preview_selection_cursor;
+    let (selection_start, selection_end) = if anchor <= cursor {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    };
+
+    for (row, line) in visible_text.lines.iter_mut().enumerate() {
+        let line_idx = start_line.saturating_add(row);
+        if line_idx < selection_start || line_idx > selection_end {
+            continue;
+        }
+
+        for span in &mut line.spans {
+            span.style = span.style.bg(colors::DIFF_SELECTION_BG);
         }
     }
 }

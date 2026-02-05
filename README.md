@@ -190,12 +190,15 @@ On first launch, Tenex checks if your terminal supports the Kitty keyboard proto
 
 ### Copying text / mouse selection
 
-Tenex does not capture the mouse by default, so you can click + drag in your terminal to select and copy agent output.
+Tenex captures the mouse so it can support wheel scrolling and pane-isolated text selection (similar to tmux panes).
 
-To enable Tenex mouse support (wheel scrolling + click selection), run:
+To copy output from the Terminal Output pane:
+- Click + drag to select lines
+- Release to copy to your clipboard
+  - (Uses OSC 52; if your terminal blocks it, disable Tenex mouse support and use native selection)
 
 ```bash
-TENEX_ENABLE_MOUSE=1 tenex
+TENEX_DISABLE_MOUSE=1 tenex  # disable Tenex mouse support (use your terminal's native selection)
 ```
 
 ### Agents Disappear Immediately

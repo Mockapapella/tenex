@@ -36,15 +36,16 @@ const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
 const MIN_OUTPUT_REFRESH_MS: u64 = 16;
 const MIN_PANE_ACTIVITY_SYNC_MS: u64 = 500;
 const STATE_FILE_SYNC_INTERVAL_MS: u64 = 250;
+const OSC52_MAX_BYTES: usize = 100_000;
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
 
 fn mouse_capture_enabled() -> bool {
-    mouse_capture_enabled_from_env(std::env::var("TENEX_ENABLE_MOUSE").ok().as_deref())
+    !env_var_truthy(std::env::var("TENEX_DISABLE_MOUSE").ok().as_deref())
 }
 
-fn mouse_capture_enabled_from_env(value: Option<&str>) -> bool {
+fn env_var_truthy(value: Option<&str>) -> bool {
     let Some(value) = value else {
         return false;
     };
@@ -62,6 +63,44 @@ fn enter_tui_screen(stdout: &mut impl io::Write, enable_mouse_capture: bool) -> 
         execute!(stdout, EnableMouseCapture)?;
     }
     Ok(())
+}
+
+fn flush_pending_clipboard(stdout: &mut impl io::Write, app: &mut App) {
+    let Some(text) = app.data.ui.pending_clipboard.take() else {
+        return;
+    };
+
+    if text.is_empty() {
+        return;
+    }
+
+    if text.len() > OSC52_MAX_BYTES {
+        app.set_status(format!(
+            "Selection too large to copy ({} bytes; max {OSC52_MAX_BYTES})",
+            text.len()
+        ));
+        return;
+    }
+
+    match write_osc52_clipboard(stdout, &text) {
+        Ok(()) => {
+            let line_count = text.lines().count().max(1);
+            let suffix = if line_count == 1 { "" } else { "s" };
+            app.set_status(format!("Copied {line_count} line{suffix}"));
+        }
+        Err(err) => {
+            app.set_status(format!("Copy failed: {err}"));
+        }
+    }
+}
+
+fn write_osc52_clipboard(stdout: &mut impl io::Write, content: &str) -> io::Result<()> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    let encoded = STANDARD.encode(content.as_bytes());
+    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
+    stdout.flush()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +295,15 @@ fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
     }
 }
 
+fn send_keys_and_flush_clipboard(
+    terminal: &mut TuiTerminal,
+    app: &mut App,
+    batched_keys: &[String],
+) {
+    send_batched_keys_to_mux(app, batched_keys);
+    flush_pending_clipboard(terminal.backend_mut(), app);
+}
+
 fn init_preview_dimensions(terminal: &TuiTerminal, app: &mut App, action_handler: Actions) {
     if app.data.ui.preview_dimensions.is_some() && app.data.ui.terminal_dimensions.is_some() {
         return;
@@ -373,7 +421,6 @@ fn run_loop(
     init_preview_dimensions(terminal, app, action_handler);
 
     let mut state_tracker = StateFileTracker::new(app);
-
     // Track selection to detect changes
     let mut last_selected = app.data.selected;
     // Track active tab so we can refresh content when switching tabs
@@ -404,7 +451,7 @@ fn run_loop(
         // Send batched keys to the mux in one command (much faster than per-keystroke)
         let sent_keys_in_preview = flushed_batched_keys
             || (!batched_keys.is_empty() && matches!(app.mode, AppMode::PreviewFocused(_)));
-        send_batched_keys_to_mux(app, &batched_keys);
+        send_keys_and_flush_clipboard(terminal, app, &batched_keys);
 
         // Apply final resize if any occurred
         if let Some((width, height)) = last_resize {
@@ -601,27 +648,21 @@ mod tests {
     }
 
     #[test]
-    fn test_mouse_capture_enabled_defaults_to_false() {
-        assert!(!mouse_capture_enabled_from_env(None));
+    fn test_env_var_truthy_defaults_to_false() {
+        assert!(!env_var_truthy(None));
     }
 
     #[test]
-    fn test_mouse_capture_enabled_accepts_truthy_values() {
+    fn test_env_var_truthy_accepts_truthy_values() {
         for value in ["1", "true", "TRUE", " yes ", "On"] {
-            assert!(
-                mouse_capture_enabled_from_env(Some(value)),
-                "expected truthy for {value:?}"
-            );
+            assert!(env_var_truthy(Some(value)), "expected truthy for {value:?}");
         }
     }
 
     #[test]
-    fn test_mouse_capture_enabled_rejects_falsy_values() {
+    fn test_env_var_truthy_rejects_falsy_values() {
         for value in ["", "0", "false", "no", "off"] {
-            assert!(
-                !mouse_capture_enabled_from_env(Some(value)),
-                "expected falsy for {value:?}"
-            );
+            assert!(!env_var_truthy(Some(value)), "expected falsy for {value:?}");
         }
     }
 
@@ -642,6 +683,190 @@ mod tests {
         enter_tui_screen(&mut with_mouse, true)?;
 
         assert!(with_mouse.len() > without_mouse.len());
+        Ok(())
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_writes_osc52_and_sets_status_for_multiline() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        let mut app = create_test_app();
+        let content = "line1\nline2";
+        app.data.ui.pending_clipboard = Some(content.to_string());
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        let expected = format!("\x1b]52;c;{}\x07", STANDARD.encode(content.as_bytes()));
+        assert_eq!(buffer.as_slice(), expected.as_bytes());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Copied 2 lines")
+        );
+        assert!(app.data.ui.pending_clipboard.is_none());
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_sets_status_for_single_line() {
+        let mut app = create_test_app();
+        app.data.ui.pending_clipboard = Some("line1".to_string());
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        assert_eq!(app.data.ui.status_message.as_deref(), Some("Copied 1 line"));
+        assert!(app.data.ui.pending_clipboard.is_none());
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_rejects_oversize_selection() {
+        let mut app = create_test_app();
+        app.data.ui.pending_clipboard = Some("a".repeat(OSC52_MAX_BYTES.saturating_add(1)));
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        assert!(buffer.is_empty());
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|message| message.contains("Selection too large"))
+        );
+        assert!(app.data.ui.pending_clipboard.is_none());
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_reports_write_errors() {
+        struct FailingWriter;
+
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("nope"))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("nope"))
+            }
+        }
+
+        let mut app = create_test_app();
+        app.data.ui.pending_clipboard = Some("line1".to_string());
+
+        flush_pending_clipboard(&mut FailingWriter, &mut app);
+
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Copy failed:"))
+        );
+        assert!(app.data.ui.pending_clipboard.is_none());
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_noops_when_none() {
+        let mut app = create_test_app();
+        app.data.ui.set_status("existing");
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        assert!(buffer.is_empty());
+        assert_eq!(app.data.ui.status_message.as_deref(), Some("existing"));
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_noops_when_empty() {
+        let mut app = create_test_app();
+        app.data.ui.pending_clipboard = Some(String::new());
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        assert!(buffer.is_empty());
+        assert!(app.data.ui.pending_clipboard.is_none());
+        assert!(app.data.ui.status_message.is_none());
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_reports_flush_errors() {
+        struct FlushFails {
+            buffer: Vec<u8>,
+        }
+
+        impl std::io::Write for FlushFails {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.buffer.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("nope"))
+            }
+        }
+
+        let mut app = create_test_app();
+        app.data.ui.pending_clipboard = Some("line1".to_string());
+
+        flush_pending_clipboard(&mut FlushFails { buffer: Vec::new() }, &mut app);
+
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Copy failed:"))
+        );
+        assert!(app.data.ui.pending_clipboard.is_none());
+    }
+
+    #[test]
+    fn test_write_osc52_clipboard_roundtrips_base64() -> Result<()> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        let content = "line1\nλ line2\n";
+        let mut buffer: Vec<u8> = Vec::new();
+        write_osc52_clipboard(&mut buffer, content)?;
+
+        let prefix = b"\x1b]52;c;";
+        assert!(buffer.starts_with(prefix));
+        assert_eq!(buffer.last().copied(), Some(b'\x07'));
+
+        let encoded = &buffer[prefix.len()..buffer.len().saturating_sub(1)];
+        let encoded = std::str::from_utf8(encoded)?;
+        let decoded = STANDARD.decode(encoded)?;
+        assert_eq!(decoded, content.as_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn test_flush_pending_clipboard_payload_decodes_to_original() -> Result<()> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        let mut app = create_test_app();
+        let content = "echo 1\nprintf '%s' \"hi\"";
+        app.data.ui.pending_clipboard = Some(content.to_string());
+
+        let mut buffer: Vec<u8> = Vec::new();
+        flush_pending_clipboard(&mut buffer, &mut app);
+
+        let prefix = b"\x1b]52;c;";
+        assert!(buffer.starts_with(prefix));
+        assert_eq!(buffer.last().copied(), Some(b'\x07'));
+        let encoded = &buffer[prefix.len()..buffer.len().saturating_sub(1)];
+        let encoded = std::str::from_utf8(encoded)?;
+        let decoded = STANDARD.decode(encoded)?;
+        assert_eq!(decoded, content.as_bytes());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Copied 2 lines")
+        );
         Ok(())
     }
 
