@@ -188,6 +188,19 @@ On first launch, Tenex checks if your terminal supports the Kitty keyboard proto
 
 ## Troubleshooting
 
+### Copying text / mouse selection
+
+Tenex captures the mouse so it can support wheel scrolling and pane-isolated text selection (similar to tmux panes).
+
+To copy output from the Terminal Output pane:
+- Click + drag to select lines
+- Release to copy to your clipboard
+  - (Uses OSC 52; if your terminal blocks it, disable Tenex mouse support and use native selection)
+
+```bash
+TENEX_DISABLE_MOUSE=1 tenex  # disable Tenex mouse support (use your terminal's native selection)
+```
+
 ### Agents Disappear Immediately
 
 If a newly-created agent flashes into existence and vanishes a few seconds later, it usually means the underlying agent process exited during startup (Tenex then prunes the agent because its mux session is gone).
