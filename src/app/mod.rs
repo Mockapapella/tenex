@@ -14,6 +14,6 @@ pub use handlers::Actions;
 pub use settings::{AgentProgram, AgentRole, Settings};
 pub(crate) use sidebar::{SidebarItem, SidebarProject};
 pub use state::{
-    App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, MuxdVersionMismatchInfo, Tab,
-    WorktreeConflictInfo,
+    App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, MuxdVersionMismatchInfo,
+    PreviewSelectionPoint, Tab, WorktreeConflictInfo,
 };

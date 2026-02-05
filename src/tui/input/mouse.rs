@@ -1,6 +1,6 @@
 //! Mouse input handling (click-to-select).
 
-use crate::app::{App, Tab};
+use crate::app::{App, PreviewSelectionPoint, Tab};
 use crate::state::{AppMode, DiffFocusedMode, PreviewFocusedMode, ScrollingMode};
 use anyhow::Result;
 use ratatui::{
@@ -119,6 +119,25 @@ fn handle_scroll_wheel(
 
     let (agents_area, content_area) = main_panes(frame_area);
     if rect_contains(content_area, x, y) {
+        if app.data.active_tab == Tab::Preview && app.data.ui.preview_selection_anchor.is_some() {
+            match direction {
+                ScrollDirection::Up => app.data.scroll_up(MOUSE_SCROLL_LINES),
+                ScrollDirection::Down => app.data.scroll_down(MOUSE_SCROLL_LINES),
+            }
+
+            if let Some(body_area) = content_body_area(content_area)
+                && let Some(point) = preview_selection_point_for_xy(app, body_area, x, y)
+            {
+                app.data.ui.preview_selection_cursor = point;
+                app.data.ui.preview_selection_dragging = true;
+            }
+
+            if matches!(&app.mode, AppMode::Normal(_) | AppMode::Scrolling(_)) {
+                app.apply_mode(ScrollingMode.into());
+            }
+            return;
+        }
+
         let preview_focused = matches!(&app.mode, AppMode::PreviewFocused(_));
         let preview_tab = app.data.active_tab == Tab::Preview;
         let preview_is_codex = app
@@ -280,11 +299,11 @@ fn main_panes(frame_area: Rect) -> (Rect, Rect) {
 
 const fn clear_preview_selection(app: &mut App) {
     app.data.ui.preview_selection_anchor = None;
-    app.data.ui.preview_selection_cursor = 0;
+    app.data.ui.preview_selection_cursor = PreviewSelectionPoint { line: 0, column: 0 };
     app.data.ui.preview_selection_dragging = false;
 }
 
-fn handle_left_drag(app: &mut App, _x: u16, y: u16, frame_area: Rect) {
+fn handle_left_drag(app: &mut App, x: u16, y: u16, frame_area: Rect) {
     if app.data.active_tab != Tab::Preview {
         return;
     }
@@ -301,15 +320,27 @@ fn handle_left_drag(app: &mut App, _x: u16, y: u16, frame_area: Rect) {
         return;
     }
 
-    let Some(line_idx) = preview_line_index_for_y(app, body_area, y) else {
+    let bottom_y = body_area
+        .y
+        .saturating_add(body_area.height.saturating_sub(1));
+
+    if y < body_area.y {
+        let delta = usize::from(body_area.y.saturating_sub(y)).max(1);
+        app.data.scroll_up(delta);
+    } else if y > bottom_y {
+        let delta = usize::from(y.saturating_sub(bottom_y)).max(1);
+        app.data.scroll_down(delta);
+    }
+
+    let Some(point) = preview_selection_point_for_xy(app, body_area, x, y) else {
         return;
     };
 
-    app.data.ui.preview_selection_cursor = line_idx;
+    app.data.ui.preview_selection_cursor = point;
     app.data.ui.preview_selection_dragging = true;
 }
 
-fn handle_left_up(app: &mut App, _x: u16, y: u16, frame_area: Rect) {
+fn handle_left_up(app: &mut App, x: u16, y: u16, frame_area: Rect) {
     if app.data.active_tab != Tab::Preview {
         clear_preview_selection(app);
         return;
@@ -330,16 +361,12 @@ fn handle_left_up(app: &mut App, _x: u16, y: u16, frame_area: Rect) {
         return;
     };
 
-    let Some(cursor) = preview_line_index_for_y(app, body_area, y) else {
+    let Some(cursor) = preview_selection_point_for_xy(app, body_area, x, y) else {
         clear_preview_selection(app);
         return;
     };
 
-    let (start, end) = if anchor <= cursor {
-        (anchor, cursor)
-    } else {
-        (cursor, anchor)
-    };
+    let (start, end) = normalize_preview_selection_points(anchor, cursor);
 
     if let Some(text) = preview_selection_text(app, start, end) {
         app.data.ui.pending_clipboard = Some(text);
@@ -370,6 +397,38 @@ const fn content_body_area(content_area: Rect) -> Option<Rect> {
     })
 }
 
+fn preview_column_for_x(body_area: Rect, x: u16) -> usize {
+    if body_area.width == 0 {
+        return 0;
+    }
+
+    let max_x = body_area.width.saturating_sub(1);
+    let local_x = x.saturating_sub(body_area.x).min(max_x);
+    usize::from(local_x)
+}
+
+fn preview_selection_point_for_xy(
+    app: &App,
+    body_area: Rect,
+    x: u16,
+    y: u16,
+) -> Option<PreviewSelectionPoint> {
+    let line = preview_line_index_for_y(app, body_area, y)?;
+    let column = preview_column_for_x(body_area, x);
+    Some(PreviewSelectionPoint { line, column })
+}
+
+const fn normalize_preview_selection_points(
+    anchor: PreviewSelectionPoint,
+    cursor: PreviewSelectionPoint,
+) -> (PreviewSelectionPoint, PreviewSelectionPoint) {
+    if anchor.line < cursor.line || (anchor.line == cursor.line && anchor.column <= cursor.column) {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    }
+}
+
 fn preview_line_index_for_y(app: &App, body_area: Rect, y: u16) -> Option<usize> {
     let line_count = app.data.ui.preview_text.lines.len();
     if line_count == 0 || body_area.height == 0 {
@@ -393,29 +452,90 @@ fn preview_line_index_for_y(app: &App, body_area: Rect, y: u16) -> Option<usize>
     )
 }
 
-fn preview_selection_text(app: &App, start: usize, end: usize) -> Option<String> {
+fn preview_selection_text(
+    app: &App,
+    start: PreviewSelectionPoint,
+    end: PreviewSelectionPoint,
+) -> Option<String> {
     let line_count = app.data.ui.preview_text.lines.len();
-    if line_count == 0 {
-        return None;
-    }
+    let max_line = line_count.checked_sub(1)?;
 
-    let start = start.min(line_count.saturating_sub(1));
-    let end = end.min(line_count.saturating_sub(1));
-    if start > end {
+    let clamped_start = PreviewSelectionPoint {
+        line: start.line.min(max_line),
+        column: start.column,
+    };
+    let clamped_end = PreviewSelectionPoint {
+        line: end.line.min(max_line),
+        column: end.column,
+    };
+    let start = clamped_start;
+    let end = clamped_end;
+    if start.line > end.line || (start.line == end.line && start.column > end.column) {
         return None;
     }
 
     let mut out = String::new();
-    for line in &app.data.ui.preview_text.lines[start..=end] {
-        if !out.is_empty() {
+    for (idx, line_idx) in (start.line..=end.line).enumerate() {
+        if idx > 0 {
             out.push('\n');
         }
+
+        let line = &app.data.ui.preview_text.lines[line_idx];
+        let mut line_text = String::new();
         for span in &line.spans {
-            out.push_str(span.content.as_ref());
+            line_text.push_str(span.content.as_ref());
+        }
+
+        let (slice_start, slice_end) = if start.line == end.line {
+            (start.column, end.column)
+        } else if line_idx == start.line {
+            (start.column, usize::MAX)
+        } else if line_idx == end.line {
+            (0usize, end.column)
+        } else {
+            (0usize, usize::MAX)
+        };
+
+        if let Some((start_byte, end_byte)) =
+            byte_range_for_char_range_inclusive(&line_text, slice_start, slice_end)
+        {
+            out.push_str(&line_text[start_byte..end_byte]);
         }
     }
 
-    Some(out)
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn byte_range_for_char_range_inclusive(
+    text: &str,
+    start_col: usize,
+    end_col_inclusive: usize,
+) -> Option<(usize, usize)> {
+    let char_len = text.chars().count();
+    if char_len == 0 {
+        return Some((0, 0));
+    }
+
+    let start = start_col.min(char_len);
+    let end_inclusive = end_col_inclusive.min(char_len.saturating_sub(1));
+    if start > end_inclusive {
+        return None;
+    }
+
+    let start_byte = byte_index_for_char(text, start);
+    let end_byte = byte_index_for_char(text, end_inclusive.saturating_add(1));
+    Some((start_byte, end_byte))
+}
+
+fn byte_index_for_char(text: &str, char_idx: usize) -> usize {
+    if char_idx == 0 {
+        return 0;
+    }
+
+    match text.char_indices().nth(char_idx) {
+        Some((byte_idx, _)) => byte_idx,
+        None => text.len(),
+    }
 }
 
 fn handle_agent_list_click(app: &mut App, x: u16, y: u16, area: Rect) {
@@ -470,9 +590,9 @@ fn handle_content_pane_click(app: &mut App, x: u16, y: u16, area: Rect) {
         && let Some(body_area) = content_body_area(area)
         && rect_contains(body_area, x, y)
     {
-        if let Some(line_idx) = preview_line_index_for_y(app, body_area, y) {
-            app.data.ui.preview_selection_anchor = Some(line_idx);
-            app.data.ui.preview_selection_cursor = line_idx;
+        if let Some(point) = preview_selection_point_for_xy(app, body_area, x, y) {
+            app.data.ui.preview_selection_anchor = Some(point);
+            app.data.ui.preview_selection_cursor = point;
             app.data.ui.preview_selection_dragging = false;
         }
     } else {
@@ -1024,21 +1144,24 @@ mod tests {
         })?;
 
         let mut batched_keys = Vec::new();
+        let end_x = body_area
+            .x
+            .saturating_add(body_area.width.saturating_sub(1));
         handle_mouse_event(
             &mut app,
-            left_click(body_area.x + 1, body_area.y),
+            left_click(body_area.x, body_area.y),
             frame,
             &mut batched_keys,
         )?;
         handle_mouse_event(
             &mut app,
-            left_drag(body_area.x + 1, body_area.y + 2),
+            left_drag(end_x, body_area.y + 2),
             frame,
             &mut batched_keys,
         )?;
         handle_mouse_event(
             &mut app,
-            left_up(body_area.x + 1, body_area.y + 2),
+            left_up(end_x, body_area.y + 2),
             frame,
             &mut batched_keys,
         )?;
@@ -1046,6 +1169,174 @@ mod tests {
         assert_eq!(
             app.data.ui.pending_clipboard.as_deref(),
             Some("line1\nline2\nline3")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn drag_select_preview_single_line_selects_by_column() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.data.ui.set_preview_content("0123456789");
+
+        let frame = Rect::new(0, 0, 100, 8);
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 7,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let body_area = content_body_area(content_area).ok_or_else(|| {
+            anyhow::anyhow!("Expected preview body to be renderable for selection")
+        })?;
+        app.set_preview_dimensions(body_area.width, body_area.height);
+
+        let start = (body_area.x.saturating_add(2), body_area.y);
+        let end = (body_area.x.saturating_add(5), body_area.y);
+
+        let mut batched_keys = Vec::new();
+        handle_mouse_event(
+            &mut app,
+            left_click(start.0, start.1),
+            frame,
+            &mut batched_keys,
+        )?;
+        handle_mouse_event(&mut app, left_drag(end.0, end.1), frame, &mut batched_keys)?;
+        handle_mouse_event(&mut app, left_up(end.0, end.1), frame, &mut batched_keys)?;
+
+        assert_eq!(app.data.ui.pending_clipboard.as_deref(), Some("2345"));
+        Ok(())
+    }
+
+    #[test]
+    fn drag_beyond_preview_bottom_autoscrolls_and_extends_selection() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.data.ui.preview_follow = false;
+        app.data.ui.set_preview_content(
+            (0..20)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        let frame = Rect::new(0, 0, 100, 8);
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 7,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let body_area = content_body_area(content_area).ok_or_else(|| {
+            anyhow::anyhow!("Expected preview body to be renderable for selection")
+        })?;
+        app.set_preview_dimensions(body_area.width, body_area.height);
+
+        let end_x = body_area
+            .x
+            .saturating_add(body_area.width.saturating_sub(1));
+        let start_y = body_area.y;
+        let end_y = body_area
+            .y
+            .saturating_add(body_area.height.saturating_sub(1))
+            .saturating_add(1);
+
+        let mut batched_keys = Vec::new();
+        handle_mouse_event(
+            &mut app,
+            left_click(body_area.x, start_y),
+            frame,
+            &mut batched_keys,
+        )?;
+        handle_mouse_event(&mut app, left_drag(end_x, end_y), frame, &mut batched_keys)?;
+        handle_mouse_event(&mut app, left_up(end_x, end_y), frame, &mut batched_keys)?;
+
+        let expected = (0..5)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            app.data.ui.pending_clipboard.as_deref(),
+            Some(expected.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scroll_wheel_while_selecting_extends_preview_selection() -> anyhow::Result<()> {
+        let (mut app, _tmp) = create_test_app()?;
+        add_agent(&mut app, "a0");
+        app.apply_mode(NormalMode.into());
+        app.data.active_tab = Tab::Preview;
+        app.data.ui.preview_follow = false;
+        app.data.ui.set_preview_content(
+            (0..20)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        let frame = Rect::new(0, 0, 100, 8);
+        let main = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 7,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main);
+        let content_area = chunks[1];
+        let body_area = content_body_area(content_area).ok_or_else(|| {
+            anyhow::anyhow!("Expected preview body to be renderable for selection")
+        })?;
+        app.set_preview_dimensions(body_area.width, body_area.height);
+
+        let end_x = body_area
+            .x
+            .saturating_add(body_area.width.saturating_sub(1));
+        let end_y = body_area
+            .y
+            .saturating_add(body_area.height.saturating_sub(1));
+
+        let mut batched_keys = Vec::new();
+        handle_mouse_event(
+            &mut app,
+            left_click(body_area.x, body_area.y),
+            frame,
+            &mut batched_keys,
+        )?;
+        handle_mouse_event(&mut app, left_drag(end_x, end_y), frame, &mut batched_keys)?;
+        handle_mouse_event(
+            &mut app,
+            scroll_down(end_x, end_y),
+            frame,
+            &mut batched_keys,
+        )?;
+        handle_mouse_event(&mut app, left_up(end_x, end_y), frame, &mut batched_keys)?;
+
+        let expected = (0..7)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            app.data.ui.pending_clipboard.as_deref(),
+            Some(expected.as_str())
         );
         Ok(())
     }
@@ -1136,8 +1427,8 @@ mod tests {
         add_agent(&mut app, "a0");
         app.apply_mode(NormalMode.into());
         app.data.active_tab = Tab::Diff;
-        app.data.ui.preview_selection_anchor = Some(0);
-        app.data.ui.preview_selection_cursor = 2;
+        app.data.ui.preview_selection_anchor = Some(PreviewSelectionPoint { line: 0, column: 0 });
+        app.data.ui.preview_selection_cursor = PreviewSelectionPoint { line: 2, column: 0 };
         app.data.ui.preview_selection_dragging = true;
 
         let frame = Rect::new(0, 0, 100, 30);
@@ -1145,7 +1436,10 @@ mod tests {
         handle_mouse_event(&mut app, left_up(10, 10), frame, &mut batched_keys)?;
 
         assert!(app.data.ui.preview_selection_anchor.is_none());
-        assert_eq!(app.data.ui.preview_selection_cursor, 0);
+        assert_eq!(
+            app.data.ui.preview_selection_cursor,
+            PreviewSelectionPoint { line: 0, column: 0 }
+        );
         assert!(!app.data.ui.preview_selection_dragging);
         assert!(app.data.ui.pending_clipboard.is_none());
         Ok(())
@@ -1160,10 +1454,24 @@ mod tests {
     #[test]
     fn preview_selection_text_returns_none_for_empty_or_inverted_range() -> anyhow::Result<()> {
         let (mut app, _tmp) = create_test_app()?;
-        assert!(preview_selection_text(&app, 0, 0).is_none());
+        assert!(
+            preview_selection_text(
+                &app,
+                PreviewSelectionPoint { line: 0, column: 0 },
+                PreviewSelectionPoint { line: 0, column: 0 }
+            )
+            .is_none()
+        );
 
         app.data.ui.set_preview_content("line1\nline2");
-        assert!(preview_selection_text(&app, 1, 0).is_none());
+        assert!(
+            preview_selection_text(
+                &app,
+                PreviewSelectionPoint { line: 1, column: 0 },
+                PreviewSelectionPoint { line: 0, column: 0 }
+            )
+            .is_none()
+        );
         Ok(())
     }
 
@@ -1174,8 +1482,8 @@ mod tests {
         app.apply_mode(NormalMode.into());
         app.data.active_tab = Tab::Preview;
         app.data.ui.set_preview_content("line1\nline2");
-        app.data.ui.preview_selection_anchor = Some(0);
-        app.data.ui.preview_selection_cursor = 1;
+        app.data.ui.preview_selection_anchor = Some(PreviewSelectionPoint { line: 0, column: 0 });
+        app.data.ui.preview_selection_cursor = PreviewSelectionPoint { line: 1, column: 0 };
         app.data.ui.preview_selection_dragging = true;
 
         let frame = Rect::new(0, 0, 100, 3);
@@ -1183,7 +1491,10 @@ mod tests {
         handle_mouse_event(&mut app, left_up(10, 1), frame, &mut batched_keys)?;
 
         assert!(app.data.ui.preview_selection_anchor.is_none());
-        assert_eq!(app.data.ui.preview_selection_cursor, 0);
+        assert_eq!(
+            app.data.ui.preview_selection_cursor,
+            PreviewSelectionPoint { line: 0, column: 0 }
+        );
         assert!(!app.data.ui.preview_selection_dragging);
         assert!(app.data.ui.pending_clipboard.is_none());
         Ok(())

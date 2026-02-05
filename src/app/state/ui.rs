@@ -8,6 +8,15 @@ use std::path::PathBuf;
 
 use ratatui::{style::Style, text::Text};
 
+/// A point in the preview pane selection (absolute line index + 0-based column).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PreviewSelectionPoint {
+    /// Absolute line index into `preview_text.lines`.
+    pub line: usize,
+    /// 0-based column within the line.
+    pub column: usize,
+}
+
 /// Whether an agent's pane output is changing or stalled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneActivity {
@@ -93,11 +102,11 @@ pub struct UiState {
     /// Pending clipboard content to send to the terminal (OSC 52) on the next tick.
     pub pending_clipboard: Option<String>,
 
-    /// Mouse-driven line selection anchor in the preview pane (absolute line index).
-    pub preview_selection_anchor: Option<usize>,
+    /// Mouse-driven selection anchor in the preview pane.
+    pub preview_selection_anchor: Option<PreviewSelectionPoint>,
 
-    /// Mouse-driven line selection cursor in the preview pane (absolute line index).
-    pub preview_selection_cursor: usize,
+    /// Mouse-driven selection cursor in the preview pane.
+    pub preview_selection_cursor: PreviewSelectionPoint,
 
     /// Whether the user is currently dragging to select preview lines.
     pub preview_selection_dragging: bool,
@@ -207,7 +216,7 @@ impl UiState {
             },
             pending_clipboard: None,
             preview_selection_anchor: None,
-            preview_selection_cursor: 0,
+            preview_selection_cursor: PreviewSelectionPoint { line: 0, column: 0 },
             preview_selection_dragging: false,
             preview_cursor_position: None,
             preview_pane_size: None,

@@ -1,7 +1,7 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
 use crate::agent::{Status, WorkspaceKind};
-use crate::app::{App, DiffLineMeta, Tab};
+use crate::app::{App, DiffLineMeta, PreviewSelectionPoint, Tab};
 use crate::app::{SidebarItem, SidebarProject};
 use crate::state::AppMode;
 use ratatui::{
@@ -354,7 +354,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines: full_text.lines[start..end].to_vec(),
     };
 
-    apply_preview_line_selection(app, start, &mut visible_text);
+    apply_preview_selection(app, start, &mut visible_text);
 
     let paragraph_style = if no_agent_selected {
         Style::default().fg(colors::TEXT_MUTED).bg(colors::SURFACE)
@@ -395,7 +395,7 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 }
 
-fn apply_preview_line_selection(app: &App, start_line: usize, visible_text: &mut Text<'static>) {
+fn apply_preview_selection(app: &App, start_line: usize, visible_text: &mut Text<'static>) {
     if !app.data.ui.preview_selection_dragging {
         return;
     }
@@ -405,21 +405,130 @@ fn apply_preview_line_selection(app: &App, start_line: usize, visible_text: &mut
     };
 
     let cursor = app.data.ui.preview_selection_cursor;
-    let (selection_start, selection_end) = if anchor <= cursor {
-        (anchor, cursor)
-    } else {
-        (cursor, anchor)
-    };
+    let (selection_start, selection_end) = normalize_preview_selection_points(anchor, cursor);
 
     for (row, line) in visible_text.lines.iter_mut().enumerate() {
         let line_idx = start_line.saturating_add(row);
-        if line_idx < selection_start || line_idx > selection_end {
+        if line_idx < selection_start.line || line_idx > selection_end.line {
             continue;
         }
 
+        apply_preview_selection_to_line(line_idx, selection_start, selection_end, line);
+    }
+}
+
+const fn normalize_preview_selection_points(
+    anchor: PreviewSelectionPoint,
+    cursor: PreviewSelectionPoint,
+) -> (PreviewSelectionPoint, PreviewSelectionPoint) {
+    if anchor.line < cursor.line || (anchor.line == cursor.line && anchor.column <= cursor.column) {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    }
+}
+
+fn apply_preview_selection_to_line(
+    line_idx: usize,
+    selection_start: PreviewSelectionPoint,
+    selection_end: PreviewSelectionPoint,
+    line: &mut Line<'static>,
+) {
+    let line_len = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref().chars().count())
+        .sum::<usize>();
+    if line_len == 0 {
+        return;
+    }
+
+    let (raw_start, raw_end) = if selection_start.line == selection_end.line {
+        (selection_start.column, selection_end.column)
+    } else if line_idx == selection_start.line {
+        (selection_start.column, usize::MAX)
+    } else if line_idx == selection_end.line {
+        (0usize, selection_end.column)
+    } else {
+        (0usize, usize::MAX)
+    };
+
+    let selection_start_col = raw_start.min(line_len);
+    let selection_end_col = raw_end.min(line_len.saturating_sub(1));
+    if selection_start_col > selection_end_col {
+        return;
+    }
+
+    if selection_start_col == 0 && selection_end_col == line_len.saturating_sub(1) {
         for span in &mut line.spans {
             span.style = span.style.bg(colors::DIFF_SELECTION_BG);
         }
+        return;
+    }
+
+    let original_spans = std::mem::take(&mut line.spans);
+    let mut new_spans = Vec::new();
+    let mut col = 0usize;
+
+    for span in original_spans {
+        let text = span.content.as_ref();
+        let span_len = text.chars().count();
+        if span_len == 0 {
+            new_spans.push(span);
+            continue;
+        }
+
+        let span_start = col;
+        let span_end = span_start.saturating_add(span_len.saturating_sub(1));
+        col = col.saturating_add(span_len);
+
+        if span_end < selection_start_col || span_start > selection_end_col {
+            new_spans.push(span);
+            continue;
+        }
+
+        if selection_start_col <= span_start && span_end <= selection_end_col {
+            let mut selected_span = span;
+            selected_span.style = selected_span.style.bg(colors::DIFF_SELECTION_BG);
+            new_spans.push(selected_span);
+            continue;
+        }
+
+        let overlap_start = selection_start_col.saturating_sub(span_start).min(span_len);
+        let overlap_end = selection_end_col
+            .saturating_sub(span_start)
+            .min(span_len.saturating_sub(1));
+
+        let start_byte = byte_index_for_char(text, overlap_start);
+        let end_byte = byte_index_for_char(text, overlap_end.saturating_add(1));
+
+        if overlap_start > 0 && start_byte != 0 {
+            new_spans.push(Span::styled(text[..start_byte].to_string(), span.style));
+        }
+
+        if start_byte < end_byte {
+            new_spans.push(Span::styled(
+                text[start_byte..end_byte].to_string(),
+                span.style.bg(colors::DIFF_SELECTION_BG),
+            ));
+        }
+
+        if end_byte < text.len() {
+            new_spans.push(Span::styled(text[end_byte..].to_string(), span.style));
+        }
+    }
+
+    line.spans = new_spans;
+}
+
+fn byte_index_for_char(text: &str, char_idx: usize) -> usize {
+    if char_idx == 0 {
+        return 0;
+    }
+
+    match text.char_indices().nth(char_idx) {
+        Some((byte_idx, _)) => byte_idx,
+        None => text.len(),
     }
 }
 
@@ -898,6 +1007,124 @@ mod tests {
         buffer
             .cell((x, y))
             .ok_or_else(|| anyhow::anyhow!("Missing cell at ({x}, {y})"))
+    }
+
+    #[test]
+    fn test_normalize_preview_selection_points_orders_by_line_then_column() {
+        let anchor = PreviewSelectionPoint { line: 2, column: 0 };
+        let cursor = PreviewSelectionPoint {
+            line: 1,
+            column: 99,
+        };
+        let (start, end) = normalize_preview_selection_points(anchor, cursor);
+        assert_eq!(start, cursor);
+        assert_eq!(end, anchor);
+
+        let anchor = PreviewSelectionPoint {
+            line: 1,
+            column: 10,
+        };
+        let cursor = PreviewSelectionPoint { line: 1, column: 9 };
+        let (start, end) = normalize_preview_selection_points(anchor, cursor);
+        assert_eq!(start, cursor);
+        assert_eq!(end, anchor);
+    }
+
+    #[test]
+    fn test_apply_preview_selection_to_line_highlights_entire_line_when_fully_selected() {
+        let mut line: Line<'static> = Line::from(vec![
+            Span::styled("hello ", Style::default().fg(colors::TEXT_PRIMARY)),
+            Span::styled("world", Style::default().fg(colors::TEXT_MUTED)),
+        ]);
+
+        let start = PreviewSelectionPoint { line: 0, column: 0 };
+        let end = PreviewSelectionPoint {
+            line: 0,
+            column: usize::MAX,
+        };
+        apply_preview_selection_to_line(0, start, end, &mut line);
+
+        assert_eq!(line_text(&line), "hello world");
+        for span in &line.spans {
+            assert_eq!(span.style.bg, Some(colors::DIFF_SELECTION_BG));
+        }
+    }
+
+    #[test]
+    fn test_apply_preview_selection_to_line_splits_spans_for_partial_selection() {
+        let mut line: Line<'static> = Line::from(vec![
+            Span::styled("hello ", Style::default().fg(colors::TEXT_PRIMARY)),
+            Span::styled("world", Style::default().fg(colors::TEXT_PRIMARY)),
+        ]);
+
+        let start = PreviewSelectionPoint { line: 0, column: 6 };
+        let end = PreviewSelectionPoint { line: 0, column: 8 };
+        apply_preview_selection_to_line(0, start, end, &mut line);
+
+        assert_eq!(line_text(&line), "hello world");
+        assert_eq!(line.spans.len(), 3);
+        assert_eq!(line.spans[0].content.as_ref(), "hello ");
+        assert_eq!(line.spans[0].style.bg, None);
+        assert_eq!(line.spans[1].content.as_ref(), "wor");
+        assert_eq!(line.spans[1].style.bg, Some(colors::DIFF_SELECTION_BG));
+        assert_eq!(line.spans[2].content.as_ref(), "ld");
+        assert_eq!(line.spans[2].style.bg, None);
+    }
+
+    #[test]
+    fn test_apply_preview_selection_to_line_highlights_entire_span_when_selected() {
+        let mut line: Line<'static> = Line::from(vec![
+            Span::styled("foo", Style::default().fg(colors::TEXT_PRIMARY)),
+            Span::styled("bar", Style::default().fg(colors::TEXT_PRIMARY)),
+        ]);
+
+        let start = PreviewSelectionPoint { line: 0, column: 0 };
+        let end = PreviewSelectionPoint { line: 0, column: 2 };
+        apply_preview_selection_to_line(0, start, end, &mut line);
+
+        assert_eq!(line_text(&line), "foobar");
+        assert_eq!(line.spans[0].content.as_ref(), "foo");
+        assert_eq!(line.spans[0].style.bg, Some(colors::DIFF_SELECTION_BG));
+        assert_eq!(line.spans[1].content.as_ref(), "bar");
+        assert_eq!(line.spans[1].style.bg, None);
+    }
+
+    #[test]
+    fn test_apply_preview_selection_to_line_returns_early_when_selection_starts_at_eol() {
+        let mut line: Line<'static> = Line::from(vec![Span::styled(
+            "abc",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )]);
+
+        let start = PreviewSelectionPoint { line: 0, column: 3 };
+        let end = PreviewSelectionPoint {
+            line: 0,
+            column: usize::MAX,
+        };
+        apply_preview_selection_to_line(0, start, end, &mut line);
+
+        assert_eq!(line_text(&line), "abc");
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].style.bg, None);
+    }
+
+    #[test]
+    fn test_apply_preview_selection_to_line_partial_selection_to_end_of_span_uses_full_end_byte() {
+        let mut line: Line<'static> = Line::from(vec![Span::styled(
+            "world",
+            Style::default().fg(colors::TEXT_PRIMARY),
+        )]);
+
+        let start = PreviewSelectionPoint { line: 0, column: 2 };
+        let end = PreviewSelectionPoint { line: 0, column: 4 };
+        apply_preview_selection_to_line(0, start, end, &mut line);
+
+        assert_eq!(line_text(&line), "world");
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content.as_ref(), "wo");
+        assert_eq!(line.spans[0].style.bg, None);
+        assert_eq!(line.spans[1].content.as_ref(), "rld");
+        assert_eq!(line.spans[1].style.bg, Some(colors::DIFF_SELECTION_BG));
     }
 
     #[test]
