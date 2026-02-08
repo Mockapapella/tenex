@@ -4,25 +4,25 @@
 
 ### Added
 
-- **Switch branch**: Add `Ctrl+s` to switch an agent's branch (restarts the agent).
-- **Project sections**: Add foldable project sections to the Agents sidebar.
-- **No-git startup**: Tenex can start in directories without a git repo.
+- **Switch branch**: Add `Ctrl+s` to switch an agent's branch (restarts the agent). (#17)
+- **Project sections**: Add foldable project sections to the Agents sidebar. (#16)
+- **No-git startup**: Tenex can start in directories without a git repo. (#83)
 
 ### Changed
 
-- **Review swarms**: Review agents now use Codex `/review` with a more reliable, step-aware submission flow.
-- **Projects sidebar**: Sort projects alphabetically.
-- **Collapse state**: Agent collapse/expand state is now client-local.
+- **Review swarms**: Review agents now use Codex `/review` with a more reliable, step-aware submission flow. (#86)
+- **Projects sidebar**: Sort projects alphabetically. (#16)
+- **Collapse state**: Agent collapse/expand state is now client-local. (#16)
 
 ### Fixed
 
-- **Mouse selection**: Improve preview selection and allow terminal text selection.
-- **State sync**: Sync state across clients more reliably.
-- **Worktrees**: Fix multi-repo worktrees, project selection, and handling of stale `.git/worktrees` entries.
-- **Mux stability**: Fix mux session teardown when the root exits and restart the root mux window more reliably.
-- **Reconnect**: Fix duplicate agents after reconnect and persist no-git labeling.
-- **Child titles**: Child agent titles no longer include short IDs.
-- **Terminal agents**: Terminal agents can no longer spawn children.
+- **Mouse selection**: Improve preview selection and allow terminal text selection. (#54)
+- **State sync**: Sync state across clients more reliably. (#16)
+- **Worktrees**: Fix multi-repo worktrees, project selection, and handling of stale `.git/worktrees` entries. (#16)
+- **Mux stability**: Fix mux session teardown when the root exits and restart the root mux window more reliably. (#63)
+- **Reconnect**: Fix duplicate agents after reconnect and persist no-git labeling. (#84, #83)
+- **Child titles**: Child agent titles no longer include short IDs. (#92)
+- **Terminal agents**: Terminal agents can no longer spawn children. (#53)
 
 ## [1.0.8] - 2026-02-02
 
