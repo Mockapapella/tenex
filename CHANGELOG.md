@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.9] - 2026-02-08
+
+### Added
+
+- **Project sections**: Agents are grouped under foldable project headers in the sidebar; multiple Tenex instances sharing the same state file now stay in sync reliably.
+- **Switch branch**: `Ctrl+s` opens a local/remote branch picker and restarts the agent on the selected branch (the agent you switch away from is removed and its worktree is deleted; uncommitted work is lost).
+- **Mouse selection + copy**: Click+drag to select text in Terminal Output; releasing copies it to your clipboard. Selection can be extended by scrolling.
+- **No-git startup**: Tenex can start outside a git repo; agents are labeled `(no-git)` and git-only actions explain why they’re unavailable (and the label persists across restarts).
+
+### Changed
+
+- **Codex review agents**: Codex-based review swarms now use Codex’s built-in `/review` flow instead of pasting a generic review pre-prompt.
+- **Agent branches**: Tenex-managed agent branches now use the `agent/` prefix instead of the old `tenex/` prefix.
+- **Worktree layout**: Worktrees are namespaced by project to avoid collisions when different repos use the same agent name.
+
+### Fixed
+
+- **Root agent exits**: If the root agent process exits (e.g. after a self-update), Tenex restarts it automatically instead of leaving a blank window.
+- **Reconnect to existing worktree**: Choosing “Reconnect” in the worktree conflict flow no longer leaves duplicate agents in the sidebar.
+- **Worktree creation edge cases**: Agent creation is more resilient when git has stale worktree metadata under `.git/worktrees/` from an interrupted worktree operation.
+- **Child titles**: Auto-generated child agent titles no longer include short IDs; upgrading strips the legacy suffix from existing child titles.
+- **Terminal agents**: Terminals can’t spawn children or synthesize descendants.
+
 ## [1.0.8] - 2026-02-02
 
 ### Added
