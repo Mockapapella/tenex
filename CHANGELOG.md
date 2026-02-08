@@ -4,25 +4,25 @@
 
 ### Added
 
-- **Switch branch**: Add `Ctrl+s` to switch an agent's branch (restarts the agent).
-- **Project sections**: Add foldable project sections to the Agents sidebar.
-- **No-git startup**: Tenex can start in directories without a git repo.
+- **Switch branch**: `Ctrl+s` opens a local/remote branch picker and restarts the selected agent on the chosen branch.
+- **Project sections**: Agents are now grouped under foldable project headers in the sidebar for working across multiple repos.
+- **No-git startup**: Tenex can start in directories without a git repo; agents and descendants are labeled `(no-git)` and git-only actions explain why they’re unavailable.
 
 ### Changed
 
-- **Review swarms**: Review agents now use Codex `/review` with a more reliable, step-aware submission flow.
-- **Projects sidebar**: Sort projects alphabetically.
-- **Collapse state**: Agent collapse/expand state is now client-local.
+- **Codex review agents**: Review swarms now drive Codex’s interactive `/review` flow (preset + base branch selection) without stalling the UI.
+- **Worktrees and branches**: Worktrees are namespaced by project and new agent branches use the `agent/` prefix to avoid collisions across repos.
 
 ### Fixed
 
-- **Mouse selection**: Improve preview selection and allow terminal text selection.
-- **State sync**: Sync state across clients more reliably.
-- **Worktrees**: Fix multi-repo worktrees, project selection, and handling of stale `.git/worktrees` entries.
-- **Mux stability**: Fix mux session teardown when the root exits and restart the root mux window more reliably.
-- **Reconnect**: Fix duplicate agents after reconnect and persist no-git labeling.
-- **Child titles**: Child agent titles no longer include short IDs.
-- **Terminal agents**: Terminal agents can no longer spawn children.
+- **Mouse selection**: Click+drag selection in Terminal Output is pane-isolated and character-accurate; you can extend selection by scrolling, and releasing copies via OSC 52.
+- **Multi-client state**: Concurrent state-file updates across multiple Tenex clients are safer and selection restoration is more reliable.
+- **Worktree creation**: Removes stale `.git/worktrees/` admin directories that could block agent creation.
+- **Agent updates**: If the root agent process exits (e.g. during a self-update prompt), Tenex restarts the root window without tearing down the whole mux session.
+- **Worktree reconnect**: Reconnecting to an existing worktree replaces the old agent entry instead of leaving duplicates.
+- **No-git labeling**: `(no-git)` classification is backfilled for older state files so labels persist across restarts.
+- **Child titles**: Auto-generated child agent titles no longer include short IDs; older state is backfilled on startup.
+- **Terminal agents**: Terminals can’t spawn child agents or synthesize descendants.
 
 ## [1.0.8] - 2026-02-02
 
