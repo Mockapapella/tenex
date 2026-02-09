@@ -17,7 +17,7 @@ pub enum Action {
     Kill,
     /// Push branch to remote
     Push,
-    /// Rename branch (local and remote)
+    /// Rename branch (local; pushes new remote branch, keeps old remote branch)
     RenameBranch,
     /// Open pull request (push first if needed)
     OpenPR,
