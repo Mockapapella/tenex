@@ -12,7 +12,8 @@ use super::super::Actions;
 impl Actions {
     /// Rename the selected agent (r key)
     ///
-    /// For root agents: Renames branch (local + remote if exists) + agent title + mux session
+    /// For root agents: Renames local branch + agent title + mux session. If a remote branch exists,
+    /// Tenex pushes the new branch name but keeps the old remote branch to avoid closing PRs.
     /// For sub-agents: Renames agent title + mux window only
     ///
     /// # Errors
@@ -58,7 +59,8 @@ impl Actions {
 
     /// Execute rename operation
     ///
-    /// For root agents: Renames branch (local + remote if exists) + agent title + mux session
+    /// For root agents: Renames local branch + agent title + mux session. If a remote branch exists,
+    /// Tenex pushes the new branch name but keeps the old remote branch to avoid closing PRs.
     /// For sub-agents: Renames agent title + mux window only
     ///
     /// # Errors
@@ -334,7 +336,7 @@ impl Actions {
         app_data.storage.save()
     }
 
-    /// Handle remote branch rename (delete old, push new)
+    /// Handle remote branch rename (push new; preserve old)
     fn handle_remote_branch_rename(
         app_data: &mut AppData,
         worktree_path: &std::path::Path,
@@ -354,12 +356,6 @@ impl Actions {
             return Ok(());
         }
 
-        // Delete old remote branch
-        let _ = crate::git::git_command()
-            .args(["push", "origin", "--delete", old_branch])
-            .current_dir(worktree_path)
-            .output();
-
         // Push new branch to remote
         let push_output = crate::git::git_command()
             .args(["push", "-u", "origin", new_branch])
@@ -373,11 +369,15 @@ impl Actions {
                 new_name = %new_name,
                 "Root agent renamed successfully"
             );
-            app_data.set_status(format!("Renamed: {old_name} → {new_name}"));
+            app_data.set_status(format!(
+                "Renamed: {old_name} → {new_name} (kept origin/{old_branch})"
+            ));
         } else {
             let stderr = String::from_utf8_lossy(&push_output.stderr);
             warn!(error = %stderr, "Failed to push renamed branch to remote");
-            app_data.set_status(format!("Renamed to {new_name} (remote push failed)"));
+            app_data.set_status(format!(
+                "Renamed to {new_name} (remote push failed; origin/{old_branch} kept)"
+            ));
         }
 
         Ok(())

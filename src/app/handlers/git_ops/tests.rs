@@ -608,6 +608,105 @@ fn test_check_remote_branch_exists_no_git() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+fn run_git(current_dir: &std::path::Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("git {args:?} failed:\n{stdout}\n{stderr}").into())
+}
+
+#[test]
+fn test_execute_root_rename_keeps_remote_branch() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::app::Settings;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new()?;
+    let remote_repo = temp_dir.path().join("remote.git");
+    let local_repo = temp_dir.path().join("local");
+
+    std::fs::create_dir_all(&remote_repo)?;
+    std::fs::create_dir_all(&local_repo)?;
+
+    run_git(&remote_repo, &["init", "--bare"])?;
+    run_git(&local_repo, &["init"])?;
+    run_git(&local_repo, &["config", "user.email", "tenex@test.invalid"])?;
+    run_git(&local_repo, &["config", "user.name", "Tenex Test"])?;
+
+    std::fs::write(local_repo.join("README.md"), "test\n")?;
+    run_git(&local_repo, &["add", "."])?;
+    run_git(&local_repo, &["commit", "-m", "init"])?;
+
+    let old_title = "old-agent";
+    let new_title = "new-agent";
+
+    let config = Config {
+        worktree_dir: temp_dir.path().join("worktrees"),
+        ..Config::default()
+    };
+    let old_branch = config.generate_branch_name(old_title);
+    let new_branch = config.generate_branch_name(new_title);
+
+    run_git(&local_repo, &["checkout", "-b", old_branch.as_str()])?;
+    run_git(
+        &local_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ],
+    )?;
+    run_git(&local_repo, &["push", "-u", "origin", old_branch.as_str()])?;
+    run_git(&local_repo, &["fetch", "origin"])?;
+
+    let temp_file = NamedTempFile::new()?;
+    let storage = Storage::with_path(temp_file.path().to_path_buf());
+    let mut app = App::new(config, storage, Settings::default(), false);
+
+    let agent = Agent::new(
+        old_title.to_string(),
+        "claude".to_string(),
+        old_branch.clone(),
+        local_repo,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.start_rename(agent_id, old_title.to_string(), true);
+    app.data.input.buffer = new_title.to_string();
+    assert!(app.confirm_rename_branch());
+
+    let next = Actions::execute_rename(&mut app.data)?;
+    app.apply_mode(next);
+    assert_eq!(app.mode, AppMode::normal());
+
+    run_git(
+        &remote_repo,
+        &[
+            "show-ref",
+            "--verify",
+            format!("refs/heads/{old_branch}").as_str(),
+        ],
+    )?;
+    run_git(
+        &remote_repo,
+        &[
+            "show-ref",
+            "--verify",
+            format!("refs/heads/{new_branch}").as_str(),
+        ],
+    )?;
+
+    Ok(())
+}
+
 #[test]
 fn test_execute_rename_clears_state_on_no_agent() -> Result<(), Box<dyn std::error::Error>> {
     let (mut app, _temp) = create_test_app()?;
