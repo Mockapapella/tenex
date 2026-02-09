@@ -74,6 +74,7 @@ fn main() -> Result<()> {
             let mut did_backfill = storage.backfill_workspace_kinds();
             did_backfill |= storage.backfill_child_titles();
             did_backfill |= storage.backfill_repo_roots();
+            did_backfill |= storage.backfill_conversation_ids();
             if did_backfill {
                 storage.save()?;
             }
