@@ -24,7 +24,9 @@ pub use review::ReviewState;
 pub use settings_menu::SettingsMenuState;
 pub use spawn::SpawnState;
 pub use spawn::WorktreeConflictInfo;
-pub use ui::{DiffEdit, DiffLineMeta, MuxdVersionMismatchInfo, PreviewSelectionPoint, UiState};
+pub use ui::{
+    DiffEdit, DiffLineMeta, MuxdVersionMismatchInfo, PreviewSelectionPoint, PreviewVtState, UiState,
+};
 
 use crate::agent::Storage;
 use crate::config::Config;

@@ -19,6 +19,8 @@ pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 /// Number of trailing bytes retained to detect terminal queries split across reads.
 const TERMINAL_QUERY_TAIL: usize = 32;
+/// Maximum number of raw output bytes retained per window for per-client replay.
+const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Global mux state shared by the session and capture APIs.
 #[derive(Debug, Default)]
@@ -60,6 +62,8 @@ pub struct MuxWindow {
     pub child: Box<dyn Child + Send + Sync>,
     /// Terminal parser with scrollback.
     pub parser: vt100::Parser,
+    /// Recent raw output history (used for per-client rendering).
+    pub output_history: OutputHistory,
     /// Current PTY size.
     pub size: PtySize,
 }
@@ -73,6 +77,49 @@ impl std::fmt::Debug for MuxWindow {
             .field("command", &self.command)
             .field("size", &self.size)
             .finish_non_exhaustive()
+    }
+}
+
+/// Buffered output bytes for a mux window with a monotonic sequence number.
+#[derive(Debug, Default)]
+pub struct OutputHistory {
+    /// First sequence number still available in `buf`.
+    pub seq_start: u64,
+    /// Sequence number after the last byte observed.
+    pub seq_end: u64,
+    /// Raw PTY output bytes in the range `[seq_start, seq_end)`.
+    pub buf: Vec<u8>,
+    /// Optional checkpoint stream used to resync when the buffer rolls over.
+    pub checkpoint: Option<OutputCheckpoint>,
+}
+
+/// A checkpoint byte stream representing the terminal state at `seq`.
+#[derive(Debug, Clone)]
+pub struct OutputCheckpoint {
+    pub seq: u64,
+    pub bytes: Vec<u8>,
+}
+
+impl OutputHistory {
+    const fn should_checkpoint(&self, additional: usize) -> bool {
+        self.buf.len().saturating_add(additional) > OUTPUT_MAX_BYTES
+    }
+
+    fn record(&mut self, chunk: &[u8], checkpoint_bytes: Option<Vec<u8>>) {
+        let chunk_len = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
+        self.seq_end = self.seq_end.saturating_add(chunk_len);
+
+        if let Some(bytes) = checkpoint_bytes {
+            self.seq_start = self.seq_end;
+            self.buf.clear();
+            self.checkpoint = Some(OutputCheckpoint {
+                seq: self.seq_end,
+                bytes,
+            });
+            return;
+        }
+
+        self.buf.extend_from_slice(chunk);
     }
 }
 
@@ -201,6 +248,7 @@ pub fn spawn_window(
         writer,
         child,
         parser,
+        output_history: OutputHistory::default(),
         size,
     }));
 
@@ -239,6 +287,12 @@ fn spawn_reader_thread(window: Arc<Mutex<MuxWindow>>, mut reader: Box<dyn Read +
             if cpr_queries == 0 && da_queries == 0 && osc10_queries == 0 && osc11_queries == 0 {
                 let mut guard = window.lock();
                 guard.parser.process(chunk);
+                let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
+                    Some(guard.parser.screen().state_formatted())
+                } else {
+                    None
+                };
+                guard.output_history.record(chunk, checkpoint_bytes);
                 drop(guard);
                 continue;
             }
@@ -246,6 +300,12 @@ fn spawn_reader_thread(window: Arc<Mutex<MuxWindow>>, mut reader: Box<dyn Read +
             let response_result = {
                 let mut guard = window.lock();
                 guard.parser.process(chunk);
+                let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
+                    Some(guard.parser.screen().state_formatted())
+                } else {
+                    None
+                };
+                guard.output_history.record(chunk, checkpoint_bytes);
                 let result = respond_to_terminal_queries(
                     &mut guard,
                     cpr_queries,

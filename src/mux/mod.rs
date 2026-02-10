@@ -7,12 +7,15 @@ mod daemon;
 mod discovery;
 mod endpoint;
 mod ipc;
+mod output;
 mod protocol;
+pub(crate) mod render;
 mod server;
 mod session;
 
 pub use capture::Capture as OutputCapture;
 pub use endpoint::set_socket_override;
+pub use output::{OutputRead, OutputStream};
 pub use session::{Manager as SessionManager, Session, Window};
 
 use anyhow::{Context, Result, bail};

@@ -4,116 +4,20 @@ use super::endpoint::SocketEndpoint;
 use super::ipc;
 use super::protocol::{CaptureKind, MuxRequest, MuxResponse, SessionInfo, WindowInfo};
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 use interprocess::local_socket::{ListenerOptions, Stream};
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+static RESIZE_MAX: OnceLock<Mutex<HashMap<String, (u16, u16)>>> = OnceLock::new();
 
-static RESIZE_STATE: OnceLock<Mutex<ResizeState>> = OnceLock::new();
-
-fn resize_state() -> &'static Mutex<ResizeState> {
-    RESIZE_STATE.get_or_init(|| Mutex::new(ResizeState::default()))
-}
-
-#[derive(Debug, Default)]
-struct ResizeState {
-    per_target: HashMap<String, HashMap<u64, (u16, u16)>>,
-    per_connection: HashMap<u64, HashSet<String>>,
-}
-
-impl ResizeState {
-    fn record_resize(
-        &mut self,
-        connection_id: u64,
-        target: &str,
-        cols: u16,
-        rows: u16,
-    ) -> (u16, u16) {
-        let entry = self.per_target.entry(target.to_string()).or_default();
-        entry.insert(connection_id, (cols, rows));
-
-        self.per_connection
-            .entry(connection_id)
-            .or_default()
-            .insert(target.to_string());
-
-        effective_size(entry)
-    }
-
-    fn remove_resize(&mut self, connection_id: u64, target: &str) {
-        if let Some(targets) = self.per_connection.get_mut(&connection_id) {
-            targets.remove(target);
-            if targets.is_empty() {
-                self.per_connection.remove(&connection_id);
-            }
-        }
-
-        if let Some(entry) = self.per_target.get_mut(target) {
-            entry.remove(&connection_id);
-            if entry.is_empty() {
-                self.per_target.remove(target);
-            }
-        }
-    }
-
-    fn remove_connection(&mut self, connection_id: u64) -> Vec<(String, (u16, u16))> {
-        let Some(targets) = self.per_connection.remove(&connection_id) else {
-            return Vec::new();
-        };
-
-        let mut updates = Vec::with_capacity(targets.len());
-        for target in targets {
-            if let Some(entry) = self.per_target.get_mut(&target) {
-                entry.remove(&connection_id);
-                if entry.is_empty() {
-                    self.per_target.remove(&target);
-                    continue;
-                }
-
-                updates.push((target, effective_size(entry)));
-            }
-        }
-
-        updates
-    }
-}
-
-fn effective_size(entry: &HashMap<u64, (u16, u16)>) -> (u16, u16) {
-    entry
-        .values()
-        .fold((0, 0), |(max_cols, max_rows), (cols, rows)| {
-            (max_cols.max(*cols), max_rows.max(*rows))
-        })
-}
-
-struct ConnectionResizeGuard {
-    connection_id: u64,
-}
-
-impl ConnectionResizeGuard {
-    const fn new(connection_id: u64) -> Self {
-        Self { connection_id }
-    }
-}
-
-impl Drop for ConnectionResizeGuard {
-    fn drop(&mut self) {
-        let updates = {
-            let mut guard = resize_state().lock();
-            guard.remove_connection(self.connection_id)
-        };
-
-        for (target, (cols, rows)) in updates {
-            let _ = super::server::SessionManager::resize_window(&target, cols, rows);
-        }
-    }
+fn resize_max() -> &'static Mutex<HashMap<String, (u16, u16)>> {
+    RESIZE_MAX.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Run the mux daemon in the foreground.
@@ -160,9 +64,8 @@ pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
-                let connection_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    if let Err(err) = handle_connection(stream, connection_id) {
+                    if let Err(err) = handle_connection(stream) {
                         debug!(error = %err, "Mux client connection closed");
                     }
                 });
@@ -186,8 +89,7 @@ fn try_ping_existing(endpoint: &SocketEndpoint) -> Result<bool> {
     }
 }
 
-fn handle_connection(mut stream: Stream, connection_id: u64) -> Result<()> {
-    let _resize_guard = ConnectionResizeGuard::new(connection_id);
+fn handle_connection(mut stream: Stream) -> Result<()> {
     loop {
         let request: MuxRequest = match ipc::read_json(&mut stream) {
             Ok(req) => req,
@@ -196,7 +98,7 @@ fn handle_connection(mut stream: Stream, connection_id: u64) -> Result<()> {
             }
         };
 
-        let response = match dispatch_request(request, connection_id) {
+        let response = match dispatch_request(request) {
             Ok(response) => response,
             Err(err) => MuxResponse::Err {
                 message: err.to_string(),
@@ -207,7 +109,7 @@ fn handle_connection(mut stream: Stream, connection_id: u64) -> Result<()> {
     }
 }
 
-fn dispatch_request(request: MuxRequest, connection_id: u64) -> Result<MuxResponse> {
+fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
     match request {
         MuxRequest::Ping => handle_ping(),
         MuxRequest::ListSessions => Ok(handle_list_sessions()),
@@ -239,9 +141,7 @@ fn dispatch_request(request: MuxRequest, connection_id: u64) -> Result<MuxRespon
             window_index,
             new_name,
         } => handle_rename_window(&session, window_index, &new_name),
-        MuxRequest::Resize { target, cols, rows } => {
-            handle_resize(connection_id, &target, cols, rows)
-        }
+        MuxRequest::Resize { target, cols, rows } => handle_resize(&target, cols, rows),
         MuxRequest::SendInput { target, data } => handle_send_input(&target, &data),
         MuxRequest::Capture { target, kind } => {
             let content = handle_capture(&target, &kind)?;
@@ -254,6 +154,11 @@ fn dispatch_request(request: MuxRequest, connection_id: u64) -> Result<MuxRespon
             let content = handle_tail(&target, lines)?;
             Ok(MuxResponse::Text { text: content })
         }
+        MuxRequest::ReadOutput {
+            target,
+            after,
+            max_bytes,
+        } => handle_read_output(&target, after, max_bytes),
         MuxRequest::ListPanePids { session } => handle_list_pids(&session),
     }
 }
@@ -295,11 +200,38 @@ fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> R
 
 fn handle_kill_session(name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::kill(name)?;
+    let prefix = format!("{name}:");
+    resize_max()
+        .lock()
+        .retain(|target, _| target != name && !target.starts_with(&prefix));
     Ok(MuxResponse::Ok)
 }
 
 fn handle_rename_session(old_name: &str, new_name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::rename(old_name, new_name)?;
+    {
+        let mut guard = resize_max().lock();
+        if let Some(value) = guard.remove(old_name) {
+            guard.insert(new_name.to_string(), value);
+        }
+
+        let old_prefix = format!("{old_name}:");
+        let new_prefix = format!("{new_name}:");
+        let updates: Vec<(String, String, (u16, u16))> = guard
+            .iter()
+            .filter_map(|(target, dims)| {
+                target
+                    .strip_prefix(&old_prefix)
+                    .map(|suffix| (target.clone(), format!("{new_prefix}{suffix}"), *dims))
+            })
+            .collect();
+        for (old_target, _, _) in &updates {
+            guard.remove(old_target);
+        }
+        for (_, new_target, dims) in updates {
+            guard.insert(new_target, dims);
+        }
+    }
     Ok(MuxResponse::Ok)
 }
 
@@ -332,6 +264,9 @@ fn handle_create_window(
 
 fn handle_kill_window(session: &str, window_index: u32) -> Result<MuxResponse> {
     super::server::SessionManager::kill_window(session, window_index)?;
+    resize_max()
+        .lock()
+        .remove(&format!("{session}:{window_index}"));
     Ok(MuxResponse::Ok)
 }
 
@@ -340,19 +275,13 @@ fn handle_rename_window(session: &str, window_index: u32, new_name: &str) -> Res
     Ok(MuxResponse::Ok)
 }
 
-fn handle_resize(connection_id: u64, target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
-    let effective = {
-        let mut guard = resize_state().lock();
-        guard.record_resize(connection_id, target, cols, rows)
-    };
+fn handle_resize(target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
+    let current = resize_max().lock().get(target).copied().unwrap_or((0, 0));
+    let proposed = (current.0.max(cols), current.1.max(rows));
 
-    match super::server::SessionManager::resize_window(target, effective.0, effective.1) {
-        Ok(()) => Ok(MuxResponse::Ok),
-        Err(err) => {
-            resize_state().lock().remove_resize(connection_id, target);
-            Err(err)
-        }
-    }
+    super::server::SessionManager::resize_window(target, proposed.0, proposed.1)?;
+    resize_max().lock().insert(target.to_string(), proposed);
+    Ok(MuxResponse::Ok)
 }
 
 fn handle_send_input(target: &str, data: &[u8]) -> Result<MuxResponse> {
@@ -390,6 +319,84 @@ fn handle_tail(target: &str, lines: u32) -> Result<String> {
     Ok(super::server::OutputCapture::tail(target, lines)?.join("\n"))
 }
 
+enum ReadResult {
+    Chunk { start: u64, data: Vec<u8> },
+    Reset { start: u64, checkpoint: Vec<u8> },
+}
+
+fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxResponse> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    let window = super::backend::resolve_window(target)?;
+
+    let result = {
+        let guard = window.lock();
+
+        if after < guard.output_history.seq_start {
+            let checkpoint = guard
+                .output_history
+                .checkpoint
+                .as_ref()
+                .filter(|checkpoint| checkpoint.seq == guard.output_history.seq_start)
+                .map(|checkpoint| checkpoint.bytes.clone())
+                .unwrap_or_default();
+
+            ReadResult::Reset {
+                start: guard.output_history.seq_start,
+                checkpoint,
+            }
+        } else if after >= guard.output_history.seq_end {
+            ReadResult::Chunk {
+                start: after,
+                data: Vec::new(),
+            }
+        } else {
+            let offset =
+                usize::try_from(after.saturating_sub(guard.output_history.seq_start)).unwrap_or(0);
+            let take = guard
+                .output_history
+                .buf
+                .len()
+                .saturating_sub(offset)
+                .min(max_bytes);
+            let end_offset = offset.saturating_add(take);
+            ReadResult::Chunk {
+                start: after,
+                data: guard
+                    .output_history
+                    .buf
+                    .get(offset..end_offset)
+                    .unwrap_or_default()
+                    .to_vec(),
+            }
+        }
+    };
+
+    match result {
+        ReadResult::Chunk { start, data } => {
+            let end = start.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+            Ok(MuxResponse::OutputChunk {
+                start,
+                end,
+                data_b64: if data.is_empty() {
+                    String::new()
+                } else {
+                    BASE64.encode(data)
+                },
+            })
+        }
+        ReadResult::Reset { start, checkpoint } => Ok(MuxResponse::OutputReset {
+            start,
+            checkpoint_b64: if checkpoint.is_empty() {
+                String::new()
+            } else {
+                BASE64.encode(checkpoint)
+            },
+        }),
+    }
+}
+
 fn handle_list_pids(session: &str) -> Result<MuxResponse> {
     let pids = super::server::SessionManager::list_pane_pids(session)?;
     Ok(MuxResponse::Pids { pids })
@@ -400,11 +407,7 @@ mod tests {
     use super::*;
 
     fn dispatch(request: MuxRequest) -> Result<MuxResponse> {
-        dispatch_request(request, 0)
-    }
-
-    fn dispatch_for(connection_id: u64, request: MuxRequest) -> Result<MuxResponse> {
-        dispatch_request(request, connection_id)
+        dispatch_request(request)
     }
 
     fn temp_working_dir() -> String {
@@ -417,6 +420,14 @@ mod tests {
 
     fn long_running_command() -> Vec<String> {
         vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+    }
+
+    fn echo_then_sleep_command(message: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{message}'; sleep 10"),
+        ]
     }
 
     #[test]
@@ -524,19 +535,12 @@ mod tests {
         assert!(matches!(response, MuxResponse::Ok));
 
         let target = format!("{session}:{window_index}");
-        {
-            let connection_id = 1;
-            let _resize_guard = ConnectionResizeGuard::new(connection_id);
-            let response = dispatch_for(
-                connection_id,
-                MuxRequest::Resize {
-                    target: target.clone(),
-                    cols: 100,
-                    rows: 40,
-                },
-            )?;
-            assert!(matches!(response, MuxResponse::Ok));
-        }
+        let response = dispatch(MuxRequest::Resize {
+            target: target.clone(),
+            cols: 100,
+            rows: 40,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
 
         let response = dispatch(MuxRequest::PaneSize {
             target: target.clone(),
@@ -596,8 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resize_uses_largest_client_dimensions_and_recovers_on_disconnect()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_resize_is_monotonic_max_per_target() -> Result<(), Box<dyn std::error::Error>> {
         let session = unique_session("tenex-test-daemon-resize-multi");
         let working_dir = temp_working_dir();
         let command = long_running_command();
@@ -613,29 +616,18 @@ mod tests {
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let small_id = 10;
-        let large_id = 20;
-        let small_guard = ConnectionResizeGuard::new(small_id);
-        let large_guard = ConnectionResizeGuard::new(large_id);
-
-        let response = dispatch_for(
-            small_id,
-            MuxRequest::Resize {
-                target: session.clone(),
-                cols: 80,
-                rows: 24,
-            },
-        )?;
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 80,
+            rows: 24,
+        })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_for(
-            large_id,
-            MuxRequest::Resize {
-                target: session.clone(),
-                cols: 120,
-                rows: 40,
-            },
-        )?;
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 120,
+            rows: 40,
+        })?;
         assert!(matches!(response, MuxResponse::Ok));
 
         let response = dispatch(MuxRequest::PaneSize {
@@ -646,7 +638,12 @@ mod tests {
         };
         assert_eq!((cols, rows), (120, 40));
 
-        drop(large_guard);
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
 
         let response = dispatch(MuxRequest::PaneSize {
             target: session.clone(),
@@ -654,9 +651,130 @@ mod tests {
         let MuxResponse::Size { cols, rows } = response else {
             return Err("Expected Size response".into());
         };
-        assert_eq!((cols, rows), (80, 24));
+        assert_eq!((cols, rows), (120, 40));
 
-        drop(small_guard);
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_read_output_returns_chunks() -> Result<(), Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use std::time::Duration;
+
+        let session = unique_session("tenex-test-daemon-read-output");
+        let working_dir = temp_working_dir();
+        let marker = "tenex-output-marker";
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: echo_then_sleep_command(marker),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let mut after = 0_u64;
+        let mut collected: Vec<u8> = Vec::new();
+
+        for _ in 0..50 {
+            let response = dispatch(MuxRequest::ReadOutput {
+                target: session.clone(),
+                after,
+                max_bytes: 4096,
+            })?;
+
+            let MuxResponse::OutputChunk {
+                start,
+                end,
+                data_b64,
+            } = response
+            else {
+                return Err("Expected OutputChunk response".into());
+            };
+            assert_eq!(start, after);
+            after = end;
+
+            if !data_b64.is_empty() {
+                let data = BASE64.decode(data_b64.as_bytes())?;
+                collected.extend_from_slice(&data);
+            }
+
+            if collected
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+            {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            collected
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+        );
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_read_output_resets_when_after_is_stale()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+
+        let session = unique_session("tenex-test-daemon-read-output-reset");
+        let working_dir = temp_working_dir();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: long_running_command(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&session)?;
+        {
+            let mut guard = window.lock();
+            guard.output_history.seq_start = 5;
+            guard.output_history.seq_end = 5;
+            guard.output_history.buf.clear();
+            guard.output_history.checkpoint = Some(super::super::backend::OutputCheckpoint {
+                seq: 5,
+                bytes: b"checkpoint".to_vec(),
+            });
+        }
+
+        let response = dispatch(MuxRequest::ReadOutput {
+            target: session.clone(),
+            after: 0,
+            max_bytes: 4096,
+        })?;
+        let MuxResponse::OutputReset {
+            start,
+            checkpoint_b64,
+        } = response
+        else {
+            return Err("Expected OutputReset response".into());
+        };
+        assert_eq!(start, 5);
+        assert_eq!(
+            BASE64.decode(checkpoint_b64.as_bytes())?,
+            b"checkpoint".to_vec()
+        );
 
         let response = dispatch(MuxRequest::KillSession { name: session })?;
         assert!(matches!(response, MuxResponse::Ok));

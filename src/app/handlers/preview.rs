@@ -35,55 +35,34 @@ impl Actions {
             wants_full_history && !app.data.ui.preview_using_full_history;
 
         if let Some(agent) = app.selected_agent() {
-            // Determine the target (session or specific window)
-            let target = if let Some(window_idx) = agent.window_index {
-                // Child agent: target specific window within root's session
-                let agent_id = agent.id;
-                let root = app.data.storage.root_ancestor(agent_id);
-                let root_session =
-                    root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
-                SessionManager::window_target(&root_session, window_idx)
-            } else {
-                // Root agent: use session directly
-                agent.mux_session.clone()
-            };
-
+            let target = preview_target(app, agent);
             if self.session_manager.exists(&agent.mux_session) {
-                let content = if wants_full_history {
-                    self.output_capture
-                        .capture_full_history(&target)
-                        .unwrap_or_default()
-                } else {
-                    self.output_capture
-                        .capture_pane_with_history(&target, HISTORY_LINES_FOLLOWING)
-                        .unwrap_or_default()
-                };
-                app.data.ui.set_preview_content(content);
-                app.data.ui.preview_cursor_position =
-                    self.output_capture.cursor_position(&target).ok();
-                app.data.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
+                let (cols, rows) = app.data.ui.preview_dimensions.unwrap_or((80, 24));
+                let cols = cols.max(1);
+                let rows = rows.max(1);
 
-                if matches!(&app.mode, crate::state::AppMode::PreviewFocused(_))
-                    && app.data.ui.preview_follow
-                    && let Some((cursor_x, _cursor_y, cursor_hidden)) =
-                        app.data.ui.preview_cursor_position
-                    && !cursor_hidden
-                {
-                    app.data.ui.follow_preview_cursor_x(cursor_x);
+                let streamed_ok = self.try_update_preview_streamed(
+                    app,
+                    &target,
+                    cols,
+                    rows,
+                    wants_full_history,
+                    HISTORY_LINES_FOLLOWING,
+                );
+                if !streamed_ok {
+                    self.update_preview_with_capture(
+                        app,
+                        &target,
+                        rows,
+                        wants_full_history,
+                        HISTORY_LINES_FOLLOWING,
+                    );
                 }
             } else {
-                app.data
-                    .ui
-                    .set_preview_content(String::from("(Session not running)"));
-                app.data.ui.preview_cursor_position = None;
-                app.data.ui.preview_pane_size = None;
+                set_preview_message(app, "(Session not running)");
             }
         } else {
-            app.data
-                .ui
-                .set_preview_content(String::from("(No agent selected)"));
-            app.data.ui.preview_cursor_position = None;
-            app.data.ui.preview_pane_size = None;
+            set_preview_message(app, "(No agent selected)");
         }
 
         // If we just switched from a short tail buffer to full history, preserve the user's
@@ -109,6 +88,109 @@ impl Actions {
         app.data.ui.preview_using_full_history = wants_full_history;
 
         Ok(())
+    }
+
+    fn try_update_preview_streamed(
+        self,
+        app: &mut App,
+        target: &str,
+        cols: u16,
+        rows: u16,
+        wants_full_history: bool,
+        history_lines_following: u32,
+    ) -> bool {
+        const MAX_BYTES: u32 = 64 * 1024;
+        const MAX_REQUESTS: usize = 32;
+
+        let needs_reset = app
+            .data
+            .ui
+            .preview_vt
+            .as_ref()
+            .is_none_or(|vt| vt.target != target || vt.dims != (cols, rows));
+        if needs_reset {
+            app.data.ui.preview_vt = Some(crate::app::state::PreviewVtState::new(
+                target.to_string(),
+                cols,
+                rows,
+            ));
+        }
+
+        let Some(vt) = app.data.ui.preview_vt.as_mut() else {
+            return false;
+        };
+
+        let max_bytes = usize::try_from(MAX_BYTES).unwrap_or(usize::MAX);
+
+        for _ in 0..MAX_REQUESTS {
+            match self.output_stream.read_output(target, vt.after, MAX_BYTES) {
+                Ok(crate::mux::OutputRead::Chunk(chunk)) => {
+                    if !chunk.data.is_empty() {
+                        vt.parser.process(&chunk.data);
+                    }
+                    vt.after = chunk.end;
+
+                    if chunk.data.is_empty() || chunk.data.len() < max_bytes {
+                        break;
+                    }
+                }
+                Ok(crate::mux::OutputRead::Reset(reset)) => {
+                    vt.reset(target.to_string(), cols, rows);
+                    if !reset.checkpoint.is_empty() {
+                        vt.parser.process(&reset.checkpoint);
+                    }
+                    vt.after = reset.start;
+                }
+                Err(_) => {
+                    return false;
+                }
+            }
+        }
+
+        let requested = if wants_full_history {
+            usize::MAX
+        } else {
+            usize::try_from(history_lines_following)
+                .unwrap_or(usize::MAX)
+                .max(usize::from(rows))
+        };
+
+        let content =
+            crate::mux::render::capture_lines(&mut vt.parser, requested).unwrap_or_default();
+        let (cursor_row, cursor_col) = vt.parser.screen().cursor_position();
+        let cursor_hidden = vt.parser.screen().hide_cursor();
+        let cursor_position = Some((cursor_col, cursor_row, cursor_hidden));
+
+        app.data.ui.set_preview_content(content);
+        app.data.ui.preview_cursor_position = cursor_position;
+        app.data.ui.preview_pane_size = Some((cols, rows));
+        true
+    }
+
+    fn update_preview_with_capture(
+        self,
+        app: &mut App,
+        target: &str,
+        rows: u16,
+        wants_full_history: bool,
+        history_lines_following: u32,
+    ) {
+        app.data.ui.preview_vt = None;
+
+        let history_lines = history_lines_following.max(u32::from(rows));
+        let content = if wants_full_history {
+            self.output_capture
+                .capture_full_history(target)
+                .unwrap_or_default()
+        } else {
+            self.output_capture
+                .capture_pane_with_history(target, history_lines)
+                .unwrap_or_default()
+        };
+
+        app.data.ui.set_preview_content(content);
+        app.data.ui.preview_cursor_position = self.output_capture.cursor_position(target).ok();
+        app.data.ui.preview_pane_size = self.output_capture.pane_size(target).ok();
     }
 
     /// Update diff content for the selected agent
@@ -352,6 +434,26 @@ impl Actions {
 
         Ok(())
     }
+}
+
+fn preview_target(app: &App, agent: &crate::agent::Agent) -> String {
+    agent.window_index.map_or_else(
+        || agent.mux_session.clone(),
+        |window_idx| {
+            let agent_id = agent.id;
+            let root = app.data.storage.root_ancestor(agent_id);
+            let root_session =
+                root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
+            SessionManager::window_target(&root_session, window_idx)
+        },
+    )
+}
+
+fn set_preview_message(app: &mut App, message: &str) {
+    app.data.ui.set_preview_content(message.to_string());
+    app.data.ui.preview_cursor_position = None;
+    app.data.ui.preview_pane_size = None;
+    app.data.ui.preview_vt = None;
 }
 
 #[derive(Debug)]

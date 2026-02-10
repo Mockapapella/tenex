@@ -154,6 +154,17 @@ pub enum MuxRequest {
         /// Number of lines.
         lines: u32,
     },
+    /// Read raw output bytes for a target since the given sequence number.
+    ///
+    /// Bytes are returned base64-encoded to avoid JSON array overhead.
+    ReadOutput {
+        /// Target string.
+        target: String,
+        /// Sequence number after the last byte the client has processed.
+        after: u64,
+        /// Maximum number of bytes to return (before base64 encoding).
+        max_bytes: u32,
+    },
     /// List process IDs for all windows in a session.
     ListPanePids {
         /// Session name.
@@ -222,6 +233,22 @@ pub enum MuxResponse {
     Pids {
         /// PIDs.
         pids: Vec<u32>,
+    },
+    /// Output chunk payload.
+    OutputChunk {
+        /// First sequence number included in this chunk.
+        start: u64,
+        /// Sequence number after the last byte included in this chunk.
+        end: u64,
+        /// Base64-encoded output bytes.
+        data_b64: String,
+    },
+    /// Client must reset its local output state.
+    OutputReset {
+        /// Sequence number to restart from.
+        start: u64,
+        /// Base64-encoded checkpoint stream for the restart point.
+        checkpoint_b64: String,
     },
     /// Error response.
     Err {
