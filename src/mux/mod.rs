@@ -7,12 +7,15 @@ mod daemon;
 mod discovery;
 mod endpoint;
 mod ipc;
+mod output;
 mod protocol;
+pub(crate) mod render;
 mod server;
 mod session;
 
 pub use capture::Capture as OutputCapture;
 pub use endpoint::set_socket_override;
+pub use output::{OutputRead, OutputStream};
 pub use session::{Manager as SessionManager, Session, Window};
 
 use anyhow::{Context, Result, bail};
@@ -158,7 +161,14 @@ pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
 ///
 /// Returns an error if the version cannot be constructed.
 pub fn version() -> Result<String> {
-    Ok(format!("tenex-mux/{}", env!("CARGO_PKG_VERSION")))
+    // Bump this when Tenex makes incompatible changes to mux IPC payloads.
+    const MUX_PROTOCOL_VERSION: u32 = 2;
+
+    Ok(format!(
+        "tenex-mux/{}/proto-{}",
+        env!("CARGO_PKG_VERSION"),
+        MUX_PROTOCOL_VERSION
+    ))
 }
 
 /// Get the mux daemon socket name/path Tenex will use by default for this process.

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use ratatui::{style::Style, text::Text};
 
+const PREVIEW_VT_SCROLLBACK: usize = 10_000;
+
 /// A point in the preview pane selection (absolute line index + 0-based column).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PreviewSelectionPoint {
@@ -33,6 +35,40 @@ pub struct PaneDigest {
     pub hash: u64,
     /// Whether the pane appears active or waiting.
     pub activity: PaneActivity,
+}
+
+pub struct PreviewVtState {
+    pub target: String,
+    pub after: u64,
+    pub dims: (u16, u16),
+    pub parser: vt100::Parser,
+}
+
+impl std::fmt::Debug for PreviewVtState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewVtState")
+            .field("target", &self.target)
+            .field("after", &self.after)
+            .field("dims", &self.dims)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreviewVtState {
+    pub fn new(target: String, cols: u16, rows: u16) -> Self {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        Self {
+            target,
+            after: 0,
+            dims: (cols, rows),
+            parser: vt100::Parser::new(rows, cols, PREVIEW_VT_SCROLLBACK),
+        }
+    }
+
+    pub fn reset(&mut self, target: String, cols: u16, rows: u16) {
+        *self = Self::new(target, cols, rows);
+    }
 }
 
 /// Details about a running mux daemon whose version differs from the Tenex client.
@@ -116,6 +152,9 @@ pub struct UiState {
 
     /// Cached pane size for the selected pane (cols, rows).
     pub preview_pane_size: Option<(u16, u16)>,
+
+    /// Per-client VT100 parsing state for the preview pane.
+    pub preview_vt: Option<PreviewVtState>,
 
     /// Cached diff content
     pub diff_content: String,
@@ -220,6 +259,7 @@ impl UiState {
             preview_selection_dragging: false,
             preview_cursor_position: None,
             preview_pane_size: None,
+            preview_vt: None,
             diff_content: String::new(),
             diff_line_ranges: Vec::new(),
             commits_content: String::new(),

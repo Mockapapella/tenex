@@ -215,9 +215,9 @@ fn scroll_wheel_to_sgr_sequence(
     }
 
     // Map terminal coordinates into 1-based cell coordinates for the agent PTY.
-    let local_x = x.saturating_sub(body.x).min(body.width.saturating_sub(1));
+    let local_x = usize::from(x.saturating_sub(body.x).min(body.width.saturating_sub(1)));
     let local_y = y.saturating_sub(body.y).min(body.height.saturating_sub(1));
-    let col = local_x.saturating_add(1);
+    let col = u16::try_from(local_x.saturating_add(1)).unwrap_or(u16::MAX);
     let row = local_y.saturating_add(1);
 
     // Xterm mouse protocol button codes.
@@ -397,7 +397,7 @@ const fn content_body_area(content_area: Rect) -> Option<Rect> {
     })
 }
 
-fn preview_column_for_x(body_area: Rect, x: u16) -> usize {
+fn preview_column_for_x(_app: &App, body_area: Rect, x: u16) -> usize {
     if body_area.width == 0 {
         return 0;
     }
@@ -414,7 +414,7 @@ fn preview_selection_point_for_xy(
     y: u16,
 ) -> Option<PreviewSelectionPoint> {
     let line = preview_line_index_for_y(app, body_area, y)?;
-    let column = preview_column_for_x(body_area, x);
+    let column = preview_column_for_x(app, body_area, x);
     Some(PreviewSelectionPoint { line, column })
 }
 

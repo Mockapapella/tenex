@@ -4,11 +4,21 @@ use super::endpoint::SocketEndpoint;
 use super::ipc;
 use super::protocol::{CaptureKind, MuxRequest, MuxResponse, SessionInfo, WindowInfo};
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 use interprocess::local_socket::{ListenerOptions, Stream};
+use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
+
+static RESIZE_MAX: OnceLock<Mutex<HashMap<String, (u16, u16)>>> = OnceLock::new();
+
+fn resize_max() -> &'static Mutex<HashMap<String, (u16, u16)>> {
+    RESIZE_MAX.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Run the mux daemon in the foreground.
 ///
@@ -144,6 +154,11 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
             let content = handle_tail(&target, lines)?;
             Ok(MuxResponse::Text { text: content })
         }
+        MuxRequest::ReadOutput {
+            target,
+            after,
+            max_bytes,
+        } => handle_read_output(&target, after, max_bytes),
         MuxRequest::ListPanePids { session } => handle_list_pids(&session),
     }
 }
@@ -185,11 +200,38 @@ fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> R
 
 fn handle_kill_session(name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::kill(name)?;
+    let prefix = format!("{name}:");
+    resize_max()
+        .lock()
+        .retain(|target, _| target != name && !target.starts_with(&prefix));
     Ok(MuxResponse::Ok)
 }
 
 fn handle_rename_session(old_name: &str, new_name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::rename(old_name, new_name)?;
+    {
+        let mut guard = resize_max().lock();
+        if let Some(value) = guard.remove(old_name) {
+            guard.insert(new_name.to_string(), value);
+        }
+
+        let old_prefix = format!("{old_name}:");
+        let new_prefix = format!("{new_name}:");
+        let updates: Vec<(String, String, (u16, u16))> = guard
+            .iter()
+            .filter_map(|(target, dims)| {
+                target
+                    .strip_prefix(&old_prefix)
+                    .map(|suffix| (target.clone(), format!("{new_prefix}{suffix}"), *dims))
+            })
+            .collect();
+        for (old_target, _, _) in &updates {
+            guard.remove(old_target);
+        }
+        for (_, new_target, dims) in updates {
+            guard.insert(new_target, dims);
+        }
+    }
     Ok(MuxResponse::Ok)
 }
 
@@ -222,6 +264,9 @@ fn handle_create_window(
 
 fn handle_kill_window(session: &str, window_index: u32) -> Result<MuxResponse> {
     super::server::SessionManager::kill_window(session, window_index)?;
+    resize_max()
+        .lock()
+        .remove(&format!("{session}:{window_index}"));
     Ok(MuxResponse::Ok)
 }
 
@@ -231,7 +276,11 @@ fn handle_rename_window(session: &str, window_index: u32, new_name: &str) -> Res
 }
 
 fn handle_resize(target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
-    super::server::SessionManager::resize_window(target, cols, rows)?;
+    let current = resize_max().lock().get(target).copied().unwrap_or((0, 0));
+    let proposed = (current.0.max(cols), current.1.max(rows));
+
+    super::server::SessionManager::resize_window(target, proposed.0, proposed.1)?;
+    resize_max().lock().insert(target.to_string(), proposed);
     Ok(MuxResponse::Ok)
 }
 
@@ -270,6 +319,84 @@ fn handle_tail(target: &str, lines: u32) -> Result<String> {
     Ok(super::server::OutputCapture::tail(target, lines)?.join("\n"))
 }
 
+enum ReadResult {
+    Chunk { start: u64, data: Vec<u8> },
+    Reset { start: u64, checkpoint: Vec<u8> },
+}
+
+fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxResponse> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    let window = super::backend::resolve_window(target)?;
+
+    let result = {
+        let guard = window.lock();
+
+        if after < guard.output_history.seq_start {
+            let checkpoint = guard
+                .output_history
+                .checkpoint
+                .as_ref()
+                .filter(|checkpoint| checkpoint.seq == guard.output_history.seq_start)
+                .map(|checkpoint| checkpoint.bytes.clone())
+                .unwrap_or_default();
+
+            ReadResult::Reset {
+                start: guard.output_history.seq_start,
+                checkpoint,
+            }
+        } else if after >= guard.output_history.seq_end {
+            ReadResult::Chunk {
+                start: after,
+                data: Vec::new(),
+            }
+        } else {
+            let offset =
+                usize::try_from(after.saturating_sub(guard.output_history.seq_start)).unwrap_or(0);
+            let take = guard
+                .output_history
+                .buf
+                .len()
+                .saturating_sub(offset)
+                .min(max_bytes);
+            let end_offset = offset.saturating_add(take);
+            ReadResult::Chunk {
+                start: after,
+                data: guard
+                    .output_history
+                    .buf
+                    .get(offset..end_offset)
+                    .unwrap_or_default()
+                    .to_vec(),
+            }
+        }
+    };
+
+    match result {
+        ReadResult::Chunk { start, data } => {
+            let end = start.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+            Ok(MuxResponse::OutputChunk {
+                start,
+                end,
+                data_b64: if data.is_empty() {
+                    String::new()
+                } else {
+                    BASE64.encode(data)
+                },
+            })
+        }
+        ReadResult::Reset { start, checkpoint } => Ok(MuxResponse::OutputReset {
+            start,
+            checkpoint_b64: if checkpoint.is_empty() {
+                String::new()
+            } else {
+                BASE64.encode(checkpoint)
+            },
+        }),
+    }
+}
+
 fn handle_list_pids(session: &str) -> Result<MuxResponse> {
     let pids = super::server::SessionManager::list_pane_pids(session)?;
     Ok(MuxResponse::Pids { pids })
@@ -278,6 +405,10 @@ fn handle_list_pids(session: &str) -> Result<MuxResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dispatch(request: MuxRequest) -> Result<MuxResponse> {
+        dispatch_request(request)
+    }
 
     fn temp_working_dir() -> String {
         std::env::temp_dir().to_string_lossy().into_owned()
@@ -291,9 +422,17 @@ mod tests {
         vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
     }
 
+    fn echo_then_sleep_command(message: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{message}'; sleep 10"),
+        ]
+    }
+
     #[test]
     fn test_dispatch_ping() -> Result<(), Box<dyn std::error::Error>> {
-        let response = dispatch_request(MuxRequest::Ping)?;
+        let response = dispatch(MuxRequest::Ping)?;
         match response {
             MuxResponse::Pong { version } => {
                 assert!(version.starts_with("tenex-mux/"));
@@ -310,7 +449,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let response = dispatch_request(MuxRequest::CreateSession {
+        let response = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir,
             command: long_running_command(),
@@ -319,30 +458,30 @@ mod tests {
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::SessionExists {
+        let response = dispatch(MuxRequest::SessionExists {
             name: session.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Bool { value: true }));
 
-        let response = dispatch_request(MuxRequest::ListSessions)?;
+        let response = dispatch(MuxRequest::ListSessions)?;
         let MuxResponse::Sessions { sessions } = response else {
             return Err("Expected Sessions response".into());
         };
         assert!(sessions.iter().any(|s| s.name == session));
 
         let renamed = format!("{session}-renamed");
-        let response = dispatch_request(MuxRequest::RenameSession {
+        let response = dispatch(MuxRequest::RenameSession {
             old_name: session,
             new_name: renamed.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::SessionExists {
+        let response = dispatch(MuxRequest::SessionExists {
             name: renamed.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Bool { value: true }));
 
-        let response = dispatch_request(MuxRequest::KillSession { name: renamed })?;
+        let response = dispatch(MuxRequest::KillSession { name: renamed })?;
         assert!(matches!(response, MuxResponse::Ok));
 
         Ok(())
@@ -356,7 +495,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let response = dispatch_request(MuxRequest::CreateSession {
+        let response = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir: working_dir.clone(),
             command: command.clone(),
@@ -365,7 +504,7 @@ mod tests {
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::ListWindows {
+        let response = dispatch(MuxRequest::ListWindows {
             session: session.clone(),
         })?;
         let MuxResponse::Windows { windows } = response else {
@@ -373,7 +512,7 @@ mod tests {
         };
         assert!(windows.iter().any(|w| w.index == 0));
 
-        let response = dispatch_request(MuxRequest::CreateWindow {
+        let response = dispatch(MuxRequest::CreateWindow {
             session: session.clone(),
             window_name: "child".to_string(),
             working_dir,
@@ -388,7 +527,7 @@ mod tests {
             return Err("Expected WindowCreated response".into());
         };
 
-        let response = dispatch_request(MuxRequest::RenameWindow {
+        let response = dispatch(MuxRequest::RenameWindow {
             session: session.clone(),
             window_index,
             new_name: "renamed".to_string(),
@@ -396,14 +535,14 @@ mod tests {
         assert!(matches!(response, MuxResponse::Ok));
 
         let target = format!("{session}:{window_index}");
-        let response = dispatch_request(MuxRequest::Resize {
+        let response = dispatch(MuxRequest::Resize {
             target: target.clone(),
             cols: 100,
             rows: 40,
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::PaneSize {
+        let response = dispatch(MuxRequest::PaneSize {
             target: target.clone(),
         })?;
         let MuxResponse::Size { cols, rows } = response else {
@@ -412,12 +551,12 @@ mod tests {
         assert_eq!(cols, 100);
         assert_eq!(rows, 40);
 
-        let response = dispatch_request(MuxRequest::CursorPosition {
+        let response = dispatch(MuxRequest::CursorPosition {
             target: target.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Position { .. }));
 
-        let response = dispatch_request(MuxRequest::PaneCurrentCommand {
+        let response = dispatch(MuxRequest::PaneCurrentCommand {
             target: target.clone(),
         })?;
         let MuxResponse::Text { text } = response else {
@@ -425,7 +564,7 @@ mod tests {
         };
         assert!(!text.is_empty());
 
-        let response = dispatch_request(MuxRequest::Tail {
+        let response = dispatch(MuxRequest::Tail {
             target: target.clone(),
             lines: 5,
         })?;
@@ -436,27 +575,209 @@ mod tests {
             CaptureKind::History { lines: 50 },
             CaptureKind::FullHistory,
         ] {
-            let response = dispatch_request(MuxRequest::Capture {
+            let response = dispatch(MuxRequest::Capture {
                 target: target.clone(),
                 kind,
             })?;
             assert!(matches!(response, MuxResponse::Text { .. }));
         }
 
-        let response = dispatch_request(MuxRequest::ListPanePids {
+        let response = dispatch(MuxRequest::ListPanePids {
             session: session.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Pids { .. }));
 
-        let response = dispatch_request(MuxRequest::KillWindow {
+        let response = dispatch(MuxRequest::KillWindow {
             session: session.clone(),
             window_index,
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::KillSession { name: session })?;
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
         assert!(matches!(response, MuxResponse::Ok));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_resize_is_monotonic_max_per_target() -> Result<(), Box<dyn std::error::Error>> {
+        let session = unique_session("tenex-test-daemon-resize-multi");
+        let working_dir = temp_working_dir();
+        let command = long_running_command();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command,
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 120,
+            rows: 40,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::PaneSize {
+            target: session.clone(),
+        })?;
+        let MuxResponse::Size { cols, rows } = response else {
+            return Err("Expected Size response".into());
+        };
+        assert_eq!((cols, rows), (120, 40));
+
+        let response = dispatch(MuxRequest::Resize {
+            target: session.clone(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::PaneSize {
+            target: session.clone(),
+        })?;
+        let MuxResponse::Size { cols, rows } = response else {
+            return Err("Expected Size response".into());
+        };
+        assert_eq!((cols, rows), (120, 40));
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_read_output_returns_chunks() -> Result<(), Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use std::time::Duration;
+
+        let session = unique_session("tenex-test-daemon-read-output");
+        let working_dir = temp_working_dir();
+        let marker = "tenex-output-marker";
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: echo_then_sleep_command(marker),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let mut after = 0_u64;
+        let mut collected: Vec<u8> = Vec::new();
+
+        for _ in 0..50 {
+            let response = dispatch(MuxRequest::ReadOutput {
+                target: session.clone(),
+                after,
+                max_bytes: 4096,
+            })?;
+
+            let MuxResponse::OutputChunk {
+                start,
+                end,
+                data_b64,
+            } = response
+            else {
+                return Err("Expected OutputChunk response".into());
+            };
+            assert_eq!(start, after);
+            after = end;
+
+            if !data_b64.is_empty() {
+                let data = BASE64.decode(data_b64.as_bytes())?;
+                collected.extend_from_slice(&data);
+            }
+
+            if collected
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+            {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            collected
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+        );
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_read_output_resets_when_after_is_stale()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+
+        let session = unique_session("tenex-test-daemon-read-output-reset");
+        let working_dir = temp_working_dir();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: long_running_command(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&session)?;
+        {
+            let mut guard = window.lock();
+            guard.output_history.seq_start = 5;
+            guard.output_history.seq_end = 5;
+            guard.output_history.buf.clear();
+            guard.output_history.checkpoint = Some(super::super::backend::OutputCheckpoint {
+                seq: 5,
+                bytes: b"checkpoint".to_vec(),
+            });
+        }
+
+        let response = dispatch(MuxRequest::ReadOutput {
+            target: session.clone(),
+            after: 0,
+            max_bytes: 4096,
+        })?;
+        let MuxResponse::OutputReset {
+            start,
+            checkpoint_b64,
+        } = response
+        else {
+            return Err("Expected OutputReset response".into());
+        };
+        assert_eq!(start, 5);
+        assert_eq!(
+            BASE64.decode(checkpoint_b64.as_bytes())?,
+            b"checkpoint".to_vec()
+        );
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
         Ok(())
     }
 
@@ -468,7 +789,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let first = dispatch_request(MuxRequest::CreateSession {
+        let first = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir: working_dir.clone(),
             command: command.clone(),
@@ -477,7 +798,7 @@ mod tests {
         });
         assert!(first.is_ok());
 
-        let second = dispatch_request(MuxRequest::CreateSession {
+        let second = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir,
             command,

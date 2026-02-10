@@ -13,7 +13,7 @@ mod window;
 
 use crate::config::Action;
 use crate::git::{self, WorktreeManager};
-use crate::mux::{OutputCapture, SessionManager};
+use crate::mux::{OutputCapture, OutputStream, SessionManager};
 use crate::state::{
     AppMode, ConfirmPushForPRMode, ConfirmPushMode, PreviewFocusedMode, RenameBranchMode,
 };
@@ -29,6 +29,8 @@ pub struct Actions {
     pub(crate) session_manager: SessionManager,
     /// Output capture
     pub(crate) output_capture: OutputCapture,
+    /// Raw output stream
+    pub(crate) output_stream: OutputStream,
 }
 
 impl Actions {
@@ -38,6 +40,7 @@ impl Actions {
         Self {
             session_manager: SessionManager::new(),
             output_capture: OutputCapture::new(),
+            output_stream: OutputStream::new(),
         }
     }
 
