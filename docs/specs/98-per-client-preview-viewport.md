@@ -79,3 +79,8 @@ Because parsing happens at the client’s pane size, wrapping and cursor positio
 - Full-screen terminal UIs may still look odd on smaller clients because the program is drawing for the shared PTY size.
 - If a client falls behind enough to require `OutputReset`, the checkpoint is taken at the shared PTY size, so the reconstructed view may not perfectly match a continuously-following client.
 
+## Compatibility / upgrades
+
+Per-client preview rendering requires a mux daemon that supports the `ReadOutput` IPC request. If Tenex connects to an older mux daemon (for example, because it is preserving existing sessions across a rebuild/upgrade), Tenex falls back to the legacy capture API and preview rendering will again be shared across clients.
+
+Tenex prompts to restart the mux daemon when it detects an incompatible daemon protocol. Restarting the daemon restarts all running agent sessions.
