@@ -8,6 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
 };
 const MOUSE_SCROLL_LINES: usize = 3;
+const MOUSE_SCROLL_COLUMNS: usize = 8;
 
 /// Handle a mouse event.
 ///
@@ -62,6 +63,10 @@ enum ScrollDirection {
     Down,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Scroll wheel handling covers modal, selection, and focused forwarding cases"
+)]
 fn handle_scroll_wheel(
     app: &mut App,
     x: u16,
@@ -155,13 +160,30 @@ fn handle_scroll_wheel(
                 .map_or(20, |(_, h)| usize::from(h));
             let can_scroll_preview = app.data.ui.preview_text.lines.len() > visible_height;
             if !can_scroll_preview {
-                if let Some(sequence) =
-                    scroll_wheel_to_sgr_sequence(content_area, x, y, modifiers, direction)
-                {
+                if let Some(sequence) = scroll_wheel_to_sgr_sequence(
+                    content_area,
+                    x,
+                    y,
+                    modifiers,
+                    direction,
+                    app.data.ui.preview_scroll_x,
+                ) {
                     batched_keys.push(sequence);
                 }
                 return;
             }
+        }
+
+        if preview_tab && modifiers.contains(KeyModifiers::SHIFT) {
+            match direction {
+                ScrollDirection::Up => app.data.ui.scroll_preview_left(MOUSE_SCROLL_COLUMNS),
+                ScrollDirection::Down => app.data.ui.scroll_preview_right(MOUSE_SCROLL_COLUMNS),
+            }
+
+            if matches!(&app.mode, AppMode::Normal(_) | AppMode::Scrolling(_)) {
+                app.apply_mode(ScrollingMode.into());
+            }
+            return;
         }
 
         match direction {
@@ -193,6 +215,7 @@ fn scroll_wheel_to_sgr_sequence(
     y: u16,
     modifiers: KeyModifiers,
     direction: ScrollDirection,
+    preview_scroll_x: usize,
 ) -> Option<String> {
     // Compute inner block area (inside borders), then the preview "body" area
     // (inner area excluding the 1-line tab bar).
@@ -215,9 +238,10 @@ fn scroll_wheel_to_sgr_sequence(
     }
 
     // Map terminal coordinates into 1-based cell coordinates for the agent PTY.
-    let local_x = x.saturating_sub(body.x).min(body.width.saturating_sub(1));
+    let local_x = usize::from(x.saturating_sub(body.x).min(body.width.saturating_sub(1)))
+        .saturating_add(preview_scroll_x);
     let local_y = y.saturating_sub(body.y).min(body.height.saturating_sub(1));
-    let col = local_x.saturating_add(1);
+    let col = u16::try_from(local_x.saturating_add(1)).unwrap_or(u16::MAX);
     let row = local_y.saturating_add(1);
 
     // Xterm mouse protocol button codes.
@@ -397,14 +421,17 @@ const fn content_body_area(content_area: Rect) -> Option<Rect> {
     })
 }
 
-fn preview_column_for_x(body_area: Rect, x: u16) -> usize {
+fn preview_column_for_x(app: &App, body_area: Rect, x: u16) -> usize {
     if body_area.width == 0 {
-        return 0;
+        return app.data.ui.preview_scroll_x;
     }
 
     let max_x = body_area.width.saturating_sub(1);
     let local_x = x.saturating_sub(body_area.x).min(max_x);
-    usize::from(local_x)
+    app.data
+        .ui
+        .preview_scroll_x
+        .saturating_add(usize::from(local_x))
 }
 
 fn preview_selection_point_for_xy(
@@ -414,7 +441,7 @@ fn preview_selection_point_for_xy(
     y: u16,
 ) -> Option<PreviewSelectionPoint> {
     let line = preview_line_index_for_y(app, body_area, y)?;
-    let column = preview_column_for_x(body_area, x);
+    let column = preview_column_for_x(app, body_area, x);
     Some(PreviewSelectionPoint { line, column })
 }
 
@@ -1879,6 +1906,7 @@ mod tests {
             content_area.y + 2,
             modifiers,
             ScrollDirection::Down,
+            0,
         ) else {
             return Err(anyhow::anyhow!(
                 "Expected SGR sequence for non-empty content area"
@@ -1892,6 +1920,7 @@ mod tests {
             content_area.y + 2,
             modifiers,
             ScrollDirection::Up,
+            0,
         ) else {
             return Err(anyhow::anyhow!(
                 "Expected SGR sequence for non-empty content area"
@@ -1905,7 +1934,8 @@ mod tests {
                 0,
                 0,
                 KeyModifiers::NONE,
-                ScrollDirection::Up
+                ScrollDirection::Up,
+                0
             )
             .is_none()
         );

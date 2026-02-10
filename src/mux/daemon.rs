@@ -6,9 +6,115 @@ use super::protocol::{CaptureKind, MuxRequest, MuxResponse, SessionInfo, WindowI
 use anyhow::{Context, Result};
 use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 use interprocess::local_socket::{ListenerOptions, Stream};
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
+
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+static RESIZE_STATE: OnceLock<Mutex<ResizeState>> = OnceLock::new();
+
+fn resize_state() -> &'static Mutex<ResizeState> {
+    RESIZE_STATE.get_or_init(|| Mutex::new(ResizeState::default()))
+}
+
+#[derive(Debug, Default)]
+struct ResizeState {
+    per_target: HashMap<String, HashMap<u64, (u16, u16)>>,
+    per_connection: HashMap<u64, HashSet<String>>,
+}
+
+impl ResizeState {
+    fn record_resize(
+        &mut self,
+        connection_id: u64,
+        target: &str,
+        cols: u16,
+        rows: u16,
+    ) -> (u16, u16) {
+        let entry = self.per_target.entry(target.to_string()).or_default();
+        entry.insert(connection_id, (cols, rows));
+
+        self.per_connection
+            .entry(connection_id)
+            .or_default()
+            .insert(target.to_string());
+
+        effective_size(entry)
+    }
+
+    fn remove_resize(&mut self, connection_id: u64, target: &str) {
+        if let Some(targets) = self.per_connection.get_mut(&connection_id) {
+            targets.remove(target);
+            if targets.is_empty() {
+                self.per_connection.remove(&connection_id);
+            }
+        }
+
+        if let Some(entry) = self.per_target.get_mut(target) {
+            entry.remove(&connection_id);
+            if entry.is_empty() {
+                self.per_target.remove(target);
+            }
+        }
+    }
+
+    fn remove_connection(&mut self, connection_id: u64) -> Vec<(String, (u16, u16))> {
+        let Some(targets) = self.per_connection.remove(&connection_id) else {
+            return Vec::new();
+        };
+
+        let mut updates = Vec::with_capacity(targets.len());
+        for target in targets {
+            if let Some(entry) = self.per_target.get_mut(&target) {
+                entry.remove(&connection_id);
+                if entry.is_empty() {
+                    self.per_target.remove(&target);
+                    continue;
+                }
+
+                updates.push((target, effective_size(entry)));
+            }
+        }
+
+        updates
+    }
+}
+
+fn effective_size(entry: &HashMap<u64, (u16, u16)>) -> (u16, u16) {
+    entry
+        .values()
+        .fold((0, 0), |(max_cols, max_rows), (cols, rows)| {
+            (max_cols.max(*cols), max_rows.max(*rows))
+        })
+}
+
+struct ConnectionResizeGuard {
+    connection_id: u64,
+}
+
+impl ConnectionResizeGuard {
+    const fn new(connection_id: u64) -> Self {
+        Self { connection_id }
+    }
+}
+
+impl Drop for ConnectionResizeGuard {
+    fn drop(&mut self) {
+        let updates = {
+            let mut guard = resize_state().lock();
+            guard.remove_connection(self.connection_id)
+        };
+
+        for (target, (cols, rows)) in updates {
+            let _ = super::server::SessionManager::resize_window(&target, cols, rows);
+        }
+    }
+}
 
 /// Run the mux daemon in the foreground.
 ///
@@ -54,8 +160,9 @@ pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
+                let connection_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    if let Err(err) = handle_connection(stream) {
+                    if let Err(err) = handle_connection(stream, connection_id) {
                         debug!(error = %err, "Mux client connection closed");
                     }
                 });
@@ -79,7 +186,8 @@ fn try_ping_existing(endpoint: &SocketEndpoint) -> Result<bool> {
     }
 }
 
-fn handle_connection(mut stream: Stream) -> Result<()> {
+fn handle_connection(mut stream: Stream, connection_id: u64) -> Result<()> {
+    let _resize_guard = ConnectionResizeGuard::new(connection_id);
     loop {
         let request: MuxRequest = match ipc::read_json(&mut stream) {
             Ok(req) => req,
@@ -88,7 +196,7 @@ fn handle_connection(mut stream: Stream) -> Result<()> {
             }
         };
 
-        let response = match dispatch_request(request) {
+        let response = match dispatch_request(request, connection_id) {
             Ok(response) => response,
             Err(err) => MuxResponse::Err {
                 message: err.to_string(),
@@ -99,7 +207,7 @@ fn handle_connection(mut stream: Stream) -> Result<()> {
     }
 }
 
-fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
+fn dispatch_request(request: MuxRequest, connection_id: u64) -> Result<MuxResponse> {
     match request {
         MuxRequest::Ping => handle_ping(),
         MuxRequest::ListSessions => Ok(handle_list_sessions()),
@@ -131,7 +239,9 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
             window_index,
             new_name,
         } => handle_rename_window(&session, window_index, &new_name),
-        MuxRequest::Resize { target, cols, rows } => handle_resize(&target, cols, rows),
+        MuxRequest::Resize { target, cols, rows } => {
+            handle_resize(connection_id, &target, cols, rows)
+        }
         MuxRequest::SendInput { target, data } => handle_send_input(&target, &data),
         MuxRequest::Capture { target, kind } => {
             let content = handle_capture(&target, &kind)?;
@@ -230,9 +340,19 @@ fn handle_rename_window(session: &str, window_index: u32, new_name: &str) -> Res
     Ok(MuxResponse::Ok)
 }
 
-fn handle_resize(target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
-    super::server::SessionManager::resize_window(target, cols, rows)?;
-    Ok(MuxResponse::Ok)
+fn handle_resize(connection_id: u64, target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
+    let effective = {
+        let mut guard = resize_state().lock();
+        guard.record_resize(connection_id, target, cols, rows)
+    };
+
+    match super::server::SessionManager::resize_window(target, effective.0, effective.1) {
+        Ok(()) => Ok(MuxResponse::Ok),
+        Err(err) => {
+            resize_state().lock().remove_resize(connection_id, target);
+            Err(err)
+        }
+    }
 }
 
 fn handle_send_input(target: &str, data: &[u8]) -> Result<MuxResponse> {
@@ -279,6 +399,14 @@ fn handle_list_pids(session: &str) -> Result<MuxResponse> {
 mod tests {
     use super::*;
 
+    fn dispatch(request: MuxRequest) -> Result<MuxResponse> {
+        dispatch_request(request, 0)
+    }
+
+    fn dispatch_for(connection_id: u64, request: MuxRequest) -> Result<MuxResponse> {
+        dispatch_request(request, connection_id)
+    }
+
     fn temp_working_dir() -> String {
         std::env::temp_dir().to_string_lossy().into_owned()
     }
@@ -293,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_ping() -> Result<(), Box<dyn std::error::Error>> {
-        let response = dispatch_request(MuxRequest::Ping)?;
+        let response = dispatch(MuxRequest::Ping)?;
         match response {
             MuxResponse::Pong { version } => {
                 assert!(version.starts_with("tenex-mux/"));
@@ -310,7 +438,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let response = dispatch_request(MuxRequest::CreateSession {
+        let response = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir,
             command: long_running_command(),
@@ -319,30 +447,30 @@ mod tests {
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::SessionExists {
+        let response = dispatch(MuxRequest::SessionExists {
             name: session.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Bool { value: true }));
 
-        let response = dispatch_request(MuxRequest::ListSessions)?;
+        let response = dispatch(MuxRequest::ListSessions)?;
         let MuxResponse::Sessions { sessions } = response else {
             return Err("Expected Sessions response".into());
         };
         assert!(sessions.iter().any(|s| s.name == session));
 
         let renamed = format!("{session}-renamed");
-        let response = dispatch_request(MuxRequest::RenameSession {
+        let response = dispatch(MuxRequest::RenameSession {
             old_name: session,
             new_name: renamed.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::SessionExists {
+        let response = dispatch(MuxRequest::SessionExists {
             name: renamed.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Bool { value: true }));
 
-        let response = dispatch_request(MuxRequest::KillSession { name: renamed })?;
+        let response = dispatch(MuxRequest::KillSession { name: renamed })?;
         assert!(matches!(response, MuxResponse::Ok));
 
         Ok(())
@@ -356,7 +484,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let response = dispatch_request(MuxRequest::CreateSession {
+        let response = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir: working_dir.clone(),
             command: command.clone(),
@@ -365,7 +493,7 @@ mod tests {
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::ListWindows {
+        let response = dispatch(MuxRequest::ListWindows {
             session: session.clone(),
         })?;
         let MuxResponse::Windows { windows } = response else {
@@ -373,7 +501,7 @@ mod tests {
         };
         assert!(windows.iter().any(|w| w.index == 0));
 
-        let response = dispatch_request(MuxRequest::CreateWindow {
+        let response = dispatch(MuxRequest::CreateWindow {
             session: session.clone(),
             window_name: "child".to_string(),
             working_dir,
@@ -388,7 +516,7 @@ mod tests {
             return Err("Expected WindowCreated response".into());
         };
 
-        let response = dispatch_request(MuxRequest::RenameWindow {
+        let response = dispatch(MuxRequest::RenameWindow {
             session: session.clone(),
             window_index,
             new_name: "renamed".to_string(),
@@ -396,14 +524,21 @@ mod tests {
         assert!(matches!(response, MuxResponse::Ok));
 
         let target = format!("{session}:{window_index}");
-        let response = dispatch_request(MuxRequest::Resize {
-            target: target.clone(),
-            cols: 100,
-            rows: 40,
-        })?;
-        assert!(matches!(response, MuxResponse::Ok));
+        {
+            let connection_id = 1;
+            let _resize_guard = ConnectionResizeGuard::new(connection_id);
+            let response = dispatch_for(
+                connection_id,
+                MuxRequest::Resize {
+                    target: target.clone(),
+                    cols: 100,
+                    rows: 40,
+                },
+            )?;
+            assert!(matches!(response, MuxResponse::Ok));
+        }
 
-        let response = dispatch_request(MuxRequest::PaneSize {
+        let response = dispatch(MuxRequest::PaneSize {
             target: target.clone(),
         })?;
         let MuxResponse::Size { cols, rows } = response else {
@@ -412,12 +547,12 @@ mod tests {
         assert_eq!(cols, 100);
         assert_eq!(rows, 40);
 
-        let response = dispatch_request(MuxRequest::CursorPosition {
+        let response = dispatch(MuxRequest::CursorPosition {
             target: target.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Position { .. }));
 
-        let response = dispatch_request(MuxRequest::PaneCurrentCommand {
+        let response = dispatch(MuxRequest::PaneCurrentCommand {
             target: target.clone(),
         })?;
         let MuxResponse::Text { text } = response else {
@@ -425,7 +560,7 @@ mod tests {
         };
         assert!(!text.is_empty());
 
-        let response = dispatch_request(MuxRequest::Tail {
+        let response = dispatch(MuxRequest::Tail {
             target: target.clone(),
             lines: 5,
         })?;
@@ -436,27 +571,95 @@ mod tests {
             CaptureKind::History { lines: 50 },
             CaptureKind::FullHistory,
         ] {
-            let response = dispatch_request(MuxRequest::Capture {
+            let response = dispatch(MuxRequest::Capture {
                 target: target.clone(),
                 kind,
             })?;
             assert!(matches!(response, MuxResponse::Text { .. }));
         }
 
-        let response = dispatch_request(MuxRequest::ListPanePids {
+        let response = dispatch(MuxRequest::ListPanePids {
             session: session.clone(),
         })?;
         assert!(matches!(response, MuxResponse::Pids { .. }));
 
-        let response = dispatch_request(MuxRequest::KillWindow {
+        let response = dispatch(MuxRequest::KillWindow {
             session: session.clone(),
             window_index,
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let response = dispatch_request(MuxRequest::KillSession { name: session })?;
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
         assert!(matches!(response, MuxResponse::Ok));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_resize_uses_largest_client_dimensions_and_recovers_on_disconnect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session = unique_session("tenex-test-daemon-resize-multi");
+        let working_dir = temp_working_dir();
+        let command = long_running_command();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command,
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let small_id = 10;
+        let large_id = 20;
+        let small_guard = ConnectionResizeGuard::new(small_id);
+        let large_guard = ConnectionResizeGuard::new(large_id);
+
+        let response = dispatch_for(
+            small_id,
+            MuxRequest::Resize {
+                target: session.clone(),
+                cols: 80,
+                rows: 24,
+            },
+        )?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch_for(
+            large_id,
+            MuxRequest::Resize {
+                target: session.clone(),
+                cols: 120,
+                rows: 40,
+            },
+        )?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::PaneSize {
+            target: session.clone(),
+        })?;
+        let MuxResponse::Size { cols, rows } = response else {
+            return Err("Expected Size response".into());
+        };
+        assert_eq!((cols, rows), (120, 40));
+
+        drop(large_guard);
+
+        let response = dispatch(MuxRequest::PaneSize {
+            target: session.clone(),
+        })?;
+        let MuxResponse::Size { cols, rows } = response else {
+            return Err("Expected Size response".into());
+        };
+        assert_eq!((cols, rows), (80, 24));
+
+        drop(small_guard);
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
         Ok(())
     }
 
@@ -468,7 +671,7 @@ mod tests {
 
         let _ = super::super::server::SessionManager::kill(&session);
 
-        let first = dispatch_request(MuxRequest::CreateSession {
+        let first = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir: working_dir.clone(),
             command: command.clone(),
@@ -477,7 +680,7 @@ mod tests {
         });
         assert!(first.is_ok());
 
-        let second = dispatch_request(MuxRequest::CreateSession {
+        let second = dispatch(MuxRequest::CreateSession {
             name: session.clone(),
             working_dir,
             command,

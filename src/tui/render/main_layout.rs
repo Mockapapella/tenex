@@ -361,11 +361,22 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         Style::default().bg(colors::SURFACE)
     };
-    let paragraph = Paragraph::new(visible_text).style(paragraph_style);
+    let scroll_x = u16::try_from(app.data.ui.preview_scroll_x).unwrap_or(u16::MAX);
+    let paragraph = Paragraph::new(visible_text)
+        .style(paragraph_style)
+        .scroll((0, scroll_x));
     frame.render_widget(paragraph, content_area);
 
     if is_focused {
-        render_preview_cursor(frame, app, content_area, scroll, line_count, visible_height);
+        render_preview_cursor(
+            frame,
+            app,
+            content_area,
+            scroll,
+            scroll_x,
+            line_count,
+            visible_height,
+        );
     }
 
     // Match common terminal UX (e.g. Claude Code): don't show a scrollbar while we're
@@ -537,6 +548,7 @@ fn render_preview_cursor(
     app: &App,
     content_area: Rect,
     scroll: usize,
+    scroll_x: u16,
     line_count: usize,
     visible_height: usize,
 ) {
@@ -574,7 +586,11 @@ fn render_preview_cursor(
     }
 
     let max_x = content_area.width.saturating_sub(1);
-    let cursor_x = cursor_x.min(max_x);
+    let cursor_x = if cursor_x < scroll_x {
+        0
+    } else {
+        cursor_x.saturating_sub(scroll_x).min(max_x)
+    };
     let cursor_y = u16::try_from(visible_row)
         .unwrap_or(0)
         .min(content_area.height.saturating_sub(1));
@@ -1386,31 +1402,31 @@ mod tests {
         let mut terminal = Terminal::new(backend)?;
 
         terminal.draw(|frame| {
-            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+            render_preview_cursor(frame, &app, frame.area(), 0, 0, 10, 10);
         })?;
 
         app.data.ui.preview_cursor_position = Some((0, 0, true));
         app.data.ui.preview_pane_size = Some((40, 10));
         terminal.draw(|frame| {
-            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+            render_preview_cursor(frame, &app, frame.area(), 0, 0, 10, 10);
         })?;
 
         app.data.ui.preview_cursor_position = Some((0, 0, false));
         app.data.ui.preview_pane_size = None;
         terminal.draw(|frame| {
-            render_preview_cursor(frame, &app, frame.area(), 0, 10, 10);
+            render_preview_cursor(frame, &app, frame.area(), 0, 0, 10, 10);
         })?;
 
         app.data.ui.preview_cursor_position = Some((0, 0, false));
         app.data.ui.preview_pane_size = Some((40, 10));
         terminal.draw(|frame| {
-            render_preview_cursor(frame, &app, frame.area(), 0, 10, 0);
+            render_preview_cursor(frame, &app, frame.area(), 0, 0, 10, 0);
         })?;
 
         app.data.ui.preview_cursor_position = Some((0, 0, false));
         app.data.ui.preview_pane_size = Some((40, 5));
         terminal.draw(|frame| {
-            render_preview_cursor(frame, &app, frame.area(), 0, 10, 1);
+            render_preview_cursor(frame, &app, frame.area(), 0, 0, 10, 1);
         })?;
 
         app.data.ui.preview_cursor_position = Some((0, 0, false));
@@ -1418,7 +1434,7 @@ mod tests {
         terminal.draw(|frame| {
             let mut area = frame.area();
             area.width = 0;
-            render_preview_cursor(frame, &app, area, 0, 5, 5);
+            render_preview_cursor(frame, &app, area, 0, 0, 5, 5);
         })?;
 
         Ok(())

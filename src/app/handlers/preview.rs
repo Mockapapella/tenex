@@ -62,6 +62,15 @@ impl Actions {
                 app.data.ui.preview_cursor_position =
                     self.output_capture.cursor_position(&target).ok();
                 app.data.ui.preview_pane_size = self.output_capture.pane_size(&target).ok();
+
+                if matches!(&app.mode, crate::state::AppMode::PreviewFocused(_))
+                    && app.data.ui.preview_follow
+                    && let Some((cursor_x, _cursor_y, cursor_hidden)) =
+                        app.data.ui.preview_cursor_position
+                    && !cursor_hidden
+                {
+                    app.data.ui.follow_preview_cursor_x(cursor_x);
+                }
             } else {
                 app.data
                     .ui

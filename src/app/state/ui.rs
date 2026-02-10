@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use std::path::PathBuf;
 
-use ratatui::{style::Style, text::Text};
+use ratatui::{
+    style::Style,
+    text::{Line, Text},
+};
 
 /// A point in the preview pane selection (absolute line index + 0-based column).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -61,6 +64,9 @@ pub struct UiState {
     /// Scroll position in preview pane
     pub preview_scroll: usize,
 
+    /// Horizontal scroll position in preview pane (0-based column).
+    pub preview_scroll_x: usize,
+
     /// Scroll position in diff pane
     pub diff_scroll: usize,
 
@@ -83,6 +89,9 @@ pub struct UiState {
     /// Whether preview should auto-scroll to bottom on content updates
     /// Set to false when user manually scrolls up, true when they scroll to bottom
     pub preview_follow: bool,
+
+    /// Whether preview should auto-pan horizontally to keep the cursor visible.
+    pub preview_follow_cursor_x: bool,
 
     /// Whether the current preview buffer represents the full scrollback history.
     ///
@@ -200,6 +209,7 @@ impl UiState {
         Self {
             agent_list_scroll: 0,
             preview_scroll: 0,
+            preview_scroll_x: 0,
             diff_scroll: 0,
             commits_scroll: 0,
             diff_cursor: 0,
@@ -207,6 +217,7 @@ impl UiState {
             help_scroll: 0,
             changelog_scroll: 0,
             preview_follow: true,
+            preview_follow_cursor_x: true,
             preview_using_full_history: false,
             preview_content: String::new(),
             preview_text: Text {
@@ -366,7 +377,9 @@ impl UiState {
     pub fn reset_scroll(&mut self) {
         // Preview: set to max so render functions clamp to bottom of content
         self.preview_scroll = usize::MAX;
+        self.preview_scroll_x = 0;
         self.preview_follow = true;
+        self.preview_follow_cursor_x = true;
         self.preview_using_full_history = false;
         // Diff: set to 0 to show from top
         self.diff_scroll = 0;
@@ -453,6 +466,44 @@ impl UiState {
         self.check_preview_follow();
     }
 
+    pub fn scroll_preview_left(&mut self, amount: usize) {
+        self.normalize_preview_scroll_x();
+        self.preview_follow_cursor_x = false;
+        self.preview_scroll_x = self.preview_scroll_x.saturating_sub(amount);
+        if self.preview_scroll_x == 0 {
+            self.preview_follow_cursor_x = true;
+        }
+    }
+
+    pub fn scroll_preview_right(&mut self, amount: usize) {
+        self.normalize_preview_scroll_x();
+        self.preview_follow_cursor_x = false;
+        self.preview_scroll_x = self.preview_scroll_x.saturating_add(amount);
+        self.normalize_preview_scroll_x();
+    }
+
+    pub fn follow_preview_cursor_x(&mut self, cursor_x: u16) {
+        if !self.preview_follow_cursor_x {
+            return;
+        }
+
+        let visible_width = self.preview_dimensions.map_or(0, |(w, _)| usize::from(w));
+        if visible_width == 0 {
+            return;
+        }
+
+        let cursor_x = usize::from(cursor_x);
+        let window_end = self.preview_scroll_x.saturating_add(visible_width);
+
+        if cursor_x < self.preview_scroll_x {
+            self.preview_scroll_x = cursor_x;
+        } else if cursor_x >= window_end {
+            self.preview_scroll_x = cursor_x.saturating_sub(visible_width.saturating_sub(1));
+        }
+
+        self.normalize_preview_scroll_x();
+    }
+
     /// Scroll up in the diff pane by the given amount
     pub fn scroll_diff_up(&mut self, amount: usize) {
         self.normalize_diff_scroll();
@@ -502,6 +553,34 @@ impl UiState {
 
         if self.preview_scroll > preview_max {
             self.preview_scroll = preview_max;
+        }
+    }
+
+    fn normalize_preview_scroll_x(&mut self) {
+        let visible_width = self.preview_dimensions.map_or(0, |(w, _)| usize::from(w));
+        if visible_width == 0 {
+            self.preview_scroll_x = 0;
+            return;
+        }
+
+        let max_cols = self.preview_pane_size.map_or_else(
+            || {
+                self.preview_text
+                    .lines
+                    .iter()
+                    .map(line_char_count)
+                    .max()
+                    .unwrap_or(0)
+            },
+            |(cols, _)| usize::from(cols),
+        );
+        let max_scroll = max_cols.saturating_sub(visible_width);
+
+        if self.preview_scroll_x > max_scroll {
+            self.preview_scroll_x = max_scroll;
+        }
+        if self.preview_scroll_x == 0 {
+            self.preview_follow_cursor_x = true;
         }
     }
 
@@ -857,6 +936,13 @@ pub struct DiffEdit {
     pub applied_reverse: bool,
 }
 
+fn line_char_count(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref().chars().count())
+        .sum()
+}
+
 /// Compute per-line byte ranges for fast slicing.
 /// Treats both `\n` and `\r\n` as line endings (like `str::lines()`).
 fn compute_line_ranges(s: &str) -> Vec<(usize, usize)> {
@@ -896,11 +982,13 @@ mod tests {
         let ui = UiState::new();
         assert_eq!(ui.agent_list_scroll, 0);
         assert_eq!(ui.preview_scroll, 0);
+        assert_eq!(ui.preview_scroll_x, 0);
         assert_eq!(ui.diff_scroll, 0);
         assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 0);
         assert_eq!(ui.changelog_scroll, 0);
         assert!(ui.preview_follow);
+        assert!(ui.preview_follow_cursor_x);
         assert!(ui.preview_content.is_empty());
         assert!(ui.preview_text.lines.is_empty());
         assert!(ui.diff_content.is_empty());
@@ -916,16 +1004,20 @@ mod tests {
     fn test_reset_scroll() {
         let mut ui = UiState::new();
         ui.preview_scroll = 100;
+        ui.preview_scroll_x = 12;
         ui.diff_scroll = 50;
         ui.commits_scroll = 42;
         ui.preview_follow = false;
+        ui.preview_follow_cursor_x = false;
         ui.help_scroll = 25;
         ui.changelog_scroll = 17;
 
         ui.reset_scroll();
 
         assert_eq!(ui.preview_scroll, usize::MAX);
+        assert_eq!(ui.preview_scroll_x, 0);
         assert!(ui.preview_follow);
+        assert!(ui.preview_follow_cursor_x);
         assert_eq!(ui.diff_scroll, 0);
         assert_eq!(ui.commits_scroll, 0);
         assert_eq!(ui.help_scroll, 25);
@@ -1055,6 +1147,35 @@ mod tests {
 
         ui.clear_error();
         assert!(ui.last_error.is_none());
+    }
+
+    #[test]
+    fn test_follow_preview_cursor_x_keeps_cursor_visible() {
+        let mut ui = UiState::new();
+        ui.preview_dimensions = Some((10, 3));
+        ui.preview_pane_size = Some((80, 3));
+
+        ui.follow_preview_cursor_x(15);
+        assert_eq!(ui.preview_scroll_x, 6);
+
+        ui.follow_preview_cursor_x(2);
+        assert_eq!(ui.preview_scroll_x, 2);
+    }
+
+    #[test]
+    fn test_horizontal_preview_scroll_disables_cursor_follow_until_reset() {
+        let mut ui = UiState::new();
+        ui.preview_dimensions = Some((10, 3));
+        ui.preview_pane_size = Some((80, 3));
+        ui.preview_follow_cursor_x = true;
+
+        ui.scroll_preview_right(8);
+        assert_eq!(ui.preview_scroll_x, 8);
+        assert!(!ui.preview_follow_cursor_x);
+
+        ui.scroll_preview_left(usize::MAX);
+        assert_eq!(ui.preview_scroll_x, 0);
+        assert!(ui.preview_follow_cursor_x);
     }
 
     #[test]
