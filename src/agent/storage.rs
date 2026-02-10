@@ -457,6 +457,35 @@ impl Storage {
         changed
     }
 
+    /// Backfill agent conversation IDs for older Tenex state files.
+    ///
+    /// Tenex uses `conversation_id` to resume supported agent CLIs after restarts/crashes.
+    /// Older state files may not have this field populated.
+    pub fn backfill_conversation_ids(&mut self) -> bool {
+        let mut changed = false;
+
+        for agent in &mut self.agents {
+            if agent.is_terminal_agent() {
+                continue;
+            }
+
+            if let Some(existing) = agent.conversation_id.as_deref()
+                && !existing.trim().is_empty()
+            {
+                continue;
+            }
+
+            if crate::conversation::detect_agent_cli(&agent.program)
+                == crate::conversation::AgentCli::Claude
+            {
+                agent.conversation_id = Some(agent.id.to_string());
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
     /// Save state to the configured location (custom path or default)
     ///
     /// # Errors
@@ -1475,6 +1504,47 @@ mod tests {
         assert!(loaded.backfill_workspace_kinds());
         let agent = loaded.agents.first().ok_or("missing agent")?;
         assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_conversation_ids_sets_claude_uuid_when_missing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut storage = Storage::new();
+        let agent = Agent::new(
+            "plain".to_string(),
+            "claude --debug".to_string(),
+            "tenex/plain".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        let expected = agent_id.to_string();
+        storage.add(agent);
+
+        assert!(storage.backfill_conversation_ids());
+        let loaded = storage.get(agent_id).ok_or("missing agent")?;
+        assert_eq!(loaded.conversation_id.as_deref(), Some(expected.as_str()));
+
+        assert!(!storage.backfill_conversation_ids());
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_conversation_ids_does_not_touch_other_programs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut storage = Storage::new();
+        let agent = Agent::new(
+            "plain".to_string(),
+            "sh -c 'sleep 1'".to_string(),
+            "tenex/plain".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        storage.add(agent);
+
+        assert!(!storage.backfill_conversation_ids());
+        let loaded = storage.get(agent_id).ok_or("missing agent")?;
+        assert!(loaded.conversation_id.is_none());
         Ok(())
     }
 
