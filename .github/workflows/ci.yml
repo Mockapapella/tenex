@@ -57,7 +57,18 @@ jobs:
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
           gzip -9 -f llvm-cov-report.lcov
-          sha256sum llvm-cov-report.txt | tee llvm-cov-report.sha256
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          report_path = pathlib.Path("llvm-cov-report.txt")
+          digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+          pathlib.Path("llvm-cov-report.sha256").write_text(
+              f"{digest}  {report_path.as_posix()}\n",
+              encoding="utf-8",
+          )
+          PY
+          cat llvm-cov-report.sha256
           {
             echo "git_sha=$(git rev-parse HEAD)"
             cargo llvm-cov --version
@@ -68,16 +79,48 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          if [ ! -f ci/llvm-cov-report.txt ]; then
-            echo "ERROR: Missing ci/llvm-cov-report.txt" >&2
+          case "${{ runner.os }}" in
+            Linux) receipt_os="linux" ;;
+            macOS) receipt_os="macos" ;;
+            Windows) receipt_os="windows" ;;
+            *) echo "ERROR: Unsupported runner.os: ${{ runner.os }}" >&2; exit 1 ;;
+          esac
+
+          receipt_dir="ci/llvm-cov-receipts/${receipt_os}"
+          receipt_report="${receipt_dir}/llvm-cov-report.txt"
+          receipt_sha="${receipt_dir}/llvm-cov-report.sha256"
+
+          if [ ! -f "$receipt_report" ]; then
+            echo "ERROR: Missing ${receipt_report}" >&2
             echo "Run locally: pre-commit install -t post-commit" >&2
             echo "Then make a commit (it will auto-amend in the report)." >&2
             exit 1
           fi
-          diff -u ci/llvm-cov-report.txt llvm-cov-report.txt
-          if [ -f ci/llvm-cov-report.sha256 ]; then
-            sha256sum -c ci/llvm-cov-report.sha256
+          diff -u "$receipt_report" llvm-cov-report.txt
+
+          if [ ! -f "$receipt_sha" ]; then
+            echo "ERROR: Missing ${receipt_sha}" >&2
+            exit 1
           fi
+
+          python - "$receipt_sha" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          sha_path = pathlib.Path(sys.argv[1])
+          line = sha_path.read_text(encoding="utf-8").strip()
+          expected_hash, expected_path = line.split(maxsplit=1)
+          report_path = pathlib.Path(expected_path)
+          if not report_path.is_file():
+              raise SystemExit(f"ERROR: sha references missing file: {expected_path}")
+
+          actual_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
+          if actual_hash != expected_hash:
+              raise SystemExit(
+                  f"ERROR: sha mismatch for {expected_path}: expected {expected_hash}, got {actual_hash}"
+              )
+          PY
       - name: Upload llvm-cov report
         if: always()
         uses: actions/upload-artifact@v4
