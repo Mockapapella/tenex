@@ -20,6 +20,67 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: cov-receipts-required
+        name: "push: ensure required llvm-cov receipts exist"
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+                exit 0
+              fi
+
+              required_file="ci/llvm-cov-receipts/required-platforms.txt"
+              if [ ! -f "$required_file" ]; then
+                echo "ERROR: Missing ${required_file}" >&2
+                exit 1
+              fi
+
+              missing=0
+              while IFS= read -r line || [ -n "$line" ]; do
+                os="${line%%#*}"
+                os="${os#"${os%%[![:space:]]*}"}"
+                os="${os%"${os##*[![:space:]]}"}"
+                if [ -z "$os" ]; then
+                  continue
+                fi
+
+                case "$os" in
+                  linux|macos|windows) ;;
+                  *)
+                    echo "ERROR: Unsupported platform in ${required_file}: ${os}" >&2
+                    echo "Supported values: linux, macos, windows" >&2
+                    missing=1
+                    continue
+                    ;;
+                esac
+
+                report_path="ci/llvm-cov-receipts/${os}/llvm-cov-report.txt"
+                sha_path="ci/llvm-cov-receipts/${os}/llvm-cov-report.sha256"
+
+                if [ ! -f "$report_path" ] || [ ! -f "$sha_path" ]; then
+                  echo "ERROR: Missing coverage receipt for ${os}:" >&2
+                  if [ ! -f "$report_path" ]; then
+                    echo "  - ${report_path}" >&2
+                  fi
+                  if [ ! -f "$sha_path" ]; then
+                    echo "  - ${sha_path}" >&2
+                  fi
+                  missing=1
+                fi
+              done < "$required_file"
+
+              if [ "$missing" -ne 0 ]; then
+                echo "" >&2
+                echo "Generate receipts by running coverage on each missing platform, then commit on that platform (post-commit hook amends the receipt)." >&2
+                echo "Expected path template: ci/llvm-cov-receipts/<platform>/llvm-cov-report.{txt,sha256}" >&2
+                echo "If you run from Windows via WSL2, set TENEX_COV_RECEIPT_OS=windows for the commit." >&2
+                exit 1
+              fi
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: cargo-fmt
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
@@ -43,6 +104,10 @@ repos:
               mux_socket_path="$state_dir/mux.sock"
 
               cleanup_repo_muxd() {
+                if [ ! -d /proc ]; then
+                  return 0
+                fi
+
                 local pids=""
 
                 for proc_dir in /proc/[0-9]*; do
@@ -114,6 +179,10 @@ repos:
               mux_socket_path="$state_dir/mux.sock"
 
               cleanup_repo_muxd() {
+                if [ ! -d /proc ]; then
+                  return 0
+                fi
+
                 local pids=""
 
                 for proc_dir in /proc/[0-9]*; do
@@ -194,14 +263,71 @@ repos:
               fi
 
               mkdir -p ci
-              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > ci/llvm-cov-report.txt
-              sha256sum ci/llvm-cov-report.txt > ci/llvm-cov-report.sha256
+              detect_receipt_os() {
+                override="${TENEX_COV_RECEIPT_OS:-}"
+                if [ -n "$override" ]; then
+                  case "$override" in
+                    linux|macos|windows)
+                      printf '%s\n' "$override"
+                      return 0
+                      ;;
+                    *)
+                      echo "ERROR: TENEX_COV_RECEIPT_OS must be one of: linux, macos, windows" >&2
+                      return 1
+                      ;;
+                  esac
+                fi
 
-              if git diff --quiet -- ci/llvm-cov-report.txt ci/llvm-cov-report.sha256; then
+                os_name="$(uname -s 2>/dev/null || true)"
+                case "$os_name" in
+                  Linux*)
+                    if [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
+                      printf 'windows\n'
+                    else
+                      printf 'linux\n'
+                    fi
+                    ;;
+                  Darwin*) printf 'macos\n' ;;
+                  MINGW*|MSYS*|CYGWIN*) printf 'windows\n' ;;
+                  *) echo "ERROR: Unsupported OS for coverage receipt: ${os_name:-<unknown>}" >&2; return 1 ;;
+                esac
+              }
+
+              receipt_os="$(detect_receipt_os)"
+
+              receipt_dir="ci/llvm-cov-receipts/${receipt_os}"
+              report_path="${receipt_dir}/llvm-cov-report.txt"
+              sha_path="${receipt_dir}/llvm-cov-report.sha256"
+
+              mkdir -p "$receipt_dir"
+              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$report_path"
+
+              python_bin="python3"
+              if ! command -v "$python_bin" >/dev/null 2>&1; then
+                python_bin="python"
+              fi
+              if ! command -v "$python_bin" >/dev/null 2>&1; then
+                echo "ERROR: python is required to compute coverage receipt hashes" >&2
+                exit 1
+              fi
+
+              "$python_bin" - "$report_path" "$sha_path" <<'PY'
+              import hashlib
+              import pathlib
+              import sys
+
+              report_path = pathlib.Path(sys.argv[1])
+              sha_path = pathlib.Path(sys.argv[2])
+
+              digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+              sha_path.write_text(f"{digest}  {report_path.as_posix()}\n", encoding="utf-8")
+              PY
+
+              if [ -z "$(git status --porcelain=v1 -- "$report_path" "$sha_path")" ]; then
                 exit 0
               fi
 
-              git add ci/llvm-cov-report.txt ci/llvm-cov-report.sha256
+              git add "$report_path" "$sha_path"
               TENEX_SKIP_COV_REPORT_AMEND=1 git commit --amend --no-edit --no-verify
         language: system
         always_run: true
