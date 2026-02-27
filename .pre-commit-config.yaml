@@ -45,6 +45,16 @@ repos:
                   continue
                 fi
 
+                case "$os" in
+                  linux|macos|windows) ;;
+                  *)
+                    echo "ERROR: Unsupported platform in ${required_file}: ${os}" >&2
+                    echo "Supported values: linux, macos, windows" >&2
+                    missing=1
+                    continue
+                    ;;
+                esac
+
                 report_path="ci/llvm-cov-receipts/${os}/llvm-cov-report.txt"
                 sha_path="ci/llvm-cov-receipts/${os}/llvm-cov-report.sha256"
 
@@ -62,7 +72,9 @@ repos:
 
               if [ "$missing" -ne 0 ]; then
                 echo "" >&2
-                echo "Generate receipts by running coverage on the missing OS, then committing (post-commit hook will amend the receipt)." >&2
+                echo "Generate receipts by running coverage on each missing platform, then commit on that platform (post-commit hook amends the receipt)." >&2
+                echo "Expected path template: ci/llvm-cov-receipts/<platform>/llvm-cov-report.{txt,sha256}" >&2
+                echo "If you run from Windows via WSL2, set TENEX_COV_RECEIPT_OS=windows for the commit." >&2
                 exit 1
               fi
         language: system
@@ -251,13 +263,37 @@ repos:
               fi
 
               mkdir -p ci
-              os_name="$(uname -s 2>/dev/null || true)"
-              case "$os_name" in
-                Linux*) receipt_os="linux" ;;
-                Darwin*) receipt_os="macos" ;;
-                MINGW*|MSYS*|CYGWIN*) receipt_os="windows" ;;
-                *) echo "ERROR: Unsupported OS for coverage receipt: ${os_name:-<unknown>}" >&2; exit 1 ;;
-              esac
+              detect_receipt_os() {
+                override="${TENEX_COV_RECEIPT_OS:-}"
+                if [ -n "$override" ]; then
+                  case "$override" in
+                    linux|macos|windows)
+                      printf '%s\n' "$override"
+                      return 0
+                      ;;
+                    *)
+                      echo "ERROR: TENEX_COV_RECEIPT_OS must be one of: linux, macos, windows" >&2
+                      return 1
+                      ;;
+                  esac
+                fi
+
+                os_name="$(uname -s 2>/dev/null || true)"
+                case "$os_name" in
+                  Linux*)
+                    if [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
+                      printf 'windows\n'
+                    else
+                      printf 'linux\n'
+                    fi
+                    ;;
+                  Darwin*) printf 'macos\n' ;;
+                  MINGW*|MSYS*|CYGWIN*) printf 'windows\n' ;;
+                  *) echo "ERROR: Unsupported OS for coverage receipt: ${os_name:-<unknown>}" >&2; return 1 ;;
+                esac
+              }
+
+              receipt_os="$(detect_receipt_os)"
 
               receipt_dir="ci/llvm-cov-receipts/${receipt_os}"
               report_path="${receipt_dir}/llvm-cov-report.txt"
