@@ -50,8 +50,21 @@ fn test_mux_create_session_resolves_relative_working_dir_from_client_cwd()
     let _ = manager.kill(&session_name);
 
     let marker = format!("__tenex_cwd_test_{session_name}__");
-    let script = format!("echo {marker}; pwd -P; sleep 60");
-    let command = vec!["sh".to_string(), "-c".to_string(), script];
+    #[cfg(windows)]
+    let command = vec![
+        "powershell".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        format!(
+            "Write-Output {marker}; [System.IO.Path]::GetFullPath('.'); Start-Sleep -Seconds 60"
+        ),
+    ];
+    #[cfg(not(windows))]
+    let command = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!("echo {marker}; pwd -P; sleep 60"),
+    ];
 
     manager.create(&session_name, Path::new("."), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -66,10 +79,21 @@ fn test_mux_create_session_resolves_relative_working_dir_from_client_cwd()
         .canonicalize()
         .unwrap_or_else(|_| client_cwd.path().to_path_buf());
     let expected = expected.to_string_lossy();
-    assert!(
-        output.contains(expected.as_ref()),
-        "Expected mux session to start in {expected}, got output: {output:?}"
-    );
+    #[cfg(windows)]
+    {
+        let normalize = |value: &str| value.replace('\\', "/").to_ascii_lowercase();
+        assert!(
+            normalize(&output).contains(&normalize(expected.as_ref())),
+            "Expected mux session to start in {expected}, got output: {output:?}"
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(
+            output.contains(expected.as_ref()),
+            "Expected mux session to start in {expected}, got output: {output:?}"
+        );
+    }
 
     Ok(())
 }

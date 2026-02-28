@@ -113,15 +113,39 @@ pub(super) fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> 
     let looks_like_path = display.contains('/') || display.contains('\\');
 
     if looks_like_path {
-        let socket_path = PathBuf::from(&display);
-        return Ok(SocketEndpoint {
-            name: socket_path
-                .as_path()
-                .to_fs_name::<GenericFilePath>()?
-                .into_owned(),
-            cleanup_path: Some(socket_path),
-            display,
-        });
+        #[cfg(windows)]
+        {
+            let socket_path = PathBuf::from(&display);
+            if let Ok(name) = socket_path.as_path().to_fs_name::<GenericFilePath>() {
+                return Ok(SocketEndpoint {
+                    name: name.into_owned(),
+                    cleanup_path: None,
+                    display,
+                });
+            }
+
+            return Ok(SocketEndpoint {
+                name: display
+                    .clone()
+                    .to_ns_name::<GenericNamespaced>()?
+                    .into_owned(),
+                cleanup_path: None,
+                display,
+            });
+        }
+
+        #[cfg(not(windows))]
+        {
+            let socket_path = PathBuf::from(&display);
+            return Ok(SocketEndpoint {
+                name: socket_path
+                    .as_path()
+                    .to_fs_name::<GenericFilePath>()?
+                    .into_owned(),
+                cleanup_path: Some(socket_path),
+                display,
+            });
+        }
     }
 
     if GenericNamespaced::is_supported() {
@@ -214,6 +238,9 @@ mod tests {
     fn test_socket_endpoint_from_value_path_like() -> Result<()> {
         let tmp_path = std::env::temp_dir().join("tenex-mux-test.sock");
         let endpoint = socket_endpoint_from_value(&tmp_path.to_string_lossy())?;
+        #[cfg(windows)]
+        assert!(endpoint.cleanup_path.is_none());
+        #[cfg(not(windows))]
         assert!(endpoint.cleanup_path.is_some());
         assert!(!endpoint.display.is_empty());
         Ok(())

@@ -1469,6 +1469,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let plain_dir = temp_dir.path().join("plain");
         std::fs::create_dir_all(&plain_dir)?;
+        let plain_dir_json = serde_json::to_string(&plain_dir.to_string_lossy().into_owned())?;
 
         let state_path = temp_dir.path().join("state.json");
         let contents = format!(
@@ -1480,7 +1481,7 @@ mod tests {
       "program": "sh -c 'sleep 3600'",
       "status": "running",
       "branch": "tenex/legacy",
-      "worktree_path": "{}",
+      "worktree_path": {plain_dir_json},
       "mux_session": "tenex-legacy",
       "created_at": "2026-02-03T00:00:00Z",
       "updated_at": "2026-02-03T00:00:01Z",
@@ -1492,8 +1493,7 @@ mod tests {
   ],
   "version": 1
 }}
-"#,
-            plain_dir.display()
+"#
         );
         std::fs::write(&state_path, contents)?;
 

@@ -153,11 +153,16 @@ fn resolve_tenex_executable() -> Result<PathBuf> {
         .and_then(std::path::Path::parent)
         .context("Failed to resolve build output directory")?;
 
-    let exe_name = env!("CARGO_PKG_NAME").to_string();
+    let base_name = env!("CARGO_PKG_NAME");
+    let candidates = [
+        candidate_dir.join(format!("{base_name}{}", std::env::consts::EXE_SUFFIX)),
+        candidate_dir.join(base_name),
+    ];
 
-    let candidate = candidate_dir.join(exe_name);
-    if candidate.exists() {
-        return Ok(candidate);
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
     }
 
     Ok(exe)
@@ -177,22 +182,48 @@ mod tests {
     #[test]
     fn test_mux_client_reconnects_after_failed_request() -> Result<()> {
         use interprocess::local_socket::traits::ListenerExt;
-        use interprocess::local_socket::{GenericFilePath, ListenerOptions, prelude::*};
+        use interprocess::local_socket::{ListenerOptions, prelude::*};
 
-        let temp_dir = tempfile::tempdir()?;
-        let socket_path = temp_dir.path().join("mux-client.sock");
-        let name = socket_path
-            .as_path()
-            .to_fs_name::<GenericFilePath>()?
-            .into_owned();
+        #[cfg(windows)]
+        let endpoint = {
+            use interprocess::local_socket::GenericNamespaced;
 
-        let endpoint = SocketEndpoint {
-            name: name.clone(),
-            cleanup_path: Some(socket_path.clone()),
-            display: socket_path.to_string_lossy().into_owned(),
+            let display = format!("tenex-mux-client-{}", uuid::Uuid::new_v4());
+            let name = display
+                .clone()
+                .to_ns_name::<GenericNamespaced>()?
+                .into_owned();
+            SocketEndpoint {
+                name,
+                cleanup_path: None,
+                display,
+            }
         };
 
-        let listener = ListenerOptions::new().name(name).create_sync()?;
+        #[cfg(not(windows))]
+        let endpoint = {
+            use interprocess::local_socket::GenericFilePath;
+
+            let socket_name = format!("tx-mux-client-{}.sock", uuid::Uuid::new_v4().simple());
+            let socket_path = if std::path::Path::new("/tmp").is_dir() {
+                std::path::Path::new("/tmp").join(&socket_name)
+            } else {
+                std::env::temp_dir().join(socket_name)
+            };
+            let name = socket_path
+                .as_path()
+                .to_fs_name::<GenericFilePath>()?
+                .into_owned();
+            SocketEndpoint {
+                name,
+                cleanup_path: Some(socket_path.clone()),
+                display: socket_path.to_string_lossy().into_owned(),
+            }
+        };
+
+        let listener = ListenerOptions::new()
+            .name(endpoint.name.clone())
+            .create_sync()?;
         let handle = std::thread::spawn(move || -> Result<()> {
             let mut incoming = listener.incoming();
 

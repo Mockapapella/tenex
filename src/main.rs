@@ -434,28 +434,29 @@ fn preserve_corrupt_state_file(path: &std::path::Path) -> Option<std::path::Path
     Some(preserved)
 }
 
-fn restart_current_process() -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    use std::path::PathBuf;
+fn find_installed_binary(name: &str) -> std::path::PathBuf {
     use tenex::paths;
 
-    fn find_installed_binary(name: &str) -> PathBuf {
-        // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
-        let candidates = [
-            std::env::var("CARGO_HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join("bin").join(name)),
-            paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
-        ];
+    // Try CARGO_HOME first, then ~/.cargo, then just the binary name (PATH lookup)
+    let candidates = [
+        std::env::var("CARGO_HOME")
+            .ok()
+            .map(|h| std::path::PathBuf::from(h).join("bin").join(name)),
+        paths::home_dir().map(|h| h.join(".cargo").join("bin").join(name)),
+    ];
 
-        for candidate in candidates.into_iter().flatten() {
-            if candidate.exists() {
-                return candidate;
-            }
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return candidate;
         }
-
-        PathBuf::from(name)
     }
+
+    std::path::PathBuf::from(name)
+}
+
+#[cfg(unix)]
+fn restart_current_process() -> Result<()> {
+    use std::os::unix::process::CommandExt;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     // After `cargo install --force`, spawning a new process and exiting can leave the
@@ -469,12 +470,26 @@ fn restart_current_process() -> Result<()> {
     Err(anyhow::Error::new(err).context("Failed to restart Tenex"))
 }
 
+#[cfg(windows)]
+fn restart_current_process() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
+
+    std::process::Command::new(installed)
+        .args(&args)
+        .spawn()
+        .context("Failed to restart Tenex")?;
+
+    std::process::exit(0);
+}
+
 fn cmd_reset(force: bool) -> Result<()> {
     use std::collections::HashSet;
     use tenex::git::WorktreeManager;
 
     let mut storage = Storage::load().unwrap_or_default();
     let mux = SessionManager::new();
+    let mux_running = tenex::mux::is_server_running();
 
     let instance_prefix = storage.instance_session_prefix();
     let scope = prompt_reset_scope(force)?;
@@ -505,8 +520,12 @@ fn cmd_reset(force: bool) -> Result<()> {
     let worktree_mgr = repo.as_ref().map(WorktreeManager::new);
     let branch_mgr = repo.as_ref().map(tenex::git::BranchManager::new);
 
+    if !mux_running {
+        eprintln!("Warning: Mux daemon is not running; skipping session termination.");
+    }
+
     for agent in storage.iter() {
-        if let Err(e) = mux.kill(&agent.mux_session) {
+        if mux_running && let Err(e) = mux.kill(&agent.mux_session) {
             eprintln!(
                 "Warning: Failed to kill mux session {}: {e}",
                 agent.mux_session
@@ -526,9 +545,11 @@ fn cmd_reset(force: bool) -> Result<()> {
     }
 
     // Kill orphaned sessions
-    for session in &orphaned_sessions {
-        if let Err(e) = mux.kill(session) {
-            eprintln!("Warning: Failed to kill orphaned mux session {session}: {e}");
+    if mux_running {
+        for session in &orphaned_sessions {
+            if let Err(e) = mux.kill(session) {
+                eprintln!("Warning: Failed to kill orphaned mux session {session}: {e}");
+            }
         }
     }
 
@@ -573,13 +594,31 @@ fn list_orphaned_sessions(
     instance_prefix: &str,
     storage_sessions: &std::collections::HashSet<String>,
 ) -> Vec<String> {
+    if !tenex::mux::is_server_running() {
+        return Vec::new();
+    }
+
+    let sessions = {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(mux.list());
+        });
+
+        match rx.recv_timeout(Duration::from_millis(750)) {
+            Ok(Ok(sessions)) => sessions,
+            _ => return Vec::new(),
+        }
+    };
+
     let prefix = match scope {
         ResetScope::ThisInstance => instance_prefix,
         ResetScope::AllInstances => "tenex-",
     };
 
-    mux.list()
-        .unwrap_or_default()
+    sessions
         .into_iter()
         .filter(|s| s.name.starts_with(prefix))
         .filter(|s| !storage_sessions.contains(&s.name))

@@ -1026,6 +1026,17 @@ mod tests {
         ))
     }
 
+    fn test_sleep_program() -> String {
+        #[cfg(windows)]
+        {
+            "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            "sh -c 'sleep 3600'".to_string()
+        }
+    }
+
     fn init_repo() -> Result<(TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
         use git2::{Repository, RepositoryInitOptions, Signature};
 
@@ -1079,7 +1090,7 @@ mod tests {
 
         let existing = Agent::new(
             "asdf".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             branch.clone(),
             worktree_path.clone(),
         );
@@ -1174,7 +1185,7 @@ mod tests {
 
         let root = Agent::new(
             "asdf".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             branch.clone(),
             worktree_path.clone(),
         );
@@ -1183,7 +1194,7 @@ mod tests {
         app.data.storage.add(root);
         app.data.storage.add(Agent::new_child(
             "child".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             branch.clone(),
             worktree_path.clone(),
             ChildConfig {
@@ -1252,7 +1263,7 @@ mod tests {
 
         let mut root = Agent::new(
             "root".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             "tenex/root".to_string(),
             PathBuf::from("/tmp"),
         );
@@ -1345,7 +1356,7 @@ mod tests {
         let (_repo_dir, repo_path) = init_repo()?;
         let root = Agent::new(
             "root".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             "master".to_string(),
             repo_path,
         );

@@ -708,6 +708,11 @@ mod tests {
     ) -> Result<(TempDir, Repository), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let repo = Repository::init(temp_dir.path())?;
+        {
+            let mut config = repo.config()?;
+            config.set_bool("core.autocrlf", false)?;
+            config.set_str("core.eol", "lf")?;
+        }
 
         let sig = Signature::now("Test", "test@test.com")?;
         let file_path = temp_dir.path().join("test.txt");

@@ -1,6 +1,8 @@
 //! Tests for [R] review agent functionality
 
-use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+#[cfg(unix)]
+use crate::common::DirGuard;
+use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::config::Action;
 use tenex::mux::SessionManager;
 
@@ -421,13 +423,9 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
-        return Ok(());
-    }
-
-    #[cfg(not(unix))]
-    {
         return Ok(());
     }
 
@@ -538,6 +536,10 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     Ok(())
 }
+
+#[test]
+#[cfg(not(unix))]
+fn test_spawn_review_agents_codex_uses_review_flow() {}
 
 #[test]
 fn test_review_prompt_contains_base_branch() {

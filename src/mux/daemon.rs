@@ -59,6 +59,15 @@ pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
         Err(err) => return Err(err).context("Failed to create mux listener"),
     };
 
+    #[cfg(not(target_os = "linux"))]
+    let _pid_guard =
+        super::pidfile::PidFileGuard::create(&endpoint.display).with_context(|| {
+            format!(
+                "Failed to create mux daemon pid file for socket {}",
+                endpoint.display
+            )
+        })?;
+
     info!(endpoint = %endpoint.display, "Mux daemon listening");
 
     for conn in listener.incoming() {
@@ -419,15 +428,39 @@ mod tests {
     }
 
     fn long_running_command() -> Vec<String> {
-        vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        #[cfg(windows)]
+        {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 10".to_string(),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        }
     }
 
     fn echo_then_sleep_command(message: &str) -> Vec<String> {
-        vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("echo '{message}'; sleep 10"),
-        ]
+        #[cfg(windows)]
+        {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!("Write-Output '{message}'; Start-Sleep -Seconds 10"),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("echo '{message}'; sleep 10"),
+            ]
+        }
     }
 
     #[test]

@@ -6,10 +6,15 @@
 
 use super::endpoint::socket_endpoint_from_value;
 use super::ipc;
+#[cfg(not(target_os = "linux"))]
+use super::pidfile;
 use super::protocol::{MuxRequest, MuxResponse};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
-use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
+use std::collections::HashSet;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 /// Attempt to find a running mux daemon socket that contains at least one of the requested
@@ -64,9 +69,104 @@ pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
 }
 
 pub(super) fn mux_daemon_pids_for_socket(socket: &str) -> Vec<u32> {
-    mux_daemon_pids_for_socket_in_proc_root(Path::new("/proc"), socket)
+    #[cfg(target_os = "linux")]
+    {
+        mux_daemon_pids_for_socket_in_proc_root(Path::new("/proc"), socket)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let Some(pid) = pidfile::read_pid(socket) else {
+            return Vec::new();
+        };
+
+        if pid_is_alive(pid) {
+            return vec![pid];
+        }
+
+        pidfile::remove(socket);
+        Vec::new()
+    }
 }
 
+pub(super) fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let proc_dir = format!("/proc/{pid}");
+        let Ok(stat) = std::fs::read_to_string(format!("{proc_dir}/stat")) else {
+            return std::fs::metadata(proc_dir).is_ok();
+        };
+
+        let Some(idx) = stat.rfind(") ") else {
+            return true;
+        };
+        !matches!(stat.as_bytes().get(idx.saturating_add(2)), Some(b'Z'))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        let Ok(output) = output else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim().is_empty() || stdout.contains("No tasks are running") {
+            return false;
+        }
+
+        stdout.contains(&format!("\"{pid}\""))
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    {
+        use std::process::Command;
+
+        let ps = Command::new("ps")
+            .args(["-o", "stat=", "-p"])
+            .arg(pid.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        if let Ok(output) = ps {
+            if !output.status.success() {
+                return false;
+            }
+
+            let stat = String::from_utf8_lossy(&output.stdout);
+            let state = stat.trim();
+            if state.is_empty() {
+                return false;
+            }
+
+            return !state.contains('Z');
+        }
+
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn mux_daemon_pids_for_socket_in_proc_root(proc_root: &Path, socket: &str) -> Vec<u32> {
     let wanted_socket = socket.trim();
     if wanted_socket.is_empty() {
@@ -204,9 +304,25 @@ fn running_mux_sockets_in_proc_root(proc_root: &Path) -> Vec<String> {
 
 #[cfg(not(target_os = "linux"))]
 fn running_mux_sockets() -> Vec<String> {
-    Vec::new()
+    let mut sockets = Vec::new();
+
+    for socket in pidfile::list_sockets() {
+        let Some(pid) = pidfile::read_pid(&socket) else {
+            pidfile::remove(&socket);
+            continue;
+        };
+
+        if pid_is_alive(pid) {
+            sockets.push(socket);
+        } else {
+            pidfile::remove(&socket);
+        }
+    }
+
+    sockets
 }
 
+#[cfg(target_os = "linux")]
 fn cmdline_contains_muxd(cmdline: &[u8]) -> bool {
     cmdline
         .split(|b| *b == 0)
@@ -214,6 +330,7 @@ fn cmdline_contains_muxd(cmdline: &[u8]) -> bool {
         .any(|arg| arg == b"muxd")
 }
 
+#[cfg(target_os = "linux")]
 fn parse_environ(environ: &[u8]) -> HashMap<String, String> {
     let mut vars = HashMap::new();
 
@@ -242,15 +359,19 @@ mod tests {
     use anyhow::Result;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
     use std::process::Command;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_cmdline_contains_muxd() {
         assert!(cmdline_contains_muxd(b"tenex\0muxd\0"));
         assert!(!cmdline_contains_muxd(b"tenex\0\0"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_environ() {
         let env = b"A=1\0TENEX_MUX_SOCKET=test\0B=2\0";
@@ -289,6 +410,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_discover_socket_for_sessions_returns_none_when_no_matches() -> Result<()> {
         let session_manager = crate::mux::SessionManager::new();
@@ -326,6 +448,9 @@ mod tests {
             .env("TENEX_STATE_PATH", &state_path)
             .spawn()?;
         let dummy_pid = dummy.id();
+        #[cfg(not(target_os = "linux"))]
+        let _dummy_pid_guard =
+            super::pidfile::PidFileGuard::create_for_pid(&dummy_socket, dummy_pid)?;
 
         let mut found_dummy = false;
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -358,6 +483,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_mux_daemon_pids_for_socket_finds_process() -> Result<(), Box<dyn std::error::Error>> {
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
@@ -375,6 +501,8 @@ mod tests {
             .env("TENEX_STATE_PATH", &state_path)
             .spawn()?;
         let pid = child.id();
+        #[cfg(not(target_os = "linux"))]
+        let _pid_guard = super::pidfile::PidFileGuard::create_for_pid(&socket, pid)?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -397,6 +525,7 @@ mod tests {
         assert!(mux_daemon_pids_for_socket("   ").is_empty());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_mux_daemon_pids_for_socket_handles_missing_cmdline_files() -> Result<()> {
         let proc_root = TempDir::new()?;
@@ -418,6 +547,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_running_mux_sockets_handles_missing_cmdline_files() -> Result<()> {
         let proc_root = TempDir::new()?;
@@ -458,6 +588,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_running_mux_sockets_filters_mismatched_state_path() -> Result<()> {
         let Some(wanted_state_path) = std::env::var("TENEX_STATE_PATH")
