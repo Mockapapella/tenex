@@ -6,6 +6,17 @@ use crate::common::{DirGuard, TestFixture, create_child_agent, skip_if_no_mux};
 use tenex::agent::{Agent, Storage};
 use tenex::mux::SessionManager;
 
+fn sleep_program(seconds: u32) -> String {
+    #[cfg(windows)]
+    {
+        format!("powershell -NoProfile -Command \"Start-Sleep -Seconds {seconds}\"")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("sleep {seconds}")
+    }
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -306,7 +317,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     let fixture = TestFixture::new("rename_root")?;
     let mut config = fixture.config();
     // Use sleep to keep the session alive (echo exits immediately)
-    config.default_program = "sleep 300".to_string();
+    config.default_program = sleep_program(300);
     let storage = TestFixture::create_storage();
 
     let _dir_guard = DirGuard::new()?;
@@ -472,6 +483,7 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
 /// 4. All descendant agents should have their `worktree_path` updated
 /// 5. After rename, killing the agent should properly clean up the worktree
 #[test]
+#[cfg(unix)]
 #[expect(
     clippy::too_many_lines,
     reason = "integration test requires setup, action, and verification"
@@ -484,7 +496,7 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let fixture = TestFixture::new("rename_wt")?;
     let mut config = fixture.config();
     // Use sleep to keep the session alive
-    config.default_program = "sleep 300".to_string();
+    config.default_program = sleep_program(300);
     let storage = TestFixture::create_storage();
 
     let _dir_guard = DirGuard::new()?;

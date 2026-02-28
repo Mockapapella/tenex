@@ -28,7 +28,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 - **git** — Required for worktree isolation
 - **gh** — GitHub CLI, required for opening pull requests (`Ctrl+o`)
 - **An agent CLI** — `claude` (default) or `codex` (or configure a custom command)
-- **Linux** — Tenex currently supports Linux only
+- **Platform support** — Linux and macOS native; Windows via WSL2
 - **Rust 1.91+** — For building from source
 - **cargo** — Required for auto-update functionality
 

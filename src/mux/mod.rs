@@ -8,6 +8,8 @@ mod discovery;
 mod endpoint;
 mod ipc;
 mod output;
+#[cfg(not(target_os = "linux"))]
+mod pidfile;
 mod protocol;
 pub(crate) mod render;
 mod server;
@@ -78,29 +80,39 @@ pub fn running_daemon_version() -> Result<Option<String>> {
 }
 
 pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
-    fn pid_is_alive(pid: u32) -> bool {
-        let proc_dir = format!("/proc/{pid}");
-        let Ok(stat) = std::fs::read_to_string(format!("{proc_dir}/stat")) else {
-            return std::fs::metadata(proc_dir).is_ok();
-        };
-
-        let Some(idx) = stat.rfind(") ") else {
-            return true;
-        };
-        !matches!(stat.as_bytes().get(idx.saturating_add(2)), Some(b'Z'))
-    }
-
     fn send_signal(pid: u32, signal: &str) -> Result<()> {
-        let status = Command::new("kill")
-            .arg(signal)
-            .arg(pid.to_string())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .with_context(|| format!("Failed to invoke kill {signal} {pid}"))?;
+        let status = {
+            #[cfg(windows)]
+            {
+                let mut command = Command::new("taskkill");
+                if signal == "-KILL" {
+                    command.arg("/F");
+                }
 
-        if status.success() || !pid_is_alive(pid) {
+                command
+                    .arg("/PID")
+                    .arg(pid.to_string())
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .with_context(|| format!("Failed to invoke taskkill for pid {pid}"))?
+            }
+
+            #[cfg(not(windows))]
+            {
+                Command::new("kill")
+                    .arg(signal)
+                    .arg(pid.to_string())
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .with_context(|| format!("Failed to invoke kill {signal} {pid}"))?
+            }
+        };
+
+        if status.success() || !discovery::pid_is_alive(pid) {
             return Ok(());
         }
 
@@ -124,7 +136,7 @@ pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut remaining: Vec<u32> = pids;
     while Instant::now() < deadline {
-        remaining.retain(|pid| pid_is_alive(*pid));
+        remaining.retain(|pid| discovery::pid_is_alive(*pid));
         if remaining.is_empty() {
             break;
         }
@@ -141,7 +153,7 @@ pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
-        remaining.retain(|pid| pid_is_alive(*pid));
+        remaining.retain(|pid| discovery::pid_is_alive(*pid));
         if remaining.is_empty() {
             break;
         }
@@ -208,6 +220,7 @@ pub fn run_mux_daemon() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     use std::process::Command;
 
     #[test]
@@ -261,6 +274,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_terminate_mux_daemon_for_socket_kills_matching_process()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -273,6 +287,8 @@ mod tests {
             .env("TENEX_MUX_SOCKET", &socket)
             .spawn()?;
         let pid = child.id();
+        #[cfg(not(target_os = "linux"))]
+        let _pid_guard = super::pidfile::PidFileGuard::create_for_pid(&socket, pid)?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -297,9 +313,11 @@ mod tests {
         Err("Expected spawned muxd process to terminate".into())
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_terminate_mux_daemon_for_socket_escalates_to_kill_when_ignoring_term()
     -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(unix)]
         use std::os::unix::process::ExitStatusExt;
 
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
@@ -328,6 +346,8 @@ time.sleep(60)
             .env("TENEX_TEST_READY_PATH", &ready_path)
             .spawn()?;
         let pid = child.id();
+        #[cfg(not(target_os = "linux"))]
+        let _pid_guard = super::pidfile::PidFileGuard::create_for_pid(&socket, pid)?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -362,14 +382,29 @@ time.sleep(60)
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if let Some(status) = child.try_wait()? {
-                if status.signal() == Some(9) {
-                    return Ok(());
+                #[cfg(unix)]
+                {
+                    if status.signal() == Some(9) {
+                        return Ok(());
+                    }
+
+                    return Err(format!(
+                        "Expected spawned muxd process to exit with SIGKILL, got status {status:?}"
+                    )
+                    .into());
                 }
 
-                return Err(format!(
-                    "Expected spawned muxd process to exit with SIGKILL, got status {status:?}"
-                )
-                .into());
+                #[cfg(not(unix))]
+                {
+                    if !status.success() {
+                        return Ok(());
+                    }
+
+                    return Err(format!(
+                        "Expected spawned muxd process to terminate non-successfully, got status {status:?}"
+                    )
+                    .into());
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }

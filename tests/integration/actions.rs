@@ -5,6 +5,17 @@ use std::time::Duration;
 use tenex::agent::Storage;
 use tenex::mux::SessionManager;
 
+const fn interactive_shell_program() -> &'static str {
+    #[cfg(windows)]
+    {
+        "powershell"
+    }
+    #[cfg(not(windows))]
+    {
+        "sh"
+    }
+}
+
 #[test]
 fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
@@ -212,7 +223,7 @@ fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
 
     let fixture = TestFixture::new("actions_pane_activity")?;
     let mut config = fixture.config();
-    config.default_program = "sh".to_string();
+    config.default_program = interactive_shell_program().to_string();
     let storage = TestFixture::create_storage();
 
     let _dir_guard = DirGuard::new()?;
@@ -412,7 +423,7 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
     let fixture = TestFixture::new("actions_preview_scroll")?;
     let mut config = fixture.config();
     // Use an interactive shell so we can generate lots of output reliably.
-    config.default_program = "sh".to_string();
+    config.default_program = interactive_shell_program().to_string();
     let storage = TestFixture::create_storage();
 
     // Change to repo directory for the test (DirGuard restores on drop).
@@ -437,10 +448,12 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
         .clone();
 
     // Generate >300 lines so the tail capture excludes early lines.
-    manager.send_keys_and_submit(
-        &session,
-        "i=1; while [ $i -le 500 ]; do printf 'TENEX_SCROLL_TEST_LINE_%04d\\n' $i; i=$((i+1)); done",
-    )?;
+    let generate_lines_command = if cfg!(windows) {
+        "$i=1; while ($i -le 500) { Write-Output ('TENEX_SCROLL_TEST_LINE_' + $i.ToString().PadLeft(4,'0')); $i++ }"
+    } else {
+        "i=1; while [ $i -le 500 ]; do printf 'TENEX_SCROLL_TEST_LINE_%04d\\n' $i; i=$((i+1)); done"
+    };
+    manager.send_keys_and_submit(&session, generate_lines_command)?;
 
     // Wait for output to appear in the preview buffer.
     let start = std::time::Instant::now();

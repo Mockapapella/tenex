@@ -5,6 +5,17 @@ use std::fs;
 use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::app::{Actions, App};
 
+fn sleep_program(seconds: u32) -> String {
+    #[cfg(windows)]
+    {
+        format!("powershell -NoProfile -Command \"Start-Sleep -Seconds {seconds}\"")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("sleep {seconds}")
+    }
+}
+
 /// Test that creating an agent detects existing worktree and enters conflict mode
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
@@ -290,7 +301,7 @@ fn test_worktree_conflict_reconnect_swarm_creates_children()
 
     // Use sleep command to keep sessions alive for swarm tests
     let mut config = fixture.config();
-    config.default_program = "sleep 60".to_string();
+    config.default_program = sleep_program(60);
     let storage = TestFixture::create_storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
@@ -365,8 +376,13 @@ fn test_worktree_conflict_reconnect_swarm_creates_children()
     let children: Vec<_> = app.data.storage.iter().filter(|a| !a.is_root()).collect();
 
     assert_eq!(children.len(), 2, "Should have 2 children");
-    assert_eq!(root.program, "sleep 60");
-    assert!(children.iter().all(|child| child.program == "sleep 60"));
+    let expected_program = sleep_program(60);
+    assert_eq!(root.program, expected_program);
+    assert!(
+        children
+            .iter()
+            .all(|child| child.program == expected_program)
+    );
 
     // Cleanup
     fixture.cleanup_sessions();
@@ -389,7 +405,7 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
 
     // Use sleep command to keep sessions alive for swarm tests
     let mut config = fixture.config();
-    config.default_program = "sleep 60".to_string();
+    config.default_program = sleep_program(60);
     let storage = TestFixture::create_storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 
@@ -466,7 +482,7 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
 
     // Use sleep command to keep sessions alive for child spawning tests
     let mut config = fixture.config();
-    config.default_program = "sleep 60".to_string();
+    config.default_program = sleep_program(60);
     let storage = TestFixture::create_storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
 

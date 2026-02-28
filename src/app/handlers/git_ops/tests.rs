@@ -4,7 +4,6 @@ use crate::app::handlers::Actions;
 use crate::app::state::App;
 use crate::config::Config;
 use crate::state::{AppMode, ConfirmPushForPRMode, ConfirmPushMode, RenameBranchMode};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tempfile::{NamedTempFile, TempDir};
@@ -31,7 +30,25 @@ fn ensure_stub_gh_installed() -> Result<(), Box<dyn std::error::Error>> {
         ));
         std::fs::create_dir_all(&dir)?;
 
+        #[cfg(windows)]
+        let gh_path = dir.join("gh.cmd");
+        #[cfg(not(windows))]
         let gh_path = dir.join("gh");
+
+        #[cfg(windows)]
+        std::fs::write(
+            &gh_path,
+            r#"@echo off
+if "%5"=="main" (
+  exit /b 0
+)
+
+echo boom 1>&2
+exit /b 1
+"#,
+        )?;
+
+        #[cfg(not(windows))]
         std::fs::write(
             &gh_path,
             r#"#!/usr/bin/env bash
@@ -45,9 +62,13 @@ exit 1
 "#,
         )?;
 
-        let mut perms = std::fs::metadata(&gh_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&gh_path, perms)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&gh_path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&gh_path, perms)?;
+        }
 
         let _ = GH_STUB.set(gh_path.clone());
         gh_path

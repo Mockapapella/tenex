@@ -582,26 +582,72 @@ mod tests {
 
     fn test_command() -> Vec<String> {
         // Use a long-running process so tests don't race with natural process exit.
-        vec!["sh".to_string(), "-c".to_string(), "sleep 60".to_string()]
+        #[cfg(windows)]
+        {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 60".to_string(),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 60".to_string()]
+        }
     }
 
     fn test_long_command() -> Vec<String> {
-        vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        #[cfg(windows)]
+        {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 10".to_string(),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 10".to_string()]
+        }
     }
 
     fn test_exit_command() -> Vec<String> {
-        vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+        #[cfg(windows)]
+        {
+            vec!["cmd".to_string(), "/c".to_string(), "exit 0".to_string()]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+        }
     }
 
     fn test_update_like_root_command(marker_path: &Path) -> Vec<String> {
-        vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "if [ ! -f '{marker}' ]; then touch '{marker}'; exit 0; else sleep 60; fi",
-                marker = marker_path.display()
-            ),
-        ]
+        #[cfg(windows)]
+        {
+            let marker = marker_path.display().to_string();
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!(
+                    "$marker = '{marker}'; if (-not (Test-Path $marker)) {{ New-Item -ItemType File -Path $marker -Force | Out-Null; exit 0 }} else {{ Start-Sleep -Seconds 60 }}"
+                ),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "if [ ! -f '{marker}' ]; then touch '{marker}'; exit 0; else sleep 60; fi",
+                    marker = marker_path.display()
+                ),
+            ]
+        }
     }
 
     #[test]

@@ -157,7 +157,19 @@ mod tests {
     use super::*;
 
     fn test_command() -> Vec<String> {
-        vec!["sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        #[cfg(windows)]
+        {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 2".to_string(),
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        }
     }
 
     #[test]

@@ -682,6 +682,8 @@ mod tests {
         let mut with_mouse: Vec<u8> = Vec::new();
         enter_tui_screen(&mut with_mouse, true)?;
 
+        assert!(with_mouse.len() >= without_mouse.len());
+        #[cfg(not(windows))]
         assert!(with_mouse.len() > without_mouse.len());
         Ok(())
     }

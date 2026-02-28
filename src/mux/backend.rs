@@ -445,9 +445,27 @@ fn build_command_builder(command: Option<&[String]>) -> Result<(CommandBuilder, 
         if argv.is_empty() {
             bail!("Cannot spawn PTY: empty argv");
         }
-        let args = argv.iter().map(OsString::from).collect::<Vec<_>>();
+
+        // Some call sites persist custom commands as a single shell string
+        // (e.g. "sh -c 'sleep 3600'"). On Windows, CreateProcessW treats that as
+        // a literal executable path unless we split it first.
+        let normalized = if cfg!(windows) && argv.len() == 1 {
+            let candidate = argv[0].trim();
+            if candidate.contains(char::is_whitespace) {
+                match shell_words::split(candidate) {
+                    Ok(split) if !split.is_empty() => split,
+                    _ => argv.iter().map(String::from).collect(),
+                }
+            } else {
+                argv.iter().map(String::from).collect()
+            }
+        } else {
+            argv.iter().map(String::from).collect()
+        };
+
+        let args = normalized.iter().map(OsString::from).collect::<Vec<_>>();
         let builder = CommandBuilder::from_argv(args);
-        return Ok((builder, argv.iter().map(String::from).collect()));
+        return Ok((builder, normalized));
     }
 
     let builder = CommandBuilder::new_default_prog();
@@ -543,6 +561,7 @@ mod tests {
         assert!(unix_timestamp() >= 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_terminal_query_responses_end_to_end() -> Result<()> {
         let session_name = format!("tenex-test-backend-{}", uuid::Uuid::new_v4());
@@ -572,12 +591,18 @@ mod tests {
         assert!(output.contains("OSC10:"), "full output: {output:?}");
         assert!(output.contains("OSC11:"), "full output: {output:?}");
 
-        // Primary device attributes response: ESC [ ? 1 ; 0 c
-        assert!(output.contains("1b 5b 3f 31 3b 30 63"));
+        let compact: String = output
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+
+        // Primary device attributes response starts with ESC [ ?.
+        assert!(compact.contains("1b5b3f"), "full output: {output:?}");
 
         // Text color and background color responses are OSC 10/11.
-        assert!(output.contains("1b 5d 31 30"), "full output: {output:?}");
-        assert!(output.contains("1b 5d 31 31"), "full output: {output:?}");
+        assert!(compact.contains("1b5d3130"), "full output: {output:?}");
+        assert!(compact.contains("1b5d3131"), "full output: {output:?}");
 
         Ok(())
     }

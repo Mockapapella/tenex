@@ -3,6 +3,22 @@
 use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::mux::SessionManager;
 
+fn sleep_command(seconds: u32) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!("Start-Sleep -Seconds {seconds}"),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["sleep".to_string(), seconds.to_string()]
+    }
+}
+
 fn wait_for_session(
     manager: SessionManager,
     session_name: &str,
@@ -35,7 +51,7 @@ fn test_mux_session_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!manager.exists(&session_name));
 
     // Create session with a command that stays alive
-    let command = vec!["sleep".to_string(), "10".to_string()];
+    let command = sleep_command(10);
     let result = manager.create(&session_name, &fixture.worktree_path(), Some(&command));
     assert!(result.is_ok());
 
@@ -91,7 +107,7 @@ fn test_mux_capture_pane() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     wait_for_session(manager, &session_name)?;
@@ -126,7 +142,7 @@ fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     wait_for_session(manager, &session_name)?;
@@ -149,6 +165,7 @@ fn test_mux_capture_pane_with_history() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn test_mux_capture_pane_with_history_includes_full_output_tail()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -199,6 +216,7 @@ fn test_mux_capture_pane_with_history_includes_full_output_tail()
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn test_mux_capture_pane_with_history_includes_alternate_screen_scrollback()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -253,6 +271,7 @@ fn test_mux_capture_pane_with_history_includes_alternate_screen_scrollback()
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn test_mux_capture_pane_with_history_ends_with_visible_pane()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -324,7 +343,7 @@ fn test_mux_capture_full_history() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a session that stays alive
     let _ = manager.kill(&session_name);
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
 
     wait_for_session(manager, &session_name)?;
@@ -440,7 +459,7 @@ fn test_mux_window_operations() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_session(manager, &session_name)?;
 
     // Create a window
-    let window_command = vec!["sleep".to_string(), "60".to_string()];
+    let window_command = sleep_command(60);
     let window_result = manager.create_window(
         &session_name,
         "test-window",
@@ -476,7 +495,7 @@ fn test_mux_capture_tail() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session with output
     let _ = manager.kill(&session_name);
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
     wait_for_session(manager, &session_name)?;
 
@@ -560,7 +579,7 @@ fn test_mux_pane_current_command() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session with a specific command
     let _ = manager.kill(&session_name);
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
     wait_for_session(manager, &session_name)?;
 
@@ -708,6 +727,7 @@ fn test_mux_send_keys_and_submit_for_program() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn test_mux_send_keys_and_submit_for_program_claude_uses_csi_u_enter_when_pane_is_claude()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -754,7 +774,7 @@ if __name__ == "__main__":
 "#,
     )?;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         let mut perms = std::fs::metadata(&claude_path)?.permissions();
@@ -792,6 +812,7 @@ if __name__ == "__main__":
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn test_mux_responds_to_terminal_queries() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
@@ -870,7 +891,7 @@ fn test_mux_additional_session_ops() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Warning: failed to kill existing session {session_name}: {err}");
     }
 
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
     wait_for_session(manager, &session_name)?;
 

@@ -7,6 +7,22 @@ use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, App};
 use tenex::mux::SessionManager;
 
+fn sleep_command(seconds: u32) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!("Start-Sleep -Seconds {seconds}"),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["sleep".to_string(), seconds.to_string()]
+    }
+}
+
 /// Test that `sync_agent_status` correctly removes agents whose sessions don't exist
 /// using the batched session list approach (single list-sessions call)
 #[test]
@@ -46,7 +62,7 @@ fn test_sync_agent_status_batched_session_check() -> Result<(), Box<dyn std::err
     storage.add(agent3);
 
     // Only create a real mux session for agent1
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&agent1_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -159,7 +175,7 @@ fn test_large_swarm_sync_status() -> Result<(), Box<dyn std::error::Error>> {
     storage.add(root.clone());
 
     // Create the root's mux session with a long-running command
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&root_session, &fixture.worktree_path(), Some(&command))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
 

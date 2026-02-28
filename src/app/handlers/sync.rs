@@ -706,6 +706,31 @@ mod tests {
         ))
     }
 
+    fn test_sleep_program() -> String {
+        #[cfg(windows)]
+        {
+            "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            "sh -c 'sleep 3600'".to_string()
+        }
+    }
+
+    fn test_echo_arg_program() -> String {
+        #[cfg(windows)]
+        {
+            "powershell -NoProfile -Command \"Write-Output 'ARG1:'; Start-Sleep -Seconds 3600\""
+                .to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            // The `_` argument is the arg0 placeholder for `sh -c`, so an appended prompt
+            // becomes $1.
+            "sh -c 'echo ARG1:$1; sleep 3600' _".to_string()
+        }
+    }
+
     #[test]
     fn test_sync_agent_status() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
@@ -853,7 +878,7 @@ mod tests {
 
         let mut root = Agent::new(
             "root".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             "tenex-test/root".to_string(),
             worktree_path.clone(),
         );
@@ -863,7 +888,7 @@ mod tests {
 
         let child = Agent::new_child(
             "child".to_string(),
-            "sh -c 'sleep 3600'".to_string(),
+            test_sleep_program(),
             root.branch.clone(),
             worktree_path,
             crate::agent::ChildConfig {
@@ -904,9 +929,8 @@ mod tests {
         let worktree = TempDir::new()?;
         let worktree_path = worktree.path().to_path_buf();
 
-        // This program prints $1, then sleeps so we can capture output. The `_` argument is the
-        // arg0 placeholder for `sh -c`, so an appended prompt becomes $1.
-        let program = "sh -c 'echo ARG1:$1; sleep 3600' _".to_string();
+        // This program prints the first appended argument, then sleeps so we can capture output.
+        let program = test_echo_arg_program();
 
         let mut storage = Storage::with_path(state_path.clone());
         let mut root = Agent::new(

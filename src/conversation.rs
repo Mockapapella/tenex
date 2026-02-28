@@ -297,6 +297,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
 
     struct CodexSessionsRootOverrideGuard {
@@ -315,6 +316,19 @@ mod tests {
             let previous = std::mem::take(&mut self.previous);
             let _ = set_codex_sessions_root_override_for_tests(previous);
         }
+    }
+
+    fn codex_session_meta_line(id: &str, cwd: &Path) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": id,
+                    "cwd": cwd.to_string_lossy().into_owned(),
+                }
+            })
+        )
     }
 
     #[test]
@@ -390,10 +404,7 @@ mod tests {
         std::fs::create_dir_all(&date_dir)?;
 
         let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"deadbeef\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let contents = codex_session_meta_line("deadbeef", &workdir);
         std::fs::write(&session_path, contents)?;
 
         let id = detect_codex_session_id_once_in_root(
@@ -489,10 +500,7 @@ mod tests {
         std::fs::create_dir_all(&date_dir)?;
 
         let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"deadbeef\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let contents = codex_session_meta_line("deadbeef", &workdir);
         std::fs::write(&session_path, contents)?;
 
         let id = detect_codex_session_id_once_in_root(
@@ -517,10 +525,7 @@ mod tests {
         std::fs::create_dir_all(&date_dir)?;
 
         let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"deadbeef\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let contents = codex_session_meta_line("deadbeef", &workdir);
         std::fs::write(&session_path, contents)?;
 
         let exclude_ids: HashSet<String> = std::iter::once("deadbeef".to_string()).collect();
@@ -615,33 +620,21 @@ mod tests {
         let wrong_kind = "{\"type\":\"other\",\"payload\":{\"id\":\"other\",\"cwd\":\"/tmp\"}}\n";
         std::fs::write(date_dir.join("wrong_kind.jsonl"), wrong_kind)?;
         std::fs::write(date_dir.join("invalid.jsonl"), "{")?;
-        let wrong_cwd = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"wrongcwd\",\"cwd\":\"{}\"}}}}\n",
-            other_workdir.display()
-        );
+        let wrong_cwd = codex_session_meta_line("wrongcwd", &other_workdir);
         std::fs::write(date_dir.join("wrong_cwd.jsonl"), wrong_cwd)?;
 
         let first_path = date_dir.join("first.jsonl");
-        let first_contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"first\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let first_contents = codex_session_meta_line("first", &workdir);
         std::fs::write(&first_path, first_contents)?;
 
         let third_path = date_dir.join("third.jsonl");
-        let third_contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"third\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let third_contents = codex_session_meta_line("third", &workdir);
         std::fs::write(&third_path, third_contents)?;
 
         std::thread::sleep(Duration::from_secs(1));
 
         let second_path = date_dir.join("second.jsonl");
-        let second_contents = format!(
-            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"second\",\"cwd\":\"{}\"}}}}\n",
-            workdir.display()
-        );
+        let second_contents = codex_session_meta_line("second", &workdir);
         std::fs::write(&second_path, second_contents)?;
 
         let id = detect_codex_session_id_once_in_root(
@@ -670,13 +663,8 @@ mod tests {
         let id = std::thread::scope(|scope| {
             scope.spawn(|| {
                 std::thread::sleep(Duration::from_millis(30));
-                let _ = std::fs::write(
-                    &session_path,
-                    format!(
-                        "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"deadbeef\",\"cwd\":\"{}\"}}}}\n",
-                        workdir.display()
-                    ),
-                );
+                let _ =
+                    std::fs::write(&session_path, codex_session_meta_line("deadbeef", &workdir));
             });
 
             try_detect_codex_session_id_in_root(

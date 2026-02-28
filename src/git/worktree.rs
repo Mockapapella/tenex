@@ -120,10 +120,7 @@ fn git_check_ignore_ignored_paths(
     repo_dir: &Path,
     rel_paths: &[PathBuf],
 ) -> Result<std::collections::HashSet<PathBuf>> {
-    use std::ffi::OsString;
     use std::io::Write;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::ffi::OsStringExt;
     use std::process::Stdio;
 
     if rel_paths.is_empty() {
@@ -142,14 +139,13 @@ fn git_check_ignore_ignored_paths(
     {
         let mut stdin = child.stdin.take().context("Failed to open git stdin")?;
         for rel_path in rel_paths {
-            stdin
-                .write_all(rel_path.as_os_str().as_bytes())
-                .with_context(|| {
-                    format!(
-                        "Failed to write path {} to git check-ignore stdin",
-                        rel_path.display()
-                    )
-                })?;
+            let rel_path_bytes = git_path_bytes(rel_path);
+            stdin.write_all(&rel_path_bytes).with_context(|| {
+                format!(
+                    "Failed to write path {} to git check-ignore stdin",
+                    rel_path.display()
+                )
+            })?;
             stdin
                 .write_all(b"\0")
                 .context("Failed to write NUL delimiter to git check-ignore stdin")?;
@@ -177,8 +173,52 @@ fn git_check_ignore_ignored_paths(
     Ok(fields
         .into_iter()
         .filter(|value| !value.is_empty())
-        .map(|value| PathBuf::from(OsString::from_vec(value.to_vec())))
+        .map(git_path_from_bytes)
         .collect())
+}
+
+fn git_path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().into_owned().into_bytes()
+    }
+}
+
+fn git_path_from_bytes(value: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(OsString::from_vec(value.to_vec()))
+    }
+
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(value).into_owned())
+    }
+}
+
+fn symlink_path(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst)
+    }
+
+    #[cfg(windows)]
+    {
+        let metadata = fs::symlink_metadata(src)?;
+        if metadata.file_type().is_dir() {
+            std::os::windows::fs::symlink_dir(src, dst)
+        } else {
+            std::os::windows::fs::symlink_file(src, dst)
+        }
+    }
 }
 
 /// Manager for git worktree operations
@@ -744,8 +784,6 @@ impl<'a> Manager<'a> {
         rel_path: &Path,
         ignored_as_file_in_worktree: &std::collections::HashSet<PathBuf>,
     ) -> Result<()> {
-        use std::os::unix::fs::symlink;
-
         if !ignored_as_file_in_worktree.contains(rel_path) {
             debug!(
                 "Skipping ignored path {} because it is not ignored as a file in the worktree",
@@ -790,7 +828,7 @@ impl<'a> Manager<'a> {
             )
         })?;
 
-        symlink(&src, &dst).with_context(|| {
+        symlink_path(&src, &dst).with_context(|| {
             format!(
                 "Failed to symlink ignored path {} -> {}",
                 dst.display(),
@@ -915,7 +953,10 @@ mod tests {
         let linked_file = wt_path.join("ignored.txt");
         let linked_meta = fs::symlink_metadata(&linked_file)?;
         assert!(linked_meta.file_type().is_symlink());
-        assert_eq!(fs::read_link(&linked_file)?, ignored_file);
+        assert_eq!(
+            fs::canonicalize(&linked_file)?,
+            fs::canonicalize(&ignored_file)?
+        );
 
         assert!(fs::symlink_metadata(wt_path.join("ignored_dir")).is_err());
 
@@ -1002,7 +1043,10 @@ mod tests {
         let linked_dir = wt_path.join("ignored_dir");
         let linked_dir_meta = fs::symlink_metadata(&linked_dir)?;
         assert!(linked_dir_meta.file_type().is_symlink());
-        assert_eq!(fs::read_link(&linked_dir)?, ignored_dir);
+        assert_eq!(
+            fs::canonicalize(&linked_dir)?,
+            fs::canonicalize(&ignored_dir)?
+        );
 
         assert_eq!(fs::read_to_string(linked_dir.join("nested.txt"))?, "nested");
 
@@ -1024,8 +1068,6 @@ mod tests {
     #[test]
     fn test_create_with_new_branch_skips_ignored_symlink_sources()
     -> Result<(), Box<dyn std::error::Error>> {
-        use std::os::unix::fs::symlink;
-
         let (temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
 
@@ -1053,7 +1095,7 @@ mod tests {
         fs::write(&real, "payload")?;
 
         let link = temp_dir.path().join("ignored-link");
-        symlink(&real, &link)?;
+        symlink_path(&real, &link)?;
 
         let wt_path = temp_dir
             .path()

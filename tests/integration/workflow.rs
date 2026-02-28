@@ -4,6 +4,22 @@ use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::agent::Agent;
 use tenex::mux::SessionManager;
 
+fn sleep_command(seconds: u32) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!("Start-Sleep -Seconds {seconds}"),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["sleep".to_string(), seconds.to_string()]
+    }
+}
+
 #[test]
 fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
@@ -27,7 +43,7 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
     worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
     // Create mux session with a command that stays alive
-    let command = vec!["sleep".to_string(), "10".to_string()];
+    let command = sleep_command(10);
     manager.create(&session_name, &worktree_path, Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -186,7 +202,7 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
     worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
-    let command = vec!["sleep".to_string(), "60".to_string()];
+    let command = sleep_command(60);
     manager.create(&session_name, &worktree_path, Some(&command))?;
 
     std::thread::sleep(std::time::Duration::from_millis(100));

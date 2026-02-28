@@ -10,6 +10,17 @@ use tenex::config::Config;
 use tenex::git::WorktreeManager;
 use tenex::mux::SessionManager;
 
+const fn default_test_program() -> &'static str {
+    #[cfg(windows)]
+    {
+        "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\""
+    }
+    #[cfg(not(windows))]
+    {
+        "sh -c 'sleep 3600'"
+    }
+}
+
 /// Test fixture that sets up a temporary git repository
 pub struct TestFixture {
     /// Temporary directory containing the git repo
@@ -46,6 +57,8 @@ impl TestFixture {
             // Avoid relying on global git config (CI doesn't have it) for commits made via the git CLI.
             config.set_str("user.name", "Test")?;
             config.set_str("user.email", "test@test.com")?;
+            config.set_bool("core.autocrlf", false)?;
+            config.set_str("core.eol", "lf")?;
             // Avoid flaky failures on developer machines that enable GPG signing or custom hooks globally.
             config.set_str("commit.gpgsign", "false")?;
             let hooks_dir = repo.path().join("hooks-tenex-tests");
@@ -94,7 +107,7 @@ impl TestFixture {
             // Important: many integration tests assume mux sessions/windows stay alive long enough
             // for follow-up operations (spawn children, synthesize, etc). A short-lived command like
             // `echo` can exit immediately and cause flakiness across platforms.
-            default_program: "sh -c 'sleep 3600'".to_string(),
+            default_program: default_test_program().to_string(),
             branch_prefix: format!("{}/", self.session_prefix),
             worktree_dir,
             auto_yes: false,

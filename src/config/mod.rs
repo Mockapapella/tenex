@@ -36,7 +36,11 @@ impl Default for Config {
             // `claude`) on the host machine. Using a long-running shell command keeps mux sessions
             // alive long enough for follow-up operations in tests.
             default_program: if cfg!(test) {
-                "sh -c 'sleep 3600'".to_string()
+                if cfg!(windows) {
+                    "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string()
+                } else {
+                    "sh -c 'sleep 3600'".to_string()
+                }
             } else {
                 "claude --allow-dangerously-skip-permissions".to_string()
             },
@@ -182,6 +186,12 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
+        #[cfg(windows)]
+        assert_eq!(
+            config.default_program,
+            "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\""
+        );
+        #[cfg(not(windows))]
         assert_eq!(config.default_program, "sh -c 'sleep 3600'");
         assert_eq!(config.branch_prefix, "agent/");
         assert!(!config.auto_yes);
