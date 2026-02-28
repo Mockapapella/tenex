@@ -181,6 +181,7 @@ jobs:
           cargo llvm-cov --version
           "$PRECOMMIT_BIN" --version
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Fetch remote branches (WSL)
@@ -192,6 +193,7 @@ jobs:
           cd "${{ steps.wsl-context.outputs.workspace }}"
           git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Run pre-commit (WSL)
@@ -209,6 +211,7 @@ jobs:
             SKIP=cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           fi
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Run coverage hook in WSL (non-blocking)
@@ -221,6 +224,7 @@ jobs:
           cd "${{ steps.wsl-context.outputs.workspace }}"
           python3 scripts/precommit/run_cargo_hook.py coverage || true
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Export llvm-cov report (per file)
@@ -287,6 +291,7 @@ jobs:
           } > llvm-cov-meta.txt
           tail -n 3 llvm-cov-report.txt
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Verify committed llvm-cov report matches
@@ -374,6 +379,7 @@ jobs:
               )
           PY
           '@
+          $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
       - name: Upload llvm-cov report
