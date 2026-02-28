@@ -94,6 +94,20 @@ jobs:
           $distros = (wsl.exe -l -q) -split "`r?`n" |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+
+          if ($distros.Count -eq 0) {
+            Write-Host "No WSL distribution found; provisioning Ubuntu."
+            wsl.exe --set-default-version 2
+            wsl.exe --install --no-launch --distribution Ubuntu
+
+            # Launch once to complete first-time distro registration.
+            wsl.exe -d Ubuntu -e bash -lc "echo WSL ready"
+
+            $distros = (wsl.exe -l -q) -split "`r?`n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+          }
+
           if ($distros.Count -eq 0) {
             throw "No WSL distribution found on runner."
           }
