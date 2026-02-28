@@ -91,6 +91,7 @@ jobs:
         id: wsl-context
         shell: pwsh
         run: |
+          $distro = ""
           $distros = (wsl.exe -l -q) -split "`r?`n" |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
@@ -102,17 +103,29 @@ jobs:
 
             # Launch once to complete first-time distro registration.
             wsl.exe -d Ubuntu -e bash -lc "echo WSL ready"
+            $distro = "Ubuntu"
+          }
 
+          if (-not $distro) {
             $distros = (wsl.exe -l -q) -split "`r?`n" |
               ForEach-Object { $_.Trim() } |
               Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+            if ($distros.Count -eq 0) {
+              throw "No WSL distribution found on runner."
+            }
+            if ($distros -contains "Ubuntu") {
+              $distro = "Ubuntu"
+            } else {
+              $distro = $distros[0]
+            }
           }
 
-          if ($distros.Count -eq 0) {
+          $distro = $distro.Trim([char]0xFEFF)
+          if (-not $distro) {
             throw "No WSL distribution found on runner."
           }
-          $distro = $distros[0]
-          $workspace = (wsl.exe -d $distro -e wslpath -a '${{ github.workspace }}').Trim()
+
+          $workspace = (wsl.exe -d $distro -e bash -lc "wslpath -a '${{ github.workspace }}'").Trim()
           if (-not $workspace) {
             throw "Failed to translate GitHub workspace path into WSL path."
           }
@@ -241,7 +254,7 @@ jobs:
           tail -n 3 llvm-cov-report.txt
 
       - name: Export llvm-cov report (WSL)
-        if: ${{ always() && matrix.use_wsl }}
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
         shell: pwsh
         run: |
           $script = @'
@@ -318,7 +331,7 @@ jobs:
           PY
 
       - name: Verify committed llvm-cov report matches (WSL)
-        if: ${{ always() && matrix.use_wsl }}
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
         shell: pwsh
         run: |
           $script = @'
