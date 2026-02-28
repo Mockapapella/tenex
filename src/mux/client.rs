@@ -204,8 +204,12 @@ mod tests {
         let endpoint = {
             use interprocess::local_socket::GenericFilePath;
 
-            let socket_path = std::env::temp_dir()
-                .join(format!("tenex-mux-client-{}.sock", uuid::Uuid::new_v4()));
+            let socket_name = format!("tx-mux-client-{}.sock", uuid::Uuid::new_v4().simple());
+            let socket_path = if std::path::Path::new("/tmp").is_dir() {
+                std::path::Path::new("/tmp").join(&socket_name)
+            } else {
+                std::env::temp_dir().join(socket_name)
+            };
             let name = socket_path
                 .as_path()
                 .to_fs_name::<GenericFilePath>()?
