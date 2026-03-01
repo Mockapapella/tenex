@@ -165,7 +165,7 @@ def build_command(mode: str) -> list[str]:
             "--test-threads=1",
         ]
 
-    return [
+    command = [
         "cargo",
         "llvm-cov",
         "--jobs",
@@ -174,15 +174,24 @@ def build_command(mode: str) -> list[str]:
         "--all-features",
         "--profile",
         "coverage",
-        "--fail-under-lines",
-        "90",
-        "--fail-under-functions",
-        "90",
-        "--ignore-filename-regex",
-        "crates/vt100-ctt/",
-        "--",
-        "--test-threads=1",
     ]
+    command.extend(
+        [
+            "--fail-under-lines",
+            "90",
+            "--fail-under-functions",
+            "90",
+        ]
+    )
+    command.extend(
+        [
+            "--ignore-filename-regex",
+            "crates/vt100-ctt/",
+            "--",
+            "--test-threads=1",
+        ]
+    )
+    return command
 
 
 def main() -> int:

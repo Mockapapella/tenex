@@ -255,6 +255,12 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_socket_for_sessions_returns_none_for_empty_set() {
+        let wanted = std::collections::HashSet::<String>::new();
+        assert!(discover_socket_for_sessions(&wanted, None).is_none());
+    }
+
+    #[test]
     fn test_terminate_mux_daemon_for_socket_rejects_empty_socket()
     -> Result<(), Box<dyn std::error::Error>> {
         match terminate_mux_daemon_for_socket("   ") {
