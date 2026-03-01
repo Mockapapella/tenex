@@ -427,6 +427,13 @@ mod tests {
         format!("{prefix}-{}", uuid::Uuid::new_v4())
     }
 
+    fn unique_endpoint(prefix: &str) -> Result<SocketEndpoint> {
+        super::super::endpoint::socket_endpoint_from_value(&format!(
+            "{prefix}-{}",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
     fn long_running_command() -> Vec<String> {
         #[cfg(windows)]
         {
@@ -473,6 +480,49 @@ mod tests {
             }
             _ => Err("Expected Pong response".into()),
         }
+    }
+
+    #[test]
+    fn test_try_ping_existing_true_and_false() -> Result<(), Box<dyn std::error::Error>> {
+        let endpoint = unique_endpoint("tenex-test-daemon-ping")?;
+        let listener = ListenerOptions::new()
+            .name(endpoint.name.clone())
+            .create_sync()?;
+
+        let server = std::thread::spawn(move || -> Result<()> {
+            let mut incoming = listener.incoming();
+            let mut stream = match incoming.next() {
+                Some(conn) => conn?,
+                None => return Err(anyhow::anyhow!("Expected incoming mux ping request")),
+            };
+            let request: MuxRequest = ipc::read_json(&mut stream)?;
+            assert!(matches!(request, MuxRequest::Ping));
+            ipc::write_json(
+                &mut stream,
+                &MuxResponse::Pong {
+                    version: "test-version".to_string(),
+                },
+            )?;
+            Ok(())
+        });
+
+        assert!(try_ping_existing(&endpoint)?);
+        match server.join() {
+            Ok(result) => result?,
+            Err(_) => return Err("Ping server thread panicked".into()),
+        }
+
+        if let Some(path) = endpoint.cleanup_path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+
+        let missing_endpoint = unique_endpoint("tenex-test-daemon-ping-missing")?;
+        assert!(!try_ping_existing(&missing_endpoint)?);
+        if let Some(path) = missing_endpoint.cleanup_path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -629,6 +679,91 @@ mod tests {
         let response = dispatch(MuxRequest::KillSession { name: session })?;
         assert!(matches!(response, MuxResponse::Ok));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_empty_commands_send_input_and_empty_output_paths()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session = unique_session("tenex-test-daemon-empty");
+        let working_dir = temp_working_dir();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir: working_dir.clone(),
+            command: Vec::new(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let response = dispatch(MuxRequest::CreateWindow {
+            session: session.clone(),
+            window_name: "empty-command-window".to_string(),
+            working_dir,
+            command: Vec::new(),
+            cols: 80,
+            rows: 24,
+        })?;
+        let MuxResponse::WindowCreated {
+            index: window_index,
+        } = response
+        else {
+            return Err("Expected WindowCreated response".into());
+        };
+
+        let target = format!("{session}:{window_index}");
+        let response = dispatch(MuxRequest::SendInput {
+            target: target.clone(),
+            data: b"echo tenex-send-input\n".to_vec(),
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&target)?;
+        {
+            let mut guard = window.lock();
+            guard.output_history.seq_start = 10;
+            guard.output_history.seq_end = 10;
+            guard.output_history.buf.clear();
+            guard.output_history.checkpoint = None;
+        }
+
+        let response = dispatch(MuxRequest::ReadOutput {
+            target: target.clone(),
+            after: 0,
+            max_bytes: 4096,
+        })?;
+        let MuxResponse::OutputReset {
+            start,
+            checkpoint_b64,
+        } = response
+        else {
+            return Err("Expected OutputReset response".into());
+        };
+        assert_eq!(start, 10);
+        assert!(checkpoint_b64.is_empty());
+
+        let response = dispatch(MuxRequest::ReadOutput {
+            target,
+            after: 10,
+            max_bytes: 4096,
+        })?;
+        let MuxResponse::OutputChunk {
+            start,
+            end,
+            data_b64,
+        } = response
+        else {
+            return Err("Expected OutputChunk response".into());
+        };
+        assert_eq!(start, 10);
+        assert_eq!(end, 10);
+        assert!(data_b64.is_empty());
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
         Ok(())
     }
 
