@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 
 const CLAUDE_ENTER_CSI_U: &[u8] = b"\x1b[13;1u";
+const CLAUDE_CSI_U_SPLIT_DELAY_MS: u64 = 50;
 
 /// Manager for mux sessions.
 #[derive(Debug, Clone, Copy, Default)]
@@ -152,7 +153,9 @@ impl Manager {
         // Claude Code sometimes fails to recognize CSI-u when it arrives in the same read as the
         // typed text. Send the message and the Enter sequence as two writes with a short delay.
         self.send_input_bytes(target, keys.as_bytes())?;
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(
+            CLAUDE_CSI_U_SPLIT_DELAY_MS,
+        ));
         self.send_input_bytes(target, CLAUDE_ENTER_CSI_U)
     }
 

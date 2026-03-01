@@ -19,14 +19,8 @@ def repo_root() -> Path:
     return Path(output.strip())
 
 
-def cleanup_repo_muxd(root: Path) -> None:
-    proc_dir = Path("/proc")
-    if not proc_dir.is_dir():
-        return
-
-    target_prefix = (root / "target").as_posix().rstrip("/") + "/"
-    pids: list[int] = []
-
+def muxd_pids_from_proc(proc_dir: Path, target_prefix: str) -> set[int]:
+    pids: set[int] = set()
     for entry in proc_dir.iterdir():
         if not entry.name.isdigit():
             continue
@@ -49,7 +43,56 @@ def cleanup_repo_muxd(root: Path) -> None:
         if "muxd" not in parts:
             continue
 
-        pids.append(int(entry.name))
+        pids.add(int(entry.name))
+    return pids
+
+
+def muxd_pids_from_ps(target_prefix: str) -> set[int]:
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        fields = line.split(None, 1)
+        if len(fields) != 2:
+            continue
+
+        pid_str, command = fields
+        if not pid_str.isdigit():
+            continue
+
+        parts = command.split()
+        if not parts:
+            continue
+
+        executable = parts[0].replace("\\", "/")
+        if not executable.startswith(target_prefix):
+            continue
+        if "muxd" not in parts:
+            continue
+
+        pids.add(int(pid_str))
+    return pids
+
+
+def cleanup_repo_muxd(root: Path) -> None:
+    target_prefix = (root / "target").as_posix().rstrip("/") + "/"
+    proc_dir = Path("/proc")
+    pids = (
+        muxd_pids_from_proc(proc_dir, target_prefix)
+        if proc_dir.is_dir()
+        else muxd_pids_from_ps(target_prefix)
+    )
 
     if not pids:
         return

@@ -739,8 +739,8 @@ fn test_mux_send_keys_and_submit_for_program_claude_uses_csi_u_enter_when_pane_i
     let manager = SessionManager::new();
     let session_name = fixture.session_name("claude-csi-u");
 
-    // Create a mock "claude" executable that only submits when it receives CSI-u Enter as its
-    // own read chunk (mirrors Claude Code behavior).
+    // Create a mock "claude" executable that only submits when it receives CSI-u Enter bytes.
+    // This validates the submit sequence without relying on PTY read chunk boundaries.
     let claude_path = fixture.worktree_path().join("claude");
     std::fs::write(
         &claude_path,
@@ -752,10 +752,12 @@ import time
 import tty
 
 CSI_U_ENTER = b"\x1b[13;1u"
+TAIL_LEN = len(CSI_U_ENTER) - 1
 
 def main() -> int:
     tty.setraw(sys.stdin.fileno())
     deadline = time.time() + 5.0
+    pending = b""
     while time.time() < deadline:
         r, _, _ = select.select([sys.stdin], [], [], 0.1)
         if not r:
@@ -763,10 +765,13 @@ def main() -> int:
         chunk = os.read(sys.stdin.fileno(), 1024)
         if not chunk:
             break
-        if chunk == CSI_U_ENTER:
+        pending += chunk
+        if CSI_U_ENTER in pending:
             sys.stdout.write("SUBMIT_OK\n")
             sys.stdout.flush()
             return 0
+        if len(pending) > TAIL_LEN:
+            pending = pending[-TAIL_LEN:]
     return 0
 
 if __name__ == "__main__":
