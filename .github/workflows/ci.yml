@@ -79,12 +79,12 @@ jobs:
           if [ "${ENFORCE_COVERAGE}" = "true" ]; then
             pre-commit run --all-files --show-diff-on-failure
           else
-            SKIP=cargo-coverage pre-commit run --all-files --show-diff-on-failure
+            SKIP=cargo-test,cargo-coverage pre-commit run --all-files --show-diff-on-failure
           fi
 
-      - name: Run coverage hook (non-blocking)
+      - name: Run coverage hook (threshold-relaxed)
         if: ${{ !matrix.use_wsl && !matrix.enforce_coverage }}
-        run: python3 scripts/precommit/run_cargo_hook.py coverage || true
+        run: python3 scripts/precommit/run_cargo_hook.py coverage --no-fail-under
 
       - name: Resolve WSL context
         if: ${{ matrix.use_wsl }}
@@ -227,13 +227,13 @@ jobs:
           if [ "${{ matrix.enforce_coverage }}" = "true" ]; then
             SKIP=ensure-post-commit-hook-installed "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           else
-            SKIP=ensure-post-commit-hook-installed,cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
+            SKIP=ensure-post-commit-hook-installed,cargo-test,cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           fi
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
-      - name: Run coverage hook in WSL (non-blocking)
+      - name: Run coverage hook in WSL (threshold-relaxed)
         if: ${{ matrix.use_wsl && !matrix.enforce_coverage }}
         shell: pwsh
         run: |
@@ -241,7 +241,7 @@ jobs:
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
           cd "${{ steps.wsl-context.outputs.workspace }}"
-          python3 scripts/precommit/run_cargo_hook.py coverage || true
+          python3 scripts/precommit/run_cargo_hook.py coverage --no-fail-under
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"

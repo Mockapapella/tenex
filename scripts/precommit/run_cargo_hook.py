@@ -152,7 +152,7 @@ def verify_llvm_cov_version(root: Path) -> bool:
     return False
 
 
-def build_command(mode: str) -> list[str]:
+def build_command(mode: str, *, skip_fail_under: bool = False) -> list[str]:
     if mode == "test":
         return [
             "cargo",
@@ -165,7 +165,7 @@ def build_command(mode: str) -> list[str]:
             "--test-threads=1",
         ]
 
-    return [
+    command = [
         "cargo",
         "llvm-cov",
         "--jobs",
@@ -174,23 +174,41 @@ def build_command(mode: str) -> list[str]:
         "--all-features",
         "--profile",
         "coverage",
-        "--fail-under-lines",
-        "90",
-        "--fail-under-functions",
-        "90",
-        "--ignore-filename-regex",
-        "crates/vt100-ctt/",
-        "--",
-        "--test-threads=1",
     ]
+    if not skip_fail_under:
+        command.extend(
+            [
+                "--fail-under-lines",
+                "90",
+                "--fail-under-functions",
+                "90",
+            ]
+        )
+    command.extend(
+        [
+            "--ignore-filename-regex",
+            "crates/vt100-ctt/",
+            "--",
+            "--test-threads=1",
+        ]
+    )
+    return command
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("test", "coverage"))
+    parser.add_argument(
+        "--no-fail-under",
+        action="store_true",
+        help="Only for coverage mode: run coverage/tests without fail-under thresholds.",
+    )
     args = parser.parse_args()
 
     root = repo_root()
+
+    if args.mode != "coverage" and args.no_fail_under:
+        parser.error("--no-fail-under can only be used with coverage mode")
 
     if args.mode == "coverage" and not verify_llvm_cov_version(root):
         return 1
@@ -205,7 +223,7 @@ def main() -> int:
 
     cleanup_repo_muxd(root)
     try:
-        command = build_command(args.mode)
+        command = build_command(args.mode, skip_fail_under=args.no_fail_under)
         result = subprocess.run(
             command,
             cwd=root,
