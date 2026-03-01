@@ -201,6 +201,20 @@ jobs:
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
+      - name: Normalize checkout line endings (WSL)
+        if: ${{ matrix.use_wsl }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          cd "${{ steps.wsl-context.outputs.workspace }}"
+          git config --local core.autocrlf false
+          git config --local core.eol lf
+          git reset --hard HEAD
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
       - name: Run pre-commit (WSL)
         if: ${{ matrix.use_wsl }}
         shell: pwsh
@@ -211,9 +225,9 @@ jobs:
           cd "${{ steps.wsl-context.outputs.workspace }}"
           PRECOMMIT_BIN="$PWD/.wsl-precommit-venv/bin/pre-commit"
           if [ "${{ matrix.enforce_coverage }}" = "true" ]; then
-            "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
+            SKIP=ensure-post-commit-hook-installed "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           else
-            SKIP=cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
+            SKIP=ensure-post-commit-hook-installed,cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           fi
           '@
           $script = $script -replace "`r", ""
