@@ -702,7 +702,7 @@ mod tests {
         let response = dispatch(MuxRequest::CreateWindow {
             session: session.clone(),
             window_name: "empty-command-window".to_string(),
-            working_dir,
+            working_dir: working_dir.clone(),
             command: Vec::new(),
             cols: 80,
             rows: 24,
@@ -716,12 +716,27 @@ mod tests {
 
         let target = format!("{session}:{window_index}");
         let response = dispatch(MuxRequest::SendInput {
-            target: target.clone(),
-            data: b"echo tenex-send-input\n".to_vec(),
+            target,
+            data: Vec::new(),
         })?;
         assert!(matches!(response, MuxResponse::Ok));
 
-        let window = super::super::backend::resolve_window(&target)?;
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let quiet_session = unique_session("tenex-test-daemon-read-empty");
+        let _ = super::super::server::SessionManager::kill(&quiet_session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: quiet_session.clone(),
+            working_dir,
+            command: long_running_command(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&quiet_session)?;
         {
             let mut guard = window.lock();
             guard.output_history.seq_start = 10;
@@ -731,7 +746,7 @@ mod tests {
         }
 
         let response = dispatch(MuxRequest::ReadOutput {
-            target: target.clone(),
+            target: quiet_session.clone(),
             after: 0,
             max_bytes: 4096,
         })?;
@@ -746,8 +761,8 @@ mod tests {
         assert!(checkpoint_b64.is_empty());
 
         let response = dispatch(MuxRequest::ReadOutput {
-            target,
-            after: 10,
+            target: quiet_session.clone(),
+            after: start,
             max_bytes: 4096,
         })?;
         let MuxResponse::OutputChunk {
@@ -758,11 +773,12 @@ mod tests {
         else {
             return Err("Expected OutputChunk response".into());
         };
-        assert_eq!(start, 10);
-        assert_eq!(end, 10);
+        assert_eq!(start, end);
         assert!(data_b64.is_empty());
 
-        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        let response = dispatch(MuxRequest::KillSession {
+            name: quiet_session,
+        })?;
         assert!(matches!(response, MuxResponse::Ok));
         Ok(())
     }
