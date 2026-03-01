@@ -21,17 +21,14 @@ jobs:
             name: linux
             receipt_os: linux
             use_wsl: false
-            enforce_coverage: true
           - os: macos-latest
             name: macos
             receipt_os: macos
             use_wsl: false
-            enforce_coverage: false
           - os: windows-latest
             name: windows-wsl2
             receipt_os: windows
             use_wsl: true
-            enforce_coverage: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,19 +69,7 @@ jobs:
         run: python -m pip install --upgrade pip pre-commit
       - name: Run pre-commit
         if: ${{ !matrix.use_wsl }}
-        env:
-          ENFORCE_COVERAGE: ${{ matrix.enforce_coverage }}
-        run: |
-          set -euo pipefail
-          if [ "${ENFORCE_COVERAGE}" = "true" ]; then
-            pre-commit run --all-files --show-diff-on-failure
-          else
-            SKIP=cargo-test,cargo-coverage pre-commit run --all-files --show-diff-on-failure
-          fi
-
-      - name: Run coverage hook (threshold-relaxed)
-        if: ${{ !matrix.use_wsl && !matrix.enforce_coverage }}
-        run: python3 scripts/precommit/run_cargo_hook.py coverage --no-fail-under
+        run: SKIP=cargo-test pre-commit run --all-files --show-diff-on-failure
 
       - name: Resolve WSL context
         if: ${{ matrix.use_wsl }}
@@ -224,24 +209,7 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           cd "${{ steps.wsl-context.outputs.workspace }}"
           PRECOMMIT_BIN="$PWD/.wsl-precommit-venv/bin/pre-commit"
-          if [ "${{ matrix.enforce_coverage }}" = "true" ]; then
-            SKIP=ensure-post-commit-hook-installed "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
-          else
-            SKIP=ensure-post-commit-hook-installed,cargo-test,cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
-          fi
-          '@
-          $script = $script -replace "`r", ""
-          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
-
-      - name: Run coverage hook in WSL (threshold-relaxed)
-        if: ${{ matrix.use_wsl && !matrix.enforce_coverage }}
-        shell: pwsh
-        run: |
-          $script = @'
-          set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cd "${{ steps.wsl-context.outputs.workspace }}"
-          python3 scripts/precommit/run_cargo_hook.py coverage --no-fail-under
+          SKIP=ensure-post-commit-hook-installed,cargo-test "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
