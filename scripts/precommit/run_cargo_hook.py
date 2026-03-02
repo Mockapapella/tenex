@@ -153,12 +153,18 @@ def verify_llvm_cov_version(root: Path) -> bool:
 
 
 def build_command(mode: str) -> list[str]:
+    build_jobs = os.environ.get("TENEX_CARGO_BUILD_JOBS")
+    job_args: list[str] = []
+    if build_jobs:
+        build_jobs = build_jobs.strip()
+        if build_jobs.isdigit():
+            job_args = ["--jobs", build_jobs]
+
     if mode == "test":
         return [
             "cargo",
             "test",
-            "--jobs",
-            "1",
+            *job_args,
             "--all-targets",
             "--all-features",
             "--",
@@ -168,8 +174,7 @@ def build_command(mode: str) -> list[str]:
     command = [
         "cargo",
         "llvm-cov",
-        "--jobs",
-        "1",
+        *job_args,
         "--all-targets",
         "--all-features",
         "--profile",
