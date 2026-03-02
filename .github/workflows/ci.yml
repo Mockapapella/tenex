@@ -159,18 +159,18 @@ jobs:
         run: |
           $script = @'
           set -euo pipefail
-	          mounted="${{ steps.wsl-context.outputs.workspace }}"
-	          cache_dir="$mounted/.wsl-cache"
-	          UV_VERSION="${{ env.UV_VERSION }}"
-	          PRE_COMMIT_VERSION="${{ env.PRE_COMMIT_VERSION }}"
-	          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
-	          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
-	          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
-	          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
-	          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+          UV_VERSION="${{ env.UV_VERSION }}"
+          PRE_COMMIT_VERSION="${{ env.PRE_COMMIT_VERSION }}"
+          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
 
-	          cd "$mounted"
-	          mkdir -p "$cache_dir"
+          cd "$mounted"
+          mkdir -p "$cache_dir"
 
           missing=()
           command -v python3 >/dev/null 2>&1 || missing+=(python3)
@@ -182,7 +182,7 @@ jobs:
             sudo apt-get install -y "${missing[@]}"
           fi
 
-	          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$UV_INSTALL_DIR" "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$UV_INSTALL_DIR" "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
 
           if [ -f "$cache_dir/cargo-home.tar.zst" ]; then
             zstd -dc "$cache_dir/cargo-home.tar.zst" | tar -x -C "$HOME"
@@ -194,7 +194,7 @@ jobs:
             zstd -dc "$cache_dir/uv.tar.zst" | tar -x -C "$HOME"
           fi
 
-	          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -236,10 +236,10 @@ jobs:
             curl -fsSL "${uv_base}/${uv_sha_asset}" -o "$tmp_dir/${uv_sha_asset}"
             (cd "$tmp_dir" && sha256sum -c "${uv_sha_asset}")
             tar -xzf "$tmp_dir/${uv_asset}" -C "$tmp_dir"
-	            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$UV_INSTALL_DIR/uv"
-	            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$UV_INSTALL_DIR/uvx"
-	            rm -rf "$tmp_dir"
-	          fi
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$UV_INSTALL_DIR/uv"
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$UV_INSTALL_DIR/uvx"
+            rm -rf "$tmp_dir"
+          fi
           uv tool install --python "$python_version" "pre-commit==${PRE_COMMIT_VERSION}"
 
           rustc -V
