@@ -298,7 +298,7 @@ jobs:
           $script = @'
           set -euo pipefail
           fast_repo="$HOME/tenex-ci/workspace"
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.local/share/uv/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           export TENEX_CARGO_BUILD_JOBS=4
           cd "$fast_repo"
           SKIP=ensure-post-commit-hook-installed,cargo-test pre-commit run --all-files --show-diff-on-failure
