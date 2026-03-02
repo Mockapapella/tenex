@@ -180,13 +180,14 @@ jobs:
 
           source "$HOME/.cargo/env"
 
-          toolchain="$(awk -F '"' '/channel =/ { print $2 }' rust-toolchain.toml | head -n 1)"
+          toolchain="$(awk -F '\"' '/channel =/ { print $2 }' rust-toolchain.toml | head -n 1 | tr -d '\r')"
           if [ -n "$toolchain" ]; then
             rustup toolchain install "$toolchain" --profile minimal --component clippy,rustfmt,llvm-tools-preview
             rustup default "$toolchain"
           fi
 
-          required_cov="$(cat .cargo-llvm-cov-version)"
+          # The Windows checkout can contain CRLF; strip CR so curl/rustup inputs are clean.
+          required_cov="$(tr -d '\r\n' < .cargo-llvm-cov-version)"
           installed_cov="$(cargo llvm-cov --version 2>/dev/null | awk '{print $2}' || true)"
           if [ "$installed_cov" != "$required_cov" ]; then
             target="x86_64-unknown-linux-gnu"
@@ -200,7 +201,7 @@ jobs:
             rm -rf "$tmp_dir"
           fi
 
-          python_version="$(cat .python-version)"
+          python_version="$(tr -d '\r\n' < .python-version)"
           python3 -m pip install --upgrade pip "uv==${UV_VERSION}"
           uv tool install --python "$python_version" "pre-commit==${PRE_COMMIT_VERSION}"
 
