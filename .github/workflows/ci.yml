@@ -150,7 +150,6 @@ jobs:
 
           missing=()
           command -v python3 >/dev/null 2>&1 || missing+=(python3)
-          command -v pip3 >/dev/null 2>&1 || missing+=(python3-pip)
           command -v curl >/dev/null 2>&1 || missing+=(curl ca-certificates)
           command -v zstd >/dev/null 2>&1 || missing+=(zstd)
           command -v cc >/dev/null 2>&1 || missing+=(build-essential)
@@ -159,7 +158,7 @@ jobs:
             sudo apt-get install -y "${missing[@]}"
           fi
 
-          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$HOME/.cache/uv" "$HOME/.local/share/uv"
+          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$HOME/.cache/uv" "$HOME/.local/bin" "$HOME/.local/share/uv"
 
           if [ -f "$cache_dir/cargo-home.tar.zst" ]; then
             zstd -dc "$cache_dir/cargo-home.tar.zst" | tar -x -C "$HOME"
@@ -202,7 +201,22 @@ jobs:
           fi
 
           python_version="$(tr -d '\r\n' < .python-version)"
-          python3 -m pip install --upgrade pip "uv==${UV_VERSION}"
+          # Avoid pip installs into the system Python in WSL (PEP 668 externally-managed-environment).
+          uv_target="x86_64-unknown-linux-gnu"
+          if ! command -v uv >/dev/null 2>&1 || [ "$(uv --version | awk '{print $2}')" != "$UV_VERSION" ]; then
+            uv_asset="uv-${uv_target}.tar.gz"
+            uv_sha_asset="${uv_asset}.sha256"
+            uv_base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
+
+            tmp_dir="$(mktemp -d)"
+            curl -fsSL "${uv_base}/${uv_asset}" -o "$tmp_dir/${uv_asset}"
+            curl -fsSL "${uv_base}/${uv_sha_asset}" -o "$tmp_dir/${uv_sha_asset}"
+            (cd "$tmp_dir" && sha256sum -c "${uv_sha_asset}")
+            tar -xzf "$tmp_dir/${uv_asset}" -C "$tmp_dir"
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$HOME/.local/bin/uv"
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$HOME/.local/bin/uvx"
+            rm -rf "$tmp_dir"
+          fi
           uv tool install --python "$python_version" "pre-commit==${PRE_COMMIT_VERSION}"
 
           rustc -V
