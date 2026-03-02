@@ -153,36 +153,50 @@ def verify_llvm_cov_version(root: Path) -> bool:
 
 
 def build_command(mode: str) -> list[str]:
+    build_jobs = os.environ.get("TENEX_CARGO_BUILD_JOBS")
+    job_args: list[str] = []
+    if build_jobs:
+        build_jobs = build_jobs.strip()
+        if build_jobs.isdigit():
+            job_args = ["--jobs", build_jobs]
+
     if mode == "test":
         return [
             "cargo",
             "test",
-            "--jobs",
-            "1",
+            *job_args,
             "--all-targets",
             "--all-features",
             "--",
             "--test-threads=1",
         ]
 
-    return [
+    command = [
         "cargo",
         "llvm-cov",
-        "--jobs",
-        "1",
+        *job_args,
         "--all-targets",
         "--all-features",
         "--profile",
         "coverage",
-        "--fail-under-lines",
-        "90",
-        "--fail-under-functions",
-        "90",
-        "--ignore-filename-regex",
-        "crates/vt100-ctt/",
-        "--",
-        "--test-threads=1",
     ]
+    command.extend(
+        [
+            "--fail-under-lines",
+            "90",
+            "--fail-under-functions",
+            "90",
+        ]
+    )
+    command.extend(
+        [
+            "--ignore-filename-regex",
+            "crates/vt100-ctt/",
+            "--",
+            "--test-threads=1",
+        ]
+    )
+    return command
 
 
 def main() -> int:

@@ -13,6 +13,9 @@ jobs:
   pre-commit:
     name: pre-commit (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      PRE_COMMIT_VERSION: "4.5.1"
+      UV_VERSION: "0.10.7"
     strategy:
       fail-fast: false
       matrix:
@@ -21,17 +24,14 @@ jobs:
             name: linux
             receipt_os: linux
             use_wsl: false
-            enforce_coverage: true
           - os: macos-latest
             name: macos
             receipt_os: macos
             use_wsl: false
-            enforce_coverage: false
           - os: windows-latest
             name: windows-wsl2
             receipt_os: windows
             use_wsl: true
-            enforce_coverage: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +40,34 @@ jobs:
           # reports generated locally on the same commit.
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+      - name: Restore WSL rustup cache
+        if: ${{ matrix.use_wsl }}
+        id: wsl-cache-rustup
+        uses: actions/cache/restore@v4
+        with:
+          path: .wsl-cache/rustup.tar.zst
+          key: wsl-rustup-v1-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            wsl-rustup-v1-
+      - name: Restore WSL cargo-home cache
+        if: ${{ matrix.use_wsl }}
+        id: wsl-cache-cargo-home
+        uses: actions/cache/restore@v4
+        with:
+          path: .wsl-cache/cargo-home.tar.zst
+          key: wsl-cargo-home-v1-${{ hashFiles('Cargo.lock', '.cargo-llvm-cov-version') }}
+          restore-keys: |
+            wsl-cargo-home-v1-
+      - name: Restore WSL uv cache
+        if: ${{ matrix.use_wsl }}
+        id: wsl-cache-uv
+        uses: actions/cache/restore@v4
+        with:
+          path: .wsl-cache/uv.tar.zst
+          key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
+          restore-keys: |
+            wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-
+            wsl-uv-v1-
       - name: Fetch remote branches
         if: ${{ !matrix.use_wsl }}
         run: git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
@@ -47,7 +75,7 @@ jobs:
         if: ${{ !matrix.use_wsl }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version-file: .python-version
       - name: Install Rust
         if: ${{ !matrix.use_wsl }}
         uses: dtolnay/rust-toolchain@1.91.1
@@ -69,22 +97,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Install pre-commit
         if: ${{ !matrix.use_wsl }}
-        run: python -m pip install --upgrade pip pre-commit
-      - name: Run pre-commit
-        if: ${{ !matrix.use_wsl }}
-        env:
-          ENFORCE_COVERAGE: ${{ matrix.enforce_coverage }}
         run: |
           set -euo pipefail
-          if [ "${ENFORCE_COVERAGE}" = "true" ]; then
-            pre-commit run --all-files --show-diff-on-failure
-          else
-            SKIP=cargo-coverage pre-commit run --all-files --show-diff-on-failure
-          fi
-
-      - name: Run coverage hook (non-blocking)
-        if: ${{ !matrix.use_wsl && !matrix.enforce_coverage }}
-        run: python3 scripts/precommit/run_cargo_hook.py coverage || true
+          python -m pip install --upgrade pip "uv==${UV_VERSION}"
+          uv tool install --python "$(cat .python-version)" "pre-commit==${PRE_COMMIT_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run pre-commit
+        if: ${{ !matrix.use_wsl }}
+        run: SKIP=cargo-test pre-commit run --all-files --show-diff-on-failure
 
       - name: Resolve WSL context
         if: ${{ matrix.use_wsl }}
@@ -139,29 +159,42 @@ jobs:
         run: |
           $script = @'
           set -euo pipefail
-          cd "${{ steps.wsl-context.outputs.workspace }}"
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+          UV_VERSION="${{ env.UV_VERSION }}"
+          PRE_COMMIT_VERSION="${{ env.PRE_COMMIT_VERSION }}"
+          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
 
-          if ! command -v python3 >/dev/null 2>&1; then
+          cd "$mounted"
+          mkdir -p "$cache_dir"
+
+          missing=()
+          command -v python3 >/dev/null 2>&1 || missing+=(python3)
+          command -v curl >/dev/null 2>&1 || missing+=(curl ca-certificates)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          command -v cc >/dev/null 2>&1 || missing+=(build-essential)
+          if [ ${#missing[@]} -ne 0 ]; then
             sudo apt-get update
-            sudo apt-get install -y python3 python3-pip python3-venv
+            sudo apt-get install -y "${missing[@]}"
           fi
 
-          if ! command -v cc >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y build-essential
+          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$UV_INSTALL_DIR" "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+
+          if [ -f "$cache_dir/cargo-home.tar.zst" ]; then
+            zstd -dc "$cache_dir/cargo-home.tar.zst" | tar -x -C "$HOME"
+          fi
+          if [ -f "$cache_dir/rustup.tar.zst" ]; then
+            zstd -dc "$cache_dir/rustup.tar.zst" | tar -x -C "$HOME"
+          fi
+          if [ -f "$cache_dir/uv.tar.zst" ]; then
+            zstd -dc "$cache_dir/uv.tar.zst" | tar -x -C "$HOME"
           fi
 
-          PRECOMMIT_VENV="$PWD/.wsl-precommit-venv"
-          PRECOMMIT_BIN="$PRECOMMIT_VENV/bin/pre-commit"
-          rm -rf "$PRECOMMIT_VENV"
-          if ! python3 -m venv "$PRECOMMIT_VENV" >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y python3-venv
-            rm -rf "$PRECOMMIT_VENV"
-            python3 -m venv "$PRECOMMIT_VENV"
-          fi
-          "$PRECOMMIT_VENV/bin/python" -m pip install --upgrade pip pre-commit
-          export PATH="$HOME/.cargo/bin:$PATH"
+          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -169,22 +202,50 @@ jobs:
 
           source "$HOME/.cargo/env"
 
-          toolchain="$(awk -F '"' '/channel =/ { print $2 }' rust-toolchain.toml | head -n 1)"
+          toolchain="$(awk -F '\"' '/channel =/ { print $2 }' rust-toolchain.toml | head -n 1 | tr -d '\r')"
           if [ -n "$toolchain" ]; then
             rustup toolchain install "$toolchain" --profile minimal --component clippy,rustfmt,llvm-tools-preview
             rustup default "$toolchain"
           fi
 
-          required_cov="$(cat .cargo-llvm-cov-version)"
+          # The Windows checkout can contain CRLF; strip CR so curl/rustup inputs are clean.
+          required_cov="$(tr -d '\r\n' < .cargo-llvm-cov-version)"
           installed_cov="$(cargo llvm-cov --version 2>/dev/null | awk '{print $2}' || true)"
           if [ "$installed_cov" != "$required_cov" ]; then
-            cargo install cargo-llvm-cov --version "$required_cov" --locked --force
+            target="x86_64-unknown-linux-gnu"
+            asset="cargo-llvm-cov-${target}.tar.gz"
+            url="https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${required_cov}/${asset}"
+
+            tmp_dir="$(mktemp -d)"
+            curl -fsSL "$url" -o "$tmp_dir/${asset}"
+            tar -xzf "$tmp_dir/${asset}" -C "$tmp_dir"
+            install -m 0755 "$tmp_dir/cargo-llvm-cov" "$HOME/.cargo/bin/cargo-llvm-cov"
+            rm -rf "$tmp_dir"
           fi
+
+          python_version="$(tr -d '\r\n' < .python-version)"
+          # Avoid pip installs into the system Python in WSL (PEP 668 externally-managed-environment).
+          uv_target="x86_64-unknown-linux-gnu"
+          if ! command -v uv >/dev/null 2>&1 || [ "$(uv --version | awk '{print $2}')" != "$UV_VERSION" ]; then
+            uv_asset="uv-${uv_target}.tar.gz"
+            uv_sha_asset="${uv_asset}.sha256"
+            uv_base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
+
+            tmp_dir="$(mktemp -d)"
+            curl -fsSL "${uv_base}/${uv_asset}" -o "$tmp_dir/${uv_asset}"
+            curl -fsSL "${uv_base}/${uv_sha_asset}" -o "$tmp_dir/${uv_sha_asset}"
+            (cd "$tmp_dir" && sha256sum -c "${uv_sha_asset}")
+            tar -xzf "$tmp_dir/${uv_asset}" -C "$tmp_dir"
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$UV_INSTALL_DIR/uv"
+            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$UV_INSTALL_DIR/uvx"
+            rm -rf "$tmp_dir"
+          fi
+          uv tool install --python "$python_version" "pre-commit==${PRE_COMMIT_VERSION}"
 
           rustc -V
           cargo -V
           cargo llvm-cov --version
-          "$PRECOMMIT_BIN" --version
+          pre-commit --version
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
@@ -215,33 +276,32 @@ jobs:
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
+      - name: Stage repo into WSL filesystem
+        if: ${{ matrix.use_wsl }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          fast_repo="$HOME/tenex-ci/workspace"
+          rm -rf "$fast_repo"
+          mkdir -p "$fast_repo"
+          tar -C "$mounted" -cf - . | tar -C "$fast_repo" -xf -
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
       - name: Run pre-commit (WSL)
         if: ${{ matrix.use_wsl }}
         shell: pwsh
         run: |
           $script = @'
           set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cd "${{ steps.wsl-context.outputs.workspace }}"
-          PRECOMMIT_BIN="$PWD/.wsl-precommit-venv/bin/pre-commit"
-          if [ "${{ matrix.enforce_coverage }}" = "true" ]; then
-            SKIP=ensure-post-commit-hook-installed "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
-          else
-            SKIP=ensure-post-commit-hook-installed,cargo-coverage "$PRECOMMIT_BIN" run --all-files --show-diff-on-failure
-          fi
-          '@
-          $script = $script -replace "`r", ""
-          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
-
-      - name: Run coverage hook in WSL (non-blocking)
-        if: ${{ matrix.use_wsl && !matrix.enforce_coverage }}
-        shell: pwsh
-        run: |
-          $script = @'
-          set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cd "${{ steps.wsl-context.outputs.workspace }}"
-          python3 scripts/precommit/run_cargo_hook.py coverage || true
+          fast_repo="$HOME/tenex-ci/workspace"
+          export PATH="$HOME/.local/share/uv/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export TENEX_CARGO_BUILD_JOBS=4
+          cd "$fast_repo"
+          SKIP=ensure-post-commit-hook-installed,cargo-test pre-commit run --all-files --show-diff-on-failure
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
@@ -282,15 +342,18 @@ jobs:
         run: |
           $script = @'
           set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cd "${{ steps.wsl-context.outputs.workspace }}"
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          fast_repo="$HOME/tenex-ci/workspace"
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          cd "$fast_repo"
           if [ ! -d target/llvm-cov-target/coverage ]; then
             echo "No coverage artifacts found; skipping llvm-cov report export."
             exit 0
           fi
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
-          gzip -9 -f llvm-cov-report.lcov
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$mounted/llvm-cov-report.txt"
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path "$mounted/llvm-cov-report.lcov"
+          gzip -9 -f "$mounted/llvm-cov-report.lcov"
+          cd "$mounted"
           python3 - <<'PY'
           import hashlib
           import pathlib
@@ -400,6 +463,105 @@ jobs:
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Pack WSL cargo-home cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-cargo-home.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd missing; skipping cargo-home cache pack"
+            exit 0
+          fi
+
+          mkdir -p "$cache_dir"
+          rm -f "$HOME/.cargo/credentials" "$HOME/.cargo/credentials.toml" || true
+
+          mkdir -p "$HOME/.cargo"
+          tar -C "$HOME" -cf - .cargo | zstd -T0 -3 > "$cache_dir/cargo-home.tar.zst"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Pack WSL rustup cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-rustup.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd missing; skipping rustup cache pack"
+            exit 0
+          fi
+
+          mkdir -p "$cache_dir"
+
+          mkdir -p "$HOME/.rustup"
+          tar -C "$HOME" -cf - .rustup | zstd -T0 -3 > "$cache_dir/rustup.tar.zst"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Pack WSL uv cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-uv.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+
+          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
+          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd missing; skipping uv cache pack"
+            exit 0
+          fi
+
+          mkdir -p "$cache_dir"
+
+          if command -v uv >/dev/null 2>&1; then
+            uv cache prune --ci || true
+          fi
+
+          mkdir -p "$HOME/.local/share/uv"
+          tar -C "$HOME" -cf - .local/share/uv | zstd -T0 -3 > "$cache_dir/uv.tar.zst"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Save WSL cargo-home cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-cargo-home.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/cargo-home.tar.zst
+          key: wsl-cargo-home-v1-${{ hashFiles('Cargo.lock', '.cargo-llvm-cov-version') }}
+
+      - name: Save WSL rustup cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-rustup.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/rustup.tar.zst
+          key: wsl-rustup-v1-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Save WSL uv cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-uv.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/uv.tar.zst
+          key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
 
       - name: Upload llvm-cov report
         if: always()
