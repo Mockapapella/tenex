@@ -40,15 +40,34 @@ jobs:
           # reports generated locally on the same commit.
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Cache WSL tarballs
+      - name: Restore WSL rustup cache
         if: ${{ matrix.use_wsl }}
-        id: wsl-cache
-        uses: actions/cache@v4
+        id: wsl-cache-rustup
+        uses: actions/cache/restore@v4
         with:
-          path: .wsl-cache
-          key: wsl-cache-v1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo-llvm-cov-version', '.python-version', '.pre-commit-config.yaml') }}
+          path: .wsl-cache/rustup.tar.zst
+          key: wsl-rustup-v1-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
-            wsl-cache-v1-
+            wsl-rustup-v1-
+      - name: Restore WSL cargo-home cache
+        if: ${{ matrix.use_wsl }}
+        id: wsl-cache-cargo-home
+        uses: actions/cache/restore@v4
+        with:
+          path: .wsl-cache/cargo-home.tar.zst
+          key: wsl-cargo-home-v1-${{ hashFiles('Cargo.lock', '.cargo-llvm-cov-version') }}
+          restore-keys: |
+            wsl-cargo-home-v1-
+      - name: Restore WSL uv cache
+        if: ${{ matrix.use_wsl }}
+        id: wsl-cache-uv
+        uses: actions/cache/restore@v4
+        with:
+          path: .wsl-cache/uv.tar.zst
+          key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
+          restore-keys: |
+            wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-
+            wsl-uv-v1-
       - name: Fetch remote branches
         if: ${{ !matrix.use_wsl }}
         run: git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
@@ -140,13 +159,18 @@ jobs:
         run: |
           $script = @'
           set -euo pipefail
-          mounted="${{ steps.wsl-context.outputs.workspace }}"
-          cache_dir="$mounted/.wsl-cache"
-          UV_VERSION="${{ env.UV_VERSION }}"
-          PRE_COMMIT_VERSION="${{ env.PRE_COMMIT_VERSION }}"
+	          mounted="${{ steps.wsl-context.outputs.workspace }}"
+	          cache_dir="$mounted/.wsl-cache"
+	          UV_VERSION="${{ env.UV_VERSION }}"
+	          PRE_COMMIT_VERSION="${{ env.PRE_COMMIT_VERSION }}"
+	          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+	          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+	          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+	          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+	          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
 
-          cd "$mounted"
-          mkdir -p "$cache_dir"
+	          cd "$mounted"
+	          mkdir -p "$cache_dir"
 
           missing=()
           command -v python3 >/dev/null 2>&1 || missing+=(python3)
@@ -158,7 +182,7 @@ jobs:
             sudo apt-get install -y "${missing[@]}"
           fi
 
-          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$HOME/.cache/uv" "$HOME/.local/bin" "$HOME/.local/share/uv"
+	          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$UV_INSTALL_DIR" "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
 
           if [ -f "$cache_dir/cargo-home.tar.zst" ]; then
             zstd -dc "$cache_dir/cargo-home.tar.zst" | tar -x -C "$HOME"
@@ -170,8 +194,7 @@ jobs:
             zstd -dc "$cache_dir/uv.tar.zst" | tar -x -C "$HOME"
           fi
 
-          export UV_CACHE_DIR="$HOME/.cache/uv"
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+	          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -213,10 +236,10 @@ jobs:
             curl -fsSL "${uv_base}/${uv_sha_asset}" -o "$tmp_dir/${uv_sha_asset}"
             (cd "$tmp_dir" && sha256sum -c "${uv_sha_asset}")
             tar -xzf "$tmp_dir/${uv_asset}" -C "$tmp_dir"
-            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$HOME/.local/bin/uv"
-            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$HOME/.local/bin/uvx"
-            rm -rf "$tmp_dir"
-          fi
+	            install -m 0755 "$tmp_dir/uv-${uv_target}/uv" "$UV_INSTALL_DIR/uv"
+	            install -m 0755 "$tmp_dir/uv-${uv_target}/uvx" "$UV_INSTALL_DIR/uvx"
+	            rm -rf "$tmp_dir"
+	          fi
           uv tool install --python "$python_version" "pre-commit==${PRE_COMMIT_VERSION}"
 
           rustc -V
@@ -441,8 +464,8 @@ jobs:
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
-      - name: Pack WSL caches
-        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache.outputs.cache-hit != 'true' }}
+      - name: Pack WSL cargo-home cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-cargo-home.outputs.cache-hit != 'true' }}
         shell: pwsh
         run: |
           $script = @'
@@ -451,26 +474,94 @@ jobs:
           cache_dir="$mounted/.wsl-cache"
 
           if ! command -v zstd >/dev/null 2>&1; then
-            echo "zstd missing; skipping cache pack"
+            echo "zstd missing; skipping cargo-home cache pack"
+            exit 0
+          fi
+
+          mkdir -p "$cache_dir"
+          rm -f "$HOME/.cargo/credentials" "$HOME/.cargo/credentials.toml" || true
+
+          mkdir -p "$HOME/.cargo"
+          tar -C "$HOME" -cf - .cargo | zstd -T0 -3 > "$cache_dir/cargo-home.tar.zst"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Pack WSL rustup cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-rustup.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd missing; skipping rustup cache pack"
             exit 0
           fi
 
           mkdir -p "$cache_dir"
 
-          rm -f "$HOME/.cargo/credentials" "$HOME/.cargo/credentials.toml" || true
-
-          if [ -d "$HOME/.cargo" ]; then
-            tar -C "$HOME" -cf - .cargo | zstd -T0 -19 > "$cache_dir/cargo-home.tar.zst"
-          fi
-          if [ -d "$HOME/.rustup" ]; then
-            tar -C "$HOME" -cf - .rustup | zstd -T0 -19 > "$cache_dir/rustup.tar.zst"
-          fi
-
-          mkdir -p "$HOME/.cache/uv" "$HOME/.local/share/uv"
-          tar -C "$HOME" -cf - .cache/uv .local/share/uv | zstd -T0 -19 > "$cache_dir/uv.tar.zst"
+          mkdir -p "$HOME/.rustup"
+          tar -C "$HOME" -cf - .rustup | zstd -T0 -3 > "$cache_dir/rustup.tar.zst"
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Pack WSL uv cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-uv.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+
+          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
+          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd missing; skipping uv cache pack"
+            exit 0
+          fi
+
+          mkdir -p "$cache_dir"
+
+          if command -v uv >/dev/null 2>&1; then
+            uv cache prune --ci || true
+          fi
+
+          mkdir -p "$HOME/.local/share/uv"
+          tar -C "$HOME" -cf - .local/share/uv | zstd -T0 -3 > "$cache_dir/uv.tar.zst"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Save WSL cargo-home cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-cargo-home.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/cargo-home.tar.zst
+          key: wsl-cargo-home-v1-${{ hashFiles('Cargo.lock', '.cargo-llvm-cov-version') }}
+
+      - name: Save WSL rustup cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-rustup.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/rustup.tar.zst
+          key: wsl-rustup-v1-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Save WSL uv cache
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' && steps.wsl-cache-uv.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .wsl-cache/uv.tar.zst
+          key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
 
       - name: Upload llvm-cov report
         if: always()
