@@ -1,6 +1,6 @@
 //! Tests for Actions handler with real operations
 
-use crate::common::{DirGuard, TestFixture, git_command, skip_if_no_mux};
+use crate::common::{TestFixture, git_command, skip_if_no_mux};
 use std::time::Duration;
 use tenex::agent::Storage;
 use tenex::mux::SessionManager;
@@ -24,13 +24,10 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
 
     let fixture = TestFixture::new("actions_create")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    // Change to repo directory for the test
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent via the handler
@@ -41,9 +38,6 @@ fn test_actions_create_agent_integration() -> Result<(), Box<dyn std::error::Err
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
-
-    // Restore original directory
-    let _ = std::env::set_current_dir(&original_dir);
 
     assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.data.storage.len(), 1);
@@ -61,10 +55,8 @@ fn test_actions_switch_branch_integration() -> Result<(), Box<dyn std::error::Er
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
 
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     let next = handler.create_agent(&mut app.data, "switchable", None)?;
@@ -152,10 +144,8 @@ fn test_actions_switch_branch_from_remote_integration() -> Result<(), Box<dyn st
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
 
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     let next = handler.create_agent(&mut app.data, "switchable", None)?;
@@ -224,12 +214,10 @@ fn test_actions_sync_agent_pane_activity_tracks_unseen_waiting()
     let fixture = TestFixture::new("actions_pane_activity")?;
     let mut config = fixture.config();
     config.default_program = interactive_shell_program().to_string();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     let next = handler.create_agent(&mut app.data, "pane-a", None)?;
@@ -310,18 +298,14 @@ fn test_actions_create_agent_with_prompt_integration() -> Result<(), Box<dyn std
 
     let fixture = TestFixture::new("actions_prompt")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent with a prompt
     let result = handler.create_agent(&mut app.data, "prompted-agent", Some("test prompt"));
-
-    std::env::set_current_dir(&original_dir)?;
 
     assert!(result.is_ok(), "Failed to create agent: {result:?}");
     assert_eq!(app.data.storage.len(), 1);
@@ -343,12 +327,10 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
 
     let fixture = TestFixture::new("actions_kill")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -365,8 +347,6 @@ fn test_actions_kill_agent_integration() -> Result<(), Box<dyn std::error::Error
     );
     let result = handler.handle_action(&mut app, tenex::config::Action::Confirm);
 
-    std::env::set_current_dir(&original_dir)?;
-
     assert!(result.is_ok());
     assert_eq!(app.data.storage.len(), 0);
 
@@ -381,12 +361,10 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
 
     let fixture = TestFixture::new("actions_preview")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -401,8 +379,6 @@ fn test_actions_update_preview_integration() -> Result<(), Box<dyn std::error::E
     assert!(result.is_ok());
     // Preview content should be set (either actual content or session not running)
     assert!(!app.data.ui.preview_content.is_empty());
-
-    let _ = std::env::set_current_dir(&original_dir);
 
     // Cleanup
     let manager = SessionManager::new();
@@ -424,13 +400,10 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
     let mut config = fixture.config();
     // Use an interactive shell so we can generate lots of output reliably.
     config.default_program = interactive_shell_program().to_string();
-    let storage = TestFixture::create_storage();
-
-    // Change to repo directory for the test (DirGuard restores on drop).
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     // Ensure a stable "visible height" for scroll calculations and resize new sessions.
     app.set_preview_dimensions(80, 20);
 
@@ -533,12 +506,10 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
 
     let fixture = TestFixture::new("actions_diff")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -550,8 +521,6 @@ fn test_actions_update_diff_integration() -> Result<(), Box<dyn std::error::Erro
     assert!(result.is_ok());
     // Diff content should be set (either "No changes" or actual diff)
     assert!(!app.data.ui.diff_content.is_empty());
-
-    let _ = std::env::set_current_dir(&original_dir);
 
     // Cleanup
     let manager = SessionManager::new();
@@ -570,12 +539,10 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
 
     let fixture = TestFixture::new("actions_focus_preview")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -597,8 +564,6 @@ fn test_actions_focus_preview_integration() -> Result<(), Box<dyn std::error::Er
     assert!(result.is_ok());
     assert_eq!(app.mode, tenex::AppMode::normal());
 
-    let _ = std::env::set_current_dir(&original_dir);
-
     // Cleanup
     let manager = SessionManager::new();
     for agent in app.data.storage.iter() {
@@ -616,12 +581,10 @@ fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>
 
     let fixture = TestFixture::new("actions_reset")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create multiple agents
@@ -642,8 +605,6 @@ fn test_actions_reset_all_integration() -> Result<(), Box<dyn std::error::Error>
     assert!(result.is_ok());
     assert_eq!(app.data.storage.len(), 0);
 
-    let _ = std::env::set_current_dir(&original_dir);
-
     Ok(())
 }
 
@@ -655,12 +616,10 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
 
     let fixture = TestFixture::new("actions_push")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -668,7 +627,6 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
 
     // Early cleanup if creation failed
     if create_result.is_err() {
-        let _ = std::env::set_current_dir(&original_dir);
         // Skip test if agent creation fails (e.g., git/mux issues)
         return Ok(());
     }
@@ -685,8 +643,6 @@ fn test_actions_push_branch_integration() -> Result<(), Box<dyn std::error::Erro
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
-
-    let _ = std::env::set_current_dir(&original_dir);
 
     assert!(result.is_ok());
 

@@ -198,7 +198,12 @@ impl Actions {
         reason = "Auto-connect is easier to audit as a single flow"
     )]
     pub fn auto_connect_worktrees(self, app: &mut App) -> Result<()> {
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
+        let repo_path = app
+            .data
+            .cwd_project_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .context("Failed to resolve current project directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
             // Not in a git repository, nothing to auto-connect
             debug!("Not in a git repository, skipping auto-connect");

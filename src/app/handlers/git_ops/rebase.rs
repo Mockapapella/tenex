@@ -28,8 +28,12 @@ impl Actions {
 
         debug!(branch = %current_branch, "Starting rebase flow");
 
-        // Fetch branches for selector
-        let repo_path = std::env::current_dir()?;
+        // Fetch branches for selector from the selected agent's repository.
+        let repo_path = agent
+            .repo_root
+            .clone()
+            .or_else(|| git::repository_workspace_root(&agent.worktree_path).ok())
+            .unwrap_or_else(|| agent.worktree_path.clone());
         let repo = git::open_repository(&repo_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;

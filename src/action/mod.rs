@@ -949,9 +949,6 @@ mod tests {
 
     #[test]
     fn test_scrolling_mode_typed_dispatch_covers_actions() -> anyhow::Result<()> {
-        let original_dir = std::env::current_dir()?;
-        std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
-
         let (mut app, _temp) = create_test_app()?;
         add_agent_with_child(&mut app);
 
@@ -1065,7 +1062,6 @@ mod tests {
         dispatch_scrolling_mode(&mut app, KeyAction::Cancel)?;
         assert_eq!(app.mode, AppMode::normal());
 
-        std::env::set_current_dir(original_dir)?;
         Ok(())
     }
 

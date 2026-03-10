@@ -60,7 +60,7 @@ fn collect_changed_view_indices(app: &tenex::App) -> Vec<usize> {
 
 fn setup_app_with_repo(fixture: &TestFixture) -> tenex::App {
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
     app.data.storage.add(Agent::new(

@@ -1,6 +1,6 @@
 //! Tests for synthesis functionality
 
-use crate::common::{DirGuard, TestFixture, skip_if_no_mux};
+use crate::common::{TestFixture, skip_if_no_mux};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use tenex::mux::SessionManager;
 
@@ -12,12 +12,10 @@ fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>>
 
     let fixture = TestFixture::new("synth_no_children")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (no children)
@@ -50,12 +48,10 @@ fn test_synthesize_enters_confirmation_mode() -> Result<(), Box<dyn std::error::
 
     let fixture = TestFixture::new("synth_confirm")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
@@ -96,12 +92,10 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
 
     let fixture = TestFixture::new("synth_descendants")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
@@ -208,12 +202,10 @@ fn test_synthesize_ignores_terminal_children() -> Result<(), Box<dyn std::error:
 
     let fixture = TestFixture::new("synth_ignore_term")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children (non-terminal agents)
@@ -315,12 +307,10 @@ fn test_synthesize_ignores_legacy_terminal_children() -> Result<(), Box<dyn std:
 
     let fixture = TestFixture::new("synth_ignore_legacy_term")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children (non-terminal agents)
@@ -438,12 +428,10 @@ fn test_synthesize_only_terminals_shows_error() -> Result<(), Box<dyn std::error
 
     let fixture = TestFixture::new("synth_only_term")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a single agent (root)
@@ -522,12 +510,10 @@ fn test_synthesize_child_with_grandchildren() -> Result<(), Box<dyn std::error::
 
     let fixture = TestFixture::new("synth_grandchild")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 2 children

@@ -1,6 +1,6 @@
 //! Auto-connect to existing worktrees tests
 
-use crate::common::{DirGuard, TestFixture, assert_paths_eq, skip_if_no_mux};
+use crate::common::{TestFixture, assert_paths_eq, skip_if_no_mux};
 use tenex::app::{Actions, App};
 
 /// Test that `auto_connect_worktrees` picks up an existing worktree and creates an agent
@@ -10,13 +10,12 @@ fn test_auto_connect_existing_worktree() -> Result<(), Box<dyn std::error::Error
         return Ok(());
     }
 
-    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Verify no agents exist initially
@@ -87,13 +86,12 @@ fn test_auto_connect_skips_existing_agents() -> Result<(), Box<dyn std::error::E
         return Ok(());
     }
 
-    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_skip")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Create a worktree manually
@@ -148,13 +146,12 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
         return Ok(());
     }
 
-    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_prefix")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Create a worktree with a different prefix (not matching our config)
@@ -191,13 +188,12 @@ fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    let _dir_guard = DirGuard::new()?;
     let fixture = TestFixture::new("auto_connect_multi")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Create multiple worktrees manually
@@ -266,20 +262,17 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
         return Ok(());
     }
 
-    // Guard that restores the current directory when dropped (even on panic)
-    let _dir_guard = crate::common::DirGuard::new()?;
-
     let fixture = TestFixture::new("deleted_agent_restart")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(
         config.clone(),
         storage,
         tenex::app::Settings::default(),
         false,
     );
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Step 1: Create an agent
@@ -346,8 +339,9 @@ fn test_deleted_agent_does_not_reappear_after_restart() -> Result<(), Box<dyn st
 
     // Step 3: Simulate restart by calling auto_connect_worktrees
     // This is what happens on tenex startup
-    let storage2 = TestFixture::create_storage(); // Fresh empty storage (simulating restart)
+    let storage2 = fixture.storage(); // Fresh empty storage (simulating restart)
     let mut app2 = App::new(config, storage2, tenex::app::Settings::default(), false);
+    app2.set_cwd_project_root(Some(fixture.repo_path.clone()));
 
     handler.auto_connect_worktrees(&mut app2)?;
 

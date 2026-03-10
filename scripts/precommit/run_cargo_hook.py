@@ -167,8 +167,6 @@ def build_command(mode: str) -> list[str]:
             *job_args,
             "--all-targets",
             "--all-features",
-            "--",
-            "--test-threads=1",
         ]
 
     command = [
@@ -192,8 +190,6 @@ def build_command(mode: str) -> list[str]:
         [
             "--ignore-filename-regex",
             "crates/vt100-ctt/",
-            "--",
-            "--test-threads=1",
         ]
     )
     return command

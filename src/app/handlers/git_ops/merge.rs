@@ -37,8 +37,12 @@ impl Actions {
 
         debug!(branch = %current_branch, "Starting merge flow");
 
-        // Fetch branches for selector
-        let repo_path = std::env::current_dir()?;
+        // Fetch branches for selector from the selected agent's repository.
+        let repo_path = agent
+            .repo_root
+            .clone()
+            .or_else(|| git::repository_workspace_root(&agent.worktree_path).ok())
+            .unwrap_or_else(|| agent.worktree_path.clone());
         let repo = git::open_repository(&repo_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -67,15 +71,19 @@ impl Actions {
             .into());
         };
 
-        // Verify agent exists
-        if app_data.storage.get(agent_id).is_none() {
+        let Some(agent) = app_data.storage.get(agent_id) else {
             app_data.git_op.clear();
             app_data.review.clear();
             return Ok(ErrorModalMode {
                 message: "Agent not found".to_string(),
             }
             .into());
-        }
+        };
+        let repo_path = agent
+            .repo_root
+            .clone()
+            .or_else(|| git::repository_workspace_root(&agent.worktree_path).ok())
+            .unwrap_or_else(|| agent.worktree_path.clone());
 
         let source_branch = app_data.git_op.branch_name.clone(); // Agent's branch (e.g., tenex/feature)
         let target_branch = app_data.git_op.target_branch.clone(); // Branch to merge into (e.g., master)
@@ -87,7 +95,7 @@ impl Actions {
         );
 
         // Check if target branch has a worktree
-        if let Some(worktree_path) = Self::find_worktree_for_branch(&target_branch)? {
+        if let Some(worktree_path) = Self::find_worktree_for_branch(&repo_path, &target_branch)? {
             Self::execute_merge_in_worktree(
                 app_data,
                 &source_branch,
@@ -95,14 +103,18 @@ impl Actions {
                 &worktree_path,
             )
         } else {
-            Self::execute_merge_in_main_repo(app_data, &source_branch, &target_branch)
+            Self::execute_merge_in_main_repo(app_data, &repo_path, &source_branch, &target_branch)
         }
     }
 
     /// Find the worktree path for a branch, if one exists
-    pub(super) fn find_worktree_for_branch(branch: &str) -> Result<Option<std::path::PathBuf>> {
+    pub(super) fn find_worktree_for_branch(
+        repo_path: &std::path::Path,
+        branch: &str,
+    ) -> Result<Option<std::path::PathBuf>> {
         let output = crate::git::git_command()
             .args(["worktree", "list", "--porcelain"])
+            .current_dir(repo_path)
             .output()
             .context("Failed to list worktrees")?;
 
@@ -288,11 +300,10 @@ impl Actions {
     /// Execute merge from main repo (when target branch has no worktree)
     fn execute_merge_in_main_repo(
         app_data: &mut AppData,
+        repo_path: &std::path::Path,
         source_branch: &str,
         target_branch: &str,
     ) -> Result<AppMode> {
-        let repo_path = std::env::current_dir().context("Failed to get current directory")?;
-
         debug!(
             source = %source_branch,
             target = %target_branch,
@@ -300,12 +311,12 @@ impl Actions {
         );
 
         // Prepare: stash changes and get current branch
-        let did_stash = Self::git_stash_push(&repo_path)?;
-        let original_branch = Self::git_get_current_branch(&repo_path)?;
+        let did_stash = Self::git_stash_push(repo_path)?;
+        let original_branch = Self::git_get_current_branch(repo_path)?;
 
         // Checkout target branch
-        if !Self::git_checkout(&repo_path, target_branch)? {
-            Self::restore_git_state(&repo_path, did_stash);
+        if !Self::git_checkout(repo_path, target_branch)? {
+            Self::restore_git_state(repo_path, did_stash);
             app_data.git_op.clear();
             app_data.review.clear();
             return Ok(ErrorModalMode {
@@ -316,7 +327,7 @@ impl Actions {
 
         // Attempt merge
         let merge_result = Self::git_merge(
-            &repo_path,
+            repo_path,
             source_branch,
             target_branch,
             &original_branch,
@@ -325,7 +336,7 @@ impl Actions {
 
         let next = match merge_result {
             MergeResult::Success => {
-                Self::restore_git_state(&repo_path, did_stash);
+                Self::restore_git_state(repo_path, did_stash);
                 info!(source = %source_branch, target = %target_branch, "Merge successful");
                 SuccessModalMode {
                     message: format!("Merged {source_branch} into {target_branch}"),
@@ -341,8 +352,8 @@ impl Actions {
                 );
             }
             MergeResult::Failed(error_msg) => {
-                Self::git_checkout(&repo_path, &original_branch)?;
-                Self::restore_git_state(&repo_path, did_stash);
+                Self::git_checkout(repo_path, &original_branch)?;
+                Self::restore_git_state(repo_path, did_stash);
                 ErrorModalMode {
                     message: format!("Merge failed: {error_msg}"),
                 }

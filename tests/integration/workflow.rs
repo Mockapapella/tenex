@@ -28,7 +28,7 @@ fn test_agent_creation_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let fixture = TestFixture::new("create_workflow")?;
     let config = fixture.config();
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
     let manager = SessionManager::new();
 
     // Create agent manually (simulating cmd_new)
@@ -84,12 +84,10 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
 
     let fixture = TestFixture::new("cmd_kill")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -97,7 +95,6 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(next) = create_result {
         app.apply_mode(next);
     } else {
-        let _ = std::env::set_current_dir(&original_dir);
         return Ok(());
     }
 
@@ -122,8 +119,6 @@ fn test_cmd_kill_success() -> Result<(), Box<dyn std::error::Error>> {
     app.data.storage.remove(agent_id);
     app.data.storage.save_to(&storage_path)?;
 
-    let _ = std::env::set_current_dir(&original_dir);
-
     assert_eq!(app.data.storage.len(), 0);
 
     Ok(())
@@ -137,12 +132,10 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
 
     let fixture = TestFixture::new("sync_status")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    let _ = std::env::set_current_dir(&fixture.repo_path);
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent
@@ -150,7 +143,6 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
     if let Ok(next) = create_result {
         app.apply_mode(next);
     } else {
-        let _ = std::env::set_current_dir(&original_dir);
         return Ok(());
     }
 
@@ -176,8 +168,6 @@ fn test_sync_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>
     // Sync should remove dead agents
     let _ = handler.sync_agent_status(&mut app);
 
-    let _ = std::env::set_current_dir(&original_dir);
-
     Ok(())
 }
 
@@ -189,7 +179,7 @@ fn test_full_cli_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let fixture = TestFixture::new("full_workflow")?;
     let config = fixture.config();
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
     let manager = SessionManager::new();
 
     // 1. Create an agent (simulate `muster new`)

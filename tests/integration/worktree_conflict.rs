@@ -24,13 +24,12 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_conflict_single")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // First, create a worktree manually to simulate existing state
@@ -74,7 +73,6 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -87,13 +85,12 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_reconnect_single")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Create a worktree manually
@@ -140,7 +137,6 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -153,13 +149,12 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_recreate_single")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = Actions::new();
 
     // Create a worktree manually with some content
@@ -215,7 +210,6 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -228,13 +222,12 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_conflict_swarm")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
 
     // Create a worktree manually that matches what spawn_children would create
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -281,7 +274,6 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -295,15 +287,14 @@ fn test_worktree_conflict_reconnect_swarm_creates_children()
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_reconnect_swarm")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     // Use sleep command to keep sessions alive for swarm tests
     let mut config = fixture.config();
     config.default_program = sleep_program(60);
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
 
     // Create a worktree manually with a branch name that matches what spawn_children will generate
     // spawn_children uses the task as the title, which gets converted to a branch name
@@ -387,7 +378,6 @@ fn test_worktree_conflict_reconnect_swarm_creates_children()
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -399,15 +389,14 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_recreate_swarm")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     // Use sleep command to keep sessions alive for swarm tests
     let mut config = fixture.config();
     config.default_program = sleep_program(60);
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
 
     // Create a worktree manually
     let repo = git2::Repository::open(&fixture.repo_path)?;
@@ -462,7 +451,6 @@ fn test_worktree_conflict_recreate_swarm() -> Result<(), Box<dyn std::error::Err
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }
@@ -476,15 +464,14 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
         return Ok(());
     }
 
-    let original_dir = std::env::current_dir()?;
     let fixture = TestFixture::new("wt_add_children")?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     // Use sleep command to keep sessions alive for child spawning tests
     let mut config = fixture.config();
     config.default_program = sleep_program(60);
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
     let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
 
     // First create a root agent normally
     let handler = Actions::new();
@@ -519,7 +506,6 @@ fn test_add_children_to_existing_no_conflict() -> Result<(), Box<dyn std::error:
     // Cleanup
     fixture.cleanup_sessions();
     fixture.cleanup_branches();
-    let _ = std::env::set_current_dir(&original_dir);
 
     Ok(())
 }

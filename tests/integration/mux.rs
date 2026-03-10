@@ -3,6 +3,8 @@
 use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::mux::SessionManager;
 
+const READY_MARKER: &str = "__CLAUDE_READY__";
+
 fn sleep_command(seconds: u32) -> Vec<String> {
     #[cfg(windows)]
     {
@@ -34,6 +36,77 @@ fn wait_for_session(
     }
 
     Err(format!("Session '{session_name}' not found").into())
+}
+
+fn wait_for_pane_history_contains(
+    capture: tenex::mux::OutputCapture,
+    target: &str,
+    history_lines: u32,
+    needle: &str,
+    timeout: std::time::Duration,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(50);
+    let mut last_output = String::new();
+
+    loop {
+        match capture.capture_pane_with_history(target, history_lines) {
+            Ok(output) => {
+                if output.contains(needle) {
+                    return Ok(output);
+                }
+                last_output = output;
+            }
+            Err(err) if start.elapsed() >= timeout => return Err(err.into()),
+            Err(_) => {}
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(format!(
+                "Timed out waiting for {needle:?} in pane output: {last_output:?}"
+            )
+            .into());
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
+fn wait_for_full_history_matching<F>(
+    capture: tenex::mux::OutputCapture,
+    target: &str,
+    description: &str,
+    timeout: std::time::Duration,
+    predicate: F,
+) -> Result<String, Box<dyn std::error::Error>>
+where
+    F: Fn(&str) -> bool,
+{
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(50);
+    let mut last_output = String::new();
+
+    loop {
+        match capture.capture_full_history(target) {
+            Ok(output) => {
+                if predicate(&output) {
+                    return Ok(output);
+                }
+                last_output = output;
+            }
+            Err(err) if start.elapsed() >= timeout => return Err(err.into()),
+            Err(_) => {}
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(format!(
+                "Timed out waiting for {description} in full history: {last_output:?}"
+            )
+            .into());
+        }
+
+        std::thread::sleep(poll_interval);
+    }
 }
 
 #[test]
@@ -285,7 +358,9 @@ fn test_mux_capture_pane_with_history_ends_with_visible_pane()
 
     let _ = manager.kill(&session_name);
 
-    let tail_marker = format!("__tenex_hist_suffix_{session_name}__");
+    let marker_id = uuid::Uuid::new_v4().simple().to_string();
+    let marker_id = &marker_id[..8];
+    let tail_marker = format!("__tenex_hist_suffix_{marker_id}__");
     let script = format!(
         "i=0; \
          while [ $i -lt 200 ]; do echo LINE_$i; i=$((i+1)); done; \
@@ -742,9 +817,11 @@ fn test_mux_send_keys_and_submit_for_program_claude_uses_csi_u_enter_when_pane_i
     // Create a mock "claude" executable that only submits when it receives CSI-u Enter bytes.
     // This validates the submit sequence without relying on PTY read chunk boundaries.
     let claude_path = fixture.worktree_path().join("claude");
+
     std::fs::write(
         &claude_path,
-        r#"#!/usr/bin/env python3
+        format!(
+            r#"#!/usr/bin/env python3
 import os
 import sys
 import select
@@ -753,9 +830,12 @@ import tty
 
 CSI_U_ENTER = b"\x1b[13;1u"
 TAIL_LEN = len(CSI_U_ENTER) - 1
+READY_MARKER = {READY_MARKER:?}
 
 def main() -> int:
     tty.setraw(sys.stdin.fileno())
+    sys.stdout.write(READY_MARKER + "\n")
+    sys.stdout.flush()
     deadline = time.time() + 5.0
     pending = b""
     while time.time() < deadline:
@@ -777,6 +857,7 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 "#,
+        ),
     )?;
 
     #[cfg(unix)]
@@ -795,7 +876,14 @@ if __name__ == "__main__":
     manager.create(&session_name, &fixture.worktree_path(), Some(&cmd))?;
 
     wait_for_session(manager, &session_name)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    let capture = tenex::mux::OutputCapture::new();
+    wait_for_pane_history_contains(
+        capture,
+        &session_name,
+        200,
+        READY_MARKER,
+        std::time::Duration::from_secs(5),
+    )?;
 
     let result = manager.send_keys_and_submit_for_program(
         &session_name,
@@ -804,10 +892,13 @@ if __name__ == "__main__":
     );
     assert!(result.is_ok());
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    let capture = tenex::mux::OutputCapture::new();
-    let output = capture.capture_pane_with_history(&session_name, 200)?;
+    let output = wait_for_pane_history_contains(
+        capture,
+        &session_name,
+        200,
+        "SUBMIT_OK",
+        std::time::Duration::from_secs(5),
+    )?;
     assert!(
         output.contains("SUBMIT_OK"),
         "Expected CSI-u submit marker, got: {output:?}"
@@ -845,11 +936,26 @@ fn test_mux_responds_to_terminal_queries() -> Result<(), Box<dyn std::error::Err
     let command = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
 
     manager.create(&session_name, &fixture.worktree_path(), Some(&command))?;
-
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
     let capture = tenex::mux::OutputCapture::new();
-    let output = capture.capture_full_history(&session_name)?;
+    let output = wait_for_full_history_matching(
+        capture,
+        &session_name,
+        "terminal query responses",
+        std::time::Duration::from_secs(10),
+        |output| {
+            if !output.contains("DA:") || !output.contains("CPR:") {
+                return false;
+            }
+
+            let normalized_output = output.split_whitespace().collect::<Vec<_>>().join(" ");
+            let cpr_section = normalized_output.split("CPR:").nth(1).unwrap_or_default();
+
+            normalized_output.contains("1b 5b 3f 31 3b 30 63")
+                && cpr_section.contains("1b 5b")
+                && cpr_section.contains("3b")
+                && cpr_section.contains("52")
+        },
+    )?;
 
     manager.kill(&session_name)?;
 

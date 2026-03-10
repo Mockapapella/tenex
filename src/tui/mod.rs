@@ -565,6 +565,7 @@ mod tests {
     use crate::state::*;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Helper struct that cleans up test worktrees and branches on drop
     struct TestCleanup {
@@ -573,9 +574,9 @@ mod tests {
     }
 
     impl TestCleanup {
-        fn new(branch_prefix: &str) -> Self {
+        fn new(repo_path: PathBuf, branch_prefix: &str) -> Self {
             Self {
-                repo_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                repo_path,
                 branch_prefix: branch_prefix.to_string(),
             }
         }
@@ -628,12 +629,16 @@ mod tests {
     }
 
     fn create_test_config() -> Config {
-        // Use a unique temp directory for each test process to avoid conflicts
-        // and prevent tests from creating worktrees in the real ~/.tenex directory
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+        // Use a unique temp directory for each test to avoid conflicts and prevent tests from
+        // creating worktrees in the real instance directory.
         let pid = std::process::id();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let prefix = format!("tenex-test-{pid}-{id}");
         Config {
-            worktree_dir: PathBuf::from(format!("/tmp/tenex-test-{pid}")),
-            branch_prefix: format!("tenex-test-{pid}/"),
+            worktree_dir: std::env::temp_dir().join(&prefix),
+            branch_prefix: format!("{prefix}/"),
             ..Config::default()
         }
     }
@@ -874,7 +879,10 @@ mod tests {
 
     fn create_test_app_with_cleanup() -> (App, TestCleanup) {
         let config = create_test_config();
-        let cleanup = TestCleanup::new(&config.branch_prefix);
+        let cleanup = TestCleanup::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            &config.branch_prefix,
+        );
         (
             App::new(
                 config,
@@ -1097,10 +1105,7 @@ mod tests {
             ],
         )?;
 
-        let original_dir = std::env::current_dir()?;
-        std::env::set_current_dir(repo_dir.path())?;
-        let cleanup = TestCleanup::new(branch_prefix);
-        std::env::set_current_dir(original_dir)?;
+        let cleanup = TestCleanup::new(repo_dir.path().to_path_buf(), branch_prefix);
 
         drop(cleanup);
 

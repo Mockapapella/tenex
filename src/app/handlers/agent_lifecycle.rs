@@ -41,6 +41,7 @@ impl Actions {
 
         let repo_path = app_data
             .selected_project_root()
+            .or_else(|| app_data.cwd_project_root.clone())
             .or_else(|| std::env::current_dir().ok())
             .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
@@ -148,8 +149,10 @@ impl Actions {
                 .resize_window(&agent.mux_session, width, height);
         }
 
+        let agent_id = agent.id;
         app_data.storage.add(agent);
         app_data.storage.save()?;
+        app_data.select_agent_by_id(agent_id);
 
         info!(title, "Agent created in plain directory");
         app_data.set_status(format!("Created agent: {title}"));
@@ -215,8 +218,10 @@ impl Actions {
                 .resize_window(&agent.mux_session, width, height);
         }
 
+        let agent_id = agent.id;
         app_data.storage.add(agent);
         app_data.storage.save()?;
+        app_data.select_agent_by_id(agent_id);
 
         info!(title, %branch, "Agent created successfully");
         app_data.set_status(format!("Created agent: {title}"));
@@ -1139,22 +1144,11 @@ mod tests {
     #[test]
     fn test_create_agent_outside_git_uses_plain_dir_workspace()
     -> Result<(), Box<dyn std::error::Error>> {
-        struct RestoreCwd(PathBuf);
-
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        let original_cwd = std::env::current_dir()?;
-        let _guard = RestoreCwd(original_cwd);
-
         let workdir = TempDir::new()?;
-        std::env::set_current_dir(workdir.path())?;
+        app.set_cwd_project_root(Some(workdir.path().to_path_buf()));
 
         let next = handler.create_agent(&mut app.data, "plain-dir-agent", None)?;
         assert_eq!(next, AppMode::normal());
