@@ -1,6 +1,6 @@
 //! Tests for git worktree operations
 
-use crate::common::{DirGuard, TestFixture, git_command};
+use crate::common::{TestFixture, git_command};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, Settings};
 use tenex::config::Action;
@@ -250,10 +250,6 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
     let agent_id = agent.id;
     app.data.storage.add(agent);
 
-    // Change to repo directory for the merge to work (with DirGuard for cleanup on panic)
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     // Set up merge state
     app.data.git_op.agent_id = Some(agent_id);
     app.data.git_op.branch_name = branch_name.to_string();
@@ -262,7 +258,6 @@ fn test_execute_merge_with_valid_agent() -> Result<(), Box<dyn std::error::Error
     // Execute merge
     let result = Actions::execute_merge(&mut app.data);
 
-    // DirGuard will restore directory on drop
     assert!(result.is_ok(), "Merge should succeed: {result:?}");
     app.apply_mode(result?);
 
@@ -342,10 +337,6 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
 
-    // Change to repo directory (with DirGuard for cleanup on panic)
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
     // Add an agent
@@ -361,7 +352,6 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Actions::new();
     let result = handler.handle_action(&mut app, Action::Rebase);
 
-    // DirGuard will restore directory on drop
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
@@ -376,10 +366,6 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("merge_action")?;
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
-
-    // Change to repo directory (with DirGuard for cleanup on panic)
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
 
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
@@ -396,7 +382,6 @@ fn test_merge_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Actions::new();
     let result = handler.handle_action(&mut app, Action::Merge);
 
-    // DirGuard will restore directory on drop
     assert!(result.is_ok());
     assert_eq!(
         app.mode,
@@ -702,10 +687,6 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
         .output()?;
     assert_git_success(&output, "git commit failed");
 
-    // Change to repo directory (with DirGuard for cleanup on panic)
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
     // Add an agent pointing to the worktree
@@ -729,8 +710,6 @@ fn test_execute_merge_with_conflict() -> Result<(), Box<dyn std::error::Error>> 
     // Execute merge - in real mux environment, this spawns a conflict terminal
     // In test environment (no mux), it may error when trying to create window
     let result = Actions::execute_merge(&mut app.data);
-
-    // DirGuard will restore directory on drop
 
     // The merge should handle the situation gracefully.
     // Multiple outcomes are valid depending on git state and mux availability:
@@ -900,10 +879,6 @@ fn test_execute_merge_no_target_branch() -> Result<(), Box<dyn std::error::Error
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
 
-    // Change to repo directory (with DirGuard for cleanup on panic)
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
-
     let mut app = tenex::App::new(config, storage, Settings::default(), false);
 
     // Add an agent
@@ -924,7 +899,6 @@ fn test_execute_merge_no_target_branch() -> Result<(), Box<dyn std::error::Error
     // Execute merge - should fail gracefully
     let result = Actions::execute_merge(&mut app.data);
 
-    // DirGuard will restore directory on drop
     assert!(
         result.is_ok(),
         "Should handle missing target branch gracefully"

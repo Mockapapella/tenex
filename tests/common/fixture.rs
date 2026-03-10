@@ -9,6 +9,7 @@ use tenex::agent::Storage;
 use tenex::config::Config;
 use tenex::git::WorktreeManager;
 use tenex::mux::SessionManager;
+use uuid::Uuid;
 
 const fn default_test_program() -> &'static str {
     #[cfg(windows)]
@@ -82,8 +83,14 @@ impl TestFixture {
         let worktree_dir = TempDir::new()?;
         let state_dir = TempDir::new()?;
 
-        // Generate unique session prefix for this test run
-        let session_prefix = format!("tenex-test-{}-{}", test_name, std::process::id());
+        // Generate a unique session prefix for this test run.
+        //
+        // This is used for git branches, worktrees, and mux sessions. It must be unique across
+        // parallel tests within the same process, but should stay reasonably short (path length
+        // limits are a real cross-platform constraint in parts of the mux stack).
+        let run_id = Uuid::new_v4().simple().to_string();
+        let run_id = &run_id[..8];
+        let session_prefix = format!("tenex-test-{}-{}-{}", test_name, std::process::id(), run_id);
 
         Ok(Self {
             _temp_dir: temp_dir,
@@ -119,6 +126,10 @@ impl TestFixture {
         self.state_dir.path().join("agents.json")
     }
 
+    pub fn storage(&self) -> Storage {
+        Storage::with_path(self.storage_path())
+    }
+
     /// Returns the canonicalized worktree directory path.
     /// This handles symlinked temp dirs.
     pub fn worktree_path(&self) -> PathBuf {
@@ -126,10 +137,6 @@ impl TestFixture {
             .path()
             .canonicalize()
             .unwrap_or_else(|_| self.worktree_dir.path().to_path_buf())
-    }
-
-    pub const fn create_storage() -> Storage {
-        Storage::new()
     }
 
     pub fn session_name(&self, suffix: &str) -> String {

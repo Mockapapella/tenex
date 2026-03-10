@@ -4,9 +4,6 @@
 //! - the Tenex mux daemon (auto-started)
 //! - git to be available
 //! - A writable temp directory
-//!
-//! IMPORTANT: Run with `--test-threads=1` to avoid race conditions from
-//! parallel tests calling `std::env::set_current_dir`.
 
 mod common;
 

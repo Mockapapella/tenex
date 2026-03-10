@@ -7,7 +7,7 @@ use tenex::agent::Agent;
 #[test]
 fn test_cmd_list_shows_agents() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("list")?;
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
 
     // Add some test agents
     let agent1 = Agent::new(
@@ -38,7 +38,7 @@ fn test_cmd_list_shows_agents() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("list_filter")?;
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
 
     let mut agent1 = Agent::new(
         "running-agent".to_string(),
@@ -73,7 +73,7 @@ fn test_cmd_list_filter_running() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_find_agent_by_short_id_integration() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("find_short")?;
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
 
     let agent = Agent::new(
         "findable-agent".to_string(),
@@ -96,7 +96,7 @@ fn test_find_agent_by_short_id_integration() -> Result<(), Box<dyn std::error::E
 #[test]
 fn test_find_agent_by_index_integration() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("find_index")?;
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
 
     storage.add(Agent::new(
         "agent-0".to_string(),
@@ -128,7 +128,7 @@ fn test_find_agent_by_index_integration() -> Result<(), Box<dyn std::error::Erro
 #[test]
 fn test_agent_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("status_trans")?;
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
 
     let mut agent = Agent::new(
         "status-test".to_string(),

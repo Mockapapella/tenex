@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::common::{DirGuard, TestFixture, create_child_agent, skip_if_no_mux};
+use crate::common::{TestFixture, create_child_agent, skip_if_no_mux};
 use tenex::agent::{Agent, Storage};
 use tenex::mux::SessionManager;
 
@@ -29,12 +29,10 @@ fn test_nested_agent_window_index_tracking() -> Result<(), Box<dyn std::error::E
 
     let fixture = TestFixture::new("nested_windows")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with 3 children (swarm)
@@ -183,12 +181,10 @@ fn test_child_agent_titles_do_not_include_short_id() -> Result<(), Box<dyn std::
 
     let fixture = TestFixture::new("child_titles")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with children
@@ -244,12 +240,10 @@ fn test_kill_windows_in_descending_order() -> Result<(), Box<dyn std::error::Err
 
     let fixture = TestFixture::new("descending_kill")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with 3 children
@@ -318,12 +312,10 @@ fn test_rename_root_updates_children_mux_session() -> Result<(), Box<dyn std::er
     let mut config = fixture.config();
     // Use sleep to keep the session alive (echo exits immediately)
     config.default_program = sleep_program(300);
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 3 children
@@ -497,12 +489,10 @@ fn test_rename_root_updates_worktree_path() -> Result<(), Box<dyn std::error::Er
     let mut config = fixture.config();
     // Use sleep to keep the session alive
     config.default_program = sleep_program(300);
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a swarm with root + 2 children

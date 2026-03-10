@@ -9,7 +9,7 @@ fn test_storage_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
     let storage_path = fixture.storage_path();
 
     // Create storage with agents
-    let mut storage = TestFixture::create_storage();
+    let mut storage = fixture.storage();
     storage.add(Agent::new(
         "persistent-agent".to_string(),
         "echo".to_string(),

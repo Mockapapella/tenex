@@ -930,8 +930,14 @@ fn test_execute_rebase_agent_not_found() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn test_find_worktree_for_branch_no_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let mut init_opts = git2::RepositoryInitOptions::new();
+    init_opts.initial_head("master");
+    let repo = git2::Repository::init_opts(temp_dir.path(), &init_opts)?;
+    repo.set_head("refs/heads/master")?;
+
     // Should return None for a non-existent branch
-    let result = Actions::find_worktree_for_branch("non-existent-branch-12345")?;
+    let result = Actions::find_worktree_for_branch(temp_dir.path(), "non-existent-branch-12345")?;
     assert!(result.is_none());
     Ok(())
 }

@@ -1,7 +1,5 @@
 //! Tests for [R] review agent functionality
 
-#[cfg(unix)]
-use crate::common::DirGuard;
 use crate::common::{TestFixture, skip_if_no_mux};
 use tenex::config::Action;
 use tenex::mux::SessionManager;
@@ -108,7 +106,7 @@ fn write_executable_script(path: &Path, contents: &str) -> Result<(), Box<dyn st
 fn test_review_action_no_agent_selected_shows_info() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("review_no_agent")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
     let handler = tenex::app::Actions::new();
@@ -138,12 +136,10 @@ fn test_review_action_with_agent_selected_shows_count_picker()
 
     let fixture = TestFixture::new("review_with_agent")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create an agent first
@@ -176,7 +172,6 @@ fn test_review_action_with_agent_selected_shows_count_picker()
     );
 
     // Cleanup
-    std::env::set_current_dir(&original_dir)?;
     let manager = SessionManager::new();
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
@@ -189,7 +184,7 @@ fn test_review_action_with_agent_selected_shows_count_picker()
 fn test_review_branch_filtering() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("review_filter")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
@@ -251,7 +246,7 @@ fn test_review_branch_filtering() -> Result<(), Box<dyn std::error::Error>> {
 fn test_review_branch_navigation() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("review_nav")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
@@ -308,7 +303,7 @@ fn test_review_branch_navigation() -> Result<(), Box<dyn std::error::Error>> {
 fn test_review_branch_selection_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("review_confirm")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 
@@ -354,12 +349,10 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
 
     let fixture = TestFixture::new("review_spawn")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with children (swarm) to get a proper mux session
@@ -367,7 +360,6 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     app.data.spawn.spawning_under = None;
     let result = handler.spawn_children(&mut app.data, Some("test-swarm"));
     if result.is_err() {
-        std::env::set_current_dir(&original_dir)?;
         return Ok(()); // Skip if creation fails
     }
 
@@ -395,7 +387,6 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
-    std::env::set_current_dir(&original_dir)?;
 
     if result.is_err() {
         // Skip if review spawn fails (mux issues)
@@ -431,10 +422,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     let fixture = TestFixture::new("review_spawn_codex")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
-
-    let _dir_guard = DirGuard::new()?;
-    std::env::set_current_dir(&fixture.repo_path)?;
+    let storage = fixture.storage();
 
     let codex_path = fixture.repo_path.join("codex");
     #[cfg(unix)]
@@ -449,6 +437,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
     };
 
     let mut app = tenex::App::new(config, storage, settings, false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
     let handler = tenex::app::Actions::new();
 
     // Create a root agent with children (swarm) to get a proper mux session.
@@ -569,7 +558,7 @@ fn test_review_prompt_contains_base_branch() {
 fn test_review_modes_flow() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TestFixture::new("review_flow")?;
     let config = fixture.config();
-    let storage = TestFixture::create_storage();
+    let storage = fixture.storage();
 
     let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
 

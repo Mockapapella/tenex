@@ -339,6 +339,7 @@ impl Actions {
             .root_repo_path
             .clone()
             .or_else(|| app_data.selected_project_root())
+            .or_else(|| app_data.cwd_project_root.clone())
             .or_else(|| std::env::current_dir().ok())
             .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
@@ -1010,22 +1011,11 @@ mod tests {
     #[test]
     fn test_spawn_children_creates_plain_dir_root_outside_git()
     -> Result<(), Box<dyn std::error::Error>> {
-        struct RestoreCwd(std::path::PathBuf);
-
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        let original_cwd = std::env::current_dir()?;
-        let _guard = RestoreCwd(original_cwd);
-
         let non_git_dir = tempfile::TempDir::new()?;
-        std::env::set_current_dir(non_git_dir.path())?;
+        app.set_cwd_project_root(Some(non_git_dir.path().to_path_buf()));
 
         app.data.spawn.child_count = 1;
         app.data.spawn.spawning_under = None;

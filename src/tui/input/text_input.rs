@@ -253,22 +253,12 @@ mod tests {
 
     #[test]
     fn test_text_input_submit_error_paths() -> Result<(), Box<dyn std::error::Error>> {
-        struct RestoreCwd(std::path::PathBuf);
-
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-
-        let original_dir = std::env::current_dir()?;
-        let _guard = RestoreCwd(original_dir);
         let non_git_dir = TempDir::new()?;
-        std::env::set_current_dir(non_git_dir.path())?;
 
         // CreatingMode should succeed by creating a plain-directory agent.
         {
             let (mut app, _temp) = create_test_app()?;
+            app.set_cwd_project_root(Some(non_git_dir.path().to_path_buf()));
             app.apply_mode(CreatingMode.into());
             app.data.input.buffer = "agent".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
@@ -282,6 +272,7 @@ mod tests {
         // PromptingMode should also succeed outside git.
         {
             let (mut app, _temp) = create_test_app()?;
+            app.set_cwd_project_root(Some(non_git_dir.path().to_path_buf()));
             app.apply_mode(PromptingMode.into());
             app.data.input.buffer = "prompt".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
