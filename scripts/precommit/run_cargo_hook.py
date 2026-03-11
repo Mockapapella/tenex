@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -19,7 +20,8 @@ def repo_root() -> Path:
     return Path(output.strip())
 
 
-def muxd_pids_from_proc(proc_dir: Path, target_prefix: str) -> set[int]:
+def muxd_pids_from_proc(proc_dir: Path, socket: str) -> set[int]:
+    wanted_socket = f"TENEX_MUX_SOCKET={socket}"
     pids: set[int] = set()
     for entry in proc_dir.iterdir():
         if not entry.name.isdigit():
@@ -37,61 +39,60 @@ def muxd_pids_from_proc(proc_dir: Path, target_prefix: str) -> set[int]:
         if not parts:
             continue
 
-        executable = parts[0].replace("\\", "/")
-        if not executable.startswith(target_prefix):
-            continue
         if "muxd" not in parts:
+            continue
+
+        environ_path = entry / "environ"
+        try:
+            environ = environ_path.read_bytes()
+        except OSError:
+            continue
+        if not environ:
+            continue
+
+        env_parts = [part.decode("utf-8", "replace") for part in environ.split(b"\0") if part]
+        if wanted_socket not in env_parts:
             continue
 
         pids.add(int(entry.name))
     return pids
 
 
-def muxd_pids_from_ps(target_prefix: str) -> set[int]:
-    result = subprocess.run(
-        ["ps", "-axo", "pid=,command="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+def fnv1a64(value: str) -> int:
+    hash_value = 0xCBF29CE484222325
+    for byte in value.encode("utf-8"):
+        hash_value ^= byte
+        hash_value = (hash_value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return hash_value
+
+
+def muxd_pidfile_path(state_dir: Path, socket: str) -> Path:
+    return state_dir / f"tenex-muxd-{fnv1a64(socket):016x}.pid"
+
+
+def muxd_pids_from_pidfile(state_dir: Path, socket: str) -> set[int]:
+    pidfile_path = muxd_pidfile_path(state_dir, socket)
+    try:
+        payload = json.loads(pidfile_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
         return set()
 
-    pids: set[int] = set()
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    if str(payload.get("socket", "")).strip() != socket:
+        return set()
 
-        fields = line.split(None, 1)
-        if len(fields) != 2:
-            continue
+    pid = payload.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return set()
 
-        pid_str, command = fields
-        if not pid_str.isdigit():
-            continue
-
-        parts = command.split()
-        if not parts:
-            continue
-
-        executable = parts[0].replace("\\", "/")
-        if not executable.startswith(target_prefix):
-            continue
-        if "muxd" not in parts:
-            continue
-
-        pids.add(int(pid_str))
-    return pids
+    return {pid}
 
 
-def cleanup_repo_muxd(root: Path) -> None:
-    target_prefix = (root / "target").as_posix().rstrip("/") + "/"
+def cleanup_hook_muxd(state_dir: Path, socket: str) -> None:
     proc_dir = Path("/proc")
     pids = (
-        muxd_pids_from_proc(proc_dir, target_prefix)
+        muxd_pids_from_proc(proc_dir, socket)
         if proc_dir.is_dir()
-        else muxd_pids_from_ps(target_prefix)
+        else muxd_pids_from_pidfile(state_dir, socket)
     )
 
     if not pids:
@@ -209,11 +210,12 @@ def main() -> int:
         shutil.rmtree(root / "target" / "llvm-cov-target", ignore_errors=True)
 
     state_dir = Path(tempfile.mkdtemp(prefix="tenex-pre-commit-"))
+    mux_socket = str(state_dir / "mux.sock")
     env = os.environ.copy()
     env["TENEX_STATE_PATH"] = str(state_dir / "state.json")
-    env["TENEX_MUX_SOCKET"] = str(state_dir / "mux.sock")
+    env["TENEX_MUX_SOCKET"] = mux_socket
 
-    cleanup_repo_muxd(root)
+    cleanup_hook_muxd(state_dir, mux_socket)
     try:
         command = build_command(args.mode)
         result = subprocess.run(
@@ -224,7 +226,7 @@ def main() -> int:
         )
         return result.returncode
     finally:
-        cleanup_repo_muxd(root)
+        cleanup_hook_muxd(state_dir, mux_socket)
         shutil.rmtree(state_dir, ignore_errors=True)
 
 
