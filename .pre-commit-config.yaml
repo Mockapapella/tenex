@@ -93,6 +93,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: precommit-hook-unit-tests
+        name: pre-commit hook unit tests
+        entry: python3 scripts/precommit/test_run_cargo_hook.py
+        language: system
+        pass_filenames: false
+
       - id: cargo-test
         name: cargo test
         entry: python3 scripts/precommit/run_cargo_hook.py test
