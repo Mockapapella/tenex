@@ -221,7 +221,47 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    use std::process::Command;
+    use std::io::{BufRead, BufReader};
+
+    #[cfg(unix)]
+    use std::process::{Child, Command, Stdio};
+
+    #[cfg(unix)]
+    fn spawn_test_muxd(socket: &str, script: &str) -> Result<Child, Box<dyn std::error::Error>> {
+        Ok(Command::new("bash")
+            .arg("-c")
+            .arg("exec -a \"$0\" python3 -c \"$1\"")
+            .arg("muxd")
+            .arg(script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("TENEX_MUX_SOCKET", socket)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?)
+    }
+
+    #[cfg(unix)]
+    fn wait_for_ready(child: &mut Child) -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = child.stdout.take().ok_or_else(|| {
+            std::io::Error::other("Expected spawned muxd process to expose stdout")
+        })?;
+        let mut ready = String::new();
+        BufReader::new(stdout).read_line(&mut ready)?;
+
+        if ready.trim_end() == "ready" {
+            return Ok(());
+        }
+
+        Err(format!("Expected spawned muxd process to signal readiness, got {ready:?}").into())
+    }
+
+    #[cfg(unix)]
+    fn cleanup_child(child: &mut Child) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     #[test]
     fn test_is_available() {
@@ -285,38 +325,48 @@ mod tests {
     fn test_terminate_mux_daemon_for_socket_kills_matching_process()
     -> Result<(), Box<dyn std::error::Error>> {
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
-        let mut child = Command::new("bash")
-            .arg("-c")
-            .arg("exec -a muxd sleep 60")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("TENEX_MUX_SOCKET", &socket)
-            .spawn()?;
+        let mut child = spawn_test_muxd(
+            &socket,
+            r#"
+import signal
+import sys
+import time
+
+def on_term(_signum, _frame):
+    time.sleep(0.05)
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, on_term)
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+
+while True:
+    time.sleep(60)
+"#,
+        )?;
         let pid = child.id();
         #[cfg(not(target_os = "linux"))]
         let _pid_guard = super::pidfile::PidFileGuard::create_for_pid(&socket, pid)?;
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        if let Err(err) = wait_for_ready(&mut child) {
+            cleanup_child(&mut child);
+            return Err(err);
+        }
+        if !discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+            cleanup_child(&mut child);
+            return Err("Expected spawned muxd process to be discoverable".into());
         }
 
         terminate_mux_daemon_for_socket(&socket)?;
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if child.try_wait()?.is_some() {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        let status = child.wait()?;
+        if status.success() {
+            return Ok(());
         }
 
-        let _ = child.kill();
-        let _ = child.wait();
-        Err("Expected spawned muxd process to terminate".into())
+        Err(format!(
+            "Expected spawned muxd process to terminate successfully, got status {status:?}"
+        )
+        .into())
     }
 
     #[cfg(unix)]
@@ -327,97 +377,44 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
 
         let socket = format!("tenex-mux-test-socket-{}", uuid::Uuid::new_v4());
-        let ready_path =
-            std::env::temp_dir().join(format!("tenex-mux-test-ready-{}", uuid::Uuid::new_v4()));
-        let mut child = Command::new("python3")
-            .arg("-c")
-            .arg(
-                r#"
-import os
+        let mut child = spawn_test_muxd(
+            &socket,
+            r#"
 import signal
+import sys
 import time
 
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-ready_path = os.environ.get("TENEX_TEST_READY_PATH")
-if ready_path:
-    with open(ready_path, "w", encoding="utf-8") as f:
-        f.write("ready")
-time.sleep(60)
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+
+while True:
+    time.sleep(60)
 "#,
-            )
-            .arg("muxd")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("TENEX_MUX_SOCKET", &socket)
-            .env("TENEX_TEST_READY_PATH", &ready_path)
-            .spawn()?;
+        )?;
         let pid = child.id();
         #[cfg(not(target_os = "linux"))]
         let _pid_guard = super::pidfile::PidFileGuard::create_for_pid(&socket, pid)?;
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if ready_path.exists() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        if let Err(err) = wait_for_ready(&mut child) {
+            cleanup_child(&mut child);
+            return Err(err);
         }
-        if !ready_path.exists() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Expected spawned muxd process to signal readiness".into());
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut found = false;
-        while Instant::now() < deadline {
-            if discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
-                found = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if !found {
-            let _ = child.kill();
-            let _ = child.wait();
+        if !discovery::mux_daemon_pids_for_socket(&socket).contains(&pid) {
+            cleanup_child(&mut child);
             return Err("Expected spawned muxd process to be discoverable".into());
         }
 
         terminate_mux_daemon_for_socket(&socket)?;
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if let Some(status) = child.try_wait()? {
-                #[cfg(unix)]
-                {
-                    if status.signal() == Some(9) {
-                        return Ok(());
-                    }
-
-                    return Err(format!(
-                        "Expected spawned muxd process to exit with SIGKILL, got status {status:?}"
-                    )
-                    .into());
-                }
-
-                #[cfg(not(unix))]
-                {
-                    if !status.success() {
-                        return Ok(());
-                    }
-
-                    return Err(format!(
-                        "Expected spawned muxd process to terminate non-successfully, got status {status:?}"
-                    )
-                    .into());
-                }
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        let status = child.wait()?;
+        if status.signal() == Some(9) {
+            return Ok(());
         }
 
-        let _ = child.kill();
-        let _ = child.wait();
-        Err("Expected spawned muxd process to terminate after SIGKILL".into())
+        Err(
+            format!("Expected spawned muxd process to exit with SIGKILL, got status {status:?}")
+                .into(),
+        )
     }
 
     #[test]
