@@ -121,6 +121,9 @@ fn try_detect_codex_session_id_in_root(
             return Some(found);
         }
 
+        #[cfg(test)]
+        run_codex_probe_miss_hook_for_tests();
+
         if SystemTime::now() >= deadline {
             return None;
         }
@@ -229,6 +232,12 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
 static CODEX_SESSIONS_ROOT_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 #[cfg(test)]
+type CodexProbeMissHook = Box<dyn FnMut() + Send>;
+
+#[cfg(test)]
+static CODEX_PROBE_MISS_HOOK: OnceLock<Mutex<Option<CodexProbeMissHook>>> = OnceLock::new();
+
+#[cfg(test)]
 fn codex_sessions_root_override() -> Option<PathBuf> {
     let mutex = CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(None));
     let guard = match mutex.lock() {
@@ -246,6 +255,31 @@ fn set_codex_sessions_root_override_for_tests(new: Option<PathBuf>) -> Option<Pa
         Err(poisoned) => poisoned.into_inner(),
     };
     std::mem::replace(&mut *guard, new)
+}
+
+#[cfg(test)]
+fn set_codex_probe_miss_hook_for_tests(
+    new: Option<CodexProbeMissHook>,
+) -> Option<CodexProbeMissHook> {
+    let mutex = CODEX_PROBE_MISS_HOOK.get_or_init(|| Mutex::new(None));
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    std::mem::replace(&mut *guard, new)
+}
+
+#[cfg(test)]
+fn run_codex_probe_miss_hook_for_tests() {
+    let mutex = CODEX_PROBE_MISS_HOOK.get_or_init(|| Mutex::new(None));
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    if let Some(hook) = guard.as_mut() {
+        hook();
+    }
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
@@ -315,6 +349,24 @@ mod tests {
         fn drop(&mut self) {
             let previous = std::mem::take(&mut self.previous);
             let _ = set_codex_sessions_root_override_for_tests(previous);
+        }
+    }
+
+    struct CodexProbeMissHookGuard {
+        previous: Option<CodexProbeMissHook>,
+    }
+
+    impl CodexProbeMissHookGuard {
+        fn set(new: Option<CodexProbeMissHook>) -> Self {
+            let previous = set_codex_probe_miss_hook_for_tests(new);
+            Self { previous }
+        }
+    }
+
+    impl Drop for CodexProbeMissHookGuard {
+        fn drop(&mut self) {
+            let previous = std::mem::take(&mut self.previous);
+            let _ = set_codex_probe_miss_hook_for_tests(previous);
         }
     }
 
@@ -659,22 +711,21 @@ mod tests {
         std::fs::create_dir_all(&date_dir)?;
 
         let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
+        let workdir_for_hook = workdir.clone();
+        let _hook_guard = CodexProbeMissHookGuard::set(Some(Box::new(move || {
+            let _ = std::fs::write(
+                &session_path,
+                codex_session_meta_line("deadbeef", &workdir_for_hook),
+            );
+        })));
 
-        let id = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(30));
-                let _ =
-                    std::fs::write(&session_path, codex_session_meta_line("deadbeef", &workdir));
-            });
-
-            try_detect_codex_session_id_in_root(
-                &sessions_root,
-                &workdir,
-                SystemTime::UNIX_EPOCH,
-                &HashSet::new(),
-                Duration::from_millis(200),
-            )
-        });
+        let id = try_detect_codex_session_id_in_root(
+            &sessions_root,
+            &workdir,
+            SystemTime::UNIX_EPOCH,
+            &HashSet::new(),
+            Duration::from_millis(200),
+        );
 
         assert_eq!(id.as_deref(), Some("deadbeef"));
         Ok(())
