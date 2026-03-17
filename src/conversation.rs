@@ -150,11 +150,21 @@ fn detect_codex_session_id_once_in_root(
     since: SystemTime,
     exclude_ids: &HashSet<String>,
 ) -> Option<String> {
+    let date_dirs = codex_candidate_date_dirs(sessions_root);
+    detect_codex_session_id_once_in_dirs(&date_dirs, workdir, since, exclude_ids)
+}
+
+fn detect_codex_session_id_once_in_dirs(
+    date_dirs: &[PathBuf],
+    workdir: &Path,
+    since: SystemTime,
+    exclude_ids: &HashSet<String>,
+) -> Option<String> {
     let wanted_cwd = normalize_path(workdir);
 
     let mut best: Option<(String, SystemTime)> = None;
-    for date_dir in codex_candidate_date_dirs(sessions_root) {
-        if let Ok(entries) = std::fs::read_dir(&date_dir) {
+    for date_dir in date_dirs {
+        if let Ok(entries) = std::fs::read_dir(date_dir) {
             let mut dir_entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
             dir_entries.sort_by_key(std::fs::DirEntry::path);
             for entry in dir_entries {
@@ -553,36 +563,22 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_detect_codex_session_id_once_in_root_skips_unreadable_dirs() -> Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn test_detect_codex_session_id_once_in_dirs_skips_read_dir_errors() -> Result<()> {
         let temp = TempDir::new()?;
 
         let workdir = temp.path().join("worktree");
         std::fs::create_dir_all(&workdir)?;
+        let not_a_dir = temp.path().join("not-a-dir");
+        std::fs::write(&not_a_dir, "not a directory")?;
 
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir)?;
-
-        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
-        permissions.set_mode(0o000);
-        std::fs::set_permissions(&date_dir, permissions)?;
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
+        let id = detect_codex_session_id_once_in_dirs(
+            &[not_a_dir],
             &workdir,
             SystemTime::UNIX_EPOCH,
             &HashSet::new(),
         );
         assert!(id.is_none());
-
-        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&date_dir, permissions)?;
-
         Ok(())
     }
 
