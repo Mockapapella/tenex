@@ -113,19 +113,34 @@ fn try_detect_codex_session_id_in_root(
     exclude_ids: &HashSet<String>,
     max_wait: Duration,
 ) -> Option<String> {
-    let deadline = SystemTime::now().checked_add(max_wait)?;
+    try_detect_codex_session_id_with_retry(
+        max_wait,
+        || detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids),
+        SystemTime::now,
+        std::thread::sleep,
+    )
+}
+
+fn try_detect_codex_session_id_with_retry<Detect, Now, Sleep>(
+    max_wait: Duration,
+    mut detect_once: Detect,
+    mut now: Now,
+    mut sleep: Sleep,
+) -> Option<String>
+where
+    Detect: FnMut() -> Option<String>,
+    Now: FnMut() -> SystemTime,
+    Sleep: FnMut(Duration),
+{
+    let deadline = now().checked_add(max_wait)?;
     loop {
-        if let Some(found) =
-            detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids)
-        {
+        if let Some(found) = detect_once() {
             return Some(found);
         }
-
-        if SystemTime::now() >= deadline {
+        if now() >= deadline {
             return None;
         }
-
-        std::thread::sleep(Duration::from_millis(25));
+        sleep(Duration::from_millis(25));
     }
 }
 
@@ -135,11 +150,21 @@ fn detect_codex_session_id_once_in_root(
     since: SystemTime,
     exclude_ids: &HashSet<String>,
 ) -> Option<String> {
+    let date_dirs = codex_candidate_date_dirs(sessions_root);
+    detect_codex_session_id_once_in_dirs(&date_dirs, workdir, since, exclude_ids)
+}
+
+fn detect_codex_session_id_once_in_dirs(
+    date_dirs: &[PathBuf],
+    workdir: &Path,
+    since: SystemTime,
+    exclude_ids: &HashSet<String>,
+) -> Option<String> {
     let wanted_cwd = normalize_path(workdir);
 
     let mut best: Option<(String, SystemTime)> = None;
-    for date_dir in codex_candidate_date_dirs(sessions_root) {
-        if let Ok(entries) = std::fs::read_dir(&date_dir) {
+    for date_dir in date_dirs {
+        if let Ok(entries) = std::fs::read_dir(date_dir) {
             let mut dir_entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
             dir_entries.sort_by_key(std::fs::DirEntry::path);
             for entry in dir_entries {
@@ -418,43 +443,42 @@ mod tests {
     }
 
     #[test]
-    fn test_try_detect_codex_session_id_in_root_returns_none_on_overflow() -> Result<()> {
-        let temp = TempDir::new()?;
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir)?;
-
-        let sessions_root = temp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_root)?;
-
-        let id = try_detect_codex_session_id_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
+    fn test_try_detect_codex_session_id_with_retry_returns_none_on_overflow() {
+        let mut detect_calls = 0;
+        let id = try_detect_codex_session_id_with_retry(
             Duration::from_secs(u64::MAX),
+            || {
+                detect_calls += 1;
+                Some("unexpected".to_string())
+            },
+            || SystemTime::UNIX_EPOCH,
+            |_| unreachable!("overflow should return before sleeping"),
         );
         assert!(id.is_none());
-        Ok(())
+        assert_eq!(detect_calls, 0);
     }
 
     #[test]
-    fn test_try_detect_codex_session_id_in_root_times_out() -> Result<()> {
-        let temp = TempDir::new()?;
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir)?;
-
-        let sessions_root = temp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_root)?;
-
-        let id = try_detect_codex_session_id_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
+    fn test_try_detect_codex_session_id_with_retry_times_out() {
+        let mut detect_calls = 0;
+        let mut now_calls = 0;
+        let mut slept = false;
+        let id = try_detect_codex_session_id_with_retry(
             Duration::from_millis(0),
+            || {
+                detect_calls += 1;
+                None
+            },
+            || {
+                now_calls += 1;
+                SystemTime::UNIX_EPOCH
+            },
+            |_| slept = true,
         );
         assert!(id.is_none());
-        Ok(())
+        assert_eq!(detect_calls, 1);
+        assert_eq!(now_calls, 2);
+        assert!(!slept);
     }
 
     #[test]
@@ -539,36 +563,22 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_detect_codex_session_id_once_in_root_skips_unreadable_dirs() -> Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn test_detect_codex_session_id_once_in_dirs_skips_read_dir_errors() -> Result<()> {
         let temp = TempDir::new()?;
 
         let workdir = temp.path().join("worktree");
         std::fs::create_dir_all(&workdir)?;
+        let not_a_dir = temp.path().join("not-a-dir");
+        std::fs::write(&not_a_dir, "not a directory")?;
 
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir)?;
-
-        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
-        permissions.set_mode(0o000);
-        std::fs::set_permissions(&date_dir, permissions)?;
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
+        let id = detect_codex_session_id_once_in_dirs(
+            &[not_a_dir],
             &workdir,
             SystemTime::UNIX_EPOCH,
             &HashSet::new(),
         );
         assert!(id.is_none());
-
-        let mut permissions = std::fs::metadata(&date_dir)?.permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&date_dir, permissions)?;
-
         Ok(())
     }
 
@@ -648,35 +658,29 @@ mod tests {
     }
 
     #[test]
-    fn test_try_detect_codex_session_id_in_root_waits_for_session() -> Result<()> {
-        let temp = TempDir::new()?;
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir)?;
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir)?;
-
-        let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-
-        let id = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(30));
-                let _ =
-                    std::fs::write(&session_path, codex_session_meta_line("deadbeef", &workdir));
-            });
-
-            try_detect_codex_session_id_in_root(
-                &sessions_root,
-                &workdir,
-                SystemTime::UNIX_EPOCH,
-                &HashSet::new(),
-                Duration::from_millis(200),
-            )
-        });
-
+    fn test_try_detect_codex_session_id_with_retry_waits_for_session() {
+        let mut detect_calls = 0;
+        let mut now_calls = 0;
+        let mut slept = Vec::new();
+        let id = try_detect_codex_session_id_with_retry(
+            Duration::from_millis(200),
+            || {
+                detect_calls += 1;
+                if detect_calls == 1 {
+                    None
+                } else {
+                    Some("deadbeef".to_string())
+                }
+            },
+            || {
+                now_calls += 1;
+                SystemTime::UNIX_EPOCH
+            },
+            |duration| slept.push(duration),
+        );
         assert_eq!(id.as_deref(), Some("deadbeef"));
-        Ok(())
+        assert_eq!(detect_calls, 2);
+        assert_eq!(now_calls, 2);
+        assert_eq!(slept, vec![Duration::from_millis(25)]);
     }
 }
