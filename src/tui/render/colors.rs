@@ -22,6 +22,7 @@ pub const TEXT_MUTED: Color = Color::Rgb(100, 122, 150);
 pub const STATUS_RUNNING: Color = Color::Rgb(0, 220, 140);
 pub const STATUS_STARTING: Color = Color::Rgb(255, 200, 60);
 pub const STATUS_WAITING: Color = Color::Rgb(255, 90, 90);
+pub const DOCKER_BADGE: Color = Color::Rgb(80, 160, 255);
 
 // Diff
 pub const DIFF_ADD: Color = Color::Rgb(0, 200, 120);

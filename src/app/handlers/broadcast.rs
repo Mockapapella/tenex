@@ -55,7 +55,7 @@ impl Actions {
                 // Send the message and submit it (program-specific)
                 if self
                     .session_manager
-                    .send_keys_and_submit_for_program(&target, &target_agent.program, message)
+                    .send_keys_and_submit_for_agent(&target, target_agent, message)
                     .is_ok()
                 {
                     sent_count += 1;

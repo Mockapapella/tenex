@@ -1,6 +1,6 @@
 //! Main layout rendering: agent list, content pane, status bar, tabs
 
-use crate::agent::{Status, WorkspaceKind};
+use crate::agent::{AgentRuntime, Status, WorkspaceKind};
 use crate::app::{App, DiffLineMeta, PreviewSelectionPoint, Tab};
 use crate::app::{SidebarItem, SidebarProject};
 use crate::state::AppMode;
@@ -69,6 +69,12 @@ fn agent_list_item<'a>(
         collapse_indicator,
         Style::default().fg(colors::TEXT_DIM),
     ));
+    if info.agent.is_root() && info.agent.runtime == AgentRuntime::Docker {
+        spans.push(Span::styled(
+            "[D] ",
+            Style::default().fg(colors::DOCKER_BADGE),
+        ));
+    }
     spans.push(Span::styled(&info.agent.title, style));
     if info.agent.workspace_kind == WorkspaceKind::PlainDir {
         spans.push(Span::styled(

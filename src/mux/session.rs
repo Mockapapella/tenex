@@ -228,6 +228,32 @@ impl Manager {
         self.send_keys_and_submit(target, keys)
     }
 
+    /// Send input to an agent, preserving Docker-specific Codex/Claude behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if input cannot be sent/submitted.
+    pub fn send_keys_and_submit_for_agent(
+        &self,
+        target: &str,
+        agent: &crate::agent::Agent,
+        keys: &str,
+    ) -> Result<()> {
+        match crate::conversation::detect_agent_cli(&agent.program) {
+            crate::conversation::AgentCli::Claude => {
+                self.send_keys_and_submit_csi_u_enter(target, keys)
+            }
+            crate::conversation::AgentCli::Codex => {
+                if agent.runtime == crate::agent::AgentRuntime::Docker {
+                    return self.paste_keys_and_submit(target, keys);
+                }
+
+                self.send_keys_and_submit_for_program(target, &agent.program, keys)
+            }
+            crate::conversation::AgentCli::Other => self.send_keys_and_submit(target, keys),
+        }
+    }
+
     /// Rename a session.
     ///
     /// # Errors

@@ -1,0 +1,13 @@
+.git
+target
+worktrees
+.tenex
+.claude
+.codex
+.mypy_cache
+.pytest_cache
+.ruff_cache
+state.json
+settings.json
+PLAN.md
+AGENTS.md

@@ -50,6 +50,7 @@ impl App {
                 self.data.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
             }
+            "/toggle_docker" => self.data.toggle_docker_for_new_roots(),
             "/changelog" => match crate::release_notes::current_version()
                 .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
             {

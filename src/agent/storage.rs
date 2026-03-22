@@ -1027,6 +1027,12 @@ fn apply_agent_changes(target: &mut Agent, baseline: &Agent, ours: &Agent) {
     if ours.workspace_kind != baseline.workspace_kind {
         target.workspace_kind = ours.workspace_kind;
     }
+    if ours.runtime != baseline.runtime {
+        target.runtime = ours.runtime;
+    }
+    if ours.runtime_scope != baseline.runtime_scope {
+        target.runtime_scope.clone_from(&ours.runtime_scope);
+    }
     if ours.mux_session != baseline.mux_session {
         target.mux_session.clone_from(&ours.mux_session);
     }

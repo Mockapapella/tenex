@@ -528,10 +528,11 @@ fn test_filtered_slash_commands_no_filter() {
     let app = App::default();
     let commands = app.filtered_slash_commands();
 
-    assert_eq!(commands.len(), 3);
+    assert_eq!(commands.len(), 4);
     assert_eq!(commands[0].name, "/agents");
-    assert_eq!(commands[1].name, "/changelog");
-    assert_eq!(commands[2].name, "/help");
+    assert_eq!(commands[1].name, "/toggle_docker");
+    assert_eq!(commands[2].name, "/changelog");
+    assert_eq!(commands[3].name, "/help");
 }
 
 #[test]
@@ -564,6 +565,8 @@ fn test_select_next_slash_command() {
     app.select_next_slash_command();
     assert_eq!(app.data.command_palette.selected, 2);
     app.select_next_slash_command();
+    assert_eq!(app.data.command_palette.selected, 3);
+    app.select_next_slash_command();
     assert_eq!(app.data.command_palette.selected, 0);
 }
 
@@ -573,6 +576,8 @@ fn test_select_prev_slash_command() {
     app.start_command_palette();
 
     assert_eq!(app.data.command_palette.selected, 0);
+    app.select_prev_slash_command();
+    assert_eq!(app.data.command_palette.selected, 3);
     app.select_prev_slash_command();
     assert_eq!(app.data.command_palette.selected, 2);
     app.select_prev_slash_command();
@@ -604,8 +609,46 @@ fn test_selected_slash_command() {
     let cmd = app.selected_slash_command();
     assert!(cmd.is_some());
     if let Some(c) = cmd {
-        assert_eq!(c.name, "/changelog");
+        assert_eq!(c.name, "/toggle_docker");
     }
+}
+
+#[test]
+fn test_run_slash_command_toggle_docker_errors_when_settings_cannot_save() {
+    crate::runtime::with_docker_program_override_for_tests(
+        std::path::PathBuf::from("true"),
+        || {
+            let mut app = App::default();
+            app.run_slash_command(SlashCommand {
+                name: "/toggle_docker",
+                description: "test",
+            });
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            assert!(!app.data.settings.docker_for_new_roots);
+        },
+    );
+}
+
+#[test]
+fn test_run_slash_command_toggle_docker_rejects_missing_docker() {
+    crate::runtime::with_docker_program_override_for_tests(
+        std::path::PathBuf::from("/definitely/missing/tenex-docker"),
+        || {
+            let mut app = App::default();
+            app.run_slash_command(SlashCommand {
+                name: "/toggle_docker",
+                description: "test",
+            });
+            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            let message = match app.mode {
+                AppMode::ErrorModal(mode) => mode.message,
+                _ => String::new(),
+            };
+            assert!(message.contains("Cannot enable Docker for new root agents"));
+            assert!(message.contains("Docker is not installed or not on PATH"));
+            assert!(!app.data.settings.docker_for_new_roots);
+        },
+    );
 }
 
 #[test]
@@ -691,7 +734,7 @@ fn test_submit_slash_command_palette_unknown() {
 fn test_confirm_slash_command_selection() {
     let mut app = App::default();
     app.start_command_palette();
-    app.data.command_palette.selected = 2;
+    app.data.command_palette.selected = 3;
     app.confirm_slash_command_selection();
     assert_eq!(app.mode, AppMode::Help(HelpMode));
 }

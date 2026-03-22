@@ -12,6 +12,7 @@ mod help;
 mod input;
 mod models;
 mod picker;
+mod progress;
 mod settings_menu;
 
 pub use branch::render_branch_selector_overlay;
@@ -28,6 +29,7 @@ pub use models::render_model_selector_overlay;
 pub use picker::{
     render_count_picker_overlay, render_review_count_picker_overlay, render_review_info_overlay,
 };
+pub use progress::render_preparing_docker_modal;
 pub use settings_menu::render_settings_menu_overlay;
 
 use crate::app::App;
@@ -91,6 +93,7 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
             Some(centered_rect_absolute(55, 11, frame_area))
         }
         AppMode::KeyboardRemapPrompt(_) => Some(centered_rect_absolute(55, 16, frame_area)),
+        AppMode::PreparingDocker(state) => Some(success_modal_rect(&state.message, frame_area)),
         AppMode::ErrorModal(state) => Some(error_modal_rect(&state.message, frame_area)),
         AppMode::SuccessModal(state) => Some(success_modal_rect(&state.message, frame_area)),
         AppMode::Confirming(state) => Some(confirming_rect(app, state.action, frame_area)),
@@ -302,9 +305,10 @@ mod tests {
         BranchSelectorMode, BroadcastingMode, ChangelogMode, ChildCountMode, ChildPromptMode,
         CommandPaletteMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode,
         CreatingMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
-        MergeBranchSelectorMode, ModelSelectorMode, PromptingMode, RebaseBranchSelectorMode,
-        ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode, ReviewInfoMode,
-        SuccessModalMode, SwitchBranchSelectorMode, TerminalPromptMode, UpdatePromptMode,
+        MergeBranchSelectorMode, ModelSelectorMode, PreparingDockerMode, PromptingMode,
+        RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode,
+        ReviewInfoMode, SuccessModalMode, SwitchBranchSelectorMode, TerminalPromptMode,
+        UpdatePromptMode,
     };
     use crate::update::UpdateInfo;
     use semver::Version;
@@ -437,6 +441,15 @@ mod tests {
         app.apply_mode(
             ErrorModalMode {
                 message: "this is a long error message to wrap across multiple lines".to_string(),
+            }
+            .into(),
+        );
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(
+            PreparingDockerMode {
+                message: "building the shipped docker image and reusing it for future roots"
+                    .to_string(),
             }
             .into(),
         );

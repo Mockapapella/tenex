@@ -531,6 +531,12 @@ fn cmd_reset(force: bool) -> Result<()> {
                 agent.mux_session
             );
         }
+        if let Err(e) = tenex::cleanup_agent_runtime(agent) {
+            eprintln!(
+                "Warning: Failed to clean up runtime for {} ({}): {e}",
+                agent.title, agent.mux_session
+            );
+        }
         if let Some(ref mgr) = worktree_mgr
             && let Err(e) = mgr.remove(&agent.branch)
         {

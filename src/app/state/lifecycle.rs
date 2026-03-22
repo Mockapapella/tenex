@@ -98,6 +98,10 @@ impl App {
             AppMode::SuccessModal(state) => {
                 self.mode = AppMode::SuccessModal(state);
             }
+            AppMode::PreparingDocker(state) => {
+                self.data.input.clear();
+                self.mode = AppMode::PreparingDocker(state);
+            }
             AppMode::Changelog(state) => {
                 self.data.input.clear();
                 self.data.ui.changelog_scroll = 0;
