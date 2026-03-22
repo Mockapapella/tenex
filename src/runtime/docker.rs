@@ -186,6 +186,11 @@ fn remove_container_by_name(name: &str) -> Result<()> {
 }
 
 fn exec_prefix(agent: &Agent) -> Vec<String> {
+    let forwarded_env = collect_forwarded_exec_env(|key| std::env::var(key).ok());
+    exec_prefix_with_forwarded_env(agent, &forwarded_env)
+}
+
+fn exec_prefix_with_forwarded_env(agent: &Agent, forwarded_env: &[(&str, String)]) -> Vec<String> {
     let worktree_target = container_target_path(&agent.worktree_path);
     let mut argv = vec![
         "docker".to_string(),
@@ -214,16 +219,27 @@ fn exec_prefix(agent: &Agent) -> Vec<String> {
         argv.push(format!("CODEX_HOME={}", codex_home_target.display()));
     }
 
-    for key in ["TERM", "COLORTERM", "SSH_AUTH_SOCK"] {
-        if let Ok(value) = std::env::var(key)
-            && !value.trim().is_empty()
-        {
-            argv.push("-e".to_string());
-            argv.push(format!("{key}={}", forwarded_env_value(key, &value)));
-        }
+    for (key, value) in forwarded_env {
+        argv.push("-e".to_string());
+        argv.push(format!("{key}={value}"));
     }
 
     argv
+}
+
+fn collect_forwarded_exec_env(
+    mut get: impl FnMut(&str) -> Option<String>,
+) -> Vec<(&'static str, String)> {
+    ["TERM", "COLORTERM", "SSH_AUTH_SOCK"]
+        .into_iter()
+        .filter_map(|key| {
+            let value = get(key)?;
+            if value.trim().is_empty() {
+                return None;
+            }
+            Some((key, forwarded_env_value(key, &value)))
+        })
+        .collect()
 }
 
 const fn worker_image_tag(_settings: &Settings) -> &str {
@@ -1059,6 +1075,25 @@ mod tests {
         assert_eq!(
             forwarded_env_value("TERM", "xterm-256color"),
             "xterm-256color"
+        );
+    }
+
+    #[test]
+    fn test_exec_prefix_with_forwarded_env_adds_forwarded_values() {
+        let argv = exec_prefix_with_forwarded_env(
+            &docker_agent(),
+            &[
+                ("TERM", "xterm-256color".to_string()),
+                ("COLORTERM", "truecolor".to_string()),
+                ("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock".to_string()),
+            ],
+        );
+
+        assert!(argv.iter().any(|arg| arg == "TERM=xterm-256color"));
+        assert!(argv.iter().any(|arg| arg == "COLORTERM=truecolor"));
+        assert!(
+            argv.iter()
+                .any(|arg| arg == "SSH_AUTH_SOCK=/tmp/ssh-agent.sock")
         );
     }
 
