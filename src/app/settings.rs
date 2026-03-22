@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
+const fn default_docker_for_new_roots() -> bool {
+    false
+}
+
 /// Which model/program Tenex should run when spawning new agents.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,7 +79,7 @@ impl AgentRole {
 }
 
 /// Persistent user settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Whether to use Ctrl+N instead of Ctrl+M for merge (for incompatible terminals)
     #[serde(default)]
@@ -109,9 +113,30 @@ pub struct Settings {
     #[serde(default)]
     pub review_custom_agent_command: String,
 
+    /// Whether newly created root agents should start in Docker.
+    #[serde(default = "default_docker_for_new_roots")]
+    pub docker_for_new_roots: bool,
+
     /// The most recent Tenex version for which the user has seen "What's New".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_version: Option<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            merge_key_remapped: false,
+            keyboard_remap_asked: false,
+            agent_program: AgentProgram::default(),
+            custom_agent_command: String::new(),
+            planner_agent_program: AgentProgram::default(),
+            planner_custom_agent_command: String::new(),
+            review_agent_program: AgentProgram::default(),
+            review_custom_agent_command: String::new(),
+            docker_for_new_roots: default_docker_for_new_roots(),
+            last_seen_version: None,
+        }
+    }
 }
 
 impl Settings {
@@ -269,6 +294,7 @@ mod tests {
         assert!(settings.planner_custom_agent_command.is_empty());
         assert_eq!(settings.review_agent_program, AgentProgram::Claude);
         assert!(settings.review_custom_agent_command.is_empty());
+        assert!(!settings.docker_for_new_roots);
         assert!(settings.last_seen_version.is_none());
     }
 
@@ -282,6 +308,7 @@ mod tests {
             keyboard_remap_asked: true,
             agent_program: AgentProgram::Codex,
             custom_agent_command: "echo hello".to_string(),
+            docker_for_new_roots: true,
             ..Settings::default()
         };
 
@@ -346,6 +373,7 @@ mod tests {
             keyboard_remap_asked: true,
             agent_program: AgentProgram::Custom,
             custom_agent_command: "my-agent --flag".to_string(),
+            docker_for_new_roots: true,
             ..Settings::default()
         };
         let json = serde_json::to_string(&original)?;
@@ -354,6 +382,7 @@ mod tests {
         assert_eq!(original.keyboard_remap_asked, parsed.keyboard_remap_asked);
         assert_eq!(original.agent_program, parsed.agent_program);
         assert_eq!(original.custom_agent_command, parsed.custom_agent_command);
+        assert_eq!(original.docker_for_new_roots, parsed.docker_for_new_roots);
         Ok(())
     }
 
@@ -370,6 +399,7 @@ mod tests {
         assert!(settings.planner_custom_agent_command.is_empty());
         assert_eq!(settings.review_agent_program, AgentProgram::Claude);
         assert!(settings.review_custom_agent_command.is_empty());
+        assert!(!settings.docker_for_new_roots);
         assert!(settings.last_seen_version.is_none());
         Ok(())
     }

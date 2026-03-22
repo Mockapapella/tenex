@@ -20,6 +20,17 @@ pub enum WorkspaceKind {
     PlainDir,
 }
 
+/// Where Tenex should run the agent process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntime {
+    /// Run the agent directly on the host.
+    #[default]
+    Host,
+    /// Run the agent inside a Docker container scoped to the root session.
+    Docker,
+}
+
 /// A single agent instance
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
@@ -54,6 +65,18 @@ pub struct Agent {
     /// Whether this agent runs in a Tenex-managed git worktree or a plain directory.
     #[serde(default)]
     pub workspace_kind: WorkspaceKind,
+
+    /// Where Tenex should run the agent process.
+    #[serde(default)]
+    pub runtime: AgentRuntime,
+
+    /// Stable identifier for runtime resources shared by a root agent tree.
+    ///
+    /// Docker roots use this instead of the mux session name so renaming the session does not
+    /// silently create a second container. Older state files omit it and fall back to
+    /// `mux_session`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub runtime_scope: String,
 
     /// Mux session name
     #[serde(alias = "tmux_session")]
@@ -118,6 +141,8 @@ impl Agent {
             worktree_path,
             repo_root: None,
             workspace_kind: WorkspaceKind::GitWorktree,
+            runtime: AgentRuntime::Host,
+            runtime_scope: String::new(),
             mux_session,
             created_at: now,
             updated_at: now,
@@ -150,6 +175,8 @@ impl Agent {
             worktree_path,
             repo_root: config.repo_root,
             workspace_kind: WorkspaceKind::GitWorktree,
+            runtime: AgentRuntime::Host,
+            runtime_scope: String::new(),
             mux_session: config.mux_session,
             created_at: now,
             updated_at: now,
@@ -190,6 +217,19 @@ impl Agent {
     #[must_use]
     pub fn short_id(&self) -> String {
         self.id.to_string()[..8].to_string()
+    }
+
+    /// Runtime resource scope for this agent tree.
+    ///
+    /// Older agents fall back to their mux session name because that was the original Docker
+    /// identity key.
+    #[must_use]
+    pub fn effective_runtime_scope(&self) -> &str {
+        if self.runtime_scope.trim().is_empty() {
+            &self.mux_session
+        } else {
+            &self.runtime_scope
+        }
     }
 
     /// Update the agent's status
@@ -250,6 +290,7 @@ mod tests {
         assert_eq!(agent.program, "claude");
         assert_eq!(agent.status, Status::Starting);
         assert_eq!(agent.branch, "tenex/test-agent");
+        assert_eq!(agent.runtime, AgentRuntime::Host);
         assert!(agent.mux_session.starts_with("tenex-"));
     }
 
@@ -347,6 +388,7 @@ mod tests {
         assert_eq!(child.parent_id, Some(parent.id));
         assert_eq!(child.window_index, Some(2));
         assert_eq!(child.mux_session, parent.mux_session);
+        assert_eq!(child.runtime, AgentRuntime::Host);
         assert!(child.collapsed);
     }
 
@@ -394,6 +436,7 @@ mod tests {
         let agent: Agent = serde_json::from_str(old_json)?;
         assert!(agent.parent_id.is_none());
         assert!(agent.window_index.is_none());
+        assert_eq!(agent.runtime, AgentRuntime::Host);
         assert!(agent.collapsed); // default value
         Ok(())
     }

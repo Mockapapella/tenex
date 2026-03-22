@@ -101,8 +101,23 @@ impl Actions {
 
     /// Reset all agents and state
     pub(crate) fn reset_all(self, app_data: &mut AppData) -> Result<()> {
-        for agent in app_data.storage.iter() {
+        let roots: Vec<_> = app_data
+            .storage
+            .root_agents()
+            .into_iter()
+            .cloned()
+            .collect();
+
+        for agent in roots {
             let _ = self.session_manager.kill(&agent.mux_session);
+
+            if let Err(err) = crate::runtime::cleanup_runtime(&agent) {
+                tracing::warn!(
+                    session = %agent.mux_session,
+                    error = %err,
+                    "Failed to clean up runtime during reset"
+                );
+            }
 
             if !agent.is_git_workspace() {
                 continue;
@@ -148,11 +163,18 @@ impl Default for Actions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Status, Storage};
+    use crate::agent::{AgentRuntime, Status, Storage};
     use crate::app::Settings;
     use crate::config::Config;
     use crate::state::*;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
         let temp_file = NamedTempFile::new()?;
@@ -161,6 +183,16 @@ mod tests {
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
         ))
+    }
+
+    #[cfg(unix)]
+    fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
+        let script = temp.path().join("docker");
+        fs::write(&script, body)?;
+        let mut perms = fs::metadata(&script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms)?;
+        Ok(script)
     }
 
     #[test]
@@ -1157,7 +1189,6 @@ mod tests {
     #[test]
     fn test_handle_spawn_terminal_prompted_with_agent() -> Result<(), Box<dyn std::error::Error>> {
         use crate::agent::Agent;
-        use std::path::PathBuf;
 
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
@@ -1170,6 +1201,43 @@ mod tests {
 
         handler.handle_action(&mut app, Action::SpawnTerminalPrompted)?;
         assert_eq!(app.mode, AppMode::TerminalPrompt(TerminalPromptMode));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_reset_all_cleans_up_docker_runtime() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::agent::Agent;
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+        let temp = TempDir::new()?;
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+                log.display()
+            ),
+        )?;
+
+        let mut root = Agent::new(
+            "docker-root".to_string(),
+            "claude".to_string(),
+            "muster/docker-root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.runtime = AgentRuntime::Docker;
+        let expected_container = format!("tenex-runtime-{}", root.mux_session).to_lowercase();
+        app.data.storage.add(root);
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.reset_all(&mut app.data)
+        })?;
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains(&format!("rm -f {expected_container}")));
+        assert!(app.data.storage.is_empty());
         Ok(())
     }
 }

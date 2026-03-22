@@ -1,5 +1,6 @@
 //! Git rename flow (agents/branches/worktrees/mux sessions).
 
+use crate::agent::AgentRuntime;
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
@@ -315,8 +316,21 @@ impl Actions {
             return Ok(());
         }
 
+        let runtime_scope = app_data.storage.get(agent_id).and_then(|agent| {
+            (agent.runtime == AgentRuntime::Docker).then(|| {
+                if agent.runtime_scope.is_empty() {
+                    old_session.to_string()
+                } else {
+                    agent.runtime_scope.clone()
+                }
+            })
+        });
+
         // Update root agent's mux_session
         if let Some(agent) = app_data.storage.get_mut(agent_id) {
+            if let Some(runtime_scope) = runtime_scope.as_ref() {
+                agent.runtime_scope.clone_from(runtime_scope);
+            }
             agent.mux_session.clone_from(&new_session_name);
         }
 
@@ -329,6 +343,11 @@ impl Actions {
             .collect();
         for desc_id in descendant_ids {
             if let Some(desc) = app_data.storage.get_mut(desc_id) {
+                if let Some(runtime_scope) = runtime_scope.as_ref()
+                    && desc.runtime == AgentRuntime::Docker
+                {
+                    desc.runtime_scope.clone_from(runtime_scope);
+                }
                 desc.mux_session.clone_from(&new_session_name);
             }
         }

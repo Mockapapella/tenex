@@ -432,6 +432,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             }
         }
         AppMode::ErrorModal(state) => modals::render_error_modal(frame, &state.message),
+        AppMode::PreparingDocker(state) => {
+            modals::render_preparing_docker_modal(frame, &state.message);
+        }
         AppMode::ReviewInfo(_) => modals::render_review_info_overlay(frame),
         AppMode::ReviewChildCount(_) => modals::render_review_count_picker_overlay(frame, app),
         AppMode::BranchSelector(_)

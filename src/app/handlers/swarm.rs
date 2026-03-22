@@ -1,15 +1,14 @@
 //! Swarm operations: spawn children, spawn review agents, synthesize
 
-use crate::agent::{Agent, ChildConfig, WorkspaceKind};
+use crate::agent::{Agent, AgentRuntime, ChildConfig, WorkspaceKind};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use crate::prompts;
 use anyhow::{Context, Result, bail};
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -22,6 +21,7 @@ pub struct SpawnConfig {
     pub worktree_path: PathBuf,
     pub branch: String,
     pub workspace_kind: WorkspaceKind,
+    pub runtime: AgentRuntime,
     pub parent_agent_id: uuid::Uuid,
 }
 
@@ -31,6 +31,7 @@ struct ReviewChildAgentConfig<'a> {
     worktree_path: &'a Path,
     branch: &'a str,
     workspace_kind: WorkspaceKind,
+    runtime: AgentRuntime,
     parent_id: uuid::Uuid,
     program: &'a str,
     review_prompt: &'a str,
@@ -210,52 +211,23 @@ impl Actions {
             },
         );
         child.workspace_kind = config.workspace_kind;
+        child.runtime = config.runtime;
+        child.runtime_scope = app_data
+            .storage
+            .root_ancestor(config.parent_id)
+            .map_or_else(
+                || child.effective_runtime_scope().to_string(),
+                |root| root.effective_runtime_scope().to_string(),
+            );
 
         let cli = crate::conversation::detect_agent_cli(config.program);
-        if cli == crate::conversation::AgentCli::Claude {
-            child.conversation_id = Some(child.id.to_string());
-        }
-
         let prompt = match cli {
             crate::conversation::AgentCli::Codex => None,
             _ => Some(config.review_prompt),
         };
 
-        let command = crate::conversation::build_spawn_argv(
-            config.program,
-            prompt,
-            child.conversation_id.as_deref(),
-        )?;
-
-        let started_at = SystemTime::now();
-        let actual_index = self.session_manager.create_window(
-            config.root_session,
-            &child_title,
-            config.worktree_path,
-            Some(&command),
-        )?;
-
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            child.conversation_id = crate::conversation::try_detect_codex_session_id(
-                config.worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let window_target = SessionManager::window_target(config.root_session, actual_index);
-            let _ = self
-                .session_manager
-                .resize_window(&window_target, width, height);
-        }
-
+        let actual_index = self.launch_child_agent(app_data, &mut child, &child_title, prompt)?;
+        debug_assert_eq!(config.root_session, child.mux_session);
         child.window_index = Some(actual_index);
         Ok(child)
     }
@@ -322,6 +294,7 @@ impl Actions {
             worktree_path: root.worktree_path.clone(),
             branch: root.branch.clone(),
             workspace_kind: root.workspace_kind,
+            runtime: root.runtime,
             parent_agent_id: pid,
         })
     }
@@ -373,50 +346,15 @@ impl Actions {
         worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
 
         let program = app_data.agent_spawn_command();
-        let mut root_agent = Agent::new(
-            root_title,
-            program.clone(),
-            branch.clone(),
-            worktree_path.clone(),
-        );
+        let runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        let mut root_agent = Agent::new(root_title, program, branch.clone(), worktree_path.clone());
         root_agent.repo_root = Some(repo_path);
-        let cli = crate::conversation::detect_agent_cli(&program);
-        if cli == crate::conversation::AgentCli::Claude {
-            root_agent.conversation_id = Some(root_agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
+        root_agent.runtime = runtime;
+
+        self.launch_root_agent(app_data, &mut root_agent, None)?;
 
         let root_session = root_agent.mux_session.clone();
         let root_id = root_agent.id;
-
-        let command = crate::conversation::build_spawn_argv(
-            &program,
-            None,
-            root_agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&root_session, &worktree_path, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            root_agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&root_session, width, height);
-        }
 
         app_data.storage.add(root_agent);
         Ok(Some(SpawnConfig {
@@ -424,6 +362,7 @@ impl Actions {
             worktree_path,
             branch,
             workspace_kind: WorkspaceKind::GitWorktree,
+            runtime,
             parent_agent_id: root_id,
         }))
     }
@@ -436,48 +375,16 @@ impl Actions {
     ) -> Result<SpawnConfig> {
         let program = app_data.agent_spawn_command();
         let branch = app_data.config.generate_branch_name(&root_title);
-
-        let mut root_agent =
-            Agent::new(root_title, program.clone(), branch.clone(), workdir.clone());
+        let runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        let mut root_agent = Agent::new(root_title, program, branch.clone(), workdir.clone());
         root_agent.workspace_kind = WorkspaceKind::PlainDir;
         root_agent.repo_root = Some(workdir.clone());
-        let cli = crate::conversation::detect_agent_cli(&program);
-        if cli == crate::conversation::AgentCli::Claude {
-            root_agent.conversation_id = Some(root_agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
+        root_agent.runtime = runtime;
+
+        self.launch_root_agent(app_data, &mut root_agent, None)?;
 
         let root_session = root_agent.mux_session.clone();
         let root_id = root_agent.id;
-
-        let command = crate::conversation::build_spawn_argv(
-            &program,
-            None,
-            root_agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&root_session, &workdir, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            root_agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &workdir,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&root_session, width, height);
-        }
 
         app_data.storage.add(root_agent);
         Ok(SpawnConfig {
@@ -485,6 +392,7 @@ impl Actions {
             worktree_path: workdir,
             branch,
             workspace_kind: WorkspaceKind::PlainDir,
+            runtime,
             parent_agent_id: root_id,
         })
     }
@@ -622,44 +530,17 @@ impl Actions {
             },
         );
         child.workspace_kind = config.workspace_kind;
-        let cli = crate::conversation::detect_agent_cli(program);
-        if cli == crate::conversation::AgentCli::Claude {
-            child.conversation_id = Some(child.id.to_string());
-        }
-
-        let command = crate::conversation::build_spawn_argv(
-            program,
-            child_prompt,
-            child.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        let actual_index = self.session_manager.create_window(
-            &config.root_session,
-            child_title,
-            &config.worktree_path,
-            Some(&command),
-        )?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            child.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &config.worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
+        child.runtime = config.runtime;
+        child.runtime_scope = app_data
+            .storage
+            .root_ancestor(config.parent_agent_id)
+            .map_or_else(
+                || child.effective_runtime_scope().to_string(),
+                |root| root.effective_runtime_scope().to_string(),
             );
-        }
 
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let window_target = SessionManager::window_target(&config.root_session, actual_index);
-            let _ = self
-                .session_manager
-                .resize_window(&window_target, width, height);
-        }
-
+        let actual_index =
+            self.launch_child_agent(app_data, &mut child, child_title, child_prompt)?;
         child.window_index = Some(actual_index);
         app_data.storage.add(child);
 
@@ -727,6 +608,7 @@ impl Actions {
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
         let root_workspace_kind = root.workspace_kind;
+        let root_runtime = root.runtime;
         if root_workspace_kind != WorkspaceKind::GitWorktree {
             bail!("Review swarm requires a git repository");
         }
@@ -752,6 +634,7 @@ impl Actions {
                     worktree_path: worktree_path.as_path(),
                     branch: branch.as_str(),
                     workspace_kind: root_workspace_kind,
+                    runtime: root_runtime,
                     parent_id,
                     program: program.as_str(),
                     review_prompt: review_prompt.as_str(),
@@ -836,9 +719,9 @@ impl Actions {
         }
 
         let parent_id = agent.id;
+        let parent_agent = agent.clone();
         let parent_session = agent.mux_session.clone();
         let parent_title = agent.title.clone();
-        let parent_program = agent.program.clone();
         let worktree_path = agent.worktree_path.clone();
         // Determine the correct target for the parent
         // If the parent has a window_index, it's a child agent running in a window
@@ -925,9 +808,9 @@ impl Actions {
         // Now tell the parent to read the file
         let read_command =
             Self::build_synthesis_read_command(synthesis_id, descendants_count, prompt);
-        self.session_manager.send_keys_and_submit_for_program(
+        self.session_manager.send_keys_and_submit_for_agent(
             &parent_target,
-            &parent_program,
+            &parent_agent,
             &read_command,
         )?;
 
@@ -999,6 +882,7 @@ mod tests {
             worktree_path: PathBuf::from("/tmp"),
             branch: "test-branch".to_string(),
             workspace_kind: WorkspaceKind::GitWorktree,
+            runtime: AgentRuntime::Host,
             parent_agent_id: root_id,
         };
         let result = handler.spawn_children_for_root(&mut app.data, &spawn_config, 2, "test task");

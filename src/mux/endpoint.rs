@@ -3,6 +3,10 @@
 use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced, Name, prelude::*};
+#[cfg(test)]
+use parking_lot::Mutex;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
@@ -18,8 +22,12 @@ pub struct SocketEndpoint {
     pub display: String,
 }
 
+#[cfg(not(test))]
 static SOCKET_OVERRIDE: OnceLock<String> = OnceLock::new();
+#[cfg(not(test))]
 static DEFAULT_SOCKET_NAME: OnceLock<String> = OnceLock::new();
+#[cfg(test)]
+static TEST_SOCKET_OVERRIDES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 const DEFAULT_SOCKET_PREFIX: &str = "tenex-mux";
 
@@ -40,10 +48,27 @@ pub fn set_socket_override(value: &str) -> Result<()> {
         bail!("Mux socket override cannot be empty");
     }
 
-    SOCKET_OVERRIDE
-        .set(trimmed.to_string())
-        .map_err(|_| anyhow::anyhow!("Mux socket override is already set"))?;
-    Ok(())
+    #[cfg(test)]
+    {
+        let key = test_scope_key();
+        {
+            let overrides = TEST_SOCKET_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut overrides = overrides.lock();
+            if overrides.contains_key(&key) {
+                bail!("Mux socket override is already set");
+            }
+            overrides.insert(key, trimmed.to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    {
+        SOCKET_OVERRIDE
+            .set(trimmed.to_string())
+            .map_err(|_| anyhow::anyhow!("Mux socket override is already set"))?;
+        Ok(())
+    }
 }
 
 /// Resolve the mux daemon's IPC endpoint.
@@ -59,6 +84,12 @@ pub fn set_socket_override(value: &str) -> Result<()> {
 ///
 /// Returns an error if the name cannot be constructed.
 pub fn socket_endpoint() -> Result<SocketEndpoint> {
+    #[cfg(test)]
+    if let Some(override_value) = test_socket_override() {
+        return socket_endpoint_from_value(&override_value);
+    }
+
+    #[cfg(not(test))]
     if let Some(override_value) = SOCKET_OVERRIDE.get() {
         return socket_endpoint_from_value(override_value);
     }
@@ -176,14 +207,26 @@ pub(super) fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> 
 }
 
 fn default_socket_name() -> String {
-    DEFAULT_SOCKET_NAME
-        .get_or_init(|| {
-            let Some(fingerprint) = socket_fingerprint() else {
-                return DEFAULT_SOCKET_PREFIX.to_string();
-            };
-            format!("{DEFAULT_SOCKET_PREFIX}-{fingerprint}")
-        })
-        .clone()
+    #[cfg(test)]
+    {
+        let scope_suffix = test_scope_suffix();
+        if let Some(fingerprint) = socket_fingerprint() {
+            return format!("{DEFAULT_SOCKET_PREFIX}-{fingerprint}-{scope_suffix}");
+        }
+        format!("{DEFAULT_SOCKET_PREFIX}-{scope_suffix}")
+    }
+
+    #[cfg(not(test))]
+    {
+        DEFAULT_SOCKET_NAME
+            .get_or_init(|| {
+                let Some(fingerprint) = socket_fingerprint() else {
+                    return DEFAULT_SOCKET_PREFIX.to_string();
+                };
+                format!("{DEFAULT_SOCKET_PREFIX}-{fingerprint}")
+            })
+            .clone()
+    }
 }
 
 fn socket_fingerprint() -> Option<String> {
@@ -222,8 +265,32 @@ fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
 }
 
 #[cfg(test)]
+fn test_scope_key() -> String {
+    std::thread::current().name().map_or_else(
+        || format!("{:?}", std::thread::current().id()),
+        std::borrow::ToOwned::to_owned,
+    )
+}
+
+#[cfg(test)]
+fn test_socket_override() -> Option<String> {
+    let key = test_scope_key();
+    TEST_SOCKET_OVERRIDES
+        .get()
+        .and_then(|overrides| overrides.lock().get(&key).cloned())
+}
+
+#[cfg(test)]
+fn test_scope_suffix() -> String {
+    let mut hash = FNV_OFFSET_BASIS;
+    hash = fnv1a_update(hash, test_scope_key().as_bytes());
+    format!("{hash:08x}")
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
 
     #[test]
     fn test_socket_fingerprint_format() {
@@ -287,5 +354,67 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn test_test_scope_key_uses_current_thread_name() {
+        let thread = std::thread::current();
+        let current = thread.name().unwrap_or("unknown");
+        assert_eq!(test_scope_key(), current);
+    }
+
+    #[test]
+    fn test_test_scope_key_falls_back_for_unnamed_thread() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let handle = std::thread::spawn(test_scope_key);
+        let scope = handle
+            .join()
+            .map_err(|_| anyhow!("Unnamed thread panicked"))?;
+        assert!(scope.starts_with("ThreadId("));
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_socket_name_is_scoped_per_named_thread()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first = std::thread::Builder::new()
+            .name("endpoint-scope-one".to_string())
+            .spawn(default_socket_name)?
+            .join()
+            .map_err(|_| anyhow!("First endpoint thread panicked"))?;
+        let second = std::thread::Builder::new()
+            .name("endpoint-scope-two".to_string())
+            .spawn(default_socket_name)?
+            .join()
+            .map_err(|_| anyhow!("Second endpoint thread panicked"))?;
+
+        assert!(!first.is_empty());
+        assert!(!second.is_empty());
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn test_socket_override_is_scoped_per_named_thread() -> Result<(), Box<dyn std::error::Error>> {
+        let first = std::thread::Builder::new()
+            .name("override-scope-one".to_string())
+            .spawn(|| -> Result<String> {
+                set_socket_override("tenex-mux-override-one")?;
+                Ok(socket_endpoint()?.display)
+            })?
+            .join()
+            .map_err(|_| anyhow!("First override thread panicked"))??;
+        let second = std::thread::Builder::new()
+            .name("override-scope-two".to_string())
+            .spawn(|| -> Result<String> {
+                set_socket_override("tenex-mux-override-two")?;
+                Ok(socket_endpoint()?.display)
+            })?
+            .join()
+            .map_err(|_| anyhow!("Second override thread panicked"))??;
+
+        assert_eq!(first, "tenex-mux-override-one");
+        assert_eq!(second, "tenex-mux-override-two");
+        Ok(())
     }
 }

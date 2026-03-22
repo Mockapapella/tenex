@@ -10,7 +10,8 @@ use crate::app::state::{
 };
 use crate::config::Config;
 use crate::state::{
-    AppMode, ChangelogMode, CustomAgentCommandMode, HelpMode, ModelSelectorMode, SettingsMenuMode,
+    AppMode, ChangelogMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, ModelSelectorMode,
+    PreparingDockerMode, SettingsMenuMode,
 };
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -614,6 +615,81 @@ impl AppData {
         self.command_palette.selected = 0;
     }
 
+    fn docker_runtime_programs(&self) -> [String; 3] {
+        [
+            self.agent_spawn_command(),
+            self.planner_agent_spawn_command(),
+            self.review_agent_spawn_command(),
+        ]
+    }
+
+    fn persist_docker_for_new_roots(
+        &mut self,
+        previous: bool,
+        enabled: bool,
+        status_message: impl Into<String>,
+    ) -> AppMode {
+        self.settings.docker_for_new_roots = enabled;
+
+        if let Err(err) = self.settings.save() {
+            self.settings.docker_for_new_roots = previous;
+            return ErrorModalMode {
+                message: format!("Failed to save settings: {err}"),
+            }
+            .into();
+        }
+
+        self.input.clear();
+        self.set_status(status_message);
+        AppMode::normal()
+    }
+
+    pub(crate) fn toggle_docker_for_new_roots(&mut self) -> AppMode {
+        let previous = self.settings.docker_for_new_roots;
+        if previous {
+            return self.persist_docker_for_new_roots(
+                previous,
+                false,
+                "Docker for new root agents: OFF",
+            );
+        }
+
+        let programs = self.docker_runtime_programs();
+        let program_refs = programs.iter().map(String::as_str).collect::<Vec<_>>();
+        match crate::runtime::inspect_docker_runtime(&self.settings, &program_refs) {
+            Ok(crate::runtime::DockerPreparation::Ready) => self.persist_docker_for_new_roots(
+                previous,
+                true,
+                "Docker for new root agents: ON",
+            ),
+            Ok(crate::runtime::DockerPreparation::NeedsImageBuild) => PreparingDockerMode {
+                message: "Building the shipped Tenex Docker worker image. This can take a minute the first time, and the image will be reused for future root agents.".to_string(),
+            }
+            .into(),
+            Err(err) => ErrorModalMode {
+                message: format!("Cannot enable Docker for new root agents: {err}"),
+            }
+            .into(),
+        }
+    }
+
+    pub(crate) fn finish_preparing_docker_for_new_roots(&mut self) -> AppMode {
+        let programs = self.docker_runtime_programs();
+        let program_refs = programs.iter().map(String::as_str).collect::<Vec<_>>();
+        if let Err(err) = crate::runtime::prepare_docker_runtime(&self.settings, &program_refs) {
+            return ErrorModalMode {
+                message: format!("Cannot enable Docker for new root agents: {err}"),
+            }
+            .into();
+        }
+
+        self.persist_docker_for_new_roots(
+            false,
+            true,
+            "Docker for new root agents: ON. Worker image ready and will be reused for future root agents.",
+        )
+    }
+
     /// Run the currently highlighted command in the palette (fallbacks to parsing the input).
     pub(crate) fn confirm_slash_command_selection(&mut self) -> AppMode {
         let selected = self
@@ -682,6 +758,7 @@ impl AppData {
                 self.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
             }
+            "/toggle_docker" => self.toggle_docker_for_new_roots(),
             "/changelog" => {
                 self.input.clear();
                 match crate::release_notes::current_version()
@@ -768,6 +845,7 @@ impl AppData {
                 self.model_selector.role = AgentRole::Default;
                 SettingsMenuMode.into()
             }
+            "/toggle_docker" => self.toggle_docker_for_new_roots(),
             "/changelog" => {
                 self.input.clear();
                 match crate::release_notes::current_version()
@@ -1351,7 +1429,7 @@ mod tests {
             false,
         );
         data.input.buffer = "/".to_string();
-        data.command_palette.selected = 2;
+        data.command_palette.selected = 3;
         data.ui.help_scroll = 123;
 
         let next = data.confirm_slash_command_selection();
@@ -1457,5 +1535,115 @@ mod tests {
         assert!(matches!(next, AppMode::SettingsMenu(_)));
         assert!(data.input.buffer.is_empty());
         assert_eq!(data.model_selector.role, AgentRole::Default);
+    }
+
+    #[test]
+    fn test_toggle_docker_for_new_roots_reverts_on_save_error() {
+        crate::runtime::with_docker_program_override_for_tests(
+            std::path::PathBuf::from("true"),
+            || {
+                let mut data = AppData::new(
+                    Config::default(),
+                    Storage::default(),
+                    Settings::default(),
+                    false,
+                );
+
+                let next = data.toggle_docker_for_new_roots();
+                assert!(matches!(next, AppMode::ErrorModal(_)));
+                assert!(!data.settings.docker_for_new_roots);
+            },
+        );
+    }
+
+    #[test]
+    fn test_toggle_docker_for_new_roots_rejects_missing_docker() {
+        crate::runtime::with_docker_program_override_for_tests(
+            std::path::PathBuf::from("/definitely/missing/tenex-docker"),
+            || {
+                let mut data = AppData::new(
+                    Config::default(),
+                    Storage::default(),
+                    Settings::default(),
+                    false,
+                );
+
+                let next = data.toggle_docker_for_new_roots();
+                assert!(matches!(next, AppMode::ErrorModal(_)));
+                let message = match next {
+                    AppMode::ErrorModal(mode) => mode.message,
+                    _ => String::new(),
+                };
+                assert!(message.contains("Cannot enable Docker for new root agents"));
+                assert!(message.contains("Docker is not installed or not on PATH"));
+                assert!(!data.settings.docker_for_new_roots);
+            },
+        );
+    }
+
+    #[test]
+    fn test_toggle_docker_for_new_roots_rejects_custom_agent_program() {
+        crate::runtime::with_docker_program_override_for_tests(
+            std::path::PathBuf::from("true"),
+            || {
+                let mut data = AppData::new(
+                    Config::default(),
+                    Storage::default(),
+                    Settings {
+                        agent_program: crate::app::AgentProgram::Custom,
+                        custom_agent_command: "my-agent --flag".to_string(),
+                        ..Settings::default()
+                    },
+                    false,
+                );
+
+                let next = data.toggle_docker_for_new_roots();
+                assert!(matches!(next, AppMode::ErrorModal(_)));
+                let message = match next {
+                    AppMode::ErrorModal(mode) => mode.message,
+                    _ => String::new(),
+                };
+                assert!(message.contains("Cannot enable Docker for new root agents"));
+                assert!(
+                    message.contains(
+                        "Docker mode only supports the built-in `claude` and `codex` CLIs"
+                    )
+                );
+                assert!(!data.settings.docker_for_new_roots);
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_toggle_docker_for_new_roots_shows_preparing_modal_when_image_build_is_needed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new()?;
+        let script = temp.path().join("docker");
+        fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nexit 0\n",
+        )?;
+        let mut perms = fs::metadata(&script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms)?;
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            let config = Config {
+                default_program: "claude".to_string(),
+                ..Config::default()
+            };
+            let mut data = AppData::new(config, Storage::default(), Settings::default(), false);
+
+            let next = data.toggle_docker_for_new_roots();
+            assert!(matches!(next, AppMode::PreparingDocker(_)));
+            assert!(!data.settings.docker_for_new_roots);
+        });
+
+        Ok(())
     }
 }

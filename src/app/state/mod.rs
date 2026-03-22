@@ -54,6 +54,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Configure agent programs (default/planner/review)",
     },
     SlashCommand {
+        name: "/toggle_docker",
+        description: "Toggle Docker for newly created root agents",
+    },
+    SlashCommand {
         name: "/changelog",
         description: "Show what's new / changelog",
     },

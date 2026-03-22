@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
 use std::path::Path;
-use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::Actions;
@@ -105,6 +104,15 @@ impl Actions {
                 }
             }
 
+            if let Err(err) = crate::runtime::cleanup_runtime(&root) {
+                warn!(
+                    title = %root.title,
+                    session = %root.mux_session,
+                    error = %err,
+                    "Failed to clean up runtime for missing agent"
+                );
+            }
+
             debug!(title = %root.title, session = %root.mux_session, "Removing agent with missing mux session");
             app.data.storage.remove_with_descendants(root.id);
             changed = true;
@@ -193,10 +201,6 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if worktrees cannot be listed or agent creation fails
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Auto-connect is easier to audit as a single flow"
-    )]
     pub fn auto_connect_worktrees(self, app: &mut App) -> Result<()> {
         let repo_path = app
             .data
@@ -213,7 +217,6 @@ impl Actions {
         let worktree_mgr = WorktreeManager::new(&repo);
         let worktrees = worktree_mgr.list()?;
         let program = app.agent_spawn_command();
-        let session_prefix = app.data.storage.instance_session_prefix();
         let instance_worktree_dir = app
             .data
             .config
@@ -285,42 +288,8 @@ impl Actions {
                 worktree_path.clone(),
             );
             agent.repo_root = Some(repo_path.clone());
-            let cli = crate::conversation::detect_agent_cli(&program);
-            if cli == crate::conversation::AgentCli::Claude {
-                agent.conversation_id = Some(agent.id.to_string());
-            }
-            agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-            // Create mux session and start the agent program
-            let command = crate::conversation::build_spawn_argv(
-                &program,
-                None,
-                agent.conversation_id.as_deref(),
-            )?;
-            let started_at = SystemTime::now();
-            self.session_manager
-                .create(&agent.mux_session, &worktree_path, Some(&command))?;
-            if cli == crate::conversation::AgentCli::Codex {
-                let exclude_ids: HashSet<String> = app
-                    .data
-                    .storage
-                    .iter()
-                    .filter_map(|stored| stored.conversation_id.clone())
-                    .collect();
-                agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                    &worktree_path,
-                    started_at,
-                    &exclude_ids,
-                    Duration::from_millis(500),
-                );
-            }
-
-            // Resize the session to match preview dimensions if available
-            if let Some((width, height)) = app.data.ui.preview_dimensions {
-                let _ = self
-                    .session_manager
-                    .resize_window(&agent.mux_session, width, height);
-            }
+            agent.runtime = crate::runtime::new_root_runtime(&app.data.settings);
+            self.launch_root_agent(&mut app.data, &mut agent, None)?;
 
             app.data.storage.add(agent);
             info!(branch = %branch_name, "Auto-connected to existing worktree");
@@ -447,7 +416,17 @@ fn respawn_root_agent(
         return;
     }
 
-    let root_command = match command_for_agent(root) {
+    if let Err(err) = crate::runtime::ensure_runtime_ready(root, &app_data.settings) {
+        warn!(
+            title = %root.title,
+            session = %root.mux_session,
+            error = %err,
+            "Failed to prepare runtime for root agent; skipping respawn"
+        );
+        return;
+    }
+
+    let root_command = match command_for_agent(root, &app_data.settings) {
         Ok(cmd) => cmd,
         Err(err) => {
             warn!(
@@ -478,8 +457,12 @@ fn respawn_root_agent(
     summary.changed = true;
 
     let descendants = sorted_descendants(app_data, root.id);
-    let recreated_window_indices =
-        recreate_descendant_windows(session_manager, &root.mux_session, &descendants);
+    let recreated_window_indices = recreate_descendant_windows(
+        session_manager,
+        &root.mux_session,
+        &descendants,
+        &app_data.settings,
+    );
     summary.changed |= mark_respawned_agents_running(
         app_data,
         root.id,
@@ -505,6 +488,7 @@ fn recreate_descendant_windows(
     session_manager: crate::mux::SessionManager,
     root_session: &str,
     descendants: &[Agent],
+    settings: &crate::app::Settings,
 ) -> HashMap<uuid::Uuid, u32> {
     let mut recreated_window_indices = HashMap::with_capacity(descendants.len());
 
@@ -519,7 +503,7 @@ fn recreate_descendant_windows(
             continue;
         }
 
-        let command = match command_for_agent(desc) {
+        let command = match command_for_agent(desc, settings) {
             Ok(cmd) => cmd,
             Err(err) => {
                 warn!(
@@ -673,31 +657,30 @@ fn normalize_tree_running(
     changed
 }
 
-fn command_for_agent(agent: &Agent) -> Result<Option<Vec<String>>> {
+fn command_for_agent(
+    agent: &Agent,
+    settings: &crate::app::Settings,
+) -> Result<Option<Vec<String>>> {
     if agent.is_terminal_agent() {
-        return Ok(None);
+        return Ok(crate::runtime::build_terminal_command(
+            agent, None, settings,
+        ));
     }
 
-    if let Some(conversation_id) = agent.conversation_id.as_deref() {
-        return Ok(Some(crate::conversation::build_resume_argv(
-            &agent.program,
-            conversation_id,
-        )?));
-    }
-
-    Ok(Some(crate::conversation::build_spawn_argv(
-        &agent.program,
-        None,
-        None,
-    )?))
+    crate::runtime::build_agent_command(agent, crate::runtime::AgentLaunch::Resume, settings)
+        .map(Some)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Storage;
+    use crate::agent::{AgentRuntime, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
@@ -734,6 +717,16 @@ mod tests {
             // becomes $1.
             "sh -c 'echo ARG1:$1; sleep 3600' _".to_string()
         }
+    }
+
+    #[cfg(unix)]
+    fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
+        let script = temp.path().join("docker");
+        fs::write(&script, body)?;
+        let mut perms = fs::metadata(&script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms)?;
+        Ok(script)
     }
 
     #[test]
@@ -810,6 +803,60 @@ mod tests {
         )?;
 
         assert_eq!(app.data.storage.len(), 1);
+        assert!(app.data.storage.get(missing_id).is_none());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_agent_status_prunes_missing_docker_runtime()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        let temp = TempDir::new()?;
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+                log.display()
+            ),
+        )?;
+
+        let mut alive = Agent::new(
+            "alive".to_string(),
+            "claude".to_string(),
+            "muster/alive".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        alive.set_status(Status::Running);
+        let alive_session = alive.mux_session.clone();
+        app.data.storage.add(alive);
+
+        let mut missing = Agent::new(
+            "missing".to_string(),
+            "claude".to_string(),
+            "muster/missing".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        missing.set_status(Status::Running);
+        missing.runtime = AgentRuntime::Docker;
+        let expected_container = format!("tenex-runtime-{}", missing.mux_session).to_lowercase();
+        let missing_id = missing.id;
+        app.data.storage.add(missing);
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            Actions::new().sync_agent_status_with_sessions(
+                &mut app,
+                Ok(vec![crate::mux::Session {
+                    name: alive_session,
+                    created: 0,
+                    attached: false,
+                }]),
+            )
+        })?;
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains(&format!("rm -f {expected_container}")));
         assert!(app.data.storage.get(missing_id).is_none());
         Ok(())
     }
@@ -1001,7 +1048,7 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let command = command_for_agent(&agent)?;
+        let command = command_for_agent(&agent, &crate::app::Settings::default())?;
         assert!(command.is_none());
         Ok(())
     }
@@ -1017,7 +1064,8 @@ mod tests {
         );
         agent.conversation_id = Some("resume-id".to_string());
 
-        let command = command_for_agent(&agent)?.ok_or("Expected command")?;
+        let command = command_for_agent(&agent, &crate::app::Settings::default())?
+            .ok_or("Expected command")?;
         assert_eq!(command, vec!["claude", "--debug", "--resume", "resume-id"]);
         Ok(())
     }
@@ -1032,7 +1080,8 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let command = command_for_agent(&agent)?.ok_or("Expected command")?;
+        let command = command_for_agent(&agent, &crate::app::Settings::default())?
+            .ok_or("Expected command")?;
         assert_eq!(command, vec!["claude", "--debug"]);
         Ok(())
     }
