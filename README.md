@@ -12,7 +12,7 @@ Tenex lets you run multiple AI coding agents in parallel, each in an isolated gi
 
 - **Parallel agents** — Run multiple AI coding agents simultaneously (Claude CLI by default; also supports Codex or a custom command)
 - **Git isolation** — Each root agent works in its own worktree and branch; child agents share the root's worktree
-- **Optional Docker runtime** — New root agents can launch inside Docker; child agents and terminals inherit the root runtime
+- **Optional Docker runtime** — New root agents can launch inside Docker; child agents and terminals inherit the root runtime. This is mainly intended for Tenex development rather than general-purpose day-to-day use.
 - **Swarm workflows** — Spawn planning or review swarms with one keystroke
 - **Synthesis** — Aggregate outputs from descendant agents into a parent (captures last ~5000 lines from each, writes to markdown, then sends to parent)
 - **Live preview** — Watch agent output in real-time with ANSI color support; auto-follows bottom unless you scroll
