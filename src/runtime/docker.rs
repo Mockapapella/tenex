@@ -75,10 +75,29 @@ pub(super) fn image_build_required(settings: &Settings, program: &str) -> Result
 }
 
 pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()> {
+    let home = paths::home_dir();
+    let data_local_dir = paths::data_local_dir();
+    let ssh_auth_sock = std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from);
+    ensure_container_with_paths(
+        agent,
+        settings,
+        home.as_deref(),
+        data_local_dir.as_deref(),
+        ssh_auth_sock.as_deref(),
+    )
+}
+
+fn ensure_container_with_paths(
+    agent: &Agent,
+    settings: &Settings,
+    home: Option<&Path>,
+    data_local_dir: Option<&Path>,
+    ssh_auth_sock: Option<&Path>,
+) -> Result<()> {
     check_available()?;
     ensure_image_ready(settings, &agent.program)?;
-    if let Some(home) = paths::home_dir() {
-        prepare_runtime_home(agent, &home)?;
+    if let Some(home) = home {
+        prepare_runtime_home_with_data_local_dir(agent, home, data_local_dir)?;
     }
     let name = container_name(agent);
     let inspect = run_command(
@@ -128,11 +147,11 @@ pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()>
         cmd.args(["--user", &user]);
     }
 
-    if let Some(home) = paths::home_dir() {
-        configure_home_mounts(&mut cmd, agent, &home)?;
+    if let Some(home) = home {
+        configure_home_mounts_with_data_local_dir(&mut cmd, agent, home, data_local_dir)?;
     }
 
-    configure_ssh_auth_sock_mount(&mut cmd);
+    configure_ssh_auth_sock_mount_from(&mut cmd, ssh_auth_sock);
     configure_repo_metadata_mounts(&mut cmd, agent);
 
     cmd.args(["-w", &display_path(&worktree_target)]);
@@ -292,8 +311,13 @@ fn codex_home_dir(home: &Path) -> PathBuf {
     std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from)
 }
 
-fn configure_home_mounts(cmd: &mut Command, agent: &Agent, home: &Path) -> Result<()> {
-    let prepared_home = prepare_runtime_home(agent, home)?;
+fn configure_home_mounts_with_data_local_dir(
+    cmd: &mut Command,
+    agent: &Agent,
+    home: &Path,
+    data_local_dir: Option<&Path>,
+) -> Result<()> {
+    let prepared_home = prepare_runtime_home_with_data_local_dir(agent, home, data_local_dir)?;
     let home_target = container_target_path(home);
     let codex_home_target = container_target_path(&prepared_home.codex_home_target);
     cmd.arg("-e").arg(format!("HOME={}", home_target.display()));
@@ -344,11 +368,6 @@ fn configure_home_mounts(cmd: &mut Command, agent: &Agent, home: &Path) -> Resul
         true,
     );
     Ok(())
-}
-
-fn configure_ssh_auth_sock_mount(cmd: &mut Command) {
-    let ssh_auth_sock = std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from);
-    configure_ssh_auth_sock_mount_from(cmd, ssh_auth_sock.as_deref());
 }
 
 fn configure_ssh_auth_sock_mount_from(cmd: &mut Command, ssh_auth_sock: Option<&Path>) {
@@ -454,8 +473,14 @@ fn resolved_symlink_target(path: &Path, worktree: &Path, link_target: &Path) -> 
     resolved.canonicalize().unwrap_or(resolved)
 }
 
-fn prepare_runtime_home(agent: &Agent, home: &Path) -> Result<PreparedRuntimeHome> {
-    let data_local_dir = paths::data_local_dir()
+fn prepare_runtime_home_with_data_local_dir(
+    agent: &Agent,
+    home: &Path,
+    data_local_dir: Option<&Path>,
+) -> Result<PreparedRuntimeHome> {
+    let data_local_dir = data_local_dir
+        .map(Path::to_path_buf)
+        .or_else(paths::data_local_dir)
         .or_else(paths::home_dir)
         .unwrap_or_else(std::env::temp_dir);
     let codex_home_target = codex_home_dir(home);
@@ -1505,6 +1530,18 @@ command = "docker"
     fn test_ensure_container_rejects_running_stale_layout() -> Result<(), Box<dyn std::error::Error>>
     {
         let temp = TempDir::new()?;
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        fs::create_dir_all(host_home.join(".codex").join("sessions"))?;
+        fs::create_dir_all(host_home.join(".claude"))?;
+        fs::write(
+            host_home.join(".codex").join("config.toml"),
+            "model = \"gpt-5.4\"\n",
+        )?;
+        fs::write(
+            host_home.join(".claude").join("settings.json"),
+            "{\"permissions\":{\"defaultMode\":\"plan\"}}",
+        )?;
         let inspect_count = temp.path().join("inspect-count");
         let script = write_fake_docker_script(
             &temp,
@@ -1518,7 +1555,13 @@ command = "docker"
         )?;
 
         with_docker_program_override_for_tests(script, || {
-            let result = ensure_container(&docker_agent(), &Settings::default());
+            let result = ensure_container_with_paths(
+                &docker_agent(),
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            );
             assert!(result.is_err());
             let err = result
                 .err()
