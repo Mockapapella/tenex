@@ -1098,6 +1098,24 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_forwarded_exec_env_filters_empty_values() {
+        let values = collect_forwarded_exec_env(|key| match key {
+            "TERM" => Some("xterm-256color".to_string()),
+            "COLORTERM" => Some(String::new()),
+            "SSH_AUTH_SOCK" => Some("/tmp/ssh-agent.sock".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            values,
+            vec![
+                ("TERM", "xterm-256color".to_string()),
+                ("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn test_configure_ssh_auth_sock_mount_from_uses_container_target()
     -> Result<(), Box<dyn std::error::Error>> {
         let temp = TempDir::new()?;
