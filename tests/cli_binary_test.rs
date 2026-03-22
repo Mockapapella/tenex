@@ -6,6 +6,8 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
+#[cfg(unix)]
+use tempfile::TempDir;
 
 fn tenex_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tenex"))
@@ -27,6 +29,21 @@ fn write_state_with_one_agent(
     storage.add(agent);
     storage.save()?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn write_fake_docker_script(
+    dir: &std::path::Path,
+    body: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("docker");
+    fs::write(&script, body)?;
+    let mut perms = fs::metadata(&script)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script, perms)?;
+    Ok(script)
 }
 
 #[test]
@@ -98,6 +115,63 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = tenex::agent::Storage::load_from(temp_state.path())?;
     assert!(storage.mux_socket.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_cli_reset_force_cleans_up_docker_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    let state_dir = TempDir::new()?;
+    let state_path = state_dir.path().join("state.json");
+    let mut storage = tenex::agent::Storage::with_path(state_path.clone());
+    storage.instance_id = Some("deadbeef".to_string());
+
+    let mut agent = tenex::Agent::new(
+        "Docker Agent".to_string(),
+        "codex".to_string(),
+        "tenex/docker-branch".to_string(),
+        std::env::temp_dir().join("tenex-test-docker-worktree"),
+    );
+    agent.runtime = tenex::agent::AgentRuntime::Docker;
+    agent.mux_session = format!("{}{}", storage.instance_session_prefix(), agent.short_id());
+    let expected_container = format!("tenex-runtime-{}", agent.mux_session).to_lowercase();
+    storage.add(agent);
+    storage.save()?;
+
+    let docker_dir = TempDir::new()?;
+    let log = docker_dir.path().join("docker.log");
+    write_fake_docker_script(
+        docker_dir.path(),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+            log.display()
+        ),
+    )?;
+
+    let path = format!(
+        "{}:{}",
+        docker_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = tenex_bin()
+        .args(["reset", "--force"])
+        .env("TENEX_STATE_PATH", &state_path)
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-reset-docker-{}", uuid::Uuid::new_v4()),
+        )
+        .env("PATH", path)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "tenex reset failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let log_contents = fs::read_to_string(&log)?;
+    assert!(log_contents.contains(&format!("rm -f {expected_container}")));
     Ok(())
 }
 

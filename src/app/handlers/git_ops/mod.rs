@@ -63,11 +63,23 @@ impl Actions {
             },
         );
         terminal.is_terminal = true;
+        terminal.runtime = root.runtime;
+        terminal.runtime_scope = root.effective_runtime_scope().to_string();
 
         // Create session manager and window
         let session_manager = SessionManager::new();
-        let actual_index =
-            session_manager.create_window(&root_session, title, &worktree_path, None)?;
+        crate::runtime::ensure_runtime_ready(&terminal, &app_data.settings)?;
+        let terminal_command = crate::runtime::build_terminal_command(
+            &terminal,
+            Some(startup_command),
+            &app_data.settings,
+        );
+        let actual_index = session_manager.create_window(
+            &root_session,
+            title,
+            &worktree_path,
+            terminal_command.as_deref(),
+        )?;
 
         // Resize the new window to match preview dimensions
         if let Some((width, height)) = app_data.ui.preview_dimensions {
@@ -78,9 +90,10 @@ impl Actions {
         // Update window index if it differs
         terminal.window_index = Some(actual_index);
 
-        // Send the startup command
         let window_target = SessionManager::window_target(&root_session, actual_index);
-        session_manager.send_keys_and_submit(&window_target, startup_command)?;
+        if terminal_command.is_none() {
+            session_manager.send_keys_and_submit(&window_target, startup_command)?;
+        }
 
         app_data.storage.add(terminal);
 

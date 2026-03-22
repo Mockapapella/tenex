@@ -92,8 +92,8 @@ pub fn handle_key_event(
             let info = state.info.clone();
             confirm::handle_update_prompt_mode(app, &info, code)?;
         }
-        // Update requested - ignore input while exiting
-        AppMode::UpdateRequested(_) => {}
+        // Ignore input while the app is busy with a blocking background step.
+        AppMode::UpdateRequested(_) | AppMode::PreparingDocker(_) => {}
 
         // Help, error, and success modes
         AppMode::Changelog(state) => {

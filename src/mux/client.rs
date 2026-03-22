@@ -7,13 +7,24 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use parking_lot::Mutex;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+#[cfg(not(test))]
 static CLIENT: OnceLock<Mutex<MuxClient>> = OnceLock::new();
+#[cfg(not(test))]
 static ENDPOINT: OnceLock<SocketEndpoint> = OnceLock::new();
+#[cfg(test)]
+static TEST_CLIENTS: OnceLock<Mutex<HashMap<String, MuxClient>>> = OnceLock::new();
+const DAEMON_CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(test)]
+const DAEMON_CONNECT_RETRY_ATTEMPTS: usize = 800;
+#[cfg(not(test))]
+const DAEMON_CONNECT_RETRY_ATTEMPTS: usize = 200;
 
 /// Send a request to the mux daemon.
 ///
@@ -25,19 +36,48 @@ static ENDPOINT: OnceLock<SocketEndpoint> = OnceLock::new();
 pub fn request(req: &MuxRequest) -> Result<MuxResponse> {
     let endpoint = endpoint()?;
 
-    let client = CLIENT.get_or_init(|| Mutex::new(MuxClient::new(endpoint)));
-    let mut client = client.lock();
-    client.request(req)
+    #[cfg(test)]
+    {
+        let scope = test_scope_key();
+        {
+            let clients = TEST_CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut clients = clients.lock();
+            let client = clients
+                .entry(scope)
+                .or_insert_with(|| MuxClient::new(endpoint.clone()));
+            if client.endpoint.display != endpoint.display {
+                *client = MuxClient::new(endpoint);
+            }
+            let response = client.request(req);
+            drop(clients);
+            response
+        }
+    }
+
+    #[cfg(not(test))]
+    {
+        let client = CLIENT.get_or_init(|| Mutex::new(MuxClient::new(endpoint)));
+        let mut client = client.lock();
+        client.request(req)
+    }
 }
 
 pub(super) fn endpoint() -> Result<SocketEndpoint> {
-    if let Some(endpoint) = ENDPOINT.get() {
-        return Ok(endpoint.clone());
+    #[cfg(test)]
+    {
+        socket_endpoint()
     }
 
-    let endpoint = socket_endpoint()?;
-    let _ = ENDPOINT.set(endpoint.clone());
-    Ok(endpoint)
+    #[cfg(not(test))]
+    {
+        if let Some(endpoint) = ENDPOINT.get() {
+            return Ok(endpoint.clone());
+        }
+
+        let endpoint = socket_endpoint()?;
+        let _ = ENDPOINT.set(endpoint.clone());
+        Ok(endpoint)
+    }
 }
 
 /// A synchronous request/response mux client.
@@ -94,13 +134,13 @@ impl MuxClient {
 
         start_daemon(&self.endpoint)?;
 
-        for _ in 0..20 {
+        for _ in 0..DAEMON_CONNECT_RETRY_ATTEMPTS {
             match Stream::connect(self.endpoint.name.clone()) {
                 Ok(stream) => {
                     self.stream = Some(stream);
                     return Ok(());
                 }
-                Err(_) => std::thread::sleep(Duration::from_millis(25)),
+                Err(_) => std::thread::sleep(DAEMON_CONNECT_RETRY_INTERVAL),
             }
         }
 
@@ -118,10 +158,38 @@ fn send_request(stream: &mut Stream, req: &MuxRequest) -> Result<MuxResponse> {
 
 fn start_daemon(endpoint: &SocketEndpoint) -> Result<()> {
     let exe = resolve_tenex_executable()?;
-    let mut cmd = Command::new(exe);
-    cmd.arg("muxd")
-        .env("TENEX_MUX_SOCKET", &endpoint.display)
-        .stdin(std::process::Stdio::null())
+    #[cfg(test)]
+    let mut cmd = {
+        let current_exe =
+            std::env::current_exe().context("Failed to resolve current test executable")?;
+        let is_test_harness_fallback = exe == current_exe
+            && exe
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| name != env!("CARGO_PKG_NAME"));
+
+        if is_test_harness_fallback {
+            let mut cmd = Command::new(current_exe);
+            cmd.args(["--exact", "__tenex_muxd_test_entry", "--nocapture"])
+                .env("TENEX_RUN_MUXD_TEST_ENTRY", "1");
+            cmd
+        } else {
+            let mut cmd = Command::new(exe);
+            cmd.arg("muxd");
+            cmd
+        }
+    };
+
+    #[cfg(not(test))]
+    let mut cmd = {
+        let mut cmd = Command::new(exe);
+        cmd.arg("muxd");
+        cmd
+    };
+
+    cmd.env("TENEX_MUX_SOCKET", &endpoint.display);
+
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
@@ -169,13 +237,72 @@ fn resolve_tenex_executable() -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+fn test_scope_key() -> String {
+    std::thread::current().name().map_or_else(
+        || format!("{:?}", std::thread::current().id()),
+        std::borrow::ToOwned::to_owned,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
+
+    #[test]
+    fn __tenex_muxd_test_entry() -> Result<()> {
+        if std::env::var_os("TENEX_RUN_MUXD_TEST_ENTRY").is_some() {
+            crate::mux::run_mux_daemon()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_resolve_tenex_executable_returns_existing_path() -> Result<()> {
         let exe = resolve_tenex_executable()?;
         assert!(exe.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_test_scope_key_uses_current_thread_name() {
+        let thread = std::thread::current();
+        let current = thread.name().unwrap_or("unknown");
+        assert_eq!(test_scope_key(), current);
+    }
+
+    #[test]
+    fn test_test_scope_key_falls_back_for_unnamed_thread() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let handle = std::thread::spawn(test_scope_key);
+        let scope = handle
+            .join()
+            .map_err(|_| anyhow!("Unnamed client thread panicked"))?;
+        assert!(scope.starts_with("ThreadId("));
+        Ok(())
+    }
+
+    #[test]
+    fn test_endpoint_is_not_cached_across_named_threads() -> Result<()> {
+        let first = std::thread::Builder::new()
+            .name("client-endpoint-one".to_string())
+            .spawn(|| -> Result<String> {
+                crate::mux::set_socket_override("tenex-mux-client-one")?;
+                Ok(endpoint()?.display)
+            })?
+            .join()
+            .map_err(|_| anyhow!("First client endpoint thread panicked"))??;
+        let second = std::thread::Builder::new()
+            .name("client-endpoint-two".to_string())
+            .spawn(|| -> Result<String> {
+                crate::mux::set_socket_override("tenex-mux-client-two")?;
+                Ok(endpoint()?.display)
+            })?
+            .join()
+            .map_err(|_| anyhow!("Second client endpoint thread panicked"))??;
+
+        assert_eq!(first, "tenex-mux-client-one");
+        assert_eq!(second, "tenex-mux-client-two");
         Ok(())
     }
 

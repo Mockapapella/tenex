@@ -420,6 +420,8 @@ while True:
     #[test]
     fn test_running_daemon_version_returns_none_when_not_running()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::test_support::lock_mux_test_environment();
+
         // Ensure the daemon is actually running so we exercise the termination path.
         // (If it's already stopped, terminate_mux_daemon_for_socket is a no-op.)
         let _ = SessionManager::new().exists("tenex-version-probe-nonexistent");
@@ -449,6 +451,8 @@ while True:
     #[test]
     fn test_running_daemon_version_returns_some_when_running()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::test_support::lock_mux_test_environment();
+
         // Starting a mux request should boot the daemon if it isn't running yet.
         let _ = SessionManager::new().exists("tenex-version-probe-nonexistent");
 

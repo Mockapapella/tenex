@@ -253,6 +253,7 @@ mod tests {
 
     #[test]
     fn test_text_input_submit_error_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::test_support::lock_mux_test_environment();
         let non_git_dir = TempDir::new()?;
 
         // CreatingMode should succeed by creating a plain-directory agent.

@@ -1,9 +1,10 @@
 //! Agent lifecycle operations: create, kill, reconnect
 
-use crate::agent::{Agent, ChildConfig};
+use crate::agent::{Agent, AgentRuntime, ChildConfig};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -22,7 +23,118 @@ struct BranchSwitchTarget {
     worktree_path: std::path::PathBuf,
 }
 
+#[derive(Debug)]
+struct RootLaunchSpec {
+    title: String,
+    program: String,
+    runtime: AgentRuntime,
+    repo_root: std::path::PathBuf,
+    branch: String,
+    worktree_path: std::path::PathBuf,
+}
+
+fn runtime_for_conflict(
+    app_data: &AppData,
+    conflict: &WorktreeConflictInfo,
+) -> Option<AgentRuntime> {
+    app_data
+        .storage
+        .iter()
+        .find(|agent| {
+            agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path
+        })
+        .map(|agent| agent.runtime)
+}
+
 impl Actions {
+    fn prepare_agent_for_launch(app_data: &mut AppData, agent: &mut Agent) {
+        if crate::conversation::detect_agent_cli(&agent.program)
+            == crate::conversation::AgentCli::Claude
+            && agent.conversation_id.is_none()
+        {
+            agent.conversation_id = Some(agent.id.to_string());
+        }
+
+        if agent.is_root() {
+            let session_prefix = app_data.storage.instance_session_prefix();
+            agent.mux_session = format!("{session_prefix}{}", agent.short_id());
+            if agent.runtime == AgentRuntime::Docker && agent.runtime_scope.is_empty() {
+                agent.runtime_scope = format!("root-{}", agent.id.simple());
+            }
+        }
+    }
+
+    fn finish_agent_launch(app_data: &AppData, agent: &mut Agent, started_at: SystemTime) {
+        if crate::conversation::detect_agent_cli(&agent.program)
+            == crate::conversation::AgentCli::Codex
+        {
+            let exclude_ids: HashSet<String> = app_data
+                .storage
+                .iter()
+                .filter_map(|stored| stored.conversation_id.clone())
+                .collect();
+            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
+                &crate::runtime::codex_session_workdir(agent),
+                started_at,
+                &exclude_ids,
+                Duration::from_millis(500),
+            );
+        }
+    }
+
+    fn resize_target_to_preview(self, app_data: &AppData, target: &str) {
+        if let Some((width, height)) = app_data.ui.preview_dimensions {
+            let _ = self.session_manager.resize_window(target, width, height);
+        }
+    }
+
+    pub(crate) fn launch_root_agent(
+        self,
+        app_data: &mut AppData,
+        agent: &mut Agent,
+        prompt: Option<&str>,
+    ) -> Result<()> {
+        Self::prepare_agent_for_launch(app_data, agent);
+        crate::runtime::ensure_runtime_ready(agent, &app_data.settings)?;
+        let command = crate::runtime::build_agent_command(
+            agent,
+            crate::runtime::AgentLaunch::Spawn { prompt },
+            &app_data.settings,
+        )?;
+        let started_at = SystemTime::now();
+        self.session_manager
+            .create(&agent.mux_session, &agent.worktree_path, Some(&command))?;
+        Self::finish_agent_launch(app_data, agent, started_at);
+        self.resize_target_to_preview(app_data, &agent.mux_session);
+        Ok(())
+    }
+
+    pub(crate) fn launch_child_agent(
+        self,
+        app_data: &AppData,
+        agent: &mut Agent,
+        title: &str,
+        prompt: Option<&str>,
+    ) -> Result<u32> {
+        crate::runtime::ensure_runtime_ready(agent, &app_data.settings)?;
+        let command = crate::runtime::build_agent_command(
+            agent,
+            crate::runtime::AgentLaunch::Spawn { prompt },
+            &app_data.settings,
+        )?;
+        let started_at = SystemTime::now();
+        let actual_index = self.session_manager.create_window(
+            &agent.mux_session,
+            title,
+            &agent.worktree_path,
+            Some(&command),
+        )?;
+        Self::finish_agent_launch(app_data, agent, started_at);
+        let target = SessionManager::window_target(&agent.mux_session, actual_index);
+        self.resize_target_to_preview(app_data, &target);
+        Ok(actual_index)
+    }
+
     /// Create a new agent
     ///
     /// If a worktree with the same name already exists, this will prompt the user
@@ -105,49 +217,11 @@ impl Actions {
         let program = app_data.agent_spawn_command();
         let branch = app_data.config.generate_branch_name(title);
 
-        let mut agent = Agent::new(
-            title.to_string(),
-            program.clone(),
-            branch,
-            workdir.to_path_buf(),
-        );
+        let mut agent = Agent::new(title.to_string(), program, branch, workdir.to_path_buf());
         agent.workspace_kind = crate::agent::WorkspaceKind::PlainDir;
         agent.repo_root = Some(workdir.to_path_buf());
-
-        let cli = crate::conversation::detect_agent_cli(&program);
-        if cli == crate::conversation::AgentCli::Claude {
-            agent.conversation_id = Some(agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-        let command = crate::conversation::build_spawn_argv(
-            &program,
-            prompt,
-            agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&agent.mux_session, workdir, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                workdir,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&agent.mux_session, width, height);
-        }
+        agent.runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        self.launch_root_agent(app_data, &mut agent, prompt)?;
 
         let agent_id = agent.id;
         app_data.storage.add(agent);
@@ -177,46 +251,13 @@ impl Actions {
         let program = app_data.agent_spawn_command();
         let mut agent = Agent::new(
             title.to_string(),
-            program.clone(),
+            program,
             branch.to_string(),
             worktree_path.to_path_buf(),
         );
         agent.repo_root = Some(repo_path.to_path_buf());
-        let cli = crate::conversation::detect_agent_cli(&program);
-        if cli == crate::conversation::AgentCli::Claude {
-            agent.conversation_id = Some(agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-        let command = crate::conversation::build_spawn_argv(
-            &program,
-            prompt,
-            agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&agent.mux_session, worktree_path, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        // Resize the new session to match preview dimensions
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&agent.mux_session, width, height);
-        }
+        agent.runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        self.launch_root_agent(app_data, &mut agent, prompt)?;
 
         let agent_id = agent.id;
         app_data.storage.add(agent);
@@ -243,6 +284,8 @@ impl Actions {
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Reconnecting to existing worktree");
 
         let program = app_data.agent_spawn_command();
+        let runtime = runtime_for_conflict(app_data, &conflict)
+            .unwrap_or_else(|| crate::runtime::new_root_runtime(&app_data.settings));
 
         let removed_agents = self.remove_conflicting_agents(app_data, &conflict);
         if removed_agents > 0 {
@@ -254,9 +297,9 @@ impl Actions {
         }
 
         if let Some(child_count) = conflict.swarm_child_count {
-            self.reconnect_swarm_to_worktree(app_data, &conflict, &program, child_count)?;
+            self.reconnect_swarm_to_worktree(app_data, &conflict, &program, runtime, child_count)?;
         } else {
-            self.reconnect_single_to_worktree(app_data, &conflict, &program)?;
+            self.reconnect_single_to_worktree(app_data, &conflict, &program, runtime)?;
         }
 
         app_data.storage.save()?;
@@ -270,11 +313,15 @@ impl Actions {
     ) -> usize {
         let mut ids_to_remove: Vec<Uuid> = Vec::new();
         let mut sessions_to_consider: HashSet<String> = HashSet::new();
+        let mut runtime_agents_by_session: HashMap<String, Agent> = HashMap::new();
 
         for agent in app_data.storage.iter() {
             if agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path {
                 ids_to_remove.push(agent.id);
                 sessions_to_consider.insert(agent.mux_session.clone());
+                runtime_agents_by_session
+                    .entry(agent.mux_session.clone())
+                    .or_insert_with(|| agent.clone());
             }
         }
 
@@ -293,6 +340,15 @@ impl Actions {
                 continue;
             }
             let _ = self.session_manager.kill(&session);
+            if let Some(agent) = runtime_agents_by_session.get(&session)
+                && let Err(err) = crate::runtime::cleanup_runtime(agent)
+            {
+                warn!(
+                    session = %session,
+                    error = %err,
+                    "Failed to clean up runtime for conflicting agent"
+                );
+            }
         }
 
         let mut removed = 0;
@@ -314,6 +370,7 @@ impl Actions {
         app_data: &mut AppData,
         conflict: &WorktreeConflictInfo,
         program: &str,
+        runtime: AgentRuntime,
         child_count: usize,
     ) -> Result<()> {
         let mut root_agent = Agent::new(
@@ -323,43 +380,12 @@ impl Actions {
             conflict.worktree_path.clone(),
         );
         root_agent.repo_root = Some(conflict.repo_root.clone());
-        let cli = crate::conversation::detect_agent_cli(program);
-        if cli == crate::conversation::AgentCli::Claude {
-            root_agent.conversation_id = Some(root_agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        root_agent.mux_session = format!("{session_prefix}{}", root_agent.short_id());
+        root_agent.runtime = runtime;
+
+        self.launch_root_agent(app_data, &mut root_agent, None)?;
 
         let root_session = root_agent.mux_session.clone();
         let root_id = root_agent.id;
-
-        let command = crate::conversation::build_spawn_argv(
-            program,
-            None,
-            root_agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&root_session, &conflict.worktree_path, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            root_agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &conflict.worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&root_session, width, height);
-        }
 
         app_data.storage.add(root_agent);
 
@@ -369,6 +395,7 @@ impl Actions {
             worktree_path: conflict.worktree_path.clone(),
             branch: conflict.branch.clone(),
             workspace_kind: crate::agent::WorkspaceKind::GitWorktree,
+            runtime,
             parent_agent_id: root_id,
         };
         self.spawn_children_for_root(app_data, &spawn_config, child_count, task)?;
@@ -389,6 +416,7 @@ impl Actions {
         app_data: &mut AppData,
         conflict: &WorktreeConflictInfo,
         program: &str,
+        runtime: AgentRuntime,
     ) -> Result<()> {
         let mut agent = Agent::new(
             conflict.title.clone(),
@@ -397,40 +425,8 @@ impl Actions {
             conflict.worktree_path.clone(),
         );
         agent.repo_root = Some(conflict.repo_root.clone());
-        let cli = crate::conversation::detect_agent_cli(program);
-        if cli == crate::conversation::AgentCli::Claude {
-            agent.conversation_id = Some(agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-        let command = crate::conversation::build_spawn_argv(
-            program,
-            conflict.prompt.as_deref(),
-            agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&agent.mux_session, &conflict.worktree_path, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &conflict.worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&agent.mux_session, width, height);
-        }
+        agent.runtime = runtime;
+        self.launch_root_agent(app_data, &mut agent, conflict.prompt.as_deref())?;
 
         app_data.storage.add(agent);
 
@@ -495,7 +491,6 @@ impl Actions {
             let worktree_name = agent.branch.clone();
             let window_index = agent.window_index;
             let title = agent.title.clone();
-            let repo_root = agent.repo_root.clone();
 
             info!(
                 %title,
@@ -506,98 +501,49 @@ impl Actions {
             );
 
             if is_root {
-                // Root agent: kill entire session and worktree
-                let pane_pids = self
-                    .session_manager
-                    .list_pane_pids(&session)
-                    .unwrap_or_default();
+                let delete_branch = worktree_name.starts_with(&app_data.config.branch_prefix)
+                    || worktree_name.starts_with("tenex/");
+                self.kill_root_agent_tree(app_data, agent_id, delete_branch)?;
+                app_data.set_status("Agent killed");
+                return Ok(());
+            }
 
-                // First kill all descendant windows in descending order
-                // (in case any are in other sessions, and to handle renumbering)
-                let descendants = app_data.storage.descendants(agent_id);
-                let mut indices: Vec<u32> = descendants
-                    .iter()
-                    .filter_map(|desc| desc.window_index)
-                    .collect();
-                indices.sort_unstable_by(|a, b| b.cmp(a));
-                for idx in indices {
-                    let _ = self.session_manager.kill_window(&session, idx);
-                }
+            // Child agent: kill just this window and its descendants
+            // Get the root's session for killing windows
+            let root = app_data.storage.root_ancestor(agent_id);
+            let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
+            let root_id = root.map(|r| r.id);
 
-                // Kill the session
-                let _ = self.session_manager.kill(&session);
-
-                // Ensure any remaining pane processes are terminated before removing the worktree.
-                for pid in pane_pids {
-                    let _ = std::process::Command::new("kill")
-                        .arg("-TERM")
-                        .arg(pid.to_string())
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                }
-
-                // Brief delay to allow mux-managed processes to terminate
-                // mux kill-session sends SIGTERM and returns immediately,
-                // but processes may still be running and have files open
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // Remove worktree
-                if let Some(repo_path) = repo_root.or_else(|| std::env::current_dir().ok())
-                    && let Ok(repo) = git::open_repository(&repo_path)
-                {
-                    let worktree_mgr = WorktreeManager::new(&repo);
-                    let delete_branch = worktree_name.starts_with(&app_data.config.branch_prefix)
-                        || worktree_name.starts_with("tenex/");
-                    let result = if delete_branch {
-                        worktree_mgr.remove(&worktree_name)
-                    } else {
-                        worktree_mgr.remove_worktree_only(&worktree_name)
-                    };
-                    if let Err(e) = result {
-                        warn!("Failed to remove worktree: {e}");
-                        app_data.set_status(format!("Warning: {e}"));
-                    }
-                }
-            } else {
-                // Child agent: kill just this window and its descendants
-                // Get the root's session for killing windows
-                let root = app_data.storage.root_ancestor(agent_id);
-                let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
-                let root_id = root.map(|r| r.id);
-
-                // Collect all window indices being deleted
-                let mut deleted_indices: Vec<u32> = Vec::new();
-                let descendants = app_data.storage.descendants(agent_id);
-                for desc in &descendants {
-                    if let Some(idx) = desc.window_index {
-                        deleted_indices.push(idx);
-                    }
-                }
-
-                // Add this agent's window
-                if let Some(idx) = window_index {
+            // Collect all window indices being deleted
+            let mut deleted_indices: Vec<u32> = Vec::new();
+            let descendants = app_data.storage.descendants(agent_id);
+            for desc in &descendants {
+                if let Some(idx) = desc.window_index {
                     deleted_indices.push(idx);
                 }
+            }
 
-                // Sort in descending order and kill windows from highest to lowest
-                // This prevents window renumbering from affecting indices we haven't killed yet
-                deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
-                for idx in &deleted_indices {
-                    let _ = self.session_manager.kill_window(&root_session, *idx);
-                }
+            // Add this agent's window
+            if let Some(idx) = window_index {
+                deleted_indices.push(idx);
+            }
 
-                // Update window indices for remaining agents under the same root
-                // When the mux renumbers windows, indices shift down
-                if let Some(rid) = root_id {
-                    super::window::adjust_window_indices_after_deletion(
-                        app_data,
-                        rid,
-                        agent_id,
-                        &deleted_indices,
-                    );
-                }
+            // Sort in descending order and kill windows from highest to lowest
+            // This prevents window renumbering from affecting indices we haven't killed yet
+            deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
+            for idx in &deleted_indices {
+                let _ = self.session_manager.kill_window(&root_session, *idx);
+            }
+
+            // Update window indices for remaining agents under the same root
+            // When the mux renumbers windows, indices shift down
+            if let Some(rid) = root_id {
+                super::window::adjust_window_indices_after_deletion(
+                    app_data,
+                    rid,
+                    agent_id,
+                    &deleted_indices,
+                );
             }
 
             // Remove agent and all descendants from storage
@@ -660,6 +606,7 @@ impl Actions {
         };
 
         let program = root.program.clone();
+        let runtime = root.runtime;
         let repo_root = root
             .repo_root
             .clone()
@@ -697,11 +644,14 @@ impl Actions {
 
         let new_id = self.spawn_root_agent_in_worktree(
             app_data,
-            title,
-            program,
-            repo_root,
-            target.branch.clone(),
-            target.worktree_path,
+            RootLaunchSpec {
+                title,
+                program,
+                runtime,
+                repo_root,
+                branch: target.branch.clone(),
+                worktree_path: target.worktree_path,
+            },
         )?;
 
         app_data.select_agent_by_id(new_id);
@@ -801,49 +751,12 @@ impl Actions {
     fn spawn_root_agent_in_worktree(
         self,
         app_data: &mut AppData,
-        title: String,
-        program: String,
-        repo_root: std::path::PathBuf,
-        branch: String,
-        worktree_path: std::path::PathBuf,
+        spec: RootLaunchSpec,
     ) -> Result<Uuid> {
-        let mut agent = Agent::new(title, program, branch, worktree_path);
-        agent.repo_root = Some(repo_root);
-
-        let cli = crate::conversation::detect_agent_cli(&agent.program);
-        if cli == crate::conversation::AgentCli::Claude {
-            agent.conversation_id = Some(agent.id.to_string());
-        }
-        let session_prefix = app_data.storage.instance_session_prefix();
-        agent.mux_session = format!("{session_prefix}{}", agent.short_id());
-
-        let command = crate::conversation::build_spawn_argv(
-            &agent.program,
-            None,
-            agent.conversation_id.as_deref(),
-        )?;
-        let started_at = SystemTime::now();
-        self.session_manager
-            .create(&agent.mux_session, &agent.worktree_path, Some(&command))?;
-        if cli == crate::conversation::AgentCli::Codex {
-            let exclude_ids: HashSet<String> = app_data
-                .storage
-                .iter()
-                .filter_map(|stored| stored.conversation_id.clone())
-                .collect();
-            agent.conversation_id = crate::conversation::try_detect_codex_session_id(
-                &agent.worktree_path,
-                started_at,
-                &exclude_ids,
-                Duration::from_millis(500),
-            );
-        }
-
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self
-                .session_manager
-                .resize_window(&agent.mux_session, width, height);
-        }
+        let mut agent = Agent::new(spec.title, spec.program, spec.branch, spec.worktree_path);
+        agent.repo_root = Some(spec.repo_root);
+        agent.runtime = spec.runtime;
+        self.launch_root_agent(app_data, &mut agent, None)?;
 
         let new_id = agent.id;
         app_data.storage.add(agent);
@@ -864,6 +777,7 @@ impl Actions {
         let session = root.mux_session.clone();
         let worktree_name = root.branch.clone();
         let repo_root = root.repo_root.clone();
+        let runtime_agent = root.clone();
 
         let pane_pids = self
             .session_manager
@@ -896,6 +810,10 @@ impl Actions {
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
+
+        if let Err(err) = crate::runtime::cleanup_runtime(&runtime_agent) {
+            warn!(session = %session, error = %err, "Failed to clean up agent runtime");
+        }
 
         if let Some(repo_path) = repo_root.or_else(|| std::env::current_dir().ok())
             && let Ok(repo) = git::open_repository(&repo_path)
@@ -969,26 +887,28 @@ impl Actions {
         );
         terminal.is_terminal = true;
         terminal.workspace_kind = root.workspace_kind;
+        terminal.runtime = root.runtime;
+        terminal.runtime_scope = root.effective_runtime_scope().to_string();
 
-        // Create window in the root's session (no command - just a shell)
-        let actual_index =
-            self.session_manager
-                .create_window(&root_session, &title, &worktree_path, None)?;
-
-        // Resize the new window to match preview dimensions
-        if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let window_target = SessionManager::window_target(&root_session, actual_index);
-            let _ = self
-                .session_manager
-                .resize_window(&window_target, width, height);
-        }
+        crate::runtime::ensure_runtime_ready(&terminal, &app_data.settings)?;
+        let terminal_command =
+            crate::runtime::build_terminal_command(&terminal, startup_command, &app_data.settings);
+        let actual_index = self.session_manager.create_window(
+            &root_session,
+            &title,
+            &worktree_path,
+            terminal_command.as_deref(),
+        )?;
+        let window_target = SessionManager::window_target(&root_session, actual_index);
+        self.resize_target_to_preview(app_data, &window_target);
 
         // Update window index if it differs
         terminal.window_index = Some(actual_index);
 
-        // If a startup command was provided, send it to the terminal
-        if let Some(cmd) = startup_command {
-            let window_target = SessionManager::window_target(&root_session, actual_index);
+        // Host terminals still use the default shell and receive startup commands after launch.
+        if terminal_command.is_none()
+            && let Some(cmd) = startup_command
+        {
             self.session_manager
                 .send_keys_and_submit(&window_target, cmd)?;
         }
@@ -1012,11 +932,14 @@ impl Actions {
 mod tests {
     use super::*;
     use crate::App;
-    use crate::agent::Storage;
-    use crate::agent::WorkspaceKind;
+    use crate::agent::{AgentRuntime, Storage, WorkspaceKind};
     use crate::app::Settings;
     use crate::config::Config;
     use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -1040,6 +963,16 @@ mod tests {
         {
             "sh -c 'sleep 3600'".to_string()
         }
+    }
+
+    #[cfg(unix)]
+    fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
+        let script = temp.path().join("docker");
+        fs::write(&script, body)?;
+        let mut perms = fs::metadata(&script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms)?;
+        Ok(script)
     }
 
     fn init_repo() -> Result<(TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
@@ -1441,6 +1374,41 @@ mod tests {
         // Kill should work (session doesn't exist, but should not error)
         handler.kill_agent(&mut app.data)?;
         assert_eq!(app.data.storage.len(), 0);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_kill_agent_root_cleans_up_docker_runtime() -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+        let temp = TempDir::new()?;
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+                log.display()
+            ),
+        )?;
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.runtime = AgentRuntime::Docker;
+        let expected_container = format!("tenex-runtime-{}", root.mux_session).to_lowercase();
+        app.data.storage.add(root);
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.kill_agent(&mut app.data)
+        })?;
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains(&format!("rm -f {expected_container}")));
+        assert!(app.data.storage.is_empty());
         Ok(())
     }
 

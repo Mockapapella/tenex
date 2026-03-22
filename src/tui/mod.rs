@@ -412,6 +412,31 @@ fn maybe_refresh_preview(
     }
 }
 
+fn maybe_finish_preparing_docker(app: &mut App) -> bool {
+    if !matches!(&app.mode, AppMode::PreparingDocker(_)) {
+        return false;
+    }
+
+    let next = app.data.finish_preparing_docker_for_new_roots();
+    app.apply_mode(next);
+    true
+}
+
+fn apply_pending_resize(app: &mut App, action_handler: Actions, last_resize: Option<(u16, u16)>) {
+    let Some((width, height)) = last_resize else {
+        return;
+    };
+
+    app.set_terminal_dimensions(width, height);
+    let (preview_width, preview_height) =
+        render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
+    if app.data.ui.preview_dimensions != Some((preview_width, preview_height)) {
+        app.set_preview_dimensions(preview_width, preview_height);
+        action_handler.resize_agent_windows(app);
+        app.ensure_agent_list_scroll();
+    }
+}
+
 fn run_loop(
     terminal: &mut TuiTerminal,
     app: &mut App,
@@ -453,17 +478,7 @@ fn run_loop(
             || (!batched_keys.is_empty() && matches!(app.mode, AppMode::PreviewFocused(_)));
         send_keys_and_flush_clipboard(terminal, app, &batched_keys);
 
-        // Apply final resize if any occurred
-        if let Some((width, height)) = last_resize {
-            app.set_terminal_dimensions(width, height);
-            let (preview_width, preview_height) =
-                render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
-            if app.data.ui.preview_dimensions != Some((preview_width, preview_height)) {
-                app.set_preview_dimensions(preview_width, preview_height);
-                action_handler.resize_agent_windows(app);
-                app.ensure_agent_list_scroll();
-            }
-        }
+        apply_pending_resize(app, action_handler, last_resize);
 
         if state_tracker.maybe_reload_state(app) {
             needs_content_update = true;
@@ -524,6 +539,10 @@ fn run_loop(
 
         // Draw ONCE after draining all queued events
         terminal.draw(|frame| render::render(frame, app))?;
+
+        if maybe_finish_preparing_docker(app) {
+            continue;
+        }
 
         // Diff-check each pane less frequently than the UI frame rate.
         let pane_activity_interval = Duration::from_millis(

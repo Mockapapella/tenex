@@ -18,6 +18,7 @@ mod keyboard_remap_prompt;
 mod merge_branch_selector;
 mod model_selector;
 mod normal;
+mod preparing_docker;
 mod preview_focused;
 mod prompting;
 mod rebase_branch_selector;
@@ -52,6 +53,7 @@ pub use keyboard_remap_prompt::KeyboardRemapPromptMode;
 pub use merge_branch_selector::MergeBranchSelectorMode;
 pub use model_selector::ModelSelectorMode;
 pub use normal::NormalMode;
+pub use preparing_docker::PreparingDockerMode;
 pub use preview_focused::PreviewFocusedMode;
 pub use prompting::PromptingMode;
 pub use rebase_branch_selector::RebaseBranchSelectorMode;
@@ -125,6 +127,8 @@ pub enum AppMode {
     UpdatePrompt(UpdatePromptMode),
     /// Update requested mode (input ignored).
     UpdateRequested(UpdateRequestedMode),
+    /// Docker preparation mode (input ignored while the worker image is prepared).
+    PreparingDocker(PreparingDockerMode),
     /// Changelog / "What's New" modal mode.
     Changelog(ChangelogMode),
     /// Help overlay mode.
@@ -318,6 +322,12 @@ impl From<UpdatePromptMode> for AppMode {
 impl From<UpdateRequestedMode> for AppMode {
     fn from(state: UpdateRequestedMode) -> Self {
         Self::UpdateRequested(state)
+    }
+}
+
+impl From<PreparingDockerMode> for AppMode {
+    fn from(state: PreparingDockerMode) -> Self {
+        Self::PreparingDocker(state)
     }
 }
 
