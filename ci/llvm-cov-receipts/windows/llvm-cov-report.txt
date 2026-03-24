@@ -1,102 +1,100 @@
-Filename                                 Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-action/agent.rs                              507                94    81.46%          31                 1    96.77%         337                56    83.38%           0                 0         -
-action/confirm.rs                            545                61    88.81%          40                 4    90.00%         372                31    91.67%           0                 0         -
-action/diff.rs                              1452               198    86.36%          46                 3    93.48%         767                63    91.79%           0                 0         -
-action/git.rs                                910               107    88.24%          36                 4    88.89%         474                28    94.09%           0                 0         -
-action/misc.rs                               214                10    95.33%          16                 0   100.00%         140                 4    97.14%           0                 0         -
-action/mod.rs                               1726               349    79.78%          37                 0   100.00%         731                46    93.71%           0                 0         -
-action/modal.rs                              638                28    95.61%          38                 0   100.00%         370                20    94.59%           0                 0         -
-action/navigation.rs                         371                57    84.64%          32                 6    81.25%         232                28    87.93%           0                 0         -
-action/picker.rs                             508                49    90.35%          68                 6    91.18%         514                39    92.41%           0                 0         -
-action/preview.rs                            260                19    92.69%          12                 0   100.00%         175                14    92.00%           0                 0         -
-action/text_input.rs                         739                60    91.88%         112                 4    96.43%         769                53    93.11%           0                 0         -
-agent/instance.rs                            324                19    94.14%          27                 0   100.00%         236                 3    98.73%           0                 0         -
-agent/status.rs                               94                 3    96.81%          13                 0   100.00%          58                 0   100.00%           0                 0         -
-agent/storage.rs                            2376               206    91.33%         142                12    91.55%        1333                94    92.95%           0                 0         -
-app/data.rs                                 1768               178    89.93%         113                 6    94.69%        1129               113    89.99%           0                 0         -
-app/event.rs                                 103                21    79.61%          12                 1    91.67%          59                 9    84.75%           0                 0         -
-app/handlers/agent_lifecycle.rs             2014               216    89.28%          78                 8    89.74%        1139                78    93.15%           0                 0         -
-app/handlers/broadcast.rs                    165                19    88.48%           7                 1    85.71%          97                 8    91.75%           0                 0         -
-app/handlers/git_ops/merge.rs                449               273    39.20%          17                 5    70.59%         331               176    46.83%           0                 0         -
-app/handlers/git_ops/mod.rs                  125                58    53.60%           3                 2    33.33%          71                23    67.61%           0                 0         -
-app/handlers/git_ops/open_pr.rs              284                63    77.82%          13                 2    84.62%         190                47    75.26%           0                 0         -
-app/handlers/git_ops/push.rs                  70                22    68.57%           3                 1    66.67%          45                16    64.44%           0                 0         -
-app/handlers/git_ops/rebase.rs               117                56    52.14%           4                 2    50.00%          78                34    56.41%           0                 0         -
-app/handlers/git_ops/rename.rs               447                97    78.30%          17                 5    70.59%         308                52    83.12%           0                 0         -
-app/handlers/mod.rs                         1517               195    87.15%          64                 0   100.00%         760                26    96.58%           0                 0         -
-app/handlers/preview.rs                     1943               260    86.62%          46                 3    93.48%         927                71    92.34%           0                 0         -
-app/handlers/swarm.rs                       1306               163    87.52%          64                11    82.81%         813                70    91.39%           0                 0         -
-app/handlers/sync.rs                        1170               200    82.91%          50                 9    82.00%         720               107    85.14%           0                 0         -
-app/handlers/window.rs                       373                23    93.83%          13                 0   100.00%         230                18    92.17%           0                 0         -
-app/settings.rs                              349                60    82.81%          26                 1    96.15%         241                31    87.14%           0                 0         -
-app/sidebar.rs                               488                10    97.95%          22                 3    86.36%         287                 4    98.61%           0                 0         -
-app/state/command_palette.rs                 127                 6    95.28%          17                 0   100.00%          87                 3    96.55%           0                 0         -
-app/state/git_op.rs                          364                46    87.36%          31                 5    83.87%         229                31    86.46%           0                 0         -
-app/state/input.rs                           423                 4    99.05%          43                 1    97.67%         276                 4    98.55%           0                 0         -
-app/state/lifecycle.rs                       185                46    75.14%          15                 5    66.67%         144                27    81.25%           0                 0         -
-app/state/mod.rs                              26                 0   100.00%           3                 0   100.00%          24                 0   100.00%           0                 0         -
-app/state/models.rs                          337                34    89.91%          40                 2    95.00%         216                17    92.13%           0                 0         -
-app/state/navigation.rs                      122                15    87.70%          17                 2    88.24%          87                17    80.46%           0                 0         -
-app/state/review.rs                          358                16    95.53%          35                 3    91.43%         208                10    95.19%           0                 0         -
-app/state/scroll.rs                           64                12    81.25%           7                 0   100.00%          33                 4    87.88%           0                 0         -
-app/state/settings_menu.rs                    69                 5    92.75%          10                 0   100.00%          58                 6    89.66%           0                 0         -
-app/state/spawn.rs                           278                 6    97.84%          27                 1    96.30%         184                 3    98.37%           0                 0         -
-app/state/text_input.rs                       49                 2    95.92%          10                 0   100.00%          38                 0   100.00%           0                 0         -
-app/state/ui.rs                             1094               182    83.36%          91                13    85.71%         710               108    84.79%           0                 0         -
-command.rs                                    66                 3    95.45%           4                 0   100.00%          32                 2    93.75%           0                 0         -
-config/keys.rs                               275                28    89.82%          16                 0   100.00%         218                28    87.16%           0                 0         -
-config/mod.rs                                218                13    94.04%          31                 4    87.10%         147                 9    93.88%           0                 0         -
-conversation.rs                              874                68    92.22%          56                 5    91.07%         472                11    97.67%           0                 0         -
-git/branch.rs                                871               110    87.37%          55                 6    89.09%         413                18    95.64%           0                 0         -
-git/diff.rs                                 1020               100    90.20%          56                 9    83.93%         556                24    95.68%           0                 0         -
-git/mod.rs                                   462                90    80.52%          29                 7    75.86%         251                25    90.04%           0                 0         -
-git/worktree.rs                             1969               447    77.30%          91                24    73.63%         996               162    83.73%           0                 0         -
-lib.rs                                         4                 0   100.00%           1                 0   100.00%           3                 0   100.00%           0                 0         -
-main.rs                                      820               409    50.12%          44                26    40.91%         536               280    47.76%           0                 0         -
-migration.rs                                 261                85    67.43%          17                 8    52.94%         136                34    75.00%           0                 0         -
-mux/backend.rs                               649                80    87.67%          33                 2    93.94%         388                33    91.49%           0                 0         -
-mux/capture.rs                               105                20    80.95%          10                 0   100.00%          60                 5    91.67%           0                 0         -
-mux/client.rs                                377                73    80.64%          31                 7    77.42%         228                30    86.84%           0                 0         -
-mux/daemon.rs                               1143               231    79.79%          55                 7    87.27%         724                82    88.67%           0                 0         -
-mux/discovery.rs                             601                68    88.69%          40                 0   100.00%         335                33    90.15%           0                 0         -
-mux/endpoint.rs                              402               109    72.89%          32                 7    78.12%         236                57    75.85%           0                 0         -
-mux/ipc.rs                                    50                 6    88.00%           2                 0   100.00%          22                 0   100.00%           0                 0         -
-mux/mod.rs                                   373                91    75.60%          27                 4    85.19%         287                57    80.14%           0                 0         -
-mux/output.rs                                100                10    90.00%           8                 0   100.00%          91                 1    98.90%           0                 0         -
-mux/render.rs                                409                64    84.35%          14                 1    92.86%         217                41    81.11%           0                 0         -
-mux/server/capture.rs                        208                14    93.27%          14                 0   100.00%         118                 2    98.31%           0                 0         -
-mux/server/session.rs                        929               101    89.13%          51                 4    92.16%         591                42    92.89%           0                 0         -
-mux/session.rs                               446                86    80.72%          35                 1    97.14%         283                24    91.52%           0                 0         -
-paths.rs                                     104                 0   100.00%          22                 0   100.00%          75                 0   100.00%           0                 0         -
-prompts.rs                                    70                 0   100.00%           7                 0   100.00%          39                 0   100.00%           0                 0         -
-release_notes.rs                             287                33    88.50%          21                 2    90.48%         156                11    92.95%           0                 0         -
-runtime/docker.rs                           3805               603    84.15%         204                45    77.94%        2258               234    89.64%           0                 0         -
-runtime/mod.rs                               211                22    89.57%          23                 2    91.30%         142                11    92.25%           0                 0         -
-state/mod.rs                                 108                 0   100.00%          36                 0   100.00%         108                 0   100.00%           0                 0         -
-test_support.rs                               11                 0   100.00%           3                 0   100.00%           9                 0   100.00%           0                 0         -
-tui/input/command.rs                         295                36    87.80%          16                 0   100.00%         129                 0   100.00%           0                 0         -
-tui/input/confirm.rs                         879                95    89.19%          50                 0   100.00%         467                 5    98.93%           0                 0         -
-tui/input/mod.rs                            1005               147    85.37%          46                 1    97.83%         646                64    90.09%           0                 0         -
-tui/input/mouse.rs                          2552               190    92.55%          81                 8    90.12%        1552                81    94.78%           0                 0         -
-tui/input/normal.rs                           46                 3    93.48%           1                 0   100.00%          26                 1    96.15%           0                 0         -
-tui/input/picker.rs                          645                68    89.46%          41                 0   100.00%         312                 0   100.00%           0                 0         -
-tui/input/text_input.rs                      530                66    87.55%          12                 0   100.00%         216                 1    99.54%           0                 0         -
-tui/mod.rs                                  3182               594    81.33%         145                14    90.34%        1694               289    82.94%           0                 0         -
-tui/render/main_layout.rs                   2370               104    95.61%          76                 1    98.68%        1255                39    96.89%           0                 0         -
-tui/render/mod.rs                           3077               245    92.04%         171                 4    97.66%        1772               126    92.89%           0                 0         -
-tui/render/modals/branch.rs                  252                22    91.27%           1                 0   100.00%         156                16    89.74%           0                 0         -
-tui/render/modals/changelog.rs               555                12    97.84%          20                 0   100.00%         302                 7    97.68%           0                 0         -
-tui/render/modals/command_palette.rs         149                 2    98.66%           1                 0   100.00%          72                 1    98.61%           0                 0         -
-tui/render/modals/confirm.rs                 756                15    98.02%          20                 0   100.00%         422                 7    98.34%           0                 0         -
-tui/render/modals/error.rs                   262                10    96.18%          10                 0   100.00%         136                 4    97.06%           0                 0         -
-tui/render/modals/help.rs                    238                16    93.28%           2                 0   100.00%         123                12    90.24%           0                 0         -
-tui/render/modals/input.rs                   307                14    95.44%           4                 0   100.00%         178                 8    95.51%           0                 0         -
-tui/render/modals/mod.rs                     734                13    98.23%          21                 0   100.00%         379                 5    98.68%           0                 0         -
-tui/render/modals/models.rs                  129                 0   100.00%           1                 0   100.00%          58                 0   100.00%           0                 0         -
-tui/render/modals/picker.rs                  187                 1    99.47%           3                 0   100.00%          98                 1    98.98%           0                 0         -
-tui/render/modals/progress.rs                114                 3    97.37%           3                 0   100.00%          58                 1    98.28%           0                 0         -
-tui/render/modals/settings_menu.rs           119                 2    98.32%           3                 0   100.00%          54                 1    98.15%           0                 0         -
-update.rs                                    305                32    89.51%          13                 2    84.62%         172                19    88.95%           0                 0         -
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-TOTAL                                      62764              8202    86.93%        3357               333    90.08%       36631              3536    90.35%           0                 0         -
+Filename	Regions	Missed Regions	Region Cover	Functions	Missed Functions	Function Cover	Branches	Missed Branches	Branch Cover
+action/agent.rs	507	94	81.46%	31	1	96.77%	0	0	-
+action/confirm.rs	545	61	88.81%	40	4	90.00%	0	0	-
+action/diff.rs	1452	198	86.36%	46	3	93.48%	0	0	-
+action/git.rs	910	107	88.24%	36	4	88.89%	0	0	-
+action/misc.rs	214	10	95.33%	16	0	100.00%	0	0	-
+action/mod.rs	1726	349	79.78%	37	0	100.00%	0	0	-
+action/modal.rs	638	28	95.61%	38	0	100.00%	0	0	-
+action/navigation.rs	371	57	84.64%	32	6	81.25%	0	0	-
+action/picker.rs	508	49	90.35%	68	6	91.18%	0	0	-
+action/preview.rs	260	19	92.69%	12	0	100.00%	0	0	-
+action/text_input.rs	739	60	91.88%	112	4	96.43%	0	0	-
+agent/instance.rs	324	19	94.14%	27	0	100.00%	0	0	-
+agent/status.rs	94	3	96.81%	13	0	100.00%	0	0	-
+agent/storage.rs	2376	206	91.33%	142	12	91.55%	0	0	-
+app/data.rs	1768	178	89.93%	113	6	94.69%	0	0	-
+app/event.rs	103	21	79.61%	12	1	91.67%	0	0	-
+app/handlers/agent_lifecycle.rs	2014	216	89.28%	78	8	89.74%	0	0	-
+app/handlers/broadcast.rs	165	19	88.48%	7	1	85.71%	0	0	-
+app/handlers/git_ops/merge.rs	449	273	39.20%	17	5	70.59%	0	0	-
+app/handlers/git_ops/mod.rs	125	58	53.60%	3	2	33.33%	0	0	-
+app/handlers/git_ops/open_pr.rs	284	63	77.82%	13	2	84.62%	0	0	-
+app/handlers/git_ops/push.rs	70	22	68.57%	3	1	66.67%	0	0	-
+app/handlers/git_ops/rebase.rs	117	56	52.14%	4	2	50.00%	0	0	-
+app/handlers/git_ops/rename.rs	447	97	78.30%	17	5	70.59%	0	0	-
+app/handlers/mod.rs	1517	195	87.15%	64	0	100.00%	0	0	-
+app/handlers/preview.rs	1943	260	86.62%	46	3	93.48%	0	0	-
+app/handlers/swarm.rs	1306	163	87.52%	64	11	82.81%	0	0	-
+app/handlers/sync.rs	1170	200	82.91%	50	9	82.00%	0	0	-
+app/handlers/window.rs	373	23	93.83%	13	0	100.00%	0	0	-
+app/settings.rs	349	60	82.81%	26	1	96.15%	0	0	-
+app/sidebar.rs	488	10	97.95%	22	3	86.36%	0	0	-
+app/state/command_palette.rs	127	6	95.28%	17	0	100.00%	0	0	-
+app/state/git_op.rs	364	46	87.36%	31	5	83.87%	0	0	-
+app/state/input.rs	423	4	99.05%	43	1	97.67%	0	0	-
+app/state/lifecycle.rs	185	46	75.14%	15	5	66.67%	0	0	-
+app/state/mod.rs	26	0	100.00%	3	0	100.00%	0	0	-
+app/state/models.rs	337	34	89.91%	40	2	95.00%	0	0	-
+app/state/navigation.rs	122	15	87.70%	17	2	88.24%	0	0	-
+app/state/review.rs	358	16	95.53%	35	3	91.43%	0	0	-
+app/state/scroll.rs	64	12	81.25%	7	0	100.00%	0	0	-
+app/state/settings_menu.rs	69	5	92.75%	10	0	100.00%	0	0	-
+app/state/spawn.rs	278	6	97.84%	27	1	96.30%	0	0	-
+app/state/text_input.rs	49	2	95.92%	10	0	100.00%	0	0	-
+app/state/ui.rs	1094	182	83.36%	91	13	85.71%	0	0	-
+command.rs	66	3	95.45%	4	0	100.00%	0	0	-
+config/keys.rs	275	28	89.82%	16	0	100.00%	0	0	-
+config/mod.rs	218	13	94.04%	31	4	87.10%	0	0	-
+conversation.rs	874	68	92.22%	56	5	91.07%	0	0	-
+git/branch.rs	871	110	87.37%	55	6	89.09%	0	0	-
+git/diff.rs	1020	100	90.20%	56	9	83.93%	0	0	-
+git/mod.rs	462	90	80.52%	29	7	75.86%	0	0	-
+git/worktree.rs	1969	447	77.30%	91	24	73.63%	0	0	-
+lib.rs	4	0	100.00%	1	0	100.00%	0	0	-
+main.rs	820	409	50.12%	44	26	40.91%	0	0	-
+migration.rs	261	85	67.43%	17	8	52.94%	0	0	-
+mux/backend.rs	649	80	87.67%	33	2	93.94%	0	0	-
+mux/capture.rs	105	20	80.95%	10	0	100.00%	0	0	-
+mux/client.rs	377	73	80.64%	31	7	77.42%	0	0	-
+mux/daemon.rs	1143	231	79.79%	55	7	87.27%	0	0	-
+mux/discovery.rs	601	68	88.69%	40	0	100.00%	0	0	-
+mux/endpoint.rs	402	109	72.89%	32	7	78.12%	0	0	-
+mux/ipc.rs	50	6	88.00%	2	0	100.00%	0	0	-
+mux/mod.rs	373	91	75.60%	27	4	85.19%	0	0	-
+mux/output.rs	100	10	90.00%	8	0	100.00%	0	0	-
+mux/render.rs	409	64	84.35%	14	1	92.86%	0	0	-
+mux/server/capture.rs	208	14	93.27%	14	0	100.00%	0	0	-
+mux/server/session.rs	929	101	89.13%	51	4	92.16%	0	0	-
+mux/session.rs	446	86	80.72%	35	1	97.14%	0	0	-
+paths.rs	104	0	100.00%	22	0	100.00%	0	0	-
+prompts.rs	70	0	100.00%	7	0	100.00%	0	0	-
+release_notes.rs	287	33	88.50%	21	2	90.48%	0	0	-
+runtime/docker.rs	3805	603	84.15%	204	45	77.94%	0	0	-
+runtime/mod.rs	211	22	89.57%	23	2	91.30%	0	0	-
+state/mod.rs	108	0	100.00%	36	0	100.00%	0	0	-
+test_support.rs	11	0	100.00%	3	0	100.00%	0	0	-
+tui/input/command.rs	295	36	87.80%	16	0	100.00%	0	0	-
+tui/input/confirm.rs	879	95	89.19%	50	0	100.00%	0	0	-
+tui/input/mod.rs	1005	147	85.37%	46	1	97.83%	0	0	-
+tui/input/mouse.rs	2552	190	92.55%	81	8	90.12%	0	0	-
+tui/input/normal.rs	46	3	93.48%	1	0	100.00%	0	0	-
+tui/input/picker.rs	645	68	89.46%	41	0	100.00%	0	0	-
+tui/input/text_input.rs	530	66	87.55%	12	0	100.00%	0	0	-
+tui/mod.rs	3182	594	81.33%	145	14	90.34%	0	0	-
+tui/render/main_layout.rs	2370	104	95.61%	76	1	98.68%	0	0	-
+tui/render/mod.rs	3077	245	92.04%	171	4	97.66%	0	0	-
+tui/render/modals/branch.rs	252	22	91.27%	1	0	100.00%	0	0	-
+tui/render/modals/changelog.rs	555	12	97.84%	20	0	100.00%	0	0	-
+tui/render/modals/command_palette.rs	149	2	98.66%	1	0	100.00%	0	0	-
+tui/render/modals/confirm.rs	756	15	98.02%	20	0	100.00%	0	0	-
+tui/render/modals/error.rs	262	10	96.18%	10	0	100.00%	0	0	-
+tui/render/modals/help.rs	238	16	93.28%	2	0	100.00%	0	0	-
+tui/render/modals/input.rs	307	14	95.44%	4	0	100.00%	0	0	-
+tui/render/modals/mod.rs	734	13	98.23%	21	0	100.00%	0	0	-
+tui/render/modals/models.rs	129	0	100.00%	1	0	100.00%	0	0	-
+tui/render/modals/picker.rs	187	1	99.47%	3	0	100.00%	0	0	-
+tui/render/modals/progress.rs	114	3	97.37%	3	0	100.00%	0	0	-
+tui/render/modals/settings_menu.rs	119	2	98.32%	3	0	100.00%	0	0	-
+update.rs	305	32	89.51%	13	2	84.62%	0	0	-
+TOTAL	62764	8202	86.93%	3357	333	90.08%	0	0	-
