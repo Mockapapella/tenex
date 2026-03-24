@@ -95,7 +95,7 @@ repos:
 
       - id: precommit-hook-unit-tests
         name: pre-commit hook unit tests
-        entry: python3 scripts/precommit/test_run_cargo_hook.py
+        entry: python3 -m unittest discover -s scripts/precommit -p 'test_*.py'
         language: system
         pass_filenames: false
 
@@ -174,7 +174,9 @@ repos:
               sha_path="${receipt_dir}/llvm-cov-report.sha256"
 
               mkdir -p "$receipt_dir"
-              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$report_path"
+              raw_report="$(mktemp)"
+              trap 'rm -f "$raw_report"' EXIT
+              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$raw_report"
 
               python_bin="python3"
               if ! command -v "$python_bin" >/dev/null 2>&1; then
@@ -185,17 +187,11 @@ repos:
                 exit 1
               fi
 
-              "$python_bin" - "$report_path" "$sha_path" <<'PY'
-              import hashlib
-              import pathlib
-              import sys
-
-              report_path = pathlib.Path(sys.argv[1])
-              sha_path = pathlib.Path(sys.argv[2])
-
-              digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
-              sha_path.write_text(f"{digest}  {report_path.as_posix()}\n", encoding="utf-8")
-              PY
+              "$python_bin" scripts/precommit/write_llvm_cov_receipt.py \
+                --os "$receipt_os" \
+                --input "$raw_report" \
+                --report-path "$report_path" \
+                --sha-path "$sha_path"
 
               if [ -z "$(git status --porcelain=v1 -- "$report_path" "$sha_path")" ]; then
                 exit 0
