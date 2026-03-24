@@ -1172,6 +1172,15 @@ mod tests {
     }
 
     #[test]
+    fn test_manager_debug_impl() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        assert_eq!(format!("{manager:?}"), "Manager { .. }");
+        Ok(())
+    }
+
+    #[test]
     fn test_create_with_new_branch_skips_dir_only_ignored_directory_symlinks()
     -> Result<(), Box<dyn std::error::Error>> {
         let (temp_dir, repo) = init_test_repo_with_commit()?;
