@@ -1,7 +1,7 @@
 //! Agent lifecycle operations: create, kill, reconnect
 
 use crate::agent::{Agent, AgentRuntime, ChildConfig};
-use crate::git::{self, WorktreeManager};
+use crate::git::{self, WorktreeCreateOptions, WorktreeManager};
 use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -47,6 +47,14 @@ fn runtime_for_conflict(
 }
 
 impl Actions {
+    pub(super) fn root_worktree_create_options(runtime: AgentRuntime) -> WorktreeCreateOptions {
+        if runtime == AgentRuntime::Docker {
+            WorktreeCreateOptions::without_ignored_file_links()
+        } else {
+            WorktreeCreateOptions::default()
+        }
+    }
+
     fn prepare_agent_for_launch(app_data: &mut AppData, agent: &mut Agent) {
         if crate::conversation::detect_agent_cli(&agent.program)
             == crate::conversation::AgentCli::Claude
@@ -245,8 +253,13 @@ impl Actions {
     ) -> Result<()> {
         let repo = git::open_repository(repo_path)?;
         let worktree_mgr = WorktreeManager::new(&repo);
+        let runtime = crate::runtime::new_root_runtime(&app_data.settings);
 
-        worktree_mgr.create_with_new_branch(worktree_path, branch)?;
+        worktree_mgr.create_with_new_branch_with_options(
+            worktree_path,
+            branch,
+            Self::root_worktree_create_options(runtime),
+        )?;
 
         let program = app_data.agent_spawn_command();
         let mut agent = Agent::new(
@@ -256,7 +269,7 @@ impl Actions {
             worktree_path.to_path_buf(),
         );
         agent.repo_root = Some(repo_path.to_path_buf());
-        agent.runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        agent.runtime = runtime;
         self.launch_root_agent(app_data, &mut agent, prompt)?;
 
         let agent_id = agent.id;
@@ -613,7 +626,7 @@ impl Actions {
             .unwrap_or_else(|| root.worktree_path.clone());
 
         let Some(target) =
-            Self::prepare_branch_switch_target(&app_data.config, &repo_root, &target_raw)?
+            Self::prepare_branch_switch_target(&app_data.config, &repo_root, &target_raw, runtime)?
         else {
             Self::clear_switch_branch_state(app_data);
             return Ok(ErrorModalMode {
@@ -677,6 +690,7 @@ impl Actions {
         config: &Config,
         repo_root: &Path,
         target_raw: &str,
+        runtime: AgentRuntime,
     ) -> Result<Option<BranchSwitchTarget>> {
         let repo = git::open_repository(repo_root)?;
         let worktree_mgr = WorktreeManager::new(&repo);
@@ -691,7 +705,7 @@ impl Actions {
         }
 
         let worktree_path =
-            Self::ensure_worktree_for_branch(config, repo_root, &worktree_mgr, &branch)?;
+            Self::ensure_worktree_for_branch(config, repo_root, &worktree_mgr, &branch, runtime)?;
         Ok(Some(BranchSwitchTarget {
             branch,
             worktree_path,
@@ -736,6 +750,7 @@ impl Actions {
         repo_root: &Path,
         worktree_mgr: &WorktreeManager<'_>,
         branch: &str,
+        runtime: AgentRuntime,
     ) -> Result<std::path::PathBuf> {
         if worktree_mgr.exists(branch) {
             return Ok(worktree_mgr
@@ -744,7 +759,11 @@ impl Actions {
         }
 
         let worktree_path = config.worktree_path_for_repo_root(repo_root, branch);
-        worktree_mgr.create(&worktree_path, branch)?;
+        worktree_mgr.create_with_options(
+            &worktree_path,
+            branch,
+            Self::root_worktree_create_options(runtime),
+        )?;
         Ok(worktree_path)
     }
 
@@ -1325,9 +1344,93 @@ mod tests {
         let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
         worktree_mgr.create(&worktree_path, "feature")?;
 
-        let reused =
-            Actions::ensure_worktree_for_branch(&config, &repo_root, &worktree_mgr, "feature")?;
+        let reused = Actions::ensure_worktree_for_branch(
+            &config,
+            &repo_root,
+            &worktree_mgr,
+            "feature",
+            AgentRuntime::Host,
+        )?;
         assert!(reused.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_worktree_for_branch_skips_ignored_file_links_for_docker()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use git2::Signature;
+
+        let (_repo_dir, repo_root) = init_repo()?;
+        let worktree_dir = TempDir::new()?;
+
+        let config = Config {
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            branch_prefix: "tenex-test/".to_string(),
+            ..Config::default()
+        };
+
+        let repo = git::open_repository(&repo_root)?;
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+
+        std::fs::write(repo_root.join(".gitignore"), "ignored.txt\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+        std::fs::write(repo_root.join("ignored.txt"), "payload")?;
+        let agents_path = repo_root.join("AGENTS.md");
+        std::fs::write(&agents_path, "# local instructions\n")?;
+        std::os::unix::fs::symlink("AGENTS.md", repo_root.join("CLAUDE.md"))?;
+
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature")?;
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let created = Actions::ensure_worktree_for_branch(
+            &config,
+            &repo_root,
+            &worktree_mgr,
+            "feature",
+            AgentRuntime::Docker,
+        )?;
+
+        assert!(std::fs::symlink_metadata(created.join("ignored.txt")).is_err());
+        let linked_agents = created.join("AGENTS.md");
+        assert!(
+            std::fs::symlink_metadata(&linked_agents)?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::canonicalize(&linked_agents)?,
+            std::fs::canonicalize(&agents_path)?
+        );
+
+        let linked_claude = created.join("CLAUDE.md");
+        assert!(
+            std::fs::symlink_metadata(&linked_claude)?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(&linked_claude)?,
+            PathBuf::from("AGENTS.md")
+        );
+        assert_eq!(
+            std::fs::canonicalize(&linked_claude)?,
+            std::fs::canonicalize(&agents_path)?
+        );
         Ok(())
     }
 

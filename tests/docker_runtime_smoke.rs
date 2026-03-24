@@ -3,6 +3,8 @@
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
+use std::io::ErrorKind;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
@@ -11,6 +13,8 @@ use std::sync::OnceLock;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use git2::{RepositoryInitOptions, Signature};
 #[cfg(unix)]
 use tempfile::TempDir;
 
@@ -22,6 +26,12 @@ const STATE_PATH_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_STATE_PATH";
 const PLAIN_DIR_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_PLAIN_DIR";
 #[cfg(unix)]
 const LOG_PATH_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_LOG_PATH";
+#[cfg(unix)]
+const GIT_REPO_DIR_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_GIT_REPO_DIR";
+#[cfg(unix)]
+const WORKTREE_ROOT_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_WORKTREE_ROOT";
+#[cfg(unix)]
+const GIT_ROOT_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_SMOKE_GIT_ROOT_CHILD";
 
 #[cfg(unix)]
 const WORKER_DOCKERFILE_TEMPLATE: &str = include_str!("../docker/worker.Dockerfile");
@@ -196,6 +206,13 @@ struct ChildPaths {
 }
 
 #[cfg(unix)]
+struct GitRootChildPaths {
+    state_path: PathBuf,
+    repo_dir: PathBuf,
+    worktree_root: PathBuf,
+}
+
+#[cfg(unix)]
 struct RuntimeHomeSnapshot {
     staged_home: PathBuf,
     staged_passwd: String,
@@ -222,12 +239,54 @@ fn child_paths() -> Result<ChildPaths, Box<dyn std::error::Error>> {
 }
 
 #[cfg(unix)]
+fn git_root_child_paths() -> Result<GitRootChildPaths, Box<dyn std::error::Error>> {
+    Ok(GitRootChildPaths {
+        state_path: required_env_path(STATE_PATH_VAR)?,
+        repo_dir: required_env_path(GIT_REPO_DIR_VAR)?,
+        worktree_root: required_env_path(WORKTREE_ROOT_VAR)?,
+    })
+}
+
+#[cfg(unix)]
 fn codex_settings(docker_for_new_roots: bool) -> tenex::app::Settings {
     tenex::app::Settings {
         agent_program: tenex::app::AgentProgram::Codex,
         docker_for_new_roots,
         ..tenex::app::Settings::default()
     }
+}
+
+#[cfg(unix)]
+fn init_git_repo_with_ignored_file(repo_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut init_opts = RepositoryInitOptions::new();
+    init_opts.initial_head("master");
+    let repo = git2::Repository::init_opts(repo_dir, &init_opts)?;
+    repo.set_head("refs/heads/master")?;
+
+    let mut config = repo.config()?;
+    config.set_str("user.name", "Test")?;
+    config.set_str("user.email", "test@test.com")?;
+    config.set_bool("core.autocrlf", false)?;
+    config.set_str("core.eol", "lf")?;
+    config.set_str("commit.gpgsign", "false")?;
+
+    fs::write(repo_dir.join("README.md"), "# Test Repository\n")?;
+    fs::write(repo_dir.join(".gitignore"), "shared-cache.db\n")?;
+
+    let mut index = repo.index()?;
+    index.add_path(Path::new("README.md"))?;
+    index.add_path(Path::new(".gitignore"))?;
+    index.write()?;
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let sig = Signature::now("Test", "test@test.com")?;
+    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+    fs::write(repo_dir.join("shared-cache.db"), "host cache\n")?;
+    fs::write(repo_dir.join("AGENTS.md"), "# local instructions\n")?;
+    std::os::unix::fs::symlink("AGENTS.md", repo_dir.join("CLAUDE.md"))?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -240,6 +299,36 @@ fn enable_docker_mode(state_path: &Path) {
     );
     prep_app.data.input.buffer = "/toggle_docker".to_string();
     let _ = prep_app.data.submit_slash_command_palette();
+}
+
+#[cfg(unix)]
+fn create_docker_git_root_app(
+    state_path: &Path,
+    repo_dir: &Path,
+    worktree_root: &Path,
+) -> Result<(tenex::App, tenex::agent::Agent), Box<dyn std::error::Error>> {
+    let config = tenex::config::Config {
+        worktree_dir: worktree_root.to_path_buf(),
+        ..tenex::config::Config::default()
+    };
+    let mut app = tenex::App::new(
+        config,
+        tenex::agent::Storage::with_path(state_path.to_path_buf()),
+        codex_settings(true),
+        false,
+    );
+    app.set_cwd_project_root(Some(repo_dir.to_path_buf()));
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "docker-root", Some("test prompt"))?;
+    app.apply_mode(next);
+
+    let agent = app
+        .selected_agent()
+        .ok_or_else(|| std::io::Error::other("Expected a Docker git root agent"))?
+        .clone();
+    assert_eq!(agent.runtime, tenex::agent::AgentRuntime::Docker);
+    Ok((app, agent))
 }
 
 #[cfg(unix)]
@@ -384,6 +473,36 @@ fn assert_docker_runtime_log(
 }
 
 #[cfg(unix)]
+fn assert_instruction_file_links(
+    worktree_path: &Path,
+    repo_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let expected_agents = repo_dir.join("AGENTS.md").canonicalize()?;
+
+    let linked_agents = worktree_path.join("AGENTS.md");
+    assert!(
+        fs::symlink_metadata(&linked_agents)?
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::canonicalize(&linked_agents)?, expected_agents);
+
+    let linked_claude = worktree_path.join("CLAUDE.md");
+    assert!(
+        fs::symlink_metadata(&linked_claude)?
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&linked_claude)?, PathBuf::from("AGENTS.md"));
+    assert_eq!(
+        fs::canonicalize(&linked_claude)?,
+        repo_dir.join("AGENTS.md").canonicalize()?
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
 fn run_child() -> Result<(), Box<dyn std::error::Error>> {
     let paths = child_paths()?;
     enable_docker_mode(&paths.state_path);
@@ -407,6 +526,41 @@ fn run_child() -> Result<(), Box<dyn std::error::Error>> {
     tenex::mux::SessionManager::new().kill(&agent.mux_session)?;
     tenex::cleanup_agent_runtime(&agent)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn run_git_root_child() -> Result<(), Box<dyn std::error::Error>> {
+    let paths = git_root_child_paths()?;
+    let (_app, agent) =
+        create_docker_git_root_app(&paths.state_path, &paths.repo_dir, &paths.worktree_root)?;
+
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let ignored_path = agent.worktree_path.join("shared-cache.db");
+        let maybe_symlink_target = match fs::symlink_metadata(&ignored_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Some(fs::read_link(&ignored_path)?)
+            }
+            Ok(_) => None,
+            Err(err) if err.kind() == ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
+        };
+
+        if let Some(target) = maybe_symlink_target {
+            return Err(format!(
+                "Docker git root should not symlink ignored repo files into its worktree: {} -> {}",
+                ignored_path.display(),
+                target.display()
+            )
+            .into());
+        }
+
+        assert_instruction_file_links(&agent.worktree_path, &paths.repo_dir)?;
+        Ok(())
+    })();
+
+    tenex::mux::SessionManager::new().kill(&agent.mux_session)?;
+    tenex::cleanup_agent_runtime(&agent)?;
+    result
 }
 
 #[cfg(unix)]
@@ -518,3 +672,66 @@ fn test_docker_root_agent_stages_ssh_home_in_integration_path()
 #[cfg(not(unix))]
 #[test]
 fn test_docker_root_agent_stages_ssh_home_in_integration_path() {}
+
+#[cfg(unix)]
+#[test]
+fn test_docker_git_root_does_not_symlink_ignored_repo_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os(GIT_ROOT_CHILD_FLAG).is_some() {
+        return run_git_root_child();
+    }
+
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let temp = TempDir::new()?;
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let repo_dir = temp.path().join("repo");
+    let worktree_root = temp.path().join("worktrees");
+    let docker_dir = temp.path().join("docker-bin");
+    let state_path = temp.path().join("state.json");
+    let mux_socket = temp.path().join("mux.sock");
+    let log = temp.path().join("docker.log");
+
+    fs::create_dir_all(home.join(".codex").join("sessions"))?;
+    fs::create_dir_all(&repo_dir)?;
+    fs::create_dir_all(&worktree_root)?;
+    fs::create_dir_all(&docker_dir)?;
+    fs::write(
+        home.join(".codex").join("config.toml"),
+        "model = \"gpt-5.4\"\n",
+    )?;
+    init_git_repo_with_ignored_file(&repo_dir)?;
+    write_fake_docker_script(&docker_dir, &log)?;
+
+    let current_exe = std::env::current_exe()?;
+    let path = std::env::var("PATH").unwrap_or_default();
+    let prefixed_path = format!("{}:{path}", docker_dir.display());
+    let output = Command::new(current_exe)
+        .arg("--exact")
+        .arg("test_docker_git_root_does_not_symlink_ignored_repo_files")
+        .arg("--nocapture")
+        .env(GIT_ROOT_CHILD_FLAG, "1")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data)
+        .env("TENEX_MUX_SOCKET", &mux_socket)
+        .env("PATH", prefixed_path)
+        .env(STATE_PATH_VAR, &state_path)
+        .env(GIT_REPO_DIR_VAR, &repo_dir)
+        .env(WORKTREE_ROOT_VAR, &worktree_root)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "child test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+#[test]
+fn test_docker_git_root_does_not_symlink_ignored_repo_files() {}

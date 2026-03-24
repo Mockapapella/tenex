@@ -8,7 +8,9 @@ pub use diff::{
     DiffDigest, DiffFile, DiffHunk, DiffHunkLine, DiffModel, FileChange, FileStatus,
     Generator as DiffGenerator, LineChange, Summary as DiffSummary,
 };
-pub use worktree::{Info as WorktreeInfo, Manager as WorktreeManager};
+pub use worktree::{
+    CreateOptions as WorktreeCreateOptions, Info as WorktreeInfo, Manager as WorktreeManager,
+};
 
 use anyhow::{Context, Result};
 use std::borrow::Cow;

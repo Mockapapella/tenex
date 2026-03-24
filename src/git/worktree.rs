@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tracing::{debug, info, warn};
 
+const LOCAL_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
+
 fn remove_dir_all_with_retries(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -221,6 +223,56 @@ fn symlink_path(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 }
 
+fn clone_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let link_target = fs::read_link(src)?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&link_target, dst)
+    }
+
+    #[cfg(windows)]
+    {
+        let resolved_target = if link_target.is_absolute() {
+            link_target.clone()
+        } else {
+            src.parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&link_target)
+        };
+        if fs::metadata(&resolved_target)?.is_dir() {
+            std::os::windows::fs::symlink_dir(&link_target, dst)
+        } else {
+            std::os::windows::fs::symlink_file(&link_target, dst)
+        }
+    }
+}
+
+/// Options controlling how a new worktree is materialized on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateOptions {
+    /// Whether ignored repo-root files should be linked into the new worktree.
+    pub link_ignored_files: bool,
+}
+
+impl Default for CreateOptions {
+    fn default() -> Self {
+        Self {
+            link_ignored_files: true,
+        }
+    }
+}
+
+impl CreateOptions {
+    /// Return options for worktrees that should not inherit ignored repo-root file links.
+    #[must_use]
+    pub const fn without_ignored_file_links() -> Self {
+        Self {
+            link_ignored_files: false,
+        }
+    }
+}
+
 /// Manager for git worktree operations
 pub struct Manager<'a> {
     repo: &'a Repository,
@@ -245,6 +297,20 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree cannot be created
     pub fn create(&self, path: &Path, branch: &str) -> Result<()> {
+        self.create_with_options(path, branch, CreateOptions::default())
+    }
+
+    /// Create a new worktree for a branch with explicit materialization options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worktree cannot be created.
+    pub fn create_with_options(
+        &self,
+        path: &Path,
+        branch: &str,
+        options: CreateOptions,
+    ) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create parent directory {}", parent.display())
@@ -274,9 +340,7 @@ impl<'a> Manager<'a> {
             }
         }
 
-        if let Err(err) = self.symlink_ignored_files_into_worktree(path) {
-            warn!(?path, error = %err, "Failed to symlink ignored files into worktree");
-        }
+        self.finish_worktree_create(path, options);
 
         Ok(())
     }
@@ -329,6 +393,20 @@ impl<'a> Manager<'a> {
     ///
     /// Returns an error if the worktree or branch cannot be created
     pub fn create_with_new_branch(&self, path: &Path, branch: &str) -> Result<()> {
+        self.create_with_new_branch_with_options(path, branch, CreateOptions::default())
+    }
+
+    /// Create a new worktree with a new branch from HEAD using explicit materialization options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worktree or branch cannot be created.
+    pub fn create_with_new_branch_with_options(
+        &self,
+        path: &Path,
+        branch: &str,
+        options: CreateOptions,
+    ) -> Result<()> {
         debug!(branch, ?path, "Creating worktree with new branch");
 
         if let Some(parent) = path.parent() {
@@ -381,11 +459,74 @@ impl<'a> Manager<'a> {
             )
             .with_context(|| format!("Failed to create worktree at {}", path.display()))?;
 
-        if let Err(err) = self.symlink_ignored_files_into_worktree(path) {
+        self.finish_worktree_create(path, options);
+
+        info!(branch, ?path, "Worktree created");
+        Ok(())
+    }
+
+    fn finish_worktree_create(&self, path: &Path, options: CreateOptions) {
+        if options.link_ignored_files
+            && let Err(err) = self.symlink_ignored_files_into_worktree(path)
+        {
             warn!(?path, error = %err, "Failed to symlink ignored files into worktree");
         }
 
-        info!(branch, ?path, "Worktree created");
+        if let Err(err) = self.symlink_local_instruction_files_into_worktree(path) {
+            warn!(?path, error = %err, "Failed to symlink local instruction files into worktree");
+        }
+    }
+
+    fn symlink_local_instruction_files_into_worktree(&self, worktree_path: &Path) -> Result<()> {
+        let Some(repo_root) = self.repo.workdir() else {
+            return Ok(());
+        };
+
+        for file_name in LOCAL_INSTRUCTION_FILE_NAMES {
+            Self::symlink_local_instruction_file(repo_root, worktree_path, file_name)?;
+        }
+
+        Ok(())
+    }
+
+    fn symlink_local_instruction_file(
+        repo_root: &Path,
+        worktree_path: &Path,
+        file_name: &str,
+    ) -> Result<()> {
+        let src = repo_root.join(file_name);
+        let Ok(src_meta) = fs::symlink_metadata(&src) else {
+            return Ok(());
+        };
+
+        let dst = worktree_path.join(file_name);
+        if fs::symlink_metadata(&dst).is_ok() {
+            return Ok(());
+        }
+
+        if src_meta.file_type().is_symlink() {
+            clone_symlink(&src, &dst).with_context(|| {
+                format!(
+                    "Failed to symlink local instruction file {} -> {}",
+                    dst.display(),
+                    src.display()
+                )
+            })?;
+            return Ok(());
+        }
+
+        if !src_meta.is_file() {
+            return Ok(());
+        }
+
+        symlink_path(&src, &dst).with_context(|| {
+            format!(
+                "Failed to symlink local instruction file {} -> {}",
+                dst.display(),
+                src.display()
+            )
+        })?;
+
         Ok(())
     }
 
@@ -960,6 +1101,73 @@ mod tests {
 
         assert!(fs::symlink_metadata(wt_path.join("ignored_dir")).is_err());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_with_new_branch_can_skip_ignored_file_symlinks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let manager = Manager::new(&repo);
+
+        fs::write(temp_dir.path().join(".gitignore"), "ignored.txt\n")?;
+
+        let sig = Signature::now("Test", "test@test.com")?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new(".gitignore"))?;
+        index.write()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add gitignore",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        fs::write(temp_dir.path().join("ignored.txt"), "payload")?;
+        let agents_path = temp_dir.path().join("AGENTS.md");
+        fs::write(&agents_path, "# local instructions\n")?;
+        symlink_path(Path::new("AGENTS.md"), &temp_dir.path().join("CLAUDE.md"))?;
+
+        let wt_path = temp_dir
+            .path()
+            .join("worktrees")
+            .join("feature-no-symlinks");
+        manager.create_with_new_branch_with_options(
+            &wt_path,
+            "feature-no-symlinks-test",
+            CreateOptions::without_ignored_file_links(),
+        )?;
+
+        assert!(fs::symlink_metadata(wt_path.join("ignored.txt")).is_err());
+        let linked_agents = wt_path.join("AGENTS.md");
+        assert!(
+            fs::symlink_metadata(&linked_agents)?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(&linked_agents)?,
+            fs::canonicalize(&agents_path)?
+        );
+
+        let linked_claude = wt_path.join("CLAUDE.md");
+        assert!(
+            fs::symlink_metadata(&linked_claude)?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_link(&linked_claude)?, PathBuf::from("AGENTS.md"));
+        assert_eq!(
+            fs::canonicalize(&linked_claude)?,
+            fs::canonicalize(&agents_path)?
+        );
         Ok(())
     }
 

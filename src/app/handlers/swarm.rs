@@ -343,10 +343,14 @@ impl Actions {
             return Ok(None);
         }
 
-        worktree_mgr.create_with_new_branch(&worktree_path, &branch)?;
+        let runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        worktree_mgr.create_with_new_branch_with_options(
+            &worktree_path,
+            &branch,
+            Self::root_worktree_create_options(runtime),
+        )?;
 
         let program = app_data.agent_spawn_command();
-        let runtime = crate::runtime::new_root_runtime(&app_data.settings);
         let mut root_agent = Agent::new(root_title, program, branch.clone(), worktree_path.clone());
         root_agent.repo_root = Some(repo_path);
         root_agent.runtime = runtime;
