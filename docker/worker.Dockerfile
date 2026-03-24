@@ -10,12 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     gh \
+    libnss-wrapper \
     libssl-dev \
     nodejs \
     npm \
+    openssh-client \
     pkg-config \
     python3 \
     python3-pip \
+ && libnss_wrapper_path="$(find /usr/lib -name libnss_wrapper.so -print -quit)" \
+ && [ -n "$libnss_wrapper_path" ] \
+ && ln -sf "$libnss_wrapper_path" /usr/local/lib/libnss_wrapper.so \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @openai/codex @anthropic-ai/claude-code

@@ -6,6 +6,7 @@ use crate::paths;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,7 +18,12 @@ const DEFAULT_WORKER_DOCKERFILE_TEMPLATE: &str = include_str!("../../docker/work
 const RUNTIME_HOME_ROOT_DIR: &str = "docker-runtime";
 const WORKER_IMAGE_TEMPLATE_HASH_LABEL: &str = "dev.tenex.worker-template-fnv1a64";
 const WORKER_CONTAINER_LAYOUT_HASH_LABEL: &str = "dev.tenex.runtime-template-fnv1a64";
-const WORKER_CONTAINER_LAYOUT_VERSION: &str = "3";
+const WORKER_CONTAINER_LAYOUT_VERSION: &str = "5";
+const NSS_WRAPPER_LIB_PATH: &str = "/usr/local/lib/libnss_wrapper.so";
+const RUNTIME_PASSWD_FILE_NAME: &str = ".tenex-passwd";
+const RUNTIME_GROUP_FILE_NAME: &str = ".tenex-group";
+const DEFAULT_RUNTIME_USER_NAME: &str = "tenex";
+const DEFAULT_RUNTIME_GROUP_NAME: &str = "tenex";
 #[cfg(any(test, windows))]
 const WINDOWS_CONTAINER_ROOT: &str = "/tenex-host";
 
@@ -96,9 +102,6 @@ fn ensure_container_with_paths(
 ) -> Result<()> {
     check_available()?;
     ensure_image_ready(settings, &agent.program)?;
-    if let Some(home) = home {
-        prepare_runtime_home_with_data_local_dir(agent, home, data_local_dir)?;
-    }
     let name = container_name(agent);
     let inspect = run_command(
         docker_command().args(["inspect", "--format", "{{.State.Running}}", &name]),
@@ -115,6 +118,16 @@ fn ensure_container_with_paths(
                     );
                 }
                 remove_container_by_name(&name)?;
+            } else if let Some(home) = home {
+                refresh_runtime_home_for_reuse_with_data_local_dir(agent, home, data_local_dir)?;
+                if is_running {
+                    return Ok(());
+                }
+                run_command(
+                    docker_command().args(["start", &name]),
+                    "Failed to start Docker container",
+                )?;
+                return Ok(());
             } else if is_running {
                 return Ok(());
             } else {
@@ -347,6 +360,7 @@ fn configure_home_mounts_with_data_local_dir(
     ));
     cmd.arg("-e")
         .arg(format!("CODEX_HOME={}", codex_home_target.display()));
+    configure_runtime_identity_env(cmd, &home_target);
 
     add_bind_mount(cmd, &prepared_home.home_source, &home_target, false);
     add_bind_mount(
@@ -384,6 +398,27 @@ fn configure_home_mounts_with_data_local_dir(
         true,
     );
     Ok(())
+}
+
+fn configure_runtime_identity_env(cmd: &mut Command, home_target: &Path) {
+    if docker_user_arg().is_none() {
+        return;
+    }
+
+    let passwd_target = home_target.join(RUNTIME_PASSWD_FILE_NAME);
+    let group_target = home_target.join(RUNTIME_GROUP_FILE_NAME);
+
+    cmd.arg("-e")
+        .arg(format!("LD_PRELOAD={NSS_WRAPPER_LIB_PATH}"));
+    cmd.arg("-e")
+        .arg(format!("NSS_WRAPPER_PASSWD={}", passwd_target.display()));
+    cmd.arg("-e")
+        .arg(format!("NSS_WRAPPER_GROUP={}", group_target.display()));
+
+    if let Some(identity) = current_runtime_user_info() {
+        cmd.arg("-e").arg(format!("USER={}", identity.user_name));
+        cmd.arg("-e").arg(format!("LOGNAME={}", identity.user_name));
+    }
 }
 
 fn configure_ssh_auth_sock_mount_from(cmd: &mut Command, ssh_auth_sock: Option<&Path>) {
@@ -503,6 +538,20 @@ fn prepare_runtime_home_with_data_local_dir(
     prepare_runtime_home_in(agent, home, &data_local_dir, &codex_home_target)
 }
 
+fn refresh_runtime_home_for_reuse_with_data_local_dir(
+    agent: &Agent,
+    home: &Path,
+    data_local_dir: Option<&Path>,
+) -> Result<()> {
+    let data_local_dir = data_local_dir
+        .map(Path::to_path_buf)
+        .or_else(paths::data_local_dir)
+        .or_else(paths::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    let codex_home_target = codex_home_dir(home);
+    refresh_runtime_home_for_reuse_in(agent, home, &data_local_dir, &codex_home_target)
+}
+
 fn prepare_runtime_home_in(
     agent: &Agent,
     home: &Path,
@@ -513,6 +562,37 @@ fn prepare_runtime_home_in(
     let home_source = runtime_root.join("home");
     let codex_home_source = runtime_root.join("codex-home");
 
+    ensure_runtime_home_directories(&home_source, codex_home_target)?;
+    write_runtime_identity_files(&home_source, &container_target_path(home))?;
+    sync_ssh_home(&home_source, home)?;
+    sync_claude_home(&home_source, home)?;
+    sync_codex_home(&codex_home_source, codex_home_target)?;
+
+    Ok(PreparedRuntimeHome {
+        home_source,
+        codex_home_source,
+        codex_home_target: codex_home_target.to_path_buf(),
+    })
+}
+
+fn refresh_runtime_home_for_reuse_in(
+    agent: &Agent,
+    home: &Path,
+    data_local_dir: &Path,
+    codex_home_target: &Path,
+) -> Result<()> {
+    let runtime_root = runtime_root_dir(agent, data_local_dir);
+    let home_source = runtime_root.join("home");
+    let codex_home_source = runtime_root.join("codex-home");
+
+    ensure_runtime_home_directories(&home_source, codex_home_target)?;
+    write_runtime_identity_files(&home_source, &container_target_path(home))?;
+    sync_claude_home(&home_source, home)?;
+    sync_codex_home(&codex_home_source, codex_home_target)?;
+    Ok(())
+}
+
+fn ensure_runtime_home_directories(home_source: &Path, codex_home_target: &Path) -> Result<()> {
     std::fs::create_dir_all(home_source.join(".cache")).with_context(|| {
         format!(
             "Failed to create Docker runtime cache directory {}",
@@ -543,14 +623,7 @@ fn prepare_runtime_home_in(
             codex_home_target.join("sessions").display()
         )
     })?;
-    sync_claude_home(&home_source, home)?;
-    sync_codex_home(&codex_home_source, codex_home_target)?;
-
-    Ok(PreparedRuntimeHome {
-        home_source,
-        codex_home_source,
-        codex_home_target: codex_home_target.to_path_buf(),
-    })
+    Ok(())
 }
 
 fn runtime_root_dir(agent: &Agent, data_local_dir: &Path) -> PathBuf {
@@ -620,6 +693,135 @@ fn sync_optional_dir(source: &Path, target: &Path) -> Result<()> {
             .with_context(|| format!("Failed to remove {}", target.display()))?;
     }
 
+    Ok(())
+}
+
+fn sync_ssh_home(target_home: &Path, host_home: &Path) -> Result<()> {
+    sync_optional_path_following_symlinks(&host_home.join(".ssh"), &target_home.join(".ssh"))?;
+    sync_optional_path_following_symlinks(
+        &host_home.join(".config").join("ssh"),
+        &target_home.join(".config").join("ssh"),
+    )?;
+    Ok(())
+}
+
+fn sync_optional_path_following_symlinks(source: &Path, target: &Path) -> Result<()> {
+    remove_path_if_exists(target)?;
+    if source.exists() {
+        copy_path_recursive_following_symlinks(source, target)?;
+    }
+
+    Ok(())
+}
+
+fn copy_path_recursive_following_symlinks(source: &Path, target: &Path) -> Result<()> {
+    let mut active_sources = HashSet::new();
+    copy_path_recursive_following_symlinks_inner(source, target, &mut active_sources)
+}
+
+fn copy_path_recursive_following_symlinks_inner(
+    source: &Path,
+    target: &Path,
+    active_sources: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let metadata = std::fs::metadata(source)
+        .with_context(|| format!("Failed to read {}", source.display()))?;
+    let canonical_source = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf());
+    if !active_sources.insert(canonical_source.clone()) {
+        return Ok(());
+    }
+
+    let result = if metadata.is_dir() {
+        std::fs::create_dir_all(target)
+            .with_context(|| format!("Failed to create {}", target.display()))?;
+
+        for entry in std::fs::read_dir(source)
+            .with_context(|| format!("Failed to read {}", source.display()))?
+        {
+            let entry = entry.with_context(|| format!("Failed to read {}", source.display()))?;
+            let entry_path = entry.path();
+            let entry_type = entry.file_type().with_context(|| {
+                format!("Failed to read file type for {}", entry_path.display())
+            })?;
+            let target_path = target.join(entry.file_name());
+            if entry_type.is_symlink() {
+                let Ok(resolved) = entry_path.canonicalize() else {
+                    continue;
+                };
+                copy_path_recursive_following_symlinks_inner(
+                    &resolved,
+                    &target_path,
+                    active_sources,
+                )?;
+            } else if entry_type.is_dir() {
+                copy_path_recursive_following_symlinks_inner(
+                    &entry_path,
+                    &target_path,
+                    active_sources,
+                )?;
+            } else if entry_type.is_file() {
+                copy_file_with_permissions(&entry_path, &target_path)?;
+            }
+        }
+
+        set_staged_permissions(target, metadata.permissions())
+    } else if metadata.is_file() {
+        copy_file_with_permissions(source, target)
+    } else {
+        Ok(())
+    };
+
+    active_sources.remove(&canonical_source);
+    result
+}
+
+fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::copy(source, target).with_context(|| {
+        format!(
+            "Failed to copy {} to {}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    let permissions = std::fs::metadata(source)
+        .with_context(|| format!("Failed to read {}", source.display()))?
+        .permissions();
+    set_staged_permissions(target, permissions)?;
+    Ok(())
+}
+
+fn set_staged_permissions(path: &Path, permissions: std::fs::Permissions) -> Result<()> {
+    std::fs::set_permissions(path, owner_writable_permissions(permissions))
+        .with_context(|| format!("Failed to set permissions on {}", path.display()))
+}
+
+#[cfg(unix)]
+fn owner_writable_permissions(mut permissions: std::fs::Permissions) -> std::fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+
+    permissions.set_mode(permissions.mode() | 0o200);
+    permissions
+}
+
+#[cfg(not(unix))]
+fn owner_writable_permissions(permissions: std::fs::Permissions) -> std::fs::Permissions {
+    permissions
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("Failed to remove {}", path.display()))?;
+    } else if path.exists() {
+        std::fs::remove_file(path)
+            .with_context(|| format!("Failed to remove {}", path.display()))?;
+    }
     Ok(())
 }
 
@@ -704,6 +906,94 @@ fn sync_claude_settings_file(source: &Path, target: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn write_runtime_identity_files(home_source: &Path, home_target: &Path) -> Result<()> {
+    let passwd_path = home_source.join(RUNTIME_PASSWD_FILE_NAME);
+    let group_path = home_source.join(RUNTIME_GROUP_FILE_NAME);
+
+    let Some(identity) = current_runtime_user_info() else {
+        return Ok(());
+    };
+
+    let shell = "/bin/bash";
+    let mut passwd = String::from("root:x:0:0:root:/root:/bin/bash\n");
+    if identity.uid == "0" {
+        passwd.clear();
+    }
+    passwd
+        .write_fmt(format_args!(
+            "{}:x:{}:{}:Tenex runtime user:{}:{}\n",
+            identity.user_name,
+            identity.uid,
+            identity.gid,
+            home_target.display(),
+            shell
+        ))
+        .map_err(|_| anyhow::anyhow!("Failed to format runtime passwd entry"))?;
+
+    let mut group = String::from("root:x:0:\n");
+    if identity.gid == "0" {
+        group.clear();
+    }
+    group
+        .write_fmt(format_args!(
+            "{}:x:{}:\n",
+            identity.group_name, identity.gid
+        ))
+        .map_err(|_| anyhow::anyhow!("Failed to format runtime group entry"))?;
+
+    std::fs::write(&passwd_path, passwd)
+        .with_context(|| format!("Failed to write {}", passwd_path.display()))?;
+    std::fs::write(&group_path, group)
+        .with_context(|| format!("Failed to write {}", group_path.display()))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeUserIdentity {
+    user_name: String,
+    group_name: String,
+    uid: String,
+    gid: String,
+}
+
+fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
+    #[cfg(unix)]
+    {
+        let uid = read_trimmed_stdout("id", ["-u"])?;
+        let gid = read_trimmed_stdout("id", ["-g"])?;
+        let user_name = sanitize_runtime_account_name(
+            read_trimmed_stdout("id", ["-un"]).or_else(|| std::env::var("USER").ok()),
+            DEFAULT_RUNTIME_USER_NAME,
+        );
+        let group_name = sanitize_runtime_account_name(
+            read_trimmed_stdout("id", ["-gn"]).or_else(|| std::env::var("USER").ok()),
+            DEFAULT_RUNTIME_GROUP_NAME,
+        );
+
+        Some(RuntimeUserIdentity {
+            user_name,
+            group_name,
+            uid,
+            gid,
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.contains(':'))
+        .filter(|value| !value.contains('\n'))
+        .filter(|value| !value.contains('\r'))
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn sanitize_codex_config(contents: &str) -> String {
@@ -848,7 +1138,7 @@ fn default_worker_dockerfile_hash() -> String {
 
 fn current_container_layout_hash() -> String {
     let descriptor = format!(
-        "layout:{WORKER_CONTAINER_LAYOUT_VERSION};image:{};cargo-home:.cargo;mounts:repo-git,repo-worktrees,external-symlink-targets",
+        "layout:{WORKER_CONTAINER_LAYOUT_VERSION};image:{};cargo-home:.cargo;mounts:repo-git,repo-worktrees,external-symlink-targets,managed-ssh-home;nss-wrapper",
         default_worker_dockerfile_hash()
     );
     format!("{:016x}", fnv1a64(descriptor.as_bytes()))
@@ -1018,7 +1308,19 @@ mod tests {
     use crate::agent::{Agent, AgentRuntime};
     use crate::app::Settings;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    const ENSURE_CONTAINER_CHILD_FLAG: &str = "TENEX_DOCKER_ENSURE_CONTAINER_CHILD";
+    #[cfg(unix)]
+    const ENSURE_CONTAINER_WORKTREE_VAR: &str = "TENEX_DOCKER_ENSURE_CONTAINER_WORKTREE";
+    #[cfg(unix)]
+    const RUNTIME_IDENTITY_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_IDENTITY_CHILD";
+    #[cfg(unix)]
+    const RUNTIME_IDENTITY_HOME_SOURCE_VAR: &str = "TENEX_DOCKER_RUNTIME_IDENTITY_HOME_SOURCE";
 
     fn docker_agent() -> Agent {
         let mut agent = Agent::new(
@@ -1049,11 +1351,8 @@ mod tests {
 
     #[test]
     fn test_windows_container_target_from_str_maps_drive_paths() {
-        let target = windows_container_target_from_str(r"C:\Users\quinten\.tenex\worktrees\repo");
-        assert_eq!(
-            target,
-            PathBuf::from("/tenex-host/c/Users/quinten/.tenex/worktrees/repo")
-        );
+        let target = windows_container_target_from_str(r"C:\tenex\worktrees\repo");
+        assert_eq!(target, PathBuf::from("/tenex-host/c/tenex/worktrees/repo"));
     }
 
     #[test]
@@ -1142,6 +1441,25 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn test_resolved_symlink_target_resolves_relative_target_outside_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let worktree = temp.path().join("worktree");
+        let external = temp.path().join("external");
+        let path = worktree.join("PLAN.md");
+        let target = external.join("PLAN.md");
+        fs::create_dir_all(&worktree)?;
+        fs::create_dir_all(&external)?;
+        fs::write(&target, "# plan\n")?;
+
+        let resolved = resolved_symlink_target(&path, &worktree, Path::new("../external/PLAN.md"));
+
+        assert_eq!(resolved, target.canonicalize()?);
+        Ok(())
+    }
+
+    #[cfg(unix)]
     fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1225,6 +1543,9 @@ mod tests {
         assert!(
             dockerfile_contents.contains("cargo install cargo-llvm-cov --locked --version 0.6.22")
         );
+        assert!(dockerfile_contents.contains("libnss-wrapper"));
+        assert!(dockerfile_contents.contains("openssh-client"));
+        assert!(dockerfile_contents.contains("/usr/local/lib/libnss_wrapper.so"));
         assert!(dockerfile_contents.contains("/etc/profile.d/tenex-rust-path.sh"));
         assert!(dockerfile_contents.contains("/usr/local/cargo/bin/*"));
         Ok(())
@@ -1322,6 +1643,30 @@ hide_rate_limit_model_nudge = true
     fn test_sanitize_claude_settings_returns_original_when_invalid_json() {
         let invalid = "{ invalid";
         assert_eq!(sanitize_claude_settings(invalid), invalid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_matches_current_layout_uses_runtime_label()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nexit 0\n",
+                current_container_layout_hash(),
+            ),
+        )?;
+
+        with_docker_program_override_for_tests(script, || -> Result<()> {
+            assert_eq!(
+                container_layout_hash("tenex-runtime-test")?,
+                Some(current_container_layout_hash())
+            );
+            assert!(container_matches_current_layout("tenex-runtime-test")?);
+            Ok(())
+        })?;
+        Ok(())
     }
 
     #[test]
@@ -1460,6 +1805,174 @@ command = "docker"
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_replaces_stale_target_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let external_key = temp.path().join("external-key");
+        fs::create_dir_all(&source)?;
+        fs::write(&target, "stale-target")?;
+        fs::write(source.join("config"), "Host staged\n")?;
+        fs::write(&external_key, "private-key\n")?;
+        std::os::unix::fs::symlink(&external_key, source.join("id_test"))?;
+
+        sync_optional_path_following_symlinks(&source, &target)?;
+
+        assert_eq!(fs::read_to_string(target.join("config"))?, "Host staged\n");
+        assert_eq!(fs::read_to_string(target.join("id_test"))?, "private-key\n");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_skips_broken_symlinks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source)?;
+        std::os::unix::fs::symlink(temp.path().join("missing"), source.join("broken"))?;
+
+        sync_optional_path_following_symlinks(&source, &target)?;
+
+        assert!(target.is_dir());
+        assert!(!target.join("broken").exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_removes_target_when_source_missing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&target)?;
+        fs::write(target.join("stale.txt"), "stale")?;
+
+        sync_optional_path_following_symlinks(&source, &target)?;
+
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_reports_missing_source()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target").join("copied");
+
+        let err = match copy_file_with_permissions(&source, &target) {
+            Ok(()) => return Err("expected missing source error".into()),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains(&source.display().to_string()));
+        assert!(message.contains(&target.display().to_string()));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_set_staged_permissions_reports_missing_path() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("missing-path");
+
+        let err = match set_staged_permissions(&path, fs::Permissions::from_mode(0o644)) {
+            Ok(()) => return Err("expected missing path error".into()),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("Failed to set permissions on"));
+        assert!(message.contains(&path.display().to_string()));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_runtime_home_directories_reports_create_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let home_source = temp.path().join("runtime-home");
+        let codex_home_target = temp.path().join("codex-home");
+        fs::write(&home_source, "not-a-directory")?;
+
+        let err = match ensure_runtime_home_directories(&home_source, &codex_home_target) {
+            Ok(()) => return Err("expected directory creation failure".into()),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker runtime cache directory"));
+        assert!(message.contains(&home_source.join(".cache").display().to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_sanitize_runtime_account_name_rejects_invalid_values() {
+        assert_eq!(
+            sanitize_runtime_account_name(Some("  alice  ".to_string()), "fallback"),
+            "alice"
+        );
+        assert_eq!(
+            sanitize_runtime_account_name(Some(String::new()), "fallback"),
+            "fallback"
+        );
+        assert_eq!(
+            sanitize_runtime_account_name(Some("alice:staff".to_string()), "fallback"),
+            "fallback"
+        );
+        assert_eq!(
+            sanitize_runtime_account_name(Some("ali\nce".to_string()), "fallback"),
+            "fallback"
+        );
+        assert_eq!(sanitize_runtime_account_name(None, "fallback"), "fallback");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_trimmed_stdout_trims_and_rejects_blank_output() {
+        assert_eq!(
+            read_trimmed_stdout("sh", ["-c", "printf '  value  \\n'"]),
+            Some("value".to_string())
+        );
+        assert_eq!(read_trimmed_stdout("sh", ["-c", "printf '   \\n'"]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_runtime_identity_env_sets_expected_variables() {
+        let mut cmd = Command::new("docker");
+        let home_target = PathBuf::from("/tmp/runtime-home");
+
+        configure_runtime_identity_env(&mut cmd, &home_target);
+
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"-e".to_string()));
+        assert!(args.contains(&format!("LD_PRELOAD={NSS_WRAPPER_LIB_PATH}")));
+        assert!(args.contains(&format!(
+            "NSS_WRAPPER_PASSWD={}",
+            home_target.join(RUNTIME_PASSWD_FILE_NAME).display()
+        )));
+        assert!(args.contains(&format!(
+            "NSS_WRAPPER_GROUP={}",
+            home_target.join(RUNTIME_GROUP_FILE_NAME).display()
+        )));
+        if let Some(identity) = current_runtime_user_info() {
+            assert!(args.contains(&format!("USER={}", identity.user_name)));
+            assert!(args.contains(&format!("LOGNAME={}", identity.user_name)));
+        }
+    }
+
     #[test]
     fn test_prepare_runtime_home_in_creates_managed_cargo_home()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1477,6 +1990,165 @@ command = "docker"
         )?;
 
         assert!(prepared.home_source.join(".cargo").is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_codex_and_claude_home_helpers_copy_expected_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_codex_home = host_home.join(".codex");
+        let target_codex_home = target_home.join(".codex");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+
+        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(host_claude_dir.join("commands"))?;
+        fs::create_dir_all(&target_codex_home)?;
+        fs::create_dir_all(&target_claude_dir)?;
+
+        fs::write(
+            host_codex_home.join("config.toml"),
+            "model = \"gpt-5.4\"\nnotify = [\"beep\"]\n",
+        )?;
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#)?;
+        fs::write(
+            host_claude_dir.join("settings.json"),
+            r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
+        )?;
+        fs::write(
+            host_claude_dir.join("commands").join("review.md"),
+            "# review\n",
+        )?;
+        fs::write(host_home.join(".claude.json"), r#"{"oauthAccount":{}}"#)?;
+
+        sync_codex_home(&target_codex_home, &host_codex_home)?;
+        sync_claude_home(&target_home, &host_home)?;
+
+        let managed_codex_config = fs::read_to_string(target_codex_home.join("config.toml"))?;
+        assert!(managed_codex_config.contains("model = \"gpt-5.4\""));
+        assert!(!managed_codex_config.contains("notify ="));
+        assert_eq!(
+            fs::read_to_string(target_codex_home.join("auth.json"))?,
+            r#"{"token":"abc"}"#
+        );
+
+        let managed_claude_settings = fs::read_to_string(target_claude_dir.join("settings.json"))?;
+        assert!(managed_claude_settings.contains("\"defaultMode\": \"plan\""));
+        assert!(!managed_claude_settings.contains("\"hooks\""));
+        assert_eq!(
+            fs::read_to_string(target_claude_dir.join("commands").join("review.md"))?,
+            "# review\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target_home.join(".claude.json"))?,
+            r#"{"oauthAccount":{}}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_command_and_build_context_helpers() -> Result<(), Box<dyn std::error::Error>> {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf helper-output"]);
+        assert_eq!(
+            run_command(&mut command, "Failed to run helper command")?,
+            "helper-output"
+        );
+
+        let build_context = default_worker_build_context_dir()?;
+        assert!(build_context.is_dir());
+        assert!(build_context.ends_with("tenex/docker-build-context"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_runtime_identity_files_preserve_existing_files_when_lookup_fails()
+    -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os(RUNTIME_IDENTITY_CHILD_FLAG).is_some() {
+            let home_source = PathBuf::from(
+                std::env::var_os(RUNTIME_IDENTITY_HOME_SOURCE_VAR)
+                    .ok_or_else(|| std::io::Error::other("missing runtime identity home source"))?,
+            );
+            let passwd_path = home_source.join(RUNTIME_PASSWD_FILE_NAME);
+            let group_path = home_source.join(RUNTIME_GROUP_FILE_NAME);
+            let existing_passwd = fs::read_to_string(&passwd_path)?;
+            let existing_group = fs::read_to_string(&group_path)?;
+
+            write_runtime_identity_files(&home_source, Path::new("/tmp/runtime-home"))?;
+
+            assert_eq!(fs::read_to_string(passwd_path)?, existing_passwd);
+            assert_eq!(fs::read_to_string(group_path)?, existing_group);
+            return Ok(());
+        }
+
+        let temp = TempDir::new()?;
+        let home_source = temp.path().join("runtime-home");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&home_source)?;
+        fs::create_dir_all(&bin_dir)?;
+        fs::write(
+            home_source.join(RUNTIME_PASSWD_FILE_NAME),
+            "existing-passwd\n",
+        )?;
+        fs::write(
+            home_source.join(RUNTIME_GROUP_FILE_NAME),
+            "existing-group\n",
+        )?;
+
+        let id_script = bin_dir.join("id");
+        fs::write(&id_script, "#!/bin/sh\nexit 1\n")?;
+        let mut perms = fs::metadata(&id_script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&id_script, perms)?;
+
+        let current_exe = std::env::current_exe()?;
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", bin_dir.display());
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg(
+                "runtime::docker::tests::test_write_runtime_identity_files_preserve_existing_files_when_lookup_fails",
+            )
+            .arg("--nocapture")
+            .env(RUNTIME_IDENTITY_CHILD_FLAG, "1")
+            .env(RUNTIME_IDENTITY_HOME_SOURCE_VAR, &home_source)
+            .env("PATH", prefixed_path)
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_runtime_home_in_writes_runtime_identity_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions"))?;
+
+        let prepared = prepare_runtime_home_in(
+            &docker_agent(),
+            &host_home,
+            &data_local_dir,
+            &host_codex_home,
+        )?;
+
+        let passwd = fs::read_to_string(prepared.home_source.join(RUNTIME_PASSWD_FILE_NAME))?;
+        let group = fs::read_to_string(prepared.home_source.join(RUNTIME_GROUP_FILE_NAME))?;
+        assert!(passwd.contains("Tenex runtime user"));
+        assert!(passwd.contains(&container_target_path(&host_home).display().to_string()));
+        assert!(group.contains(':'));
         Ok(())
     }
 
@@ -1535,6 +2207,318 @@ command = "docker"
 
     #[cfg(unix)]
     #[test]
+    fn test_ensure_container_with_paths_refreshes_staged_auth_without_resetting_ssh_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        let host_codex_home = host_home.join(".codex");
+        let host_claude_dir = host_home.join(".claude");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree)?;
+        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(&host_claude_dir)?;
+        fs::create_dir_all(host_home.join(".ssh"))?;
+        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
+        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n")?;
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#)?;
+        fs::write(
+            host_claude_dir.join("settings.json"),
+            r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
+        )?;
+        fs::write(host_home.join(".ssh").join("config"), "Host test\n")?;
+        fs::write(host_home.join(".ssh").join("known_hosts"), "host-key\n")?;
+        fs::write(
+            host_home.join(".config").join("ssh").join("config"),
+            "Host xdg-test\n",
+        )?;
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let prepared =
+            prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)?;
+        fs::write(
+            prepared.home_source.join(".ssh").join("known_hosts"),
+            "updated-host-key\n",
+        )?;
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#)?;
+        fs::write(
+            host_claude_dir.join("settings.json"),
+            r#"{"permissions":{"defaultMode":"acceptEdits"}}"#,
+        )?;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        )?;
+
+        with_docker_program_override_for_tests(script, || -> Result<()> {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            )
+        })?;
+
+        assert_eq!(
+            fs::read_to_string(prepared.codex_home_source.join("auth.json"))?,
+            r#"{"token":"new"}"#
+        );
+        assert!(
+            fs::read_to_string(prepared.home_source.join(".claude").join("settings.json"))?
+                .contains("\"defaultMode\": \"acceptEdits\"")
+        );
+        assert_eq!(
+            fs::read_to_string(prepared.home_source.join(".ssh").join("known_hosts"))?,
+            "updated-host-key\n"
+        );
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains(&format!("start {}", container_name(&agent))));
+        assert!(!log_contents.contains("run -d --init"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_runtime_home_in_stages_writable_ssh_home()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new()?;
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        let host_ssh_dir = host_home.join(".ssh");
+        let host_xdg_ssh_dir = host_home.join(".config").join("ssh");
+        let external_key = temp.path().join("id_test");
+        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(&host_ssh_dir)?;
+        fs::create_dir_all(&host_xdg_ssh_dir)?;
+        fs::write(host_ssh_dir.join("config"), "Host test\n")?;
+        fs::write(host_ssh_dir.join("known_hosts"), "host-key\n")?;
+        fs::write(&external_key, "private-key\n")?;
+        std::os::unix::fs::symlink(&external_key, host_ssh_dir.join("id_test"))?;
+        fs::write(host_xdg_ssh_dir.join("config"), "Host xdg-test\n")?;
+        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o555))?;
+        fs::set_permissions(
+            host_ssh_dir.join("config"),
+            std::fs::Permissions::from_mode(0o444),
+        )?;
+        fs::set_permissions(
+            host_ssh_dir.join("known_hosts"),
+            std::fs::Permissions::from_mode(0o444),
+        )?;
+        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o555))?;
+        fs::set_permissions(
+            host_xdg_ssh_dir.join("config"),
+            std::fs::Permissions::from_mode(0o444),
+        )?;
+        fs::set_permissions(&external_key, std::fs::Permissions::from_mode(0o400))?;
+
+        let prepared = prepare_runtime_home_in(
+            &docker_agent(),
+            &host_home,
+            &data_local_dir,
+            &host_codex_home,
+        )?;
+
+        let staged_ssh_dir = prepared.home_source.join(".ssh");
+        let staged_xdg_ssh_dir = prepared.home_source.join(".config").join("ssh");
+        assert_eq!(
+            fs::read_to_string(staged_ssh_dir.join("config"))?,
+            "Host test\n"
+        );
+        assert_eq!(
+            fs::read_to_string(staged_ssh_dir.join("id_test"))?,
+            "private-key\n"
+        );
+        assert_eq!(
+            fs::read_to_string(staged_xdg_ssh_dir.join("config"))?,
+            "Host xdg-test\n"
+        );
+
+        fs::write(staged_ssh_dir.join("known_hosts"), "updated-host-key\n")?;
+        fs::write(staged_ssh_dir.join("control-socket"), "socket\n")?;
+        fs::write(staged_xdg_ssh_dir.join("control-socket"), "socket\n")?;
+        assert_ne!(
+            fs::metadata(&staged_ssh_dir)?.permissions().mode() & 0o200,
+            0
+        );
+        assert_ne!(
+            fs::metadata(staged_ssh_dir.join("config"))?
+                .permissions()
+                .mode()
+                & 0o200,
+            0
+        );
+        assert_eq!(
+            fs::read_to_string(host_ssh_dir.join("known_hosts"))?,
+            "host-key\n"
+        );
+        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_mounts_optional_host_config()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        let host_codex_home = host_home.join(".codex");
+        let host_gh_dir = host_home.join(".config").join("gh");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree)?;
+        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(host_codex_home.join("skills"))?;
+        fs::create_dir_all(host_home.join(".ssh"))?;
+        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
+        fs::create_dir_all(&host_gh_dir)?;
+        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n")?;
+        fs::write(host_home.join(".ssh").join("config"), "Host test\n")?;
+        fs::write(
+            host_home.join(".config").join("ssh").join("config"),
+            "Host xdg-test\n",
+        )?;
+        fs::write(host_home.join(".gitconfig"), "[user]\n\tname = Test User\n")?;
+        fs::write(host_gh_dir.join("hosts.yml"), "github.com:\n")?;
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nif [ \"$1\" = \"run\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+            ),
+        )?;
+
+        with_docker_program_override_for_tests(script, || -> Result<()> {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            )
+        })?;
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains("run -d --init"));
+        assert!(log_contents.contains(&format!(
+            "-v {}:{}",
+            host_gh_dir.display(),
+            host_gh_dir.display()
+        )));
+        assert!(log_contents.contains(&format!(
+            "-v {}:{}:ro",
+            host_home.join(".gitconfig").display(),
+            host_home.join(".gitconfig").display()
+        )));
+        assert!(log_contents.contains(&format!(
+            "-v {}:{}:ro",
+            host_codex_home.join("skills").display(),
+            host_codex_home.join("skills").display()
+        )));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_uses_process_environment() -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os(ENSURE_CONTAINER_CHILD_FLAG).is_some() {
+            let mut agent = docker_agent();
+            agent.worktree_path =
+                PathBuf::from(std::env::var_os(ENSURE_CONTAINER_WORKTREE_VAR).ok_or_else(
+                    || std::io::Error::other("missing ensure-container worktree path"),
+                )?);
+            ensure_container(&agent, &Settings::default())?;
+            remove_container(&agent)?;
+            return Ok(());
+        }
+
+        let temp = TempDir::new()?;
+        let home = temp.path().join("home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", temp.path().display());
+        fs::create_dir_all(home.join(".codex").join("sessions"))?;
+        fs::create_dir_all(home.join(".ssh"))?;
+        fs::create_dir_all(home.join(".config").join("ssh"))?;
+        fs::create_dir_all(&worktree)?;
+        fs::write(
+            home.join(".codex").join("config.toml"),
+            "model = \"gpt-5.4\"\n",
+        )?;
+        fs::write(home.join(".ssh").join("config"), "Host test\n")?;
+        fs::write(
+            home.join(".config").join("ssh").join("config"),
+            "Host xdg-test\n",
+        )?;
+        write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nif [ \"$1\" = \"run\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+            ),
+        )?;
+
+        let current_exe = std::env::current_exe()?;
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_ensure_container_uses_process_environment")
+            .arg("--nocapture")
+            .env(ENSURE_CONTAINER_CHILD_FLAG, "1")
+            .env(ENSURE_CONTAINER_WORKTREE_VAR, &worktree)
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_local_dir)
+            .env("PATH", prefixed_path)
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            log.exists(),
+            "expected docker log at {}\nstdout:\n{}\nstderr:\n{}",
+            log.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let log_contents = fs::read_to_string(&log)?;
+        assert!(log_contents.contains("run -d --init"));
+        assert!(log_contents.contains(&format!("HOME={}", home.display())));
+        assert!(log_contents.contains(&format!(
+            "-v {}:{}",
+            worktree.display(),
+            worktree.display()
+        )));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_ensure_container_mounts_runtime_env_and_symlink_targets()
     -> Result<(), Box<dyn std::error::Error>> {
         let temp = TempDir::new()?;
@@ -1560,6 +2544,28 @@ command = "docker"
             "CARGO_HOME={}",
             host_home.join(".cargo").display()
         )));
+        assert!(log_contents.contains(&format!("LD_PRELOAD={NSS_WRAPPER_LIB_PATH}")));
+        assert!(log_contents.contains(&format!(
+            "NSS_WRAPPER_PASSWD={}",
+            host_home.join(RUNTIME_PASSWD_FILE_NAME).display()
+        )));
+        assert!(log_contents.contains(&format!(
+            "NSS_WRAPPER_GROUP={}",
+            host_home.join(RUNTIME_GROUP_FILE_NAME).display()
+        )));
+        assert!(
+            prepared.home_source.join(".ssh").join("config").is_file(),
+            "expected staged ssh config in managed runtime home"
+        );
+        assert!(
+            prepared
+                .home_source
+                .join(".config")
+                .join("ssh")
+                .join("config")
+                .is_file(),
+            "expected staged XDG ssh config in managed runtime home"
+        );
         assert!(log_contents.contains(&format!(
             "-v {}:{}",
             expected_target_mount.display(),
@@ -1574,6 +2580,16 @@ command = "docker"
             "-v {}:{}",
             host_home.join(".claude").display(),
             host_home.join(".claude").display()
+        )));
+        assert!(!log_contents.contains(&format!(
+            "-v {}:{}",
+            host_home.join(".ssh").display(),
+            host_home.join(".ssh").display()
+        )));
+        assert!(!log_contents.contains(&format!(
+            "-v {}:{}",
+            host_home.join(".config").join("ssh").display(),
+            host_home.join(".config").join("ssh").display()
         )));
         Ok(())
     }
@@ -1626,18 +2642,18 @@ command = "docker"
     }
 
     #[cfg(unix)]
-    fn docker_mount_log_for_test(
-        temp: &TempDir,
-    ) -> Result<(String, PreparedRuntimeHome, PathBuf, PathBuf), Box<dyn std::error::Error>> {
-        let log = temp.path().join("docker.log");
-        let script = write_fake_docker_script(
-            temp,
-            &format!(
-                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
-                log.display()
-            ),
-        )?;
+    struct DockerMountTestFixture {
+        prepared: PreparedRuntimeHome,
+        repo_root: PathBuf,
+        worktree: PathBuf,
+        host_home: PathBuf,
+        agent: Agent,
+    }
 
+    #[cfg(unix)]
+    fn prepare_docker_mount_test_fixture(
+        temp: &TempDir,
+    ) -> Result<DockerMountTestFixture, Box<dyn std::error::Error>> {
         let repo_root = temp.path().join("repo");
         let worktree = temp.path().join("worktree");
         let host_home = temp.path().join("host-home");
@@ -1652,7 +2668,14 @@ command = "docker"
         fs::create_dir_all(&worktree)?;
         fs::create_dir_all(host_home.join(".codex").join("sessions"))?;
         fs::create_dir_all(host_home.join(".claude"))?;
+        fs::create_dir_all(host_home.join(".ssh"))?;
+        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
         fs::write(repo_root.join("PLAN.md"), "# plan\n")?;
+        fs::write(host_home.join(".ssh").join("config"), "# test ssh config\n")?;
+        fs::write(
+            host_home.join(".config").join("ssh").join("config"),
+            "# test xdg ssh config\n",
+        )?;
         std::os::unix::fs::symlink(repo_root.join("target"), worktree.join("target"))?;
         std::os::unix::fs::symlink(repo_root.join("PLAN.md"), worktree.join("PLAN.md"))?;
         fs::write(
@@ -1667,7 +2690,6 @@ command = "docker"
         let mut agent = docker_agent();
         agent.repo_root = Some(repo_root.clone());
         agent.worktree_path = worktree.clone();
-
         let prepared = prepare_runtime_home_in(
             &agent,
             &host_home,
@@ -1675,6 +2697,20 @@ command = "docker"
             &host_home.join(".codex"),
         )?;
 
+        Ok(DockerMountTestFixture {
+            prepared,
+            repo_root,
+            worktree,
+            host_home,
+            agent,
+        })
+    }
+
+    #[cfg(unix)]
+    fn create_test_container_mount_log(
+        script: PathBuf,
+        fixture: &DockerMountTestFixture,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         with_docker_program_override_for_tests(script, || {
             let settings = Settings::default();
             let image = worker_image_tag(&settings);
@@ -1684,9 +2720,9 @@ command = "docker"
                 "-d",
                 "--init",
                 "--name",
-                &container_name(&agent),
+                &container_name(&fixture.agent),
                 "--hostname",
-                &container_name(&agent),
+                &container_name(&fixture.agent),
             ]);
             if let Some(user) = docker_user_arg() {
                 cmd.args(["--user", &user]);
@@ -1695,37 +2731,85 @@ command = "docker"
                 "{WORKER_CONTAINER_LAYOUT_HASH_LABEL}={}",
                 current_container_layout_hash()
             ));
-            cmd.arg("-e").arg(format!("HOME={}", host_home.display()));
+            cmd.arg("-e")
+                .arg(format!("HOME={}", fixture.host_home.display()));
             cmd.arg("-e").arg(format!(
                 "XDG_CACHE_HOME={}",
-                host_home.join(".cache").display()
+                fixture.host_home.join(".cache").display()
+            ));
+            cmd.arg("-e").arg(format!(
+                "CARGO_HOME={}",
+                fixture.host_home.join(".cargo").display()
+            ));
+            cmd.arg("-e").arg(format!(
+                "CODEX_HOME={}",
+                fixture.host_home.join(".codex").display()
             ));
             cmd.arg("-e")
-                .arg(format!("CARGO_HOME={}", host_home.join(".cargo").display()));
-            cmd.arg("-e")
-                .arg(format!("CODEX_HOME={}", host_home.join(".codex").display()));
-            add_bind_mount(&mut cmd, &prepared.home_source, &host_home, false);
+                .arg(format!("LD_PRELOAD={NSS_WRAPPER_LIB_PATH}"));
+            cmd.arg("-e").arg(format!(
+                "NSS_WRAPPER_PASSWD={}",
+                fixture.host_home.join(RUNTIME_PASSWD_FILE_NAME).display()
+            ));
+            cmd.arg("-e").arg(format!(
+                "NSS_WRAPPER_GROUP={}",
+                fixture.host_home.join(RUNTIME_GROUP_FILE_NAME).display()
+            ));
+            if let Some(identity) = current_runtime_user_info() {
+                cmd.arg("-e").arg(format!("USER={}", identity.user_name));
+                cmd.arg("-e").arg(format!("LOGNAME={}", identity.user_name));
+            }
             add_bind_mount(
                 &mut cmd,
-                &prepared.codex_home_source,
-                &prepared.codex_home_target,
+                &fixture.prepared.home_source,
+                &fixture.host_home,
                 false,
             );
             add_bind_mount(
                 &mut cmd,
-                &prepared.codex_home_target.join("sessions"),
-                &prepared.codex_home_target.join("sessions"),
+                &fixture.prepared.codex_home_source,
+                &fixture.prepared.codex_home_target,
                 false,
             );
-            configure_repo_metadata_mounts(&mut cmd, &agent);
-            cmd.args(["-w", &display_path(&worktree)]);
-            add_bind_mount(&mut cmd, &worktree, &worktree, false);
+            add_bind_mount(
+                &mut cmd,
+                &fixture.prepared.codex_home_target.join("sessions"),
+                &fixture.prepared.codex_home_target.join("sessions"),
+                false,
+            );
+            configure_repo_metadata_mounts(&mut cmd, &fixture.agent);
+            cmd.args(["-w", &display_path(&fixture.worktree)]);
+            add_bind_mount(&mut cmd, &fixture.worktree, &fixture.worktree, false);
             cmd.arg(image);
             cmd.arg("sleep");
             cmd.arg("infinity");
             run_command(&mut cmd, "Failed to create Docker container")
         })?;
 
-        Ok((fs::read_to_string(&log)?, prepared, repo_root, host_home))
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn docker_mount_log_for_test(
+        temp: &TempDir,
+    ) -> Result<(String, PreparedRuntimeHome, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+                log.display()
+            ),
+        )?;
+
+        let fixture = prepare_docker_mount_test_fixture(temp)?;
+        create_test_container_mount_log(script, &fixture)?;
+
+        Ok((
+            fs::read_to_string(&log)?,
+            fixture.prepared,
+            fixture.repo_root,
+            fixture.host_home,
+        ))
     }
 }
