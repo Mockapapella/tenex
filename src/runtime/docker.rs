@@ -1880,6 +1880,24 @@ command = "docker"
 
     #[cfg(unix)]
     #[test]
+    fn test_copy_path_recursive_following_symlinks_reports_missing_source()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target");
+
+        let err = match copy_path_recursive_following_symlinks(&source, &target) {
+            Ok(()) => return Err("expected missing source error".into()),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("Failed to read"));
+        assert!(message.contains(&source.display().to_string()));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_set_staged_permissions_reports_missing_path() -> Result<(), Box<dyn std::error::Error>>
     {
         let temp = TempDir::new()?;
