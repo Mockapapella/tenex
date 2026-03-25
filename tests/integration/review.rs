@@ -39,12 +39,16 @@ def handle_submit(state: int, text: str) -> int:
     print(text, flush=True)
     if state == 0:
         print("Select a review preset", flush=True)
+        print("1. Review against a base branch  (PR Style)", flush=True)
         return 1
     if state == 1:
         print("Select a base branch", flush=True)
+        print("  Type to search branches", flush=True)
+        print("> feature/review-branch -> master", flush=True)
+        print("  feature/review-branch -> stage", flush=True)
         return 2
     if state == 2:
-        branch = text.strip() or "master"
+        branch = "stage" if text.strip().lower() == "stage" else "master"
         print(f">> Code review started: changes against '{branch}' <<", flush=True)
         return 3
     return state
@@ -83,6 +87,9 @@ while True:
 
     if ch == b"\x7f" and buffer:
         buffer.pop()
+        continue
+
+    if in_paste and state == 2:
         continue
 
     buffer += ch
@@ -377,7 +384,7 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
     // Set up for review spawning under the root
     app.data.spawn.spawning_under = Some(root_id);
     app.data.spawn.child_count = 2;
-    app.data.review.base_branch = Some("master".to_string());
+    app.data.review.base_branch = Some("stage".to_string());
 
     // Spawn review agents
     let result = handler.spawn_review_agents(&mut app.data);
@@ -458,7 +465,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     app.data.spawn.spawning_under = Some(root_id);
     app.data.spawn.child_count = 1;
-    app.data.review.base_branch = Some("master".to_string());
+    app.data.review.base_branch = Some("stage".to_string());
 
     let result = handler.spawn_review_agents(&mut app.data);
 
@@ -507,8 +514,8 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             "Expected Codex review agents to type /review, got: {output:?}"
         );
         assert!(
-            output.contains("master"),
-            "Expected Codex review agents to enter the base branch, got: {output:?}"
+            output.contains("changes against 'stage'"),
+            "Expected Codex review agents to select the typed base branch, got: {output:?}"
         );
         assert!(
             output.contains("review started"),

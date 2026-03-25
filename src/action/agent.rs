@@ -636,4 +636,63 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_toggle_collapse_action_in_diff_mode_without_diff_is_noop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+        data.active_tab = Tab::Diff;
+
+        assert_eq!(
+            ToggleCollapseAction.execute(DiffFocusedMode, &mut data)?,
+            AppMode::DiffFocused(DiffFocusedMode)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_review_action_without_selected_agent_enters_review_info_mode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        assert_eq!(
+            ReviewSwarmAction.execute(NormalMode, &mut data)?,
+            ReviewInfoMode.into()
+        );
+        assert_eq!(
+            ReviewSwarmAction.execute(ScrollingMode, &mut data)?,
+            ReviewInfoMode.into()
+        );
+        assert_eq!(data.spawn.spawning_under, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_review_action_scrolling_requires_non_terminal_agent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut data, _temp) = create_test_data()?;
+
+        let mut terminal = Agent::new(
+            "terminal".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        terminal.is_terminal = true;
+        data.storage.add(terminal);
+
+        assert_eq!(
+            ReviewSwarmAction.execute(ScrollingMode, &mut data)?,
+            AppMode::Scrolling(ScrollingMode)
+        );
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Select a non-terminal agent for review swarm")
+        );
+        assert_eq!(data.spawn.spawning_under, None);
+
+        Ok(())
+    }
 }
