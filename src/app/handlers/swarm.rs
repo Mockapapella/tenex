@@ -115,7 +115,9 @@ impl Actions {
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
-        self.session_manager.paste_keys(target, base_branch)?;
+        // Current Codex shows base-branch selection as a picker. Typed keys update the picker
+        // filter, while bracketed paste leaves the default main/master selection intact.
+        self.session_manager.send_keys(target, base_branch)?;
         self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
