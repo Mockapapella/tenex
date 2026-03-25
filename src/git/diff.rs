@@ -1,12 +1,13 @@
 //! Git diff generation
 
 use anyhow::{Context, Result};
-use git2::{Delta, DiffOptions, Repository};
+use git2::{Delta, DiffOptions, Repository, Status, StatusOptions};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 fn diff_line_content(line: &git2::DiffLine<'_>) -> String {
     let mut content = String::from_utf8_lossy(line.content()).to_string();
@@ -35,6 +36,134 @@ fn hash_diff_line(hasher: &mut DefaultHasher, origin: char, content: &str) {
             hasher.write_usize(content.len());
             hasher.write(content.as_bytes());
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct StatusMarker {
+    path: PathBuf,
+    status_bits: u32,
+    head_to_index: Option<DeltaMarker>,
+    index_to_workdir: Option<DeltaMarker>,
+    workdir_meta: Option<WorktreeMetaMarker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct DeltaMarker {
+    status: u8,
+    old_file: DiffFileMarker,
+    new_file: DiffFileMarker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct DiffFileMarker {
+    path: Option<PathBuf>,
+    oid: String,
+    mode: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct WorktreeMetaMarker {
+    kind: u8,
+    len: u64,
+    modified_secs: u64,
+    modified_nanos: u32,
+}
+
+fn diff_file_marker(file: &git2::DiffFile<'_>) -> DiffFileMarker {
+    DiffFileMarker {
+        path: file.path().map(Path::to_path_buf),
+        oid: file.id().to_string(),
+        mode: file.mode().into(),
+    }
+}
+
+const fn file_status_rank(status: FileStatus) -> u8 {
+    match status {
+        FileStatus::Added => 1,
+        FileStatus::Deleted => 2,
+        FileStatus::Modified => 3,
+        FileStatus::Renamed => 4,
+        FileStatus::Copied => 5,
+        FileStatus::TypeChange => 6,
+        FileStatus::Untracked => 7,
+        FileStatus::Unknown => 8,
+    }
+}
+
+fn delta_marker(delta: &git2::DiffDelta<'_>) -> DeltaMarker {
+    DeltaMarker {
+        status: file_status_rank(delta_to_status(delta.status())),
+        old_file: diff_file_marker(&delta.old_file()),
+        new_file: diff_file_marker(&delta.new_file()),
+    }
+}
+
+fn status_has_workdir_change(status: Status) -> bool {
+    status.intersects(
+        Status::WT_NEW
+            | Status::WT_MODIFIED
+            | Status::WT_DELETED
+            | Status::WT_RENAMED
+            | Status::WT_TYPECHANGE,
+    )
+}
+
+fn worktree_meta_marker(workdir: Option<&Path>, path: Option<&Path>) -> Option<WorktreeMetaMarker> {
+    let path = path?;
+    let full_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workdir?.join(path)
+    };
+    let metadata = std::fs::symlink_metadata(&full_path).ok()?;
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_file() {
+        1
+    } else if file_type.is_dir() {
+        2
+    } else if file_type.is_symlink() {
+        3
+    } else {
+        4
+    };
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+
+    Some(WorktreeMetaMarker {
+        kind,
+        len: metadata.len(),
+        modified_secs: modified.as_secs(),
+        modified_nanos: modified.subsec_nanos(),
+    })
+}
+
+fn status_marker(entry: &git2::StatusEntry<'_>, workdir: Option<&Path>) -> StatusMarker {
+    let status = entry.status();
+    let head_to_index = entry.head_to_index().map(|delta| delta_marker(&delta));
+    let index_to_workdir = entry.index_to_workdir().map(|delta| delta_marker(&delta));
+    let path = entry.path().map_or_else(PathBuf::new, PathBuf::from);
+    let workdir_path = index_to_workdir
+        .as_ref()
+        .and_then(|delta| {
+            delta
+                .new_file
+                .path
+                .as_deref()
+                .or(delta.old_file.path.as_deref())
+        })
+        .map(Path::to_path_buf)
+        .or_else(|| (!path.as_os_str().is_empty()).then_some(path.clone()));
+
+    StatusMarker {
+        path,
+        status_bits: status.bits(),
+        head_to_index,
+        index_to_workdir,
+        workdir_meta: if status_has_workdir_change(status) {
+            worktree_meta_marker(workdir, workdir_path.as_deref())
+        } else {
+            None
+        },
     }
 }
 
@@ -184,6 +313,44 @@ impl<'a> Generator<'a> {
             .context("Failed to get uncommitted diff")?;
 
         Self::digest_diff(&diff)
+    }
+
+    /// Get a cheap marker hash for background diff polling.
+    ///
+    /// This intentionally avoids generating patch text. It hashes git status entries plus
+    /// lightweight filesystem metadata for worktree changes, which keeps inactive-tab polling
+    /// responsive even when large untracked build directories are present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if repository status cannot be read.
+    pub fn uncommitted_change_marker(&self) -> Result<u64> {
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.renames_head_to_index(true);
+        opts.renames_index_to_workdir(true);
+
+        let statuses = self
+            .repo
+            .statuses(Some(&mut opts))
+            .context("Failed to get repository status for diff marker")?;
+
+        if statuses.is_empty() {
+            return Ok(0);
+        }
+
+        let mut markers = statuses
+            .iter()
+            .map(|entry| status_marker(&entry, self.repo.workdir()))
+            .collect::<Vec<_>>();
+        markers.sort_unstable();
+
+        let mut hasher = DefaultHasher::new();
+        for marker in markers {
+            marker.hash(&mut hasher);
+        }
+        Ok(hasher.finish())
     }
 
     /// Get diff between two commits
@@ -787,6 +954,78 @@ mod tests {
                 .iter()
                 .any(|file| file.path.as_path() == Path::new("newdir/nested.txt"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_uncommitted_change_marker_zero_when_clean() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        assert_eq!(generator.uncommitted_change_marker()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_uncommitted_change_marker_changes_when_worktree_file_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let file_path = temp_dir.path().join("README.md");
+        fs::write(&file_path, "# Modified\n")?;
+        let first = generator.uncommitted_change_marker()?;
+
+        fs::write(&file_path, "# Modified again with more bytes\nextra\n")?;
+        let second = generator.uncommitted_change_marker()?;
+
+        assert_ne!(first, 0);
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn test_uncommitted_change_marker_changes_when_staged_blob_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let file_path = temp_dir.path().join("README.md");
+        fs::write(&file_path, "# First staged version\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
+        let first = generator.uncommitted_change_marker()?;
+
+        fs::write(&file_path, "# Second staged version with more bytes\n")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("README.md"))?;
+        index.write()?;
+        let second = generator.uncommitted_change_marker()?;
+
+        assert_ne!(first, 0);
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn test_uncommitted_change_marker_changes_when_untracked_nested_file_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let dir = temp_dir.path().join("repro");
+        fs::create_dir_all(&dir)?;
+        let nested = dir.join("nested.bin");
+        fs::write(&nested, b"first payload")?;
+        let first = generator.uncommitted_change_marker()?;
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(&nested, b"second payload with different size")?;
+        let second = generator.uncommitted_change_marker()?;
+
+        assert_ne!(first, 0);
+        assert_ne!(first, second);
         Ok(())
     }
 

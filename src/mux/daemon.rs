@@ -168,6 +168,7 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
             after,
             max_bytes,
         } => handle_read_output(&target, after, max_bytes),
+        MuxRequest::OutputCursor { target } => handle_output_cursor(&target),
         MuxRequest::ListPanePids { session } => handle_list_pids(&session),
     }
 }
@@ -404,6 +405,15 @@ fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxRes
             },
         }),
     }
+}
+
+fn handle_output_cursor(target: &str) -> Result<MuxResponse> {
+    let window = super::backend::resolve_window(target)?;
+    let (start, end) = {
+        let guard = window.lock();
+        (guard.output_history.seq_start, guard.output_history.seq_end)
+    };
+    Ok(MuxResponse::OutputCursor { start, end })
 }
 
 fn handle_list_pids(session: &str) -> Result<MuxResponse> {

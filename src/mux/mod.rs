@@ -17,7 +17,7 @@ mod session;
 
 pub use capture::Capture as OutputCapture;
 pub use endpoint::set_socket_override;
-pub use output::{OutputRead, OutputStream};
+pub use output::{OutputCursor, OutputRead, OutputStream};
 pub use session::{Manager as SessionManager, Session, Window};
 
 use anyhow::{Context, Result, bail};
@@ -174,7 +174,7 @@ pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
 /// Returns an error if the version cannot be constructed.
 pub fn version() -> Result<String> {
     // Bump this when Tenex makes incompatible changes to mux IPC payloads.
-    const MUX_PROTOCOL_VERSION: u32 = 2;
+    const MUX_PROTOCOL_VERSION: u32 = 3;
 
     Ok(format!(
         "tenex-mux/{}/proto-{}",

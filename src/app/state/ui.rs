@@ -31,10 +31,20 @@ pub enum PaneActivity {
 /// Cached pane output digest used to detect activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaneDigest {
-    /// Hash of the captured visible pane content.
+    /// Hash of the current activity observation for this agent.
     pub hash: u64,
     /// Whether the pane appears active or waiting.
     pub activity: PaneActivity,
+}
+
+/// How Tenex currently computes sidebar activity digests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PaneActivityDigestMode {
+    /// Use raw output cursor bounds from the mux daemon.
+    #[default]
+    Cursor,
+    /// Fall back to hashing the visible pane capture for older daemons.
+    Capture,
 }
 
 pub struct PreviewVtState {
@@ -153,8 +163,8 @@ pub struct UiState {
     /// Cached pane size for the selected pane (cols, rows).
     pub preview_pane_size: Option<(u16, u16)>,
 
-    /// Per-client VT100 parsing state for the preview pane.
-    pub preview_vt: Option<PreviewVtState>,
+    /// Per-target VT100 parsing state for the preview pane.
+    pub preview_vt_by_target: BTreeMap<String, PreviewVtState>,
 
     /// Cached diff content
     pub diff_content: String,
@@ -228,6 +238,9 @@ pub struct UiState {
     /// The pane digest hash the user last saw per agent (used for the `◐` "unseen waiting" indicator).
     pub pane_last_seen_hash_by_agent: BTreeMap<Uuid, u64>,
 
+    /// Which mux observation path the sidebar activity indicator is currently using.
+    pub pane_activity_digest_mode: PaneActivityDigestMode,
+
     /// Collapsed project sections in the sidebar (keyed by repository/workspace root path).
     pub collapsed_projects: BTreeSet<std::path::PathBuf>,
 }
@@ -259,7 +272,7 @@ impl UiState {
             preview_selection_dragging: false,
             preview_cursor_position: None,
             preview_pane_size: None,
-            preview_vt: None,
+            preview_vt_by_target: BTreeMap::new(),
             diff_content: String::new(),
             diff_line_ranges: Vec::new(),
             commits_content: String::new(),
@@ -284,6 +297,7 @@ impl UiState {
             status_message: None,
             pane_digest_by_agent: BTreeMap::new(),
             pane_last_seen_hash_by_agent: BTreeMap::new(),
+            pane_activity_digest_mode: PaneActivityDigestMode::Cursor,
             collapsed_projects: BTreeSet::new(),
         }
     }

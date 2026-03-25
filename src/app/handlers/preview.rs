@@ -59,6 +59,7 @@ impl Actions {
                     );
                 }
             } else {
+                app.data.ui.preview_vt_by_target.remove(&target);
                 set_preview_message(app, "(Session not running)");
             }
         } else {
@@ -100,53 +101,13 @@ impl Actions {
         history_lines_following: u32,
     ) -> bool {
         const MAX_BYTES: u32 = 64 * 1024;
-        const MAX_REQUESTS: usize = 32;
+        // Keep selection responsive when switching back to a noisy target. Large backlogs can be
+        // drained over subsequent refresh ticks instead of blocking one UI turn while we replay
+        // everything at once.
+        const MAX_REQUESTS_PER_REFRESH: usize = 1;
 
-        let needs_reset = app
-            .data
-            .ui
-            .preview_vt
-            .as_ref()
-            .is_none_or(|vt| vt.target != target || vt.dims != (cols, rows));
-        if needs_reset {
-            app.data.ui.preview_vt = Some(crate::app::state::PreviewVtState::new(
-                target.to_string(),
-                cols,
-                rows,
-            ));
-        }
-
-        let Some(vt) = app.data.ui.preview_vt.as_mut() else {
-            return false;
-        };
-
+        let target_key = target.to_string();
         let max_bytes = usize::try_from(MAX_BYTES).unwrap_or(usize::MAX);
-
-        for _ in 0..MAX_REQUESTS {
-            match self.output_stream.read_output(target, vt.after, MAX_BYTES) {
-                Ok(crate::mux::OutputRead::Chunk(chunk)) => {
-                    if !chunk.data.is_empty() {
-                        vt.parser.process(&chunk.data);
-                    }
-                    vt.after = chunk.end;
-
-                    if chunk.data.is_empty() || chunk.data.len() < max_bytes {
-                        break;
-                    }
-                }
-                Ok(crate::mux::OutputRead::Reset(reset)) => {
-                    vt.reset(target.to_string(), cols, rows);
-                    if !reset.checkpoint.is_empty() {
-                        vt.parser.process(&reset.checkpoint);
-                    }
-                    vt.after = reset.start;
-                }
-                Err(_) => {
-                    return false;
-                }
-            }
-        }
-
         let requested = if wants_full_history {
             usize::MAX
         } else {
@@ -155,11 +116,56 @@ impl Actions {
                 .max(usize::from(rows))
         };
 
-        let content =
-            crate::mux::render::capture_lines(&mut vt.parser, requested).unwrap_or_default();
-        let (cursor_row, cursor_col) = vt.parser.screen().cursor_position();
-        let cursor_hidden = vt.parser.screen().hide_cursor();
-        let cursor_position = Some((cursor_col, cursor_row, cursor_hidden));
+        let (content, cursor_position) = {
+            let vt = app
+                .data
+                .ui
+                .preview_vt_by_target
+                .entry(target_key.clone())
+                .or_insert_with(|| {
+                    crate::app::state::PreviewVtState::new(target_key.clone(), cols, rows)
+                });
+
+            if vt.dims != (cols, rows) {
+                vt.reset(target_key.clone(), cols, rows);
+            }
+
+            for _ in 0..MAX_REQUESTS_PER_REFRESH {
+                match self.output_stream.read_output(target, vt.after, MAX_BYTES) {
+                    Ok(crate::mux::OutputRead::Chunk(chunk)) => {
+                        if chunk.end < vt.after {
+                            return false;
+                        }
+
+                        if !chunk.data.is_empty() {
+                            vt.parser.process(&chunk.data);
+                        }
+                        vt.after = chunk.end;
+
+                        if chunk.data.is_empty() || chunk.data.len() < max_bytes {
+                            break;
+                        }
+                    }
+                    Ok(crate::mux::OutputRead::Reset(reset)) => {
+                        vt.reset(target_key.clone(), cols, rows);
+                        if !reset.checkpoint.is_empty() {
+                            vt.parser.process(&reset.checkpoint);
+                        }
+                        vt.after = reset.start;
+                    }
+                    Err(_) => {
+                        return false;
+                    }
+                }
+            }
+
+            let content =
+                crate::mux::render::capture_lines(&mut vt.parser, requested).unwrap_or_default();
+            let (cursor_row, cursor_col) = vt.parser.screen().cursor_position();
+            let cursor_hidden = vt.parser.screen().hide_cursor();
+            let cursor_position = Some((cursor_col, cursor_row, cursor_hidden));
+            (content, cursor_position)
+        };
 
         app.data.ui.set_preview_content(content);
         app.data.ui.preview_cursor_position = cursor_position;
@@ -175,7 +181,7 @@ impl Actions {
         wants_full_history: bool,
         history_lines_following: u32,
     ) {
-        app.data.ui.preview_vt = None;
+        app.data.ui.preview_vt_by_target.remove(target);
 
         let history_lines = history_lines_following.max(u32::from(rows));
         let content = if wants_full_history {
@@ -218,8 +224,9 @@ impl Actions {
                             return Ok(());
                         }
                     };
+                    let marker_hash = diff_gen.uncommitted_change_marker()?;
 
-                    app.data.ui.diff_hash = model.hash;
+                    app.data.ui.diff_hash = marker_hash;
                     app.data.ui.diff_model = Some(model.clone());
 
                     let (content, meta) = app.data.ui.build_diff_view(&model);
@@ -228,11 +235,11 @@ impl Actions {
                     if app.data.active_tab == Tab::Diff {
                         app.data
                             .ui
-                            .set_diff_last_seen_hash_for_agent(agent_id, model.hash);
+                            .set_diff_last_seen_hash_for_agent(agent_id, marker_hash);
                         app.data.ui.diff_has_unseen_changes = false;
                     } else {
-                        app.data.ui.diff_has_unseen_changes = model.hash != 0
-                            && model.hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
+                        app.data.ui.diff_has_unseen_changes = marker_hash != 0
+                            && marker_hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
                     }
                 } else {
                     app.data.ui.diff_model = None;
@@ -266,11 +273,11 @@ impl Actions {
             if agent.worktree_path.exists() {
                 let repo = git::open_repository(&agent.worktree_path)?;
                 let diff_gen = DiffGenerator::new(&repo);
-                let digest = diff_gen.uncommitted_digest()?;
+                let marker_hash = diff_gen.uncommitted_change_marker()?;
 
-                app.data.ui.diff_hash = digest.hash;
-                app.data.ui.diff_has_unseen_changes = digest.hash != 0
-                    && digest.hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
+                app.data.ui.diff_hash = marker_hash;
+                app.data.ui.diff_has_unseen_changes = marker_hash != 0
+                    && marker_hash != app.data.ui.diff_last_seen_hash_for_agent(agent_id);
             } else {
                 app.data.ui.diff_hash = 0;
                 app.data.ui.diff_has_unseen_changes = false;
@@ -453,7 +460,6 @@ fn set_preview_message(app: &mut App, message: &str) {
     app.data.ui.set_preview_content(message.to_string());
     app.data.ui.preview_cursor_position = None;
     app.data.ui.preview_pane_size = None;
-    app.data.ui.preview_vt = None;
 }
 
 #[derive(Debug)]

@@ -3,7 +3,7 @@
 use crate::common::{TestFixture, git_command, skip_if_no_mux};
 use std::time::Duration;
 use tenex::agent::Storage;
-use tenex::mux::SessionManager;
+use tenex::mux::{OutputRead, OutputStream, SessionManager};
 
 const fn interactive_shell_program() -> &'static str {
     #[cfg(windows)]
@@ -491,6 +491,212 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
     assert_eq!(new_distance_from_bottom, old_distance_from_bottom);
 
     // Cleanup
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_update_preview_caches_stream_state_per_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_preview_target_cache")?;
+    let mut config = fixture.config();
+    config.default_program = interactive_shell_program().to_string();
+    let storage = fixture.storage();
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    app.set_preview_dimensions(80, 20);
+
+    let handler = tenex::app::Actions::new();
+    let manager = SessionManager::new();
+
+    let next = handler.create_agent(&mut app.data, "preview-cache-a", None)?;
+    app.apply_mode(next);
+    let agent_a = app
+        .selected_agent()
+        .ok_or_else(|| anyhow::anyhow!("Missing first agent"))?
+        .clone();
+
+    let next = handler.create_agent(&mut app.data, "preview-cache-b", None)?;
+    app.apply_mode(next);
+    let agent_b = app
+        .selected_agent()
+        .ok_or_else(|| anyhow::anyhow!("Missing second agent"))?
+        .clone();
+
+    let make_output = |prefix: &str| {
+        if cfg!(windows) {
+            format!(
+                "$i=1; while ($i -le 500) {{ Write-Output ('{prefix}_' + $i.ToString().PadLeft(4,'0')); $i++ }}"
+            )
+        } else {
+            format!("i=1; while [ $i -le 500 ]; do printf '{prefix}_%04d\\n' $i; i=$((i+1)); done")
+        }
+    };
+
+    manager.send_keys_and_submit(&agent_a.mux_session, &make_output("TENEX_CACHE_A"))?;
+    manager.send_keys_and_submit(&agent_b.mux_session, &make_output("TENEX_CACHE_B"))?;
+
+    app.data.selected = 1;
+    app.data.ui.reset_scroll();
+    app.data.ui.reset_diff_interaction();
+    assert_eq!(
+        app.selected_agent().map(|agent| agent.id),
+        Some(agent_a.id),
+        "Expected first agent to be selected"
+    );
+
+    let start = std::time::Instant::now();
+    loop {
+        handler.update_preview(&mut app)?;
+        if app.data.ui.preview_content.contains("TENEX_CACHE_A_0500") {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            return Err(anyhow::anyhow!("Timed out waiting for first preview target").into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        app.data
+            .ui
+            .preview_vt_by_target
+            .contains_key(&agent_a.mux_session),
+        "Expected streamed preview state to be cached for the first target"
+    );
+
+    app.data.selected = 2;
+    app.data.ui.reset_scroll();
+    app.data.ui.reset_diff_interaction();
+    assert_eq!(
+        app.selected_agent().map(|agent| agent.id),
+        Some(agent_b.id),
+        "Expected second agent to be selected"
+    );
+
+    let start = std::time::Instant::now();
+    loop {
+        handler.update_preview(&mut app)?;
+        if app.data.ui.preview_content.contains("TENEX_CACHE_B_0500") {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            return Err(anyhow::anyhow!("Timed out waiting for second preview target").into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        app.data
+            .ui
+            .preview_vt_by_target
+            .contains_key(&agent_a.mux_session),
+        "Expected first target cache to survive switching away"
+    );
+    assert!(
+        app.data
+            .ui
+            .preview_vt_by_target
+            .contains_key(&agent_b.mux_session),
+        "Expected second target cache to be populated after switching"
+    );
+
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_update_preview_limits_stream_catchup_per_refresh()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_preview_bounded_catchup")?;
+    let mut config = fixture.config();
+    config.default_program = interactive_shell_program().to_string();
+    let storage = fixture.storage();
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    app.set_preview_dimensions(80, 20);
+
+    let handler = tenex::app::Actions::new();
+    let manager = SessionManager::new();
+    let output_stream = OutputStream::new();
+
+    let next = handler.create_agent(&mut app.data, "preview-catchup", None)?;
+    app.apply_mode(next);
+
+    let session = app
+        .selected_agent()
+        .ok_or_else(|| anyhow::anyhow!("No agent selected"))?
+        .mux_session
+        .clone();
+
+    let final_marker = "TENEX_CATCHUP_5000";
+    let generate_lines_command = if cfg!(windows) {
+        "$i=1; while ($i -le 5000) { Write-Output ('TENEX_CATCHUP_' + $i.ToString().PadLeft(4,'0')); $i++ }"
+    } else {
+        "i=1; while [ $i -le 5000 ]; do printf 'TENEX_CATCHUP_%04d\\n' $i; i=$((i+1)); done"
+    };
+    manager.send_keys_and_submit(&session, generate_lines_command)?;
+
+    let max_bytes = 64 * 1024;
+    let start = std::time::Instant::now();
+    loop {
+        match output_stream.read_output(&session, 0, max_bytes)? {
+            OutputRead::Chunk(chunk)
+                if chunk.data.len() == usize::try_from(max_bytes).unwrap_or(usize::MAX) =>
+            {
+                break;
+            }
+            OutputRead::Chunk(_) | OutputRead::Reset(_) => {}
+        }
+
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(anyhow::anyhow!("Timed out waiting for a large preview backlog").into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    handler.update_preview(&mut app)?;
+
+    let after = app
+        .data
+        .ui
+        .preview_vt_by_target
+        .get(&session)
+        .ok_or_else(|| anyhow::anyhow!("Expected streamed preview cache for session"))?
+        .after;
+    assert!(
+        after <= u64::from(max_bytes),
+        "Expected one refresh to process at most one chunk, got after={after}"
+    );
+
+    let start = std::time::Instant::now();
+    loop {
+        handler.update_preview(&mut app)?;
+        if app.data.ui.preview_content.contains(final_marker) {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(anyhow::anyhow!("Timed out waiting for preview catch-up").into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }

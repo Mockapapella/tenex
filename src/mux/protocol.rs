@@ -165,6 +165,11 @@ pub enum MuxRequest {
         /// Maximum number of bytes to return (before base64 encoding).
         max_bytes: u32,
     },
+    /// Return raw output sequence bounds for a target.
+    OutputCursor {
+        /// Target string.
+        target: String,
+    },
     /// List process IDs for all windows in a session.
     ListPanePids {
         /// Session name.
@@ -249,6 +254,13 @@ pub enum MuxResponse {
         start: u64,
         /// Base64-encoded checkpoint stream for the restart point.
         checkpoint_b64: String,
+    },
+    /// Output sequence bounds payload.
+    OutputCursor {
+        /// First sequence number still retained by the daemon.
+        start: u64,
+        /// Sequence number after the last observed byte.
+        end: u64,
     },
     /// Error response.
     Err {
