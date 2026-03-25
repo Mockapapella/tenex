@@ -1,9 +1,14 @@
 //! Worktree conflict detection and resolution tests
 
 use std::fs;
+use std::path::Path;
 
 use crate::common::{TestFixture, skip_if_no_mux};
+use git2::{Repository, RepositoryInitOptions, Signature};
+use tempfile::TempDir;
+use tenex::agent::Storage;
 use tenex::app::{Actions, App};
+use tenex::config::Config;
 
 fn sleep_program(seconds: u32) -> String {
     #[cfg(windows)]
@@ -16,9 +21,65 @@ fn sleep_program(seconds: u32) -> String {
     }
 }
 
+fn init_named_repo(path: &Path) -> Result<Repository, Box<dyn std::error::Error>> {
+    fs::create_dir_all(path)?;
+
+    let mut init_opts = RepositoryInitOptions::new();
+    init_opts.initial_head("master");
+    let repo = Repository::init_opts(path, &init_opts)?;
+    repo.set_head("refs/heads/master")?;
+
+    let mut config = repo.config()?;
+    config.set_str("user.name", "Test")?;
+    config.set_str("user.email", "test@test.com")?;
+    config.set_bool("core.autocrlf", false)?;
+    config.set_str("core.eol", "lf")?;
+
+    let sig = Signature::now("Test", "test@test.com")?;
+    fs::write(path.join("README.md"), "# Test Repository\n")?;
+
+    let mut index = repo.index()?;
+    index.add_path(Path::new("README.md"))?;
+    index.write()?;
+
+    let tree_id = index.write_tree()?;
+    {
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+    }
+
+    Ok(repo)
+}
+
+fn create_orphaned_same_repo_worktree(
+    repo_path: &Path,
+    worktree_path: &Path,
+    branch_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = git2::Repository::open(repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    worktree_mgr.create_with_new_branch(worktree_path, branch_name)?;
+
+    let admin_dir = tenex::git::repository_common_dir(&repo)?
+        .join("worktrees")
+        .join(branch_name.replace('/', "-"));
+    fs::remove_dir_all(&admin_dir)?;
+
+    let fresh_repo = git2::Repository::open(repo_path)?;
+    assert!(
+        !tenex::git::WorktreeManager::new(&fresh_repo).exists(branch_name),
+        "Worktree should no longer be registered after removing its admin dir"
+    );
+    assert!(
+        worktree_path.join(".git").exists(),
+        "Orphaned worktree should still retain its .git marker"
+    );
+
+    Ok(())
+}
+
 /// Test that creating an agent detects existing worktree and enters conflict mode
 #[test]
-#[expect(clippy::expect_used, reason = "test assertions")]
 fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
@@ -62,7 +123,7 @@ fn test_worktree_conflict_detection_single_agent() -> Result<(), Box<dyn std::er
         .spawn
         .worktree_conflict
         .as_ref()
-        .expect("Conflict info should be set");
+        .ok_or("Conflict info should be set")?;
     assert_eq!(conflict.title, "existing-agent");
     assert_eq!(conflict.prompt, Some("test prompt".to_string()));
     assert!(
@@ -141,6 +202,57 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// Test that a stale worktree directory still enters conflict mode for a single agent
+#[test]
+fn test_worktree_conflict_detection_single_agent_from_existing_path_only()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("wt_conflict_path_only_single")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let title = "path-only-agent";
+    let branch_name = app.data.config.generate_branch_name(title);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    fs::create_dir_all(&worktree_path)?;
+
+    let next = handler.create_agent(&mut app.data, title, Some("test prompt"))?;
+    app.apply_mode(next);
+
+    assert!(
+        matches!(
+            app.mode,
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
+        ),
+        "Expected Confirming(WorktreeConflict) mode, got {:?}",
+        app.mode
+    );
+
+    let conflict = app
+        .data
+        .spawn
+        .worktree_conflict
+        .as_ref()
+        .ok_or("Conflict info should be set")?;
+    assert_eq!(conflict.title, title);
+    assert_eq!(conflict.worktree_path, worktree_path);
+    assert!(!conflict.registered_worktree);
+    assert_eq!(conflict.existing_branch, None);
+    assert_eq!(conflict.existing_commit, None);
+
+    fixture.cleanup_branches();
+
+    Ok(())
+}
+
 /// Test recreating worktree (delete and create fresh)
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
@@ -214,6 +326,126 @@ fn test_worktree_conflict_recreate_single_agent() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Test recreating when only the worktree directory exists
+#[test]
+fn test_worktree_conflict_recreate_single_agent_from_existing_path_only()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("wt_recreate_path_only_single")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let title = "path-only-recreate";
+    let branch_name = app.data.config.generate_branch_name(title);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    create_orphaned_same_repo_worktree(&fixture.repo_path, &worktree_path, &branch_name)?;
+    let marker_path = worktree_path.join("stale_marker.txt");
+    fs::write(&marker_path, "stale worktree dir")?;
+
+    let next = handler.create_agent(&mut app.data, title, Some("new prompt"))?;
+    app.apply_mode(next);
+
+    assert!(matches!(
+        app.mode,
+        tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+            action: tenex::state::ConfirmAction::WorktreeConflict
+        })
+    ));
+
+    let conflict = app
+        .data
+        .spawn
+        .worktree_conflict
+        .as_ref()
+        .ok_or("Conflict info should be set")?;
+    assert!(!conflict.registered_worktree);
+
+    app.exit_mode();
+    let handler2 = Actions::new();
+    let next = handler2.recreate_worktree(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert_eq!(app.data.storage.len(), 1, "Should have one agent");
+    assert!(
+        !marker_path.exists(),
+        "Stale marker file should be gone after recreate"
+    );
+    assert!(
+        worktree_path.join(".git").exists(),
+        "Recreated worktree should have git metadata"
+    );
+
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+
+    Ok(())
+}
+
+/// Test that basename collisions with another repo do not offer reconnect or recreate.
+#[test]
+fn test_worktree_conflict_rejects_foreign_same_basename_path_collision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = TempDir::new()?;
+    let repo_a_path = root.path().join("group-a").join("service");
+    let repo_b_path = root.path().join("group-b").join("service");
+    let repo_a = init_named_repo(&repo_a_path)?;
+    init_named_repo(&repo_b_path)?;
+
+    let worktree_dir = TempDir::new()?;
+    let storage_path = root.path().join("state.json");
+    let mut app = App::new(
+        Config {
+            default_program: sleep_program(60),
+            branch_prefix: "agent/".to_string(),
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            auto_yes: false,
+            poll_interval_ms: 100,
+        },
+        Storage::with_path(storage_path),
+        tenex::app::Settings::default(),
+        false,
+    );
+    app.set_cwd_project_root(Some(repo_b_path.clone()));
+
+    let title = "collision";
+    let branch_name = app.data.config.generate_branch_name(title);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&repo_b_path, &branch_name);
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo_a);
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
+
+    let next = Actions::new().create_agent(&mut app.data, title, Some("prompt"))?;
+    app.apply_mode(next);
+
+    let tenex::AppMode::ErrorModal(modal) = &app.mode else {
+        return Err(format!("Expected error modal, got {:?}", app.mode).into());
+    };
+    assert!(
+        modal
+            .message
+            .contains("not this repo's registered worktree")
+    );
+    assert!(app.data.spawn.worktree_conflict.is_none());
+    assert_eq!(
+        tenex::git::repository_workspace_root(&worktree_path)?.canonicalize()?,
+        repo_a_path.canonicalize()?
+    );
+
+    Ok(())
+}
+
 /// Test worktree conflict detection for swarm creation (S key)
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
@@ -273,6 +505,61 @@ fn test_worktree_conflict_detection_swarm() -> Result<(), Box<dyn std::error::Er
 
     // Cleanup
     fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+
+    Ok(())
+}
+
+/// Test that a stale worktree directory still enters conflict mode for swarm creation
+#[test]
+#[expect(clippy::expect_used, reason = "test assertions")]
+fn test_worktree_conflict_detection_swarm_from_existing_path_only()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("wt_conflict_path_only_swarm")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+
+    let task = "path-only-swarm";
+    let branch_name = app.data.config.generate_branch_name(task);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    fs::create_dir_all(&worktree_path)?;
+
+    app.data.spawn.spawning_under = None;
+    app.data.spawn.child_count = 2;
+
+    let handler = Actions::new();
+    let next = handler.spawn_children(&mut app.data, Some(task))?;
+    app.apply_mode(next);
+
+    assert!(
+        matches!(
+            app.mode,
+            tenex::AppMode::Confirming(tenex::state::ConfirmingMode {
+                action: tenex::state::ConfirmAction::WorktreeConflict
+            })
+        ),
+        "Expected Confirming(WorktreeConflict) mode, got {:?}",
+        app.mode
+    );
+
+    let conflict = app
+        .data
+        .spawn
+        .worktree_conflict
+        .as_ref()
+        .expect("Conflict info should be set");
+    assert_eq!(conflict.worktree_path, worktree_path);
+    assert!(!conflict.registered_worktree);
+    assert_eq!(conflict.swarm_child_count, Some(2));
+    assert_eq!(conflict.existing_branch, None);
+    assert_eq!(conflict.existing_commit, None);
+
     fixture.cleanup_branches();
 
     Ok(())

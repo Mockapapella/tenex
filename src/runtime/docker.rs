@@ -337,6 +337,16 @@ fn windows_container_target_from_str(path: &str) -> PathBuf {
 }
 
 fn codex_home_dir(home: &Path) -> PathBuf {
+    #[cfg(test)]
+    let codex_home_override = docker_codex_home_override_store()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    #[cfg(test)]
+    if let Some(path) = codex_home_override {
+        return path;
+    }
+
     std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from)
 }
 
@@ -1266,10 +1276,17 @@ fn read_trimmed_stdout<const N: usize>(program: &str, args: [&str; N]) -> Option
 static DOCKER_TEST_SERIAL: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static DOCKER_PROGRAM_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+#[cfg(test)]
+static DOCKER_CODEX_HOME_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
 
 #[cfg(test)]
 fn docker_program_override_store() -> &'static RwLock<Option<PathBuf>> {
     DOCKER_PROGRAM_OVERRIDE.get_or_init(|| RwLock::new(None))
+}
+
+#[cfg(test)]
+fn docker_codex_home_override_store() -> &'static RwLock<Option<PathBuf>> {
+    DOCKER_CODEX_HOME_OVERRIDE.get_or_init(|| RwLock::new(None))
 }
 
 #[cfg(test)]
@@ -1283,12 +1300,16 @@ impl Drop for DockerProgramOverrideGuard {
         *docker_program_override_store()
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *docker_codex_home_override_store()
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
 #[cfg(test)]
-pub(super) fn with_docker_program_override_for_tests<T>(
+fn with_docker_test_overrides<T>(
     program: PathBuf,
+    codex_home_override: Option<PathBuf>,
     f: impl FnOnce() -> T,
 ) -> T {
     let _guard = DockerProgramOverrideGuard {
@@ -1299,7 +1320,27 @@ pub(super) fn with_docker_program_override_for_tests<T>(
     *docker_program_override_store()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(program);
+    *docker_codex_home_override_store()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = codex_home_override;
     f()
+}
+
+#[cfg(test)]
+pub(super) fn with_docker_program_override_for_tests<T>(
+    program: PathBuf,
+    f: impl FnOnce() -> T,
+) -> T {
+    with_docker_test_overrides(program, None, f)
+}
+
+#[cfg(test)]
+fn with_docker_program_and_codex_home_override_for_tests<T>(
+    program: PathBuf,
+    codex_home_override: PathBuf,
+    f: impl FnOnce() -> T,
+) -> T {
+    with_docker_test_overrides(program, Some(codex_home_override), f)
 }
 
 #[cfg(test)]
@@ -2277,15 +2318,19 @@ command = "docker"
             ),
         )?;
 
-        with_docker_program_override_for_tests(script, || -> Result<()> {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-        })?;
+        with_docker_program_and_codex_home_override_for_tests(
+            script,
+            host_codex_home,
+            || -> Result<()> {
+                ensure_container_with_paths(
+                    &agent,
+                    &Settings::default(),
+                    Some(&host_home),
+                    Some(&data_local_dir),
+                    None,
+                )
+            },
+        )?;
 
         assert_eq!(
             fs::read_to_string(prepared.codex_home_source.join("auth.json"))?,
@@ -2425,15 +2470,19 @@ command = "docker"
             ),
         )?;
 
-        with_docker_program_override_for_tests(script, || -> Result<()> {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-        })?;
+        with_docker_program_and_codex_home_override_for_tests(
+            script,
+            host_codex_home.clone(),
+            || -> Result<()> {
+                ensure_container_with_paths(
+                    &agent,
+                    &Settings::default(),
+                    Some(&host_home),
+                    Some(&data_local_dir),
+                    None,
+                )
+            },
+        )?;
 
         let log_contents = fs::read_to_string(&log)?;
         assert!(log_contents.contains("run -d --init"));

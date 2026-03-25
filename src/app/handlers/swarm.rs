@@ -12,7 +12,11 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::{AppData, WorktreeConflictInfo};
+use super::agent_lifecycle::{
+    ClassifiedWorktreeConflict, WorktreeTargetAssessment, assess_worktree_target,
+    build_worktree_conflict_info,
+};
+use crate::app::AppData;
 use crate::state::{AppMode, ConfirmAction, ConfirmingMode, ErrorModalMode};
 
 /// Configuration for spawning child agents
@@ -37,6 +41,11 @@ struct ReviewChildAgentConfig<'a> {
     review_prompt: &'a str,
     reviewer_number: usize,
     reserved_window_index: u32,
+}
+
+enum NewRootForSwarm {
+    Spawn(SpawnConfig),
+    Mode(AppMode),
 }
 
 impl Actions {
@@ -252,13 +261,8 @@ impl Actions {
             Self::get_existing_parent_config(app_data, pid)?
         } else {
             match self.create_new_root_for_swarm(app_data, task, count)? {
-                Some(config) => config,
-                None => {
-                    return Ok(ConfirmingMode {
-                        action: ConfirmAction::WorktreeConflict,
-                    }
-                    .into());
-                }
+                NewRootForSwarm::Spawn(config) => config,
+                NewRootForSwarm::Mode(mode) => return Ok(mode),
             }
         };
 
@@ -299,13 +303,13 @@ impl Actions {
         })
     }
 
-    /// Create a new root agent for a swarm, returns None if worktree conflict
+    /// Create a new root agent for a swarm.
     fn create_new_root_for_swarm(
         self,
         app_data: &mut AppData,
         task: Option<&str>,
         count: usize,
-    ) -> Result<Option<SpawnConfig>> {
+    ) -> Result<NewRootForSwarm> {
         let root_title = Self::generate_root_title(task);
         let repo_path = app_data
             .spawn
@@ -317,7 +321,7 @@ impl Actions {
             .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
             let config = self.create_plain_dir_root_for_swarm(app_data, root_title, repo_path)?;
-            return Ok(Some(config));
+            return Ok(NewRootForSwarm::Spawn(config));
         };
         let branch = app_data.config.generate_branch_name(&root_title);
         let worktree_path = app_data
@@ -325,22 +329,29 @@ impl Actions {
             .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
-
-        if worktree_mgr.exists(&branch) {
-            let conflict_worktree_path = worktree_mgr
-                .worktree_path(&branch)
-                .unwrap_or_else(|| worktree_path.clone());
-            Self::setup_worktree_conflict(
-                app_data,
-                &worktree_mgr,
-                root_title,
-                task,
-                branch,
-                conflict_worktree_path,
-                count,
-                repo_path,
-            );
-            return Ok(None);
+        match assess_worktree_target(&repo, &worktree_mgr, &branch, &worktree_path)? {
+            WorktreeTargetAssessment::Available => {}
+            WorktreeTargetAssessment::Conflict(conflict) => {
+                Self::setup_worktree_conflict(
+                    app_data,
+                    &worktree_mgr,
+                    root_title,
+                    task,
+                    branch,
+                    conflict,
+                    count,
+                    repo_path,
+                );
+                return Ok(NewRootForSwarm::Mode(
+                    ConfirmingMode {
+                        action: ConfirmAction::WorktreeConflict,
+                    }
+                    .into(),
+                ));
+            }
+            WorktreeTargetAssessment::UnsafePathCollision(message) => {
+                return Ok(NewRootForSwarm::Mode(ErrorModalMode { message }.into()));
+            }
         }
 
         let runtime = crate::runtime::new_root_runtime(&app_data.settings);
@@ -361,7 +372,7 @@ impl Actions {
         let root_id = root_agent.id;
 
         app_data.storage.add(root_agent);
-        Ok(Some(SpawnConfig {
+        Ok(NewRootForSwarm::Spawn(SpawnConfig {
             root_session,
             worktree_path,
             branch,
@@ -424,33 +435,26 @@ impl Actions {
         root_title: String,
         task: Option<&str>,
         branch: String,
-        worktree_path: PathBuf,
+        conflict: ClassifiedWorktreeConflict,
         count: usize,
         repo_root: PathBuf,
     ) {
-        debug!(branch, "Worktree already exists for swarm, prompting user");
-
-        let (current_branch, current_commit) = worktree_mgr
-            .head_info()
-            .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
-
-        let (existing_branch, existing_commit) = worktree_mgr
-            .worktree_head_info(&branch)
-            .map(|(b, c)| (Some(b), Some(c)))
-            .unwrap_or((None, None));
-
-        app_data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
-            title: root_title,
-            prompt: task.map(String::from),
+        debug!(
             branch,
-            worktree_path,
+            registered_worktree = conflict.registered_worktree,
+            worktree_path = %conflict.worktree_path.display(),
+            "Worktree already exists for swarm, prompting user"
+        );
+
+        app_data.spawn.worktree_conflict = Some(build_worktree_conflict_info(
+            worktree_mgr,
+            root_title,
+            task,
+            branch,
             repo_root,
-            existing_branch,
-            existing_commit,
-            current_branch,
-            current_commit,
-            swarm_child_count: Some(count),
-        });
+            conflict,
+            Some(count),
+        ));
     }
 
     /// Spawn the actual child agents

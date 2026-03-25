@@ -72,6 +72,18 @@ pub fn repository_root(path: &Path) -> Result<PathBuf> {
         .context("Repository has no working directory")
 }
 
+/// Get the common git directory for a repository.
+///
+/// For a normal repository this is the `.git` directory under the repo root.
+/// For a linked worktree this resolves the shared main repository `.git` dir.
+///
+/// # Errors
+///
+/// Returns an error if the common directory cannot be resolved.
+pub fn repository_common_dir(repo: &Repository) -> Result<PathBuf> {
+    Ok(resolve_repo_common_dir(repo.path())?.into_owned())
+}
+
 fn resolve_repo_common_dir(git_dir: &Path) -> Result<Cow<'_, Path>> {
     let commondir_path = git_dir.join("commondir");
     if !commondir_path.exists() {

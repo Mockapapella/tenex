@@ -11,6 +11,8 @@ pub struct WorktreeConflictInfo {
     pub branch: String,
     /// The path to the existing worktree.
     pub worktree_path: std::path::PathBuf,
+    /// Whether Git still registers this path as a worktree for the current repo.
+    pub registered_worktree: bool,
     /// The repository/workspace root where the conflicting worktree lives.
     pub repo_root: std::path::PathBuf,
     /// The branch the existing worktree is based on (if available).
@@ -301,6 +303,7 @@ mod tests {
             prompt: None,
             branch: "test-branch".to_string(),
             worktree_path: std::path::PathBuf::from("/tmp/test"),
+            registered_worktree: true,
             repo_root: std::path::PathBuf::from("/tmp/repo"),
             existing_branch: None,
             existing_commit: None,

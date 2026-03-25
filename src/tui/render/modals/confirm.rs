@@ -78,26 +78,45 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
         Line::from(""),
     ];
 
-    // Show existing worktree info
+    // Show the occupied path and any existing worktree info.
     lines.push(Line::from(Span::styled(
-        "Existing worktree:",
+        "Occupied path:",
         Style::default()
             .fg(colors::TEXT_DIM)
             .add_modifier(Modifier::BOLD),
     )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", conflict.worktree_path.display()),
+        Style::default().fg(colors::TEXT_PRIMARY),
+    )));
+    lines.push(Line::from(""));
 
-    if let Some(ref branch) = conflict.existing_branch {
-        lines.push(Line::from(vec![
-            Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
-            Span::styled(branch.as_str(), Style::default().fg(colors::TEXT_PRIMARY)),
-        ]));
-    }
+    if conflict.registered_worktree {
+        lines.push(Line::from(Span::styled(
+            "Existing worktree:",
+            Style::default()
+                .fg(colors::TEXT_DIM)
+                .add_modifier(Modifier::BOLD),
+        )));
 
-    if let Some(ref commit) = conflict.existing_commit {
-        lines.push(Line::from(vec![
-            Span::styled("  Commit: ", Style::default().fg(colors::TEXT_DIM)),
-            Span::styled(commit.as_str(), Style::default().fg(colors::TEXT_MUTED)),
-        ]));
+        if let Some(ref branch) = conflict.existing_branch {
+            lines.push(Line::from(vec![
+                Span::styled("  Branch: ", Style::default().fg(colors::TEXT_DIM)),
+                Span::styled(branch.as_str(), Style::default().fg(colors::TEXT_PRIMARY)),
+            ]));
+        }
+
+        if let Some(ref commit) = conflict.existing_commit {
+            lines.push(Line::from(vec![
+                Span::styled("  Commit: ", Style::default().fg(colors::TEXT_DIM)),
+                Span::styled(commit.as_str(), Style::default().fg(colors::TEXT_MUTED)),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "This path is not a registered worktree for this repo.",
+            Style::default().fg(colors::TEXT_MUTED),
+        )));
     }
 
     lines.push(Line::from(""));
@@ -132,22 +151,29 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(""));
 
     // Add the choice buttons
-    lines.push(Line::from(vec![
-        Span::styled(
-            "[R]",
-            Style::default()
-                .fg(colors::ACCENT_POSITIVE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "econnect to existing worktree",
-            Style::default().fg(colors::TEXT_PRIMARY),
-        ),
-    ]));
-    lines.push(Line::from(Span::styled(
-        "    (you can edit the prompt before starting)",
-        Style::default().fg(colors::TEXT_MUTED),
-    )));
+    if conflict.registered_worktree {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "[R]",
+                Style::default()
+                    .fg(colors::ACCENT_POSITIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "econnect to existing worktree",
+                Style::default().fg(colors::TEXT_PRIMARY),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "    (you can edit the prompt before starting)",
+            Style::default().fg(colors::TEXT_MUTED),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Reconnect is unavailable because this path is not registered.",
+            Style::default().fg(colors::TEXT_MUTED),
+        )));
+    }
     lines.push(Line::from(vec![
         Span::styled(
             "[D]",

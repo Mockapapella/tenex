@@ -3,10 +3,11 @@
 use crate::agent::{Agent, AgentRuntime, ChildConfig};
 use crate::git::{self, WorktreeCreateOptions, WorktreeManager};
 use crate::mux::SessionManager;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -33,6 +34,21 @@ struct RootLaunchSpec {
     worktree_path: std::path::PathBuf,
 }
 
+#[derive(Debug)]
+pub(super) struct ClassifiedWorktreeConflict {
+    pub worktree_path: PathBuf,
+    pub registered_worktree: bool,
+    pub existing_branch: Option<String>,
+    pub existing_commit: Option<String>,
+}
+
+#[derive(Debug)]
+pub(super) enum WorktreeTargetAssessment {
+    Available,
+    Conflict(ClassifiedWorktreeConflict),
+    UnsafePathCollision(String),
+}
+
 fn runtime_for_conflict(
     app_data: &AppData,
     conflict: &WorktreeConflictInfo,
@@ -41,9 +57,201 @@ fn runtime_for_conflict(
         .storage
         .iter()
         .find(|agent| {
-            agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path
+            agent.branch == conflict.branch
+                && worktree_paths_match(&agent.worktree_path, &conflict.worktree_path)
         })
         .map(|agent| agent.runtime)
+}
+
+fn remove_stale_worktree_dir(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        return Ok(());
+    }
+
+    let mut last_err = None;
+    for attempt in 0u64..10 {
+        match fs::remove_dir_all(path) {
+            Ok(()) => {
+                last_err = None;
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                last_err = None;
+                break;
+            }
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
+
+        if !path.exists() {
+            last_err = None;
+            break;
+        }
+    }
+
+    if path.exists() {
+        let Some(err) = last_err else {
+            bail!("Failed to remove directory at {}", path.display());
+        };
+        bail!("Failed to remove directory at {}: {err}", path.display());
+    }
+
+    Ok(())
+}
+
+fn canonicalize_if_present(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+fn worktree_paths_match(left: &Path, right: &Path) -> bool {
+    canonicalize_if_present(left.to_path_buf()) == canonicalize_if_present(right.to_path_buf())
+}
+
+fn is_empty_dir(path: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("Failed to read directory {}", path.display()))?;
+    Ok(entries.next().is_none())
+}
+
+fn path_points_to_expected_worktree_admin_dir(
+    path: &Path,
+    expected_admin_dir: &Path,
+) -> Result<bool> {
+    let git_file = path.join(".git");
+    let metadata = match fs::symlink_metadata(&git_file) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| format!("Failed to inspect {}", git_file.display()));
+        }
+    };
+
+    if !metadata.file_type().is_file() {
+        return Ok(false);
+    }
+
+    let raw = fs::read_to_string(&git_file)
+        .with_context(|| format!("Failed to read {}", git_file.display()))?;
+    let Some(raw_gitdir) = raw.trim().strip_prefix("gitdir:") else {
+        return Ok(false);
+    };
+
+    let gitdir = PathBuf::from(raw_gitdir.trim());
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        path.join(gitdir)
+    };
+
+    Ok(
+        canonicalize_if_present(gitdir)
+            == canonicalize_if_present(expected_admin_dir.to_path_buf()),
+    )
+}
+
+fn unsafe_path_collision_message(path: &Path) -> String {
+    format!(
+        "Cannot create a worktree at {} because that path already exists and is not this repo's registered worktree. Tenex will not reconnect to or delete it automatically. Remove or rename that directory, or choose a different title.",
+        path.display()
+    )
+}
+
+pub(super) fn assess_worktree_target(
+    repo: &git::Repository,
+    worktree_mgr: &WorktreeManager<'_>,
+    branch: &str,
+    desired_path: &Path,
+) -> Result<WorktreeTargetAssessment> {
+    if worktree_mgr.exists(branch) {
+        let worktree_path = worktree_mgr
+            .worktree_path(branch)
+            .unwrap_or_else(|| desired_path.to_path_buf());
+        let (existing_branch, existing_commit) = worktree_mgr
+            .worktree_head_info(branch)
+            .map(|(existing_branch, existing_commit)| {
+                (Some(existing_branch), Some(existing_commit))
+            })
+            .unwrap_or((None, None));
+
+        return Ok(WorktreeTargetAssessment::Conflict(
+            ClassifiedWorktreeConflict {
+                worktree_path,
+                registered_worktree: true,
+                existing_branch,
+                existing_commit,
+            },
+        ));
+    }
+
+    if !desired_path.exists() {
+        return Ok(WorktreeTargetAssessment::Available);
+    }
+
+    if !desired_path.is_dir() {
+        return Ok(WorktreeTargetAssessment::UnsafePathCollision(
+            unsafe_path_collision_message(desired_path),
+        ));
+    }
+
+    if is_empty_dir(desired_path)? {
+        return Ok(WorktreeTargetAssessment::Conflict(
+            ClassifiedWorktreeConflict {
+                worktree_path: desired_path.to_path_buf(),
+                registered_worktree: false,
+                existing_branch: None,
+                existing_commit: None,
+            },
+        ));
+    }
+
+    let expected_admin_dir = git::repository_common_dir(repo)?
+        .join("worktrees")
+        .join(branch.replace('/', "-"));
+    if path_points_to_expected_worktree_admin_dir(desired_path, &expected_admin_dir)? {
+        return Ok(WorktreeTargetAssessment::Conflict(
+            ClassifiedWorktreeConflict {
+                worktree_path: desired_path.to_path_buf(),
+                registered_worktree: false,
+                existing_branch: None,
+                existing_commit: None,
+            },
+        ));
+    }
+
+    Ok(WorktreeTargetAssessment::UnsafePathCollision(
+        unsafe_path_collision_message(desired_path),
+    ))
+}
+
+pub(super) fn build_worktree_conflict_info(
+    worktree_mgr: &WorktreeManager<'_>,
+    title: String,
+    prompt: Option<&str>,
+    branch: String,
+    repo_root: PathBuf,
+    conflict: ClassifiedWorktreeConflict,
+    swarm_child_count: Option<usize>,
+) -> WorktreeConflictInfo {
+    let (current_branch, current_commit) = worktree_mgr
+        .head_info()
+        .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+
+    WorktreeConflictInfo {
+        title,
+        prompt: prompt.map(str::to_string),
+        branch,
+        worktree_path: conflict.worktree_path,
+        registered_worktree: conflict.registered_worktree,
+        repo_root,
+        existing_branch: conflict.existing_branch,
+        existing_commit: conflict.existing_commit,
+        current_branch,
+        current_commit,
+        swarm_child_count,
+    }
 }
 
 impl Actions {
@@ -174,41 +382,32 @@ impl Actions {
             .worktree_path_for_repo_root(&repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
-
-        // Check if worktree/branch already exists - prompt user for action
-        if worktree_mgr.exists(&branch) {
-            debug!(branch, "Worktree already exists, prompting user");
-            let conflict_worktree_path = worktree_mgr
-                .worktree_path(&branch)
-                .unwrap_or_else(|| worktree_path.clone());
-
-            // Get current HEAD info for new worktree context
-            let (current_branch, current_commit) = worktree_mgr
-                .head_info()
-                .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
-
-            // Try to get existing worktree info
-            let (existing_branch, existing_commit) = worktree_mgr
-                .worktree_head_info(&branch)
-                .map(|(b, c)| (Some(b), Some(c)))
-                .unwrap_or((None, None));
-
-            app_data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
-                title: title.to_string(),
-                prompt: prompt.map(String::from),
-                branch: branch.clone(),
-                worktree_path: conflict_worktree_path,
-                repo_root: repo_path.clone(),
-                existing_branch,
-                existing_commit,
-                current_branch,
-                current_commit,
-                swarm_child_count: None, // Not a swarm creation
-            });
-            return Ok(ConfirmingMode {
-                action: ConfirmAction::WorktreeConflict,
+        match assess_worktree_target(&repo, &worktree_mgr, &branch, &worktree_path)? {
+            WorktreeTargetAssessment::Available => {}
+            WorktreeTargetAssessment::Conflict(conflict) => {
+                debug!(
+                    branch,
+                    registered_worktree = conflict.registered_worktree,
+                    worktree_path = %conflict.worktree_path.display(),
+                    "Worktree conflict detected, prompting user"
+                );
+                app_data.spawn.worktree_conflict = Some(build_worktree_conflict_info(
+                    &worktree_mgr,
+                    title.to_string(),
+                    prompt,
+                    branch.clone(),
+                    repo_path.clone(),
+                    conflict,
+                    None,
+                ));
+                return Ok(ConfirmingMode {
+                    action: ConfirmAction::WorktreeConflict,
+                }
+                .into());
             }
-            .into());
+            WorktreeTargetAssessment::UnsafePathCollision(message) => {
+                return Ok(ErrorModalMode { message }.into());
+            }
         }
 
         self.create_agent_internal(app_data, &repo_path, title, prompt, &branch, &worktree_path)?;
@@ -288,11 +487,43 @@ impl Actions {
     ///
     /// Returns an error if the mux session cannot be created or storage fails
     pub fn reconnect_to_worktree(self, app_data: &mut AppData) -> Result<AppMode> {
-        let conflict = app_data
+        let mut conflict = app_data
             .spawn
             .worktree_conflict
             .take()
             .ok_or_else(|| anyhow::anyhow!("No worktree conflict info available"))?;
+
+        if !conflict.registered_worktree {
+            return Ok(ErrorModalMode {
+                message: format!(
+                    "Reconnect is only available for registered worktrees. {} is not currently registered for this repo.",
+                    conflict.worktree_path.display()
+                ),
+            }
+            .into());
+        }
+
+        let repo = git::open_repository(&conflict.repo_root)?;
+        let worktree_mgr = WorktreeManager::new(&repo);
+        match assess_worktree_target(
+            &repo,
+            &worktree_mgr,
+            &conflict.branch,
+            &conflict.worktree_path,
+        )? {
+            WorktreeTargetAssessment::Conflict(current) if current.registered_worktree => {
+                conflict.worktree_path = current.worktree_path;
+            }
+            _ => {
+                return Ok(ErrorModalMode {
+                    message: format!(
+                        "Cannot reconnect to {} because it is no longer a registered worktree for this repo.",
+                        conflict.worktree_path.display()
+                    ),
+                }
+                .into());
+            }
+        }
 
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Reconnecting to existing worktree");
 
@@ -329,7 +560,9 @@ impl Actions {
         let mut runtime_agents_by_session: HashMap<String, Agent> = HashMap::new();
 
         for agent in app_data.storage.iter() {
-            if agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path {
+            if agent.branch == conflict.branch
+                && worktree_paths_match(&agent.worktree_path, &conflict.worktree_path)
+            {
                 ids_to_remove.push(agent.id);
                 sessions_to_consider.insert(agent.mux_session.clone());
                 runtime_agents_by_session
@@ -470,7 +703,23 @@ impl Actions {
         // Remove existing worktree first
         let repo = git::open_repository(&conflict.repo_root)?;
         let worktree_mgr = WorktreeManager::new(&repo);
-        worktree_mgr.remove(&conflict.branch)?;
+        match assess_worktree_target(
+            &repo,
+            &worktree_mgr,
+            &conflict.branch,
+            &conflict.worktree_path,
+        )? {
+            WorktreeTargetAssessment::Available => {}
+            WorktreeTargetAssessment::Conflict(current) => {
+                if current.registered_worktree {
+                    worktree_mgr.remove(&conflict.branch)?;
+                }
+                remove_stale_worktree_dir(&current.worktree_path)?;
+            }
+            WorktreeTargetAssessment::UnsafePathCollision(message) => {
+                return Ok(ErrorModalMode { message }.into());
+            }
+        }
 
         // Check if this is a swarm creation
         if let Some(child_count) = conflict.swarm_child_count {
@@ -1024,6 +1273,17 @@ mod tests {
         Ok((dir, path))
     }
 
+    #[cfg(unix)]
+    fn init_repo_with_worktree_alias()
+    -> Result<(TempDir, std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
+        let (repo_dir, repo_root) = init_repo()?;
+        let real_root = repo_dir.path().join("real-worktrees");
+        let alias_root = repo_dir.path().join("alias-worktrees");
+        std::fs::create_dir_all(&real_root)?;
+        std::os::unix::fs::symlink(&real_root, &alias_root)?;
+        Ok((repo_dir, repo_root, alias_root))
+    }
+
     #[test]
     fn test_reconnect_to_worktree_no_conflict_info() -> Result<(), Box<dyn std::error::Error>> {
         let handler = Actions::new();
@@ -1041,9 +1301,12 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        let worktree = TempDir::new()?;
-        let worktree_path = worktree.path().to_path_buf();
+        let (_repo_dir, repo_root) = init_repo()?;
+        let repo = git::open_repository(&repo_root)?;
+        let worktree_root = TempDir::new()?;
         let branch = "tenex-test/asdf".to_string();
+        let worktree_path = worktree_root.path().join("asdf");
+        WorktreeManager::new(&repo).create_with_new_branch(&worktree_path, &branch)?;
 
         let existing = Agent::new(
             "asdf".to_string(),
@@ -1059,7 +1322,8 @@ mod tests {
             prompt: None,
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
-            repo_root: std::path::PathBuf::from("/tmp"),
+            registered_worktree: true,
+            repo_root,
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -1075,7 +1339,85 @@ mod tests {
             app.data
                 .storage
                 .iter()
-                .filter(|agent| agent.branch == branch && agent.worktree_path == worktree_path)
+                .filter(|agent| {
+                    agent.branch == branch
+                        && worktree_paths_match(&agent.worktree_path, &worktree_path)
+                })
+                .count(),
+            1
+        );
+
+        let new_session = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.branch == branch)
+            .ok_or("Expected new agent")?
+            .mux_session
+            .clone();
+        let _ = crate::mux::SessionManager::new().kill(&new_session);
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_reconnect_to_worktree_removes_existing_agents_when_paths_alias_same_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app()?;
+
+        let (_repo_dir, repo_root, alias_worktree_root) = init_repo_with_worktree_alias()?;
+        let repo = git::open_repository(&repo_root)?;
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let branch = "tenex-test/asdf".to_string();
+        let aliased_worktree_path = alias_worktree_root.join("asdf");
+        worktree_mgr.create_with_new_branch(&aliased_worktree_path, &branch)?;
+
+        let registered_worktree_path = worktree_mgr
+            .worktree_path(&branch)
+            .ok_or("Expected registered worktree path")?;
+        assert_ne!(aliased_worktree_path, registered_worktree_path);
+        assert!(worktree_paths_match(
+            &aliased_worktree_path,
+            &registered_worktree_path
+        ));
+
+        let existing = Agent::new(
+            "asdf".to_string(),
+            test_sleep_program(),
+            branch.clone(),
+            aliased_worktree_path,
+        );
+        let existing_id = existing.id;
+        app.data.storage.add(existing);
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "asdf".to_string(),
+            prompt: None,
+            branch: branch.clone(),
+            worktree_path: registered_worktree_path.clone(),
+            registered_worktree: true,
+            repo_root,
+            existing_branch: Some("main".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+
+        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        assert_eq!(next, AppMode::normal());
+
+        assert!(app.data.storage.get(existing_id).is_none());
+        assert_eq!(
+            app.data
+                .storage
+                .iter()
+                .filter(|agent| {
+                    agent.branch == branch
+                        && worktree_paths_match(&agent.worktree_path, &registered_worktree_path)
+                })
                 .count(),
             1
         );
@@ -1125,9 +1467,12 @@ mod tests {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app()?;
 
-        let worktree = TempDir::new()?;
-        let worktree_path = worktree.path().to_path_buf();
+        let (_repo_dir, repo_root) = init_repo()?;
+        let repo = git::open_repository(&repo_root)?;
+        let worktree_root = TempDir::new()?;
         let branch = "tenex-test/asdf".to_string();
+        let worktree_path = worktree_root.path().join("asdf");
+        WorktreeManager::new(&repo).create_with_new_branch(&worktree_path, &branch)?;
 
         let root = Agent::new(
             "asdf".to_string(),
@@ -1156,7 +1501,8 @@ mod tests {
             prompt: Some("do stuff".to_string()),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
-            repo_root: std::path::PathBuf::from("/tmp"),
+            registered_worktree: true,
+            repo_root,
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
             current_branch: "main".to_string(),
@@ -1171,7 +1517,10 @@ mod tests {
             app.data
                 .storage
                 .iter()
-                .filter(|agent| agent.branch == branch && agent.worktree_path == worktree_path)
+                .filter(|agent| {
+                    agent.branch == branch
+                        && worktree_paths_match(&agent.worktree_path, &worktree_path)
+                })
                 .count(),
             3
         );

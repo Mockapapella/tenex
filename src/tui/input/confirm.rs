@@ -78,6 +78,7 @@ mod tests {
             prompt: Some("test prompt".to_string()),
             branch: "test-branch".to_string(),
             worktree_path: PathBuf::from("/tmp/test-worktree"),
+            registered_worktree: true,
             repo_root: PathBuf::from("/tmp"),
             existing_branch: Some("main".to_string()),
             existing_commit: Some("abc1234".to_string()),
@@ -479,6 +480,30 @@ mod tests {
 
         assert_eq!(app.mode, ReconnectPromptMode.into());
         assert!(app.data.input.buffer.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_worktree_conflict_mode_reconnect_requires_registered_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        let mut conflict = create_worktree_conflict_info();
+        conflict.registered_worktree = false;
+        app.data.spawn.worktree_conflict = Some(conflict);
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
+
+        handle_confirming_mode(
+            &mut app,
+            ConfirmAction::WorktreeConflict,
+            KeyCode::Char('r'),
+        )?;
+
+        assert!(matches!(app.mode, AppMode::Confirming(_)));
         Ok(())
     }
 

@@ -122,6 +122,9 @@ impl ValidIn<ConfirmingMode> for WorktreeReconnectAction {
         }
 
         if let Some(conflict) = app_data.spawn.worktree_conflict.as_ref() {
+            if !conflict.registered_worktree {
+                return Ok(state.into());
+            }
             app_data.input.buffer = conflict.prompt.clone().unwrap_or_default();
             app_data.input.cursor = app_data.input.buffer.len();
         }
@@ -345,6 +348,7 @@ mod tests {
             prompt: prompt.map(str::to_string),
             branch: "tenex/conflict-title".to_string(),
             worktree_path: PathBuf::from("/tmp/tenex-confirm-action-conflict"),
+            registered_worktree: true,
             repo_root: PathBuf::from("/tmp"),
             existing_branch: Some("tenex/conflict-title".to_string()),
             existing_commit: Some("abc1234".to_string()),
@@ -482,6 +486,24 @@ mod tests {
         assert!(matches!(next, AppMode::ReconnectPrompt(_)));
         assert_eq!(data.input.buffer, "hello world");
         assert_eq!(data.input.cursor, data.input.buffer.len());
+        Ok(())
+    }
+
+    #[test]
+    fn test_worktree_reconnect_action_noops_for_unregistered_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = empty_data();
+        let mut conflict = make_conflict(Some("hello world"));
+        conflict.registered_worktree = false;
+        data.spawn.worktree_conflict = Some(conflict);
+
+        let state = ConfirmingMode {
+            action: ConfirmAction::WorktreeConflict,
+        };
+        let next = WorktreeReconnectAction.execute(state, &mut data)?;
+
+        assert_eq!(next, state.into());
+        assert!(data.input.buffer.is_empty());
         Ok(())
     }
 

@@ -630,9 +630,13 @@ fn test_check_remote_branch_exists_no_git() -> Result<(), Box<dyn std::error::Er
 }
 
 fn run_git(current_dir: &std::path::Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let disabled_hooks = current_dir.join(".git").join("hooks-disabled");
     let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(current_dir)
+        .arg("-c")
+        .arg(format!("core.hooksPath={}", disabled_hooks.display()))
         .args(args)
-        .current_dir(current_dir)
         .output()?;
     if output.status.success() {
         return Ok(());
@@ -675,6 +679,7 @@ fn test_execute_root_rename_keeps_remote_branch() -> Result<(), Box<dyn std::err
     let new_branch = config.generate_branch_name(new_title);
 
     run_git(&local_repo, &["checkout", "-b", old_branch.as_str()])?;
+    let _ = run_git(&local_repo, &["remote", "remove", "origin"]);
     run_git(
         &local_repo,
         &[
