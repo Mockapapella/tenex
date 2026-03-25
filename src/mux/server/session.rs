@@ -842,6 +842,20 @@ mod tests {
             "Expected child window process to still be running"
         );
 
+        // Keep this test focused on child liveness; root restart behavior is covered separately.
+        {
+            let session_ref = {
+                let state = global_state().lock();
+                state.sessions.get(session_name).cloned()
+            };
+            let Some(session_ref) = session_ref else {
+                return Err(anyhow::anyhow!("Session vanished"));
+            };
+            let mut guard = session_ref.lock();
+            guard.root_restart_attempts = u32::MAX;
+            guard.last_root_restart = unix_timestamp();
+        }
+
         assert!(Manager::exists(session_name));
 
         assert!(
