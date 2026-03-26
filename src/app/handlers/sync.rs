@@ -11,7 +11,7 @@ use std::path::Path;
 use tracing::{debug, info, warn};
 
 use super::Actions;
-use crate::app::{App, AppData};
+use crate::app::{App, AppData, PaneActivityDigestMode};
 
 impl Actions {
     /// Check and update agent statuses based on mux sessions
@@ -135,9 +135,9 @@ impl Actions {
         Ok(())
     }
 
-    /// Update per-agent activity indicators by diffing pane output once per interval.
+    /// Update per-agent activity indicators from raw output sequence changes once per interval.
     ///
-    /// If the visible pane content for an agent has not changed since the previous observation,
+    /// If an agent's mux output sequence has not changed since the previous observation,
     /// Tenex considers it "waiting". Agents show as:
     /// - `●` in green while output is changing (working)
     /// - `◐` in yellow when waiting and unseen (needs attention)
@@ -151,10 +151,12 @@ impl Actions {
         if !crate::mux::is_server_running() {
             app.data.ui.pane_digest_by_agent.clear();
             app.data.ui.pane_last_seen_hash_by_agent.clear();
+            app.data.ui.pane_activity_digest_mode = PaneActivityDigestMode::Cursor;
             return Ok(());
         }
 
         let selected_agent_id = app.selected_agent().map(|agent| agent.id);
+        let mut digest_mode = app.data.ui.pane_activity_digest_mode;
 
         let mut keep_ids: HashSet<uuid::Uuid> = HashSet::new();
 
@@ -167,11 +169,22 @@ impl Actions {
             }
 
             let target = mux_target_for_agent(app, agent);
-            let Ok(content) = self.output_capture.capture_pane(&target) else {
+            let Ok((digest, next_mode)) = pane_activity_digest_with_fallback(
+                digest_mode,
+                || self.output_stream.cursor(&target),
+                || self.output_capture.capture_pane(&target),
+            ) else {
                 continue;
             };
-
-            let digest = hash_text(&content);
+            if digest_mode != next_mode {
+                debug!(
+                    target,
+                    ?digest_mode,
+                    ?next_mode,
+                    "Switching pane activity digest mode"
+                );
+                digest_mode = next_mode;
+            }
             app.data.ui.observe_agent_pane_digest(agent.id, digest);
 
             if selected_agent_id == Some(agent.id) {
@@ -188,6 +201,7 @@ impl Actions {
         app.data
             .ui
             .retain_agent_pane_last_seen_hashes(|id| keep_ids.contains(id));
+        app.data.ui.pane_activity_digest_mode = digest_mode;
 
         Ok(())
     }
@@ -349,6 +363,7 @@ impl Actions {
         crate::mux::terminate_mux_daemon_for_socket(&socket)?;
 
         app_data.ui.muxd_version_mismatch = None;
+        app_data.ui.pane_activity_digest_mode = PaneActivityDigestMode::Cursor;
 
         // Recreate missing sessions/windows after the daemon restart (best-effort inside helper).
         self.respawn_missing_agents_in_data(app_data)?;
@@ -371,10 +386,42 @@ fn mux_target_for_agent(app: &App, agent: &Agent) -> String {
     )
 }
 
+fn hash_output_cursor(cursor: crate::mux::OutputCursor) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    cursor.start.hash(&mut hasher);
+    cursor.end.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn hash_text(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+fn pane_activity_digest_with_fallback<CursorFn, CaptureFn>(
+    mode: PaneActivityDigestMode,
+    cursor_fn: CursorFn,
+    capture_fn: CaptureFn,
+) -> Result<(u64, PaneActivityDigestMode)>
+where
+    CursorFn: FnOnce() -> Result<crate::mux::OutputCursor>,
+    CaptureFn: FnOnce() -> Result<String>,
+{
+    match mode {
+        PaneActivityDigestMode::Cursor => {
+            if let Ok(cursor) = cursor_fn() {
+                Ok((hash_output_cursor(cursor), PaneActivityDigestMode::Cursor))
+            } else {
+                let content = capture_fn()?;
+                Ok((hash_text(&content), PaneActivityDigestMode::Capture))
+            }
+        }
+        PaneActivityDigestMode::Capture => {
+            let content = capture_fn()?;
+            Ok((hash_text(&content), PaneActivityDigestMode::Capture))
+        }
+    }
 }
 
 #[derive(Default)]
@@ -719,6 +766,18 @@ mod tests {
         }
     }
 
+    fn test_output_then_sleep_program() -> String {
+        #[cfg(windows)]
+        {
+            "powershell -NoProfile -Command \"Write-Output 'capture-path'; Start-Sleep -Seconds 3600\""
+                .to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            "sh -c 'printf capture-path; sleep 3600'".to_string()
+        }
+    }
+
     #[cfg(unix)]
     fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
         let script = temp.path().join("docker");
@@ -735,6 +794,92 @@ mod tests {
         let (mut app, _temp) = create_test_app()?;
 
         handler.sync_agent_status(&mut app)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_agent_pane_activity_capture_mode_populates_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut app, _temp) = create_test_app()?;
+        let temp = TempDir::new()?;
+
+        let mut agent = Agent::new(
+            "capture-mode".to_string(),
+            test_output_then_sleep_program(),
+            "muster/capture-mode".to_string(),
+            temp.path().to_path_buf(),
+        );
+        agent.set_status(Status::Running);
+        let agent_id = agent.id;
+        let session = agent.mux_session.clone();
+        app.data.storage.add(agent);
+        app.data.ui.pane_activity_digest_mode = PaneActivityDigestMode::Capture;
+
+        let command = crate::command::parse_command_line(&test_output_then_sleep_program())?;
+        let manager = crate::mux::SessionManager::new();
+        manager.create(&session, temp.path(), Some(&command))?;
+
+        let handler = Actions::new();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        handler.sync_agent_pane_activity(&mut app)?;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        handler.sync_agent_pane_activity(&mut app)?;
+
+        assert_eq!(
+            app.data.ui.pane_activity_digest_mode,
+            PaneActivityDigestMode::Capture
+        );
+        assert!(app.data.ui.pane_digest_by_agent.contains_key(&agent_id));
+        assert!(app.data.ui.agent_is_waiting_for_input(agent_id));
+
+        let _ = manager.kill(&session);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pane_activity_digest_prefers_output_cursor_when_available() -> Result<()> {
+        let (digest, mode) = pane_activity_digest_with_fallback(
+            PaneActivityDigestMode::Cursor,
+            || Ok(crate::mux::OutputCursor { start: 7, end: 11 }),
+            || Ok(String::from("capture should not be used")),
+        )?;
+
+        assert_eq!(
+            digest,
+            hash_output_cursor(crate::mux::OutputCursor { start: 7, end: 11 })
+        );
+        assert_eq!(mode, PaneActivityDigestMode::Cursor);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pane_activity_digest_falls_back_to_capture_when_cursor_fails() -> Result<()> {
+        let (digest, mode) = pane_activity_digest_with_fallback(
+            PaneActivityDigestMode::Cursor,
+            || Err(anyhow::anyhow!("unsupported")),
+            || Ok(String::from("visible pane")),
+        )?;
+
+        assert_eq!(digest, hash_text("visible pane"));
+        assert_eq!(mode, PaneActivityDigestMode::Capture);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pane_activity_digest_capture_mode_skips_cursor() -> Result<()> {
+        let cursor_called = std::cell::Cell::new(false);
+        let (digest, mode) = pane_activity_digest_with_fallback(
+            PaneActivityDigestMode::Capture,
+            || {
+                cursor_called.set(true);
+                Ok(crate::mux::OutputCursor { start: 1, end: 2 })
+            },
+            || Ok(String::from("visible pane")),
+        )?;
+
+        assert_eq!(digest, hash_text("visible pane"));
+        assert_eq!(mode, PaneActivityDigestMode::Capture);
+        assert!(!cursor_called.get());
         Ok(())
     }
 

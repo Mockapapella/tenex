@@ -178,7 +178,8 @@ pub(super) fn pid_is_alive(pid: u32) -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .is_ok_and(|status| status.success())
+            .as_ref()
+            .is_ok_and(std::process::ExitStatus::success)
     }
 }
 
@@ -452,6 +453,12 @@ mod tests {
     fn test_mux_daemon_pids_for_socket_returns_empty_for_empty_socket() {
         assert!(mux_daemon_pids_for_socket("").is_empty());
         assert!(mux_daemon_pids_for_socket("   ").is_empty());
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    #[test]
+    fn test_pid_is_alive_returns_true_for_current_pid() {
+        assert!(pid_is_alive(std::process::id()));
     }
 
     #[cfg(target_os = "linux")]

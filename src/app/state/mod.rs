@@ -25,7 +25,8 @@ pub use settings_menu::SettingsMenuState;
 pub use spawn::SpawnState;
 pub use spawn::WorktreeConflictInfo;
 pub use ui::{
-    DiffEdit, DiffLineMeta, MuxdVersionMismatchInfo, PreviewSelectionPoint, PreviewVtState, UiState,
+    DiffEdit, DiffLineMeta, MuxdVersionMismatchInfo, PaneActivityDigestMode, PreviewSelectionPoint,
+    PreviewVtState, UiState,
 };
 
 use crate::agent::Storage;

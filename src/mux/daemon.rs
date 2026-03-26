@@ -168,6 +168,7 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
             after,
             max_bytes,
         } => handle_read_output(&target, after, max_bytes),
+        MuxRequest::OutputCursor { target } => handle_output_cursor(&target),
         MuxRequest::ListPanePids { session } => handle_list_pids(&session),
     }
 }
@@ -404,6 +405,15 @@ fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxRes
             },
         }),
     }
+}
+
+fn handle_output_cursor(target: &str) -> Result<MuxResponse> {
+    let window = super::backend::resolve_window(target)?;
+    let (start, end) = {
+        let guard = window.lock();
+        (guard.output_history.seq_start, guard.output_history.seq_end)
+    };
+    Ok(MuxResponse::OutputCursor { start, end })
 }
 
 fn handle_list_pids(session: &str) -> Result<MuxResponse> {
@@ -779,6 +789,44 @@ mod tests {
         let response = dispatch(MuxRequest::KillSession {
             name: quiet_session,
         })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dispatch_output_cursor_reflects_history_bounds()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session = unique_session("tenex-test-daemon-output-cursor");
+        let working_dir = temp_working_dir();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: long_running_command(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&session)?;
+        {
+            let mut guard = window.lock();
+            guard.output_history.seq_start = 5;
+            guard.output_history.seq_end = 42;
+        }
+
+        let response = dispatch(MuxRequest::OutputCursor {
+            target: session.clone(),
+        })?;
+        let MuxResponse::OutputCursor { start, end } = response else {
+            return Err("Expected OutputCursor response".into());
+        };
+        assert_eq!(start, 5);
+        assert_eq!(end, 42);
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
         assert!(matches!(response, MuxResponse::Ok));
         Ok(())
     }

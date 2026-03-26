@@ -37,6 +37,15 @@ pub enum OutputRead {
     Reset(OutputReset),
 }
 
+/// Current raw output sequence bounds for a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputCursor {
+    /// First sequence number still retained by the daemon.
+    pub start: u64,
+    /// Sequence number after the last observed byte.
+    pub end: u64,
+}
+
 impl OutputStream {
     /// Create a new output stream client.
     #[must_use]
@@ -56,6 +65,18 @@ impl OutputStream {
             max_bytes,
         })?;
         decode_read_output_response(response)
+    }
+
+    /// Read the current raw output sequence bounds for a target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the daemon cannot be reached or responds with an error.
+    pub fn cursor(&self, target: &str) -> Result<OutputCursor> {
+        let response = super::client::request(&MuxRequest::OutputCursor {
+            target: target.to_string(),
+        })?;
+        decode_output_cursor_response(response)
     }
 }
 
@@ -90,6 +111,14 @@ fn decode_read_output_response(response: MuxResponse) -> Result<OutputRead> {
             };
             Ok(OutputRead::Reset(OutputReset { start, checkpoint }))
         }
+        MuxResponse::Err { message } => bail!("{message}"),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+fn decode_output_cursor_response(response: MuxResponse) -> Result<OutputCursor> {
+    match response {
+        MuxResponse::OutputCursor { start, end } => Ok(OutputCursor { start, end }),
         MuxResponse::Err { message } => bail!("{message}"),
         other => bail!("Unexpected response: {other:?}"),
     }
@@ -172,6 +201,13 @@ mod tests {
                 checkpoint: checkpoint.to_vec()
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_output_cursor() -> Result<()> {
+        let cursor = decode_output_cursor_response(MuxResponse::OutputCursor { start: 3, end: 9 })?;
+        assert_eq!(cursor, OutputCursor { start: 3, end: 9 });
         Ok(())
     }
 

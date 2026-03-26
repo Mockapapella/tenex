@@ -412,6 +412,27 @@ fn maybe_refresh_preview(
     }
 }
 
+fn should_refresh_diff(
+    active_tab: Tab,
+    needs_content_update: bool,
+    diff_due: bool,
+    diff_force_refresh: bool,
+) -> bool {
+    if active_tab == Tab::Diff || diff_force_refresh {
+        return needs_content_update || diff_due || diff_force_refresh;
+    }
+
+    diff_due
+}
+
+fn should_refresh_commits(active_tab: Tab, needs_content_update: bool, commits_due: bool) -> bool {
+    if active_tab == Tab::Commits {
+        return needs_content_update || commits_due;
+    }
+
+    commits_due
+}
+
 fn maybe_finish_preparing_docker(app: &mut App) -> bool {
     if !matches!(&app.mode, AppMode::PreparingDocker(_)) {
         return false;
@@ -516,7 +537,12 @@ fn run_loop(
 
         // Diff refresh is expensive; throttle it while still updating promptly on selection/tab changes.
         let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;
-        if needs_content_update || diff_due || app.data.ui.diff_force_refresh {
+        if should_refresh_diff(
+            app.data.active_tab,
+            needs_content_update,
+            diff_due,
+            app.data.ui.diff_force_refresh,
+        ) {
             if app.data.active_tab == Tab::Diff || app.data.ui.diff_force_refresh {
                 let _ = action_handler.update_diff(app);
             } else {
@@ -526,7 +552,7 @@ fn run_loop(
         }
 
         let commits_due = last_commits_update.elapsed() >= commits_refresh_interval;
-        if needs_content_update || commits_due {
+        if should_refresh_commits(app.data.active_tab, needs_content_update, commits_due) {
             if app.data.active_tab == Tab::Commits {
                 let _ = action_handler.update_commits(app);
             } else {
@@ -578,8 +604,7 @@ fn run_loop(
 mod tests {
     use super::*;
     use crate::action::keycode_to_input_sequence;
-    use crate::agent::Agent;
-    use crate::agent::Storage;
+    use crate::agent::{Agent, Storage};
     use crate::config::Config;
     use crate::state::*;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -1173,6 +1198,30 @@ mod tests {
             compute_preview_refresh_interval(100, Tab::Preview, false),
             Duration::from_millis(100)
         );
+    }
+
+    #[test]
+    fn test_should_refresh_diff_skips_selection_updates_when_diff_tab_inactive() {
+        assert!(!should_refresh_diff(Tab::Preview, true, false, false));
+        assert!(should_refresh_diff(Tab::Preview, false, true, false));
+    }
+
+    #[test]
+    fn test_should_refresh_diff_still_updates_when_diff_tab_active_or_forced() {
+        assert!(should_refresh_diff(Tab::Diff, true, false, false));
+        assert!(should_refresh_diff(Tab::Preview, false, false, true));
+    }
+
+    #[test]
+    fn test_should_refresh_commits_skips_selection_updates_when_commits_tab_inactive() {
+        assert!(!should_refresh_commits(Tab::Preview, true, false));
+        assert!(should_refresh_commits(Tab::Preview, false, true));
+    }
+
+    #[test]
+    fn test_should_refresh_commits_still_updates_when_commits_tab_active() {
+        assert!(should_refresh_commits(Tab::Commits, true, false));
+        assert!(should_refresh_commits(Tab::Commits, false, true));
     }
 
     #[test]
