@@ -111,7 +111,7 @@ repos:
         pass_filenames: false
 
       - id: cargo-coverage
-        name: cargo llvm-cov (90% lines + functions)
+        name: cargo llvm-cov (coverage artifacts)
         entry: python3 scripts/precommit/run_cargo_hook.py coverage
         language: system
         pass_filenames: false

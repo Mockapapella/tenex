@@ -609,7 +609,8 @@ jobs:
             --linux artifacts/linux/llvm-cov-report.lcov.gz \
             --macos artifacts/macos/llvm-cov-report.lcov.gz \
             --windows artifacts/windows/llvm-cov-report.lcov.gz \
-            --out coverage-theoretical-max.json
+            --out coverage-theoretical-max.json \
+            --fail-on-missed-coverable-lines
 
       - name: Upload theoretical max coverage summary
         uses: actions/upload-artifact@v4
