@@ -171,17 +171,15 @@ pub(super) fn pid_is_alive(pid: u32) -> bool {
             return !state.contains('Z');
         }
 
-        match Command::new("kill")
+        Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-        {
-            Ok(status) => status.success(),
-            Err(_) => false,
-        }
+            .as_ref()
+            .is_ok_and(std::process::ExitStatus::success)
     }
 }
 
