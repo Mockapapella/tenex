@@ -794,6 +794,44 @@ mod tests {
     }
 
     #[test]
+    fn test_dispatch_output_cursor_reflects_history_bounds()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session = unique_session("tenex-test-daemon-output-cursor");
+        let working_dir = temp_working_dir();
+
+        let _ = super::super::server::SessionManager::kill(&session);
+
+        let response = dispatch(MuxRequest::CreateSession {
+            name: session.clone(),
+            working_dir,
+            command: long_running_command(),
+            cols: 80,
+            rows: 24,
+        })?;
+        assert!(matches!(response, MuxResponse::Ok));
+
+        let window = super::super::backend::resolve_window(&session)?;
+        {
+            let mut guard = window.lock();
+            guard.output_history.seq_start = 5;
+            guard.output_history.seq_end = 42;
+        }
+
+        let response = dispatch(MuxRequest::OutputCursor {
+            target: session.clone(),
+        })?;
+        let MuxResponse::OutputCursor { start, end } = response else {
+            return Err("Expected OutputCursor response".into());
+        };
+        assert_eq!(start, 5);
+        assert_eq!(end, 42);
+
+        let response = dispatch(MuxRequest::KillSession { name: session })?;
+        assert!(matches!(response, MuxResponse::Ok));
+        Ok(())
+    }
+
+    #[test]
     fn test_resize_is_monotonic_max_per_target() -> Result<(), Box<dyn std::error::Error>> {
         let session = unique_session("tenex-test-daemon-resize-multi");
         let working_dir = temp_working_dir();

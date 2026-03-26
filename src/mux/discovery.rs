@@ -454,6 +454,12 @@ mod tests {
         assert!(mux_daemon_pids_for_socket("   ").is_empty());
     }
 
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    #[test]
+    fn test_pid_is_alive_returns_true_for_current_pid() {
+        assert!(pid_is_alive(std::process::id()));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_mux_daemon_pids_for_socket_handles_missing_cmdline_files() -> Result<()> {
