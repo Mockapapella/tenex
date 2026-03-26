@@ -574,3 +574,45 @@ jobs:
             llvm-cov-report.sha256
             llvm-cov-meta.txt
           if-no-files-found: ignore
+
+  coverage-theoretical-max:
+    name: coverage theoretical max (lines)
+    runs-on: ubuntu-latest
+    needs: pre-commit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Download llvm-cov artifacts (linux)
+        uses: actions/download-artifact@v4
+        with:
+          name: llvm-cov-report-linux
+          path: artifacts/linux
+      - name: Download llvm-cov artifacts (macos)
+        uses: actions/download-artifact@v4
+        with:
+          name: llvm-cov-report-macos
+          path: artifacts/macos
+      - name: Download llvm-cov artifacts (windows)
+        uses: actions/download-artifact@v4
+        with:
+          name: llvm-cov-report-windows
+          path: artifacts/windows
+
+      - name: Compute theoretical max coverage
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/coverage_theoretical_max.py \
+            --linux artifacts/linux/llvm-cov-report.lcov.gz \
+            --macos artifacts/macos/llvm-cov-report.lcov.gz \
+            --windows artifacts/windows/llvm-cov-report.lcov.gz \
+            --out coverage-theoretical-max.json
+
+      - name: Upload theoretical max coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-theoretical-max
+          path: coverage-theoretical-max.json

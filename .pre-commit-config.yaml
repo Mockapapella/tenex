@@ -95,7 +95,12 @@ repos:
 
       - id: precommit-hook-unit-tests
         name: pre-commit hook unit tests
-        entry: python3 scripts/precommit/test_run_cargo_hook.py
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              python3 scripts/precommit/test_run_cargo_hook.py
+              python3 scripts/ci/test_coverage_theoretical_max.py
         language: system
         pass_filenames: false
 
