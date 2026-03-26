@@ -339,31 +339,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--macos-json", type=Path, required=True)
     parser.add_argument("--windows-json", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=Path("coverage-theoretical-max.json"))
-    parser.add_argument(
-        "--fail-on-missed-coverable",
-        action="store_true",
-        help="Exit non-zero when any platform misses a coverable region/function/line/branch.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-lines",
-        action="store_true",
-        help="Exit non-zero when any platform misses a coverable line.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-functions",
-        action="store_true",
-        help="Exit non-zero when any platform misses a coverable function.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-regions",
-        action="store_true",
-        help="Exit non-zero when any platform misses a coverable region.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-branches",
-        action="store_true",
-        help="Exit non-zero when any platform misses a coverable branch.",
-    )
     return parser.parse_args()
 
 
@@ -392,36 +367,8 @@ def main() -> int:
     else:
         sys.stdout.write(markdown)
 
-    want_all = bool(args.fail_on_missed_coverable)
-    want_lines = want_all or bool(args.fail_on_missed_coverable_lines)
-    want_functions = want_all or bool(args.fail_on_missed_coverable_functions)
-    want_regions = want_all or bool(args.fail_on_missed_coverable_regions)
-    want_branches = want_all or bool(args.fail_on_missed_coverable_branches)
-
-    missed_by_platform: dict[str, list[str]] = {}
-    for name, metrics in payload["platforms"].items():
-        missed: list[str] = []
-        if want_regions and metrics["regions"]["missed_coverable"] > 0:
-            missed.append("regions")
-        if want_functions and metrics["functions"]["missed_coverable"] > 0:
-            missed.append("functions")
-        if want_lines and metrics["lines"]["missed_coverable"] > 0:
-            missed.append("lines")
-        if want_branches and metrics["branches"]["missed_coverable"] > 0:
-            missed.append("branches")
-        if missed:
-            missed_by_platform[name] = missed
-
-    if missed_by_platform:
-        parts = [
-            f"{name}({','.join(missed)})" for name, missed in missed_by_platform.items()
-        ]
-        print(f"ERROR: missed coverable coverage: {', '.join(parts)}", file=sys.stderr)
-        return 1
-
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

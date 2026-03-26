@@ -30,31 +30,6 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Path to coverage-theoretical-max.json produced by coverage_theoretical_max.py.",
     )
-    parser.add_argument(
-        "--fail-on-missed-coverable",
-        action="store_true",
-        help="Exit non-zero when the platform misses a coverable region/function/line/branch.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-lines",
-        action="store_true",
-        help="Exit non-zero when the platform misses a coverable line.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-functions",
-        action="store_true",
-        help="Exit non-zero when the platform misses a coverable function.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-regions",
-        action="store_true",
-        help="Exit non-zero when the platform misses a coverable region.",
-    )
-    parser.add_argument(
-        "--fail-on-missed-coverable-branches",
-        action="store_true",
-        help="Exit non-zero when the platform misses a coverable branch.",
-    )
     return parser.parse_args()
 
 
@@ -81,12 +56,6 @@ def main() -> int:
         )
     )
 
-    want_all = bool(args.fail_on_missed_coverable)
-    want_lines = want_all or bool(args.fail_on_missed_coverable_lines)
-    want_functions = want_all or bool(args.fail_on_missed_coverable_functions)
-    want_regions = want_all or bool(args.fail_on_missed_coverable_regions)
-    want_branches = want_all or bool(args.fail_on_missed_coverable_branches)
-
     summary_lines = [
         "## Coverage theoretical max enforcement",
         "",
@@ -100,6 +69,8 @@ def main() -> int:
         f"  - branches: `{expected_payload['union']['branches']['instrumented']}`",
         "",
     ]
+
+    errors: list[str] = []
 
     for metric in ("lines", "functions", "regions", "branches"):
         expected_union = int(expected_payload["union"][metric]["instrumented"])
@@ -140,55 +111,35 @@ def main() -> int:
         )
 
         if instrumented != expected_instrumented:
-            print(
+            errors.append(
                 f"ERROR: instrumented {metric} count mismatch for {args.platform}: "
                 f"expected {expected_instrumented}, got {instrumented}",
-                file=sys.stderr,
             )
-            return 1
 
         if theoretical_percent != expected_theoretical_percent:
-            print(
+            errors.append(
                 f"ERROR: theoretical max percent mismatch for {metric} on {args.platform}: "
                 f"expected {expected_theoretical_percent}%, got {theoretical_percent}%",
-                file=sys.stderr,
             )
-            return 1
 
-        if metric == "lines" and want_lines and missed > 0:
-            print(f"ERROR: missed coverable lines on {args.platform}: {missed}", file=sys.stderr)
-            return 1
-        if metric == "functions" and want_functions and missed > 0:
-            print(
-                f"ERROR: missed coverable functions on {args.platform}: {missed}",
-                file=sys.stderr,
+        if missed > 0:
+            errors.append(
+                f"ERROR: missed coverable {metric} on {args.platform}: {missed}",
             )
-            return 1
-        if metric == "regions" and want_regions and missed > 0:
-            print(
-                f"ERROR: missed coverable regions on {args.platform}: {missed}",
-                file=sys.stderr,
-            )
-            return 1
-        if metric == "branches" and want_branches and missed > 0:
-            print(
-                f"ERROR: missed coverable branches on {args.platform}: {missed}",
-                file=sys.stderr,
-            )
-            return 1
 
         if missed == 0 and actual_percent != expected_theoretical_percent:
-            print(
+            errors.append(
                 f"ERROR: percent mismatch despite full coverage for {metric} on {args.platform}: "
                 f"expected {expected_theoretical_percent}%, got {actual_percent}%",
-                file=sys.stderr,
             )
-            return 1
 
     write_summary(summary_lines)
+    if errors:
+        for message in errors:
+            print(message, file=sys.stderr)
+        return 1
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -583,8 +583,7 @@ jobs:
           python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
             --platform "${{ matrix.receipt_os }}" \
             --json llvm-cov-report.summary.json.gz \
-            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
-            --fail-on-missed-coverable
+            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json
 
       - name: Enforce theoretical max coverage (WSL)
         if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
@@ -599,8 +598,7 @@ jobs:
           python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
             --platform "${{ matrix.receipt_os }}" \
             --json llvm-cov-report.summary.json.gz \
-            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
-            --fail-on-missed-coverable
+            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
