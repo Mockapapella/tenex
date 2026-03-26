@@ -81,6 +81,13 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: cross-os-theoretical-max
+        name: "push: enforce cross-OS theoretical max coverage"
+        entry: python3 scripts/precommit/pre_push_theoretical_max_gate.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: cargo-fmt
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
