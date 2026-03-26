@@ -22,6 +22,20 @@ coverage_theoretical_max = load_module()
 
 
 class CoverageTheoreticalMaxTests(unittest.TestCase):
+    def test_format_ratio_percent_decimal_rounds_and_pads(self) -> None:
+        self.assertEqual(
+            coverage_theoretical_max.format_ratio_percent_decimal(1, 2, 5),
+            "50.00000",
+        )
+        self.assertEqual(
+            coverage_theoretical_max.format_ratio_percent_decimal(1, 3, 2),
+            "33.33",
+        )
+        self.assertEqual(
+            coverage_theoretical_max.format_ratio_percent_decimal(2, 3, 2),
+            "66.67",
+        )
+
     def test_normalize_source_path_prefers_shortest_existing_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

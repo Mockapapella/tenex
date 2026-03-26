@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 LineKey = tuple[str, int]
+DEFAULT_DECIMAL_PLACES = 26
 
 
 @dataclass
@@ -119,6 +120,44 @@ def format_bps(bps: int) -> str:
     return f"{whole}.{frac:02d}%"
 
 
+def format_ratio_percent_decimal(
+    numerator: int, denominator: int, decimal_places: int = DEFAULT_DECIMAL_PLACES
+) -> str:
+    if denominator <= 0:
+        return f"0.{('0' * decimal_places)}"
+
+    scaled = numerator * 100
+    whole = scaled // denominator
+    remainder = scaled % denominator
+
+    digits: list[int] = []
+    for _ in range(decimal_places):
+        remainder *= 10
+        digit = remainder // denominator
+        remainder %= denominator
+        digits.append(int(digit))
+
+    remainder *= 10
+    next_digit = remainder // denominator
+    if next_digit >= 5:
+        carry = 1
+        for idx in range(len(digits) - 1, -1, -1):
+            if carry == 0:
+                break
+            value = digits[idx] + carry
+            if value >= 10:
+                digits[idx] = value - 10
+                carry = 1
+            else:
+                digits[idx] = value
+                carry = 0
+        if carry:
+            whole += carry
+
+    frac = "".join(str(d) for d in digits)
+    return f"{whole}.{frac}"
+
+
 def compute_summary(
     platforms: dict[str, LineCoverage], sha: Optional[str]
 ) -> tuple[dict, str]:
@@ -130,6 +169,7 @@ def compute_summary(
 
     payload: dict[str, object] = {
         "commit": {"sha": sha} if sha else None,
+        "decimal_places": DEFAULT_DECIMAL_PLACES,
         "union": {"instrumented_lines": union_lines},
         "platforms": {},
     }
@@ -152,6 +192,13 @@ def compute_summary(
             "theoretical_max_lines_bps": theoretical_bps,
             "actual_lines_bps": actual_bps,
             "coverage_of_coverable_lines_bps": coverable_bps,
+            "theoretical_max_lines_percent": format_ratio_percent_decimal(
+                instrumented, union_lines
+            ),
+            "actual_lines_percent": format_ratio_percent_decimal(covered, union_lines),
+            "coverage_of_coverable_lines_percent": format_ratio_percent_decimal(
+                covered, instrumented
+            ),
             "unknown_sources": len(coverage.unknown_sources),
         }
         rows.append((os_name, row))
@@ -183,6 +230,18 @@ def compute_summary(
             + " | "
             + format_bps(row["coverage_of_coverable_lines_bps"])
             + " |"
+        )
+
+    markdown_lines.extend(
+        [
+            "",
+            "### Theoretical max (26 dp)",
+            "",
+        ]
+    )
+    for name, row in rows:
+        markdown_lines.append(
+            f"- {name}: `{row['theoretical_max_lines_percent']}%`"
         )
 
     markdown = "\n".join(markdown_lines) + "\n"

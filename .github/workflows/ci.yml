@@ -13,6 +13,7 @@ jobs:
   pre-commit:
     name: pre-commit (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    needs: coverage-theoretical-max
     env:
       PRE_COMMIT_VERSION: "4.5.1"
       UV_VERSION: "0.10.7"
@@ -40,6 +41,12 @@ jobs:
           # reports generated locally on the same commit.
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Download coverage theoretical max summary
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-theoretical-max
+          path: artifacts/theoretical-max
       - name: Restore WSL rustup cache
         if: ${{ matrix.use_wsl }}
         id: wsl-cache-rustup
@@ -563,6 +570,37 @@ jobs:
           path: .wsl-cache/uv.tar.zst
           key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
 
+      - name: Enforce theoretical max coverage (lines)
+        if: ${{ always() && !matrix.use_wsl }}
+        run: |
+          set -euo pipefail
+          test -f artifacts/theoretical-max/coverage-theoretical-max.json
+          test -f llvm-cov-report.lcov.gz
+          python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
+            --platform "${{ matrix.receipt_os }}" \
+            --lcov llvm-cov-report.lcov.gz \
+            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
+            --fail-on-missed-coverable-lines
+
+      - name: Enforce theoretical max coverage (lines) (WSL)
+        if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cd "$mounted"
+          test -f artifacts/theoretical-max/coverage-theoretical-max.json
+          test -f llvm-cov-report.lcov.gz
+          python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
+            --platform "${{ matrix.receipt_os }}" \
+            --lcov llvm-cov-report.lcov.gz \
+            --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
+            --fail-on-missed-coverable-lines
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
       - name: Upload llvm-cov report
         if: always()
         uses: actions/upload-artifact@v4
@@ -575,42 +613,277 @@ jobs:
             llvm-cov-meta.txt
           if-no-files-found: ignore
 
+  coverage-theoretical-max-inputs:
+    name: coverage theoretical max inputs (lines) (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    env:
+      UV_VERSION: "0.10.7"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            receipt_os: linux
+            use_wsl: false
+          - os: macos-latest
+            name: macos
+            receipt_os: macos
+            use_wsl: false
+          - os: windows-latest
+            name: windows-wsl2
+            receipt_os: windows
+            use_wsl: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        if: ${{ !matrix.use_wsl }}
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - name: Install Rust
+        if: ${{ !matrix.use_wsl }}
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: llvm-tools-preview
+      - name: Read cargo-llvm-cov version
+        if: ${{ !matrix.use_wsl }}
+        id: llvm-cov-version
+        run: echo "version=$(cat .cargo-llvm-cov-version)" >> "$GITHUB_OUTPUT"
+      - name: Install cargo-llvm-cov
+        if: ${{ !matrix.use_wsl }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@${{ steps.llvm-cov-version.outputs.version }}
+          checksum: true
+          fallback: cargo-binstall
+      - name: Cache cargo
+        if: ${{ !matrix.use_wsl }}
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve WSL context
+        if: ${{ matrix.use_wsl }}
+        id: wsl-context
+        shell: pwsh
+        run: |
+          $distro = ""
+          $distros = (wsl.exe -l -q) -split "`r?`n" |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+
+          if ($distros.Count -eq 0) {
+            Write-Host "No WSL distribution found; provisioning Ubuntu."
+            wsl.exe --set-default-version 2
+            wsl.exe --install --no-launch --distribution Ubuntu
+
+            # Launch once to complete first-time distro registration.
+            wsl.exe -d Ubuntu -e bash -lc "echo WSL ready"
+            $distro = "Ubuntu"
+          }
+
+          if (-not $distro) {
+            $distros = (wsl.exe -l -q) -split "`r?`n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+            if ($distros.Count -eq 0) {
+              throw "No WSL distribution found on runner."
+            }
+            if ($distros -contains "Ubuntu") {
+              $distro = "Ubuntu"
+            } else {
+              $distro = $distros[0]
+            }
+          }
+
+          $distro = $distro.Trim([char]0xFEFF)
+          if (-not $distro) {
+            throw "No WSL distribution found on runner."
+          }
+
+          $workspace = (wsl.exe -d $distro -e bash -lc "wslpath -a '${{ github.workspace }}'").Trim()
+          if (-not $workspace) {
+            throw "Failed to translate GitHub workspace path into WSL path."
+          }
+
+          "distro=$distro" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "workspace=$workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Prepare WSL dependencies
+        if: ${{ matrix.use_wsl }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          cache_dir="$mounted/.wsl-cache"
+          UV_VERSION="${{ env.UV_VERSION }}"
+          export UV_INSTALL_DIR="$HOME/.local/share/uv/bin"
+          export UV_TOOL_DIR="$HOME/.local/share/uv/tools"
+          export UV_TOOL_BIN_DIR="$HOME/.local/share/uv/bin"
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          export UV_CACHE_DIR="$HOME/.local/share/uv/cache"
+
+          cd "$mounted"
+          mkdir -p "$cache_dir"
+
+          missing=()
+          command -v python3 >/dev/null 2>&1 || missing+=(python3)
+          command -v curl >/dev/null 2>&1 || missing+=(curl ca-certificates)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          command -v cc >/dev/null 2>&1 || missing+=(build-essential)
+          if [ ${#missing[@]} -ne 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y "${missing[@]}"
+          fi
+
+          mkdir -p "$HOME/.cargo" "$HOME/.rustup" "$UV_INSTALL_DIR" "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+
+          if [ -f "$cache_dir/cargo-home.tar.zst" ]; then
+            zstd -dc "$cache_dir/cargo-home.tar.zst" | tar -x -C "$HOME"
+          fi
+          if [ -f "$cache_dir/rustup.tar.zst" ]; then
+            zstd -dc "$cache_dir/rustup.tar.zst" | tar -x -C "$HOME"
+          fi
+          if [ -f "$cache_dir/uv.tar.zst" ]; then
+            zstd -dc "$cache_dir/uv.tar.zst" | tar -x -C "$HOME"
+          fi
+
+          export PATH="$UV_INSTALL_DIR:$UV_TOOL_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+
+          source "$HOME/.cargo/env"
+
+          toolchain="$(awk -F '\"' '/channel =/ { print $2 }' rust-toolchain.toml | head -n 1 | tr -d '\r')"
+          if [ -n "$toolchain" ]; then
+            rustup toolchain install "$toolchain" --profile minimal --component llvm-tools-preview
+            rustup default "$toolchain"
+          fi
+
+          # The Windows checkout can contain CRLF; strip CR so curl/rustup inputs are clean.
+          required_cov="$(tr -d '\r\n' < .cargo-llvm-cov-version)"
+          installed_cov="$(cargo llvm-cov --version 2>/dev/null | awk '{print $2}' || true)"
+          if [ "$installed_cov" != "$required_cov" ]; then
+            target="x86_64-unknown-linux-gnu"
+            asset="cargo-llvm-cov-${target}.tar.gz"
+            url="https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${required_cov}/${asset}"
+
+            tmp_dir="$(mktemp -d)"
+            curl -fsSL "$url" -o "$tmp_dir/${asset}"
+            tar -xzf "$tmp_dir/${asset}" -C "$tmp_dir"
+            install -m 0755 "$tmp_dir/cargo-llvm-cov" "$HOME/.cargo/bin/cargo-llvm-cov"
+            rm -rf "$tmp_dir"
+          fi
+
+          rustc -V
+          cargo -V
+          cargo llvm-cov --version
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Stage repo into WSL filesystem
+        if: ${{ matrix.use_wsl }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          fast_repo="$HOME/tenex-ci/workspace"
+          rm -rf "$fast_repo"
+          mkdir -p "$fast_repo"
+          tar -C "$mounted" -cf - . | tar -C "$fast_repo" -xf -
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Export instrumented lcov (no-run)
+        if: ${{ !matrix.use_wsl }}
+        run: |
+          set -euo pipefail
+          cargo llvm-cov \
+            --no-run \
+            --lcov \
+            --output-path llvm-cov-instrumented.lcov \
+            --all-targets \
+            --all-features \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/'
+          gzip -9 -f llvm-cov-instrumented.lcov
+
+      - name: Export instrumented lcov (no-run) (WSL)
+        if: ${{ matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $script = @'
+          set -euo pipefail
+          mounted="${{ steps.wsl-context.outputs.workspace }}"
+          fast_repo="$HOME/tenex-ci/workspace"
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          cd "$fast_repo"
+          cargo llvm-cov \
+            --no-run \
+            --lcov \
+            --output-path "$mounted/llvm-cov-instrumented.lcov" \
+            --all-targets \
+            --all-features \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/'
+          gzip -9 -f "$mounted/llvm-cov-instrumented.lcov"
+          '@
+          $script = $script -replace "`r", ""
+          wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
+
+      - name: Upload instrumented lcov
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-instrumented-${{ matrix.receipt_os }}
+          path: llvm-cov-instrumented.lcov.gz
+
   coverage-theoretical-max:
     name: coverage theoretical max (lines)
     runs-on: ubuntu-latest
-    needs: pre-commit
+    needs: coverage-theoretical-max-inputs
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: .python-version
 
-      - name: Download llvm-cov artifacts (linux)
+      - name: Download llvm-cov instrumented artifacts (linux)
         uses: actions/download-artifact@v4
         with:
-          name: llvm-cov-report-linux
+          name: llvm-cov-instrumented-linux
           path: artifacts/linux
-      - name: Download llvm-cov artifacts (macos)
+      - name: Download llvm-cov instrumented artifacts (macos)
         uses: actions/download-artifact@v4
         with:
-          name: llvm-cov-report-macos
+          name: llvm-cov-instrumented-macos
           path: artifacts/macos
-      - name: Download llvm-cov artifacts (windows)
+      - name: Download llvm-cov instrumented artifacts (windows)
         uses: actions/download-artifact@v4
         with:
-          name: llvm-cov-report-windows
+          name: llvm-cov-instrumented-windows
           path: artifacts/windows
 
-      - name: Compute theoretical max coverage
+      - name: Compute theoretical max coverage (lines)
         run: |
           set -euo pipefail
           python3 scripts/ci/coverage_theoretical_max.py \
-            --linux artifacts/linux/llvm-cov-report.lcov.gz \
-            --macos artifacts/macos/llvm-cov-report.lcov.gz \
-            --windows artifacts/windows/llvm-cov-report.lcov.gz \
-            --out coverage-theoretical-max.json \
-            --fail-on-missed-coverable-lines
+            --linux artifacts/linux/llvm-cov-instrumented.lcov.gz \
+            --macos artifacts/macos/llvm-cov-instrumented.lcov.gz \
+            --windows artifacts/windows/llvm-cov-instrumented.lcov.gz \
+            --out coverage-theoretical-max.json
 
       - name: Upload theoretical max coverage summary
         uses: actions/upload-artifact@v4
