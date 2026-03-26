@@ -1172,6 +1172,27 @@ mod tests {
     }
 
     #[test]
+    fn test_symlink_local_instruction_file_skips_existing_dst()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let repo_root = temp_dir.path().join("repo-root");
+        let worktree_root = temp_dir.path().join("worktree-root");
+        fs::create_dir_all(&repo_root)?;
+        fs::create_dir_all(&worktree_root)?;
+
+        let src = repo_root.join("AGENTS.md");
+        fs::write(&src, "src")?;
+
+        let dst = worktree_root.join("AGENTS.md");
+        fs::write(&dst, "dst")?;
+
+        Manager::symlink_local_instruction_file(&repo_root, &worktree_root, "AGENTS.md")?;
+
+        assert_eq!(fs::read_to_string(&dst)?, "dst");
+        Ok(())
+    }
+
+    #[test]
     fn test_manager_debug_impl() -> Result<(), Box<dyn std::error::Error>> {
         let (_temp_dir, repo) = init_test_repo_with_commit()?;
         let manager = Manager::new(&repo);
