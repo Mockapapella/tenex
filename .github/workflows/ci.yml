@@ -324,6 +324,8 @@ jobs:
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
           gzip -9 -f llvm-cov-report.lcov
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path llvm-cov-report.summary.json
+          gzip -9 -f llvm-cov-report.summary.json
           python - <<'PY'
           import hashlib
           import pathlib
@@ -360,6 +362,8 @@ jobs:
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$mounted/llvm-cov-report.txt"
           cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path "$mounted/llvm-cov-report.lcov"
           gzip -9 -f "$mounted/llvm-cov-report.lcov"
+          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path "$mounted/llvm-cov-report.summary.json"
+          gzip -9 -f "$mounted/llvm-cov-report.summary.json"
           cd "$mounted"
           python3 - <<'PY'
           import hashlib
@@ -570,19 +574,19 @@ jobs:
           path: .wsl-cache/uv.tar.zst
           key: wsl-uv-v1-${{ env.UV_VERSION }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.python-version') }}
 
-      - name: Enforce theoretical max coverage (lines)
+      - name: Enforce theoretical max coverage
         if: ${{ always() && !matrix.use_wsl }}
         run: |
           set -euo pipefail
           test -f artifacts/theoretical-max/coverage-theoretical-max.json
-          test -f llvm-cov-report.lcov.gz
+          test -f llvm-cov-report.summary.json.gz
           python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
             --platform "${{ matrix.receipt_os }}" \
-            --lcov llvm-cov-report.lcov.gz \
+            --json llvm-cov-report.summary.json.gz \
             --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
-            --fail-on-missed-coverable-lines
+            --fail-on-missed-coverable
 
-      - name: Enforce theoretical max coverage (lines) (WSL)
+      - name: Enforce theoretical max coverage (WSL)
         if: ${{ always() && matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -591,12 +595,12 @@ jobs:
           mounted="${{ steps.wsl-context.outputs.workspace }}"
           cd "$mounted"
           test -f artifacts/theoretical-max/coverage-theoretical-max.json
-          test -f llvm-cov-report.lcov.gz
+          test -f llvm-cov-report.summary.json.gz
           python3 scripts/ci/coverage_verify_platform_theoretical_max.py \
             --platform "${{ matrix.receipt_os }}" \
-            --lcov llvm-cov-report.lcov.gz \
+            --json llvm-cov-report.summary.json.gz \
             --theoretical-max artifacts/theoretical-max/coverage-theoretical-max.json \
-            --fail-on-missed-coverable-lines
+            --fail-on-missed-coverable
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
@@ -609,12 +613,13 @@ jobs:
           path: |
             llvm-cov-report.txt
             llvm-cov-report.lcov.gz
+            llvm-cov-report.summary.json.gz
             llvm-cov-report.sha256
             llvm-cov-meta.txt
           if-no-files-found: ignore
 
   coverage-theoretical-max-inputs:
-    name: coverage theoretical max inputs (lines) (${{ matrix.name }})
+    name: coverage theoretical max inputs (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     env:
       UV_VERSION: "0.10.7"
@@ -820,6 +825,13 @@ jobs:
             --lcov \
             --output-path llvm-cov-instrumented.lcov
           gzip -9 -f llvm-cov-instrumented.lcov
+          cargo llvm-cov report \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --summary-only \
+            --json \
+            --output-path llvm-cov-instrumented.summary.json
+          gzip -9 -f llvm-cov-instrumented.summary.json
 
       - name: Export instrumented lcov (list-only) (WSL)
         if: ${{ matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
@@ -844,6 +856,13 @@ jobs:
             --lcov \
             --output-path "$mounted/llvm-cov-instrumented.lcov"
           gzip -9 -f "$mounted/llvm-cov-instrumented.lcov"
+          cargo llvm-cov report \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --summary-only \
+            --json \
+            --output-path "$mounted/llvm-cov-instrumented.summary.json"
+          gzip -9 -f "$mounted/llvm-cov-instrumented.summary.json"
           '@
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
@@ -852,10 +871,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llvm-cov-instrumented-${{ matrix.receipt_os }}
-          path: llvm-cov-instrumented.lcov.gz
+          path: |
+            llvm-cov-instrumented.lcov.gz
+            llvm-cov-instrumented.summary.json.gz
 
   coverage-theoretical-max:
-    name: coverage theoretical max (lines)
+    name: coverage theoretical max
     runs-on: ubuntu-latest
     needs: coverage-theoretical-max-inputs
     steps:
@@ -884,13 +905,13 @@ jobs:
           name: llvm-cov-instrumented-windows
           path: artifacts/windows
 
-      - name: Compute theoretical max coverage (lines)
+      - name: Compute theoretical max coverage
         run: |
           set -euo pipefail
           python3 scripts/ci/coverage_theoretical_max.py \
-            --linux artifacts/linux/llvm-cov-instrumented.lcov.gz \
-            --macos artifacts/macos/llvm-cov-instrumented.lcov.gz \
-            --windows artifacts/windows/llvm-cov-instrumented.lcov.gz \
+            --linux-json artifacts/linux/llvm-cov-instrumented.summary.json.gz \
+            --macos-json artifacts/macos/llvm-cov-instrumented.summary.json.gz \
+            --windows-json artifacts/windows/llvm-cov-instrumented.summary.json.gz \
             --out coverage-theoretical-max.json
 
       - name: Upload theoretical max coverage summary
