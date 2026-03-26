@@ -204,7 +204,7 @@ def create_patch(*, root: Path, base_sha: str, out_dir: Path) -> Path:
     patch_path = out_dir / "wip.patch"
     with patch_path.open("wb") as handle:
         result = subprocess.run(
-            ["git", "diff", "--binary", f"{base_sha}..HEAD"],
+            ["git", "diff", "--binary", "--cached", base_sha],
             cwd=root,
             stdout=handle,
             stderr=subprocess.PIPE,
