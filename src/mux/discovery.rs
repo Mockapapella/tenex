@@ -460,6 +460,43 @@ mod tests {
         assert!(pid_is_alive(std::process::id()));
     }
 
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    #[test]
+    fn test_pid_is_alive_falls_back_to_kill_when_ps_is_missing() -> Result<()> {
+        use parking_lot::Mutex;
+        use std::ffi::OsString;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::OnceLock;
+
+        static PATH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        let _path_lock = PATH_LOCK.get_or_init(|| Mutex::new(())).lock();
+        let prev_path = std::env::var_os("PATH");
+
+        struct RestorePath(Option<OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                match self.0.as_ref() {
+                    Some(value) => std::env::set_var("PATH", value),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+
+        let _restore = RestorePath(prev_path);
+
+        let dir = TempDir::new()?;
+        let kill_path = dir.path().join("kill");
+        std::fs::write(&kill_path, "#!/bin/sh\nexit 0\n")?;
+        let mut perms = std::fs::metadata(&kill_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&kill_path, perms)?;
+
+        std::env::set_var("PATH", dir.path());
+        assert!(pid_is_alive(std::process::id()));
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_mux_daemon_pids_for_socket_handles_missing_cmdline_files() -> Result<()> {
