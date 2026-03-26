@@ -6,8 +6,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash as _, Hasher as _};
+use std::io::{Read as _, Seek as _};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+use std::{fs, io};
 
 fn diff_line_content(line: &git2::DiffLine<'_>) -> String {
     let mut content = String::from_utf8_lossy(line.content()).to_string();
@@ -68,6 +70,7 @@ struct WorktreeMetaMarker {
     len: u64,
     modified_secs: u64,
     modified_nanos: u32,
+    sample_hash: u64,
 }
 
 fn diff_file_marker(file: &git2::DiffFile<'_>) -> DiffFileMarker {
@@ -109,7 +112,48 @@ fn status_has_workdir_change(status: Status) -> bool {
     )
 }
 
-fn worktree_meta_marker(workdir: Option<&Path>, path: Option<&Path>) -> Option<WorktreeMetaMarker> {
+fn worktree_file_sample_hash(full_path: &Path, len: u64) -> u64 {
+    const SAMPLE_BYTES: usize = 4096;
+
+    let mut hasher = DefaultHasher::new();
+    hasher.write_u64(len);
+
+    let Ok(mut file) = fs::File::open(full_path) else {
+        return hasher.finish();
+    };
+
+    let mut buf = [0_u8; SAMPLE_BYTES];
+    let head_len = usize::try_from(len)
+        .ok()
+        .map_or(SAMPLE_BYTES, |v| v.min(SAMPLE_BYTES));
+    if head_len > 0
+        && let Ok(read) = file.read(&mut buf[..head_len])
+    {
+        hasher.write_usize(read);
+        hasher.write(&buf[..read]);
+    }
+
+    if len > SAMPLE_BYTES as u64 {
+        let tail_len = SAMPLE_BYTES;
+        let Some(tail_offset) = i64::try_from(tail_len).ok().and_then(i64::checked_neg) else {
+            return hasher.finish();
+        };
+        if file.seek(io::SeekFrom::End(tail_offset)).is_ok()
+            && let Ok(read) = file.read(&mut buf[..tail_len])
+        {
+            hasher.write_usize(read);
+            hasher.write(&buf[..read]);
+        }
+    }
+
+    hasher.finish()
+}
+
+fn worktree_meta_marker(
+    workdir: Option<&Path>,
+    path: Option<&Path>,
+    include_content_sample: bool,
+) -> Option<WorktreeMetaMarker> {
     let path = path?;
     let full_path = if path.is_absolute() {
         path.to_path_buf()
@@ -128,17 +172,22 @@ fn worktree_meta_marker(workdir: Option<&Path>, path: Option<&Path>) -> Option<W
         4
     };
     let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    let sample_hash = (include_content_sample && file_type.is_file())
+        .then(|| worktree_file_sample_hash(&full_path, metadata.len()));
 
     Some(WorktreeMetaMarker {
         kind,
         len: metadata.len(),
         modified_secs: modified.as_secs(),
         modified_nanos: modified.subsec_nanos(),
+        sample_hash: sample_hash.unwrap_or(0),
     })
 }
 
 fn status_marker(entry: &git2::StatusEntry<'_>, workdir: Option<&Path>) -> StatusMarker {
     let status = entry.status();
+    let include_content_sample =
+        status_has_workdir_change(status) && !status.contains(Status::WT_NEW);
     let head_to_index = entry.head_to_index().map(|delta| delta_marker(&delta));
     let index_to_workdir = entry.index_to_workdir().map(|delta| delta_marker(&delta));
     let path = entry.path().map_or_else(PathBuf::new, PathBuf::from);
@@ -160,7 +209,7 @@ fn status_marker(entry: &git2::StatusEntry<'_>, workdir: Option<&Path>) -> Statu
         head_to_index,
         index_to_workdir,
         workdir_meta: if status_has_workdir_change(status) {
-            worktree_meta_marker(workdir, workdir_path.as_deref())
+            worktree_meta_marker(workdir, workdir_path.as_deref(), include_content_sample)
         } else {
             None
         },
@@ -977,6 +1026,24 @@ mod tests {
         let first = generator.uncommitted_change_marker()?;
 
         fs::write(&file_path, "# Modified again with more bytes\nextra\n")?;
+        let second = generator.uncommitted_change_marker()?;
+
+        assert_ne!(first, 0);
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn test_uncommitted_change_marker_changes_when_worktree_file_changes_same_size()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (temp_dir, repo) = init_test_repo_with_commit()?;
+        let generator = Generator::new(&repo);
+
+        let file_path = temp_dir.path().join("README.md");
+        fs::write(&file_path, "hello world\n")?;
+        let first = generator.uncommitted_change_marker()?;
+
+        fs::write(&file_path, "hello again\n")?;
         let second = generator.uncommitted_change_marker()?;
 
         assert_ne!(first, 0);
