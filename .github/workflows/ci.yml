@@ -803,21 +803,25 @@ jobs:
           $script = $script -replace "`r", ""
           wsl.exe -d '${{ steps.wsl-context.outputs.distro }}' -e bash -lc "$script"
 
-      - name: Export instrumented lcov (no-run)
+      - name: Export instrumented lcov (list-only)
         if: ${{ !matrix.use_wsl }}
         run: |
           set -euo pipefail
           cargo llvm-cov \
-            --no-run \
-            --lcov \
-            --output-path llvm-cov-instrumented.lcov \
             --all-targets \
             --all-features \
             --profile coverage \
-            --ignore-filename-regex 'crates/vt100-ctt/'
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --no-report \
+            -- --list
+          cargo llvm-cov report \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --lcov \
+            --output-path llvm-cov-instrumented.lcov
           gzip -9 -f llvm-cov-instrumented.lcov
 
-      - name: Export instrumented lcov (no-run) (WSL)
+      - name: Export instrumented lcov (list-only) (WSL)
         if: ${{ matrix.use_wsl && steps.wsl-context.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -828,13 +832,17 @@ jobs:
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           cd "$fast_repo"
           cargo llvm-cov \
-            --no-run \
-            --lcov \
-            --output-path "$mounted/llvm-cov-instrumented.lcov" \
             --all-targets \
             --all-features \
             --profile coverage \
-            --ignore-filename-regex 'crates/vt100-ctt/'
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --no-report \
+            -- --list
+          cargo llvm-cov report \
+            --profile coverage \
+            --ignore-filename-regex 'crates/vt100-ctt/' \
+            --lcov \
+            --output-path "$mounted/llvm-cov-instrumented.lcov"
           gzip -9 -f "$mounted/llvm-cov-instrumented.lcov"
           '@
           $script = $script -replace "`r", ""
