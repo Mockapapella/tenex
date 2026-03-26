@@ -81,13 +81,6 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: cross-os-theoretical-max
-        name: "push: enforce cross-OS theoretical max coverage"
-        entry: python3 scripts/precommit/pre_push_theoretical_max_gate.py
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
       - id: cargo-fmt
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
@@ -111,17 +104,12 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: cargo-test
-        name: cargo test
-        entry: python3 scripts/precommit/run_cargo_hook.py test
+      - id: cross-os-theoretical-max
+        name: "commit: enforce cross-OS theoretical max coverage"
+        entry: python3 scripts/precommit/pre_push_theoretical_max_gate.py
         language: system
         pass_filenames: false
-
-      - id: cargo-coverage
-        name: cargo llvm-cov (coverage artifacts)
-        entry: python3 scripts/precommit/run_cargo_hook.py coverage
-        language: system
-        pass_filenames: false
+        stages: [pre-commit]
 
       - id: llvm-cov-report-amend
         name: "commit: embed llvm-cov per-file report"
