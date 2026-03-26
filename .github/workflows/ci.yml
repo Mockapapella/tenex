@@ -619,7 +619,7 @@ jobs:
           if-no-files-found: ignore
 
   coverage-theoretical-max-inputs:
-    name: coverage theoretical max inputs (${{ matrix.name }})
+    name: Calculate theoretical max test coverage (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     env:
       UV_VERSION: "0.10.7"
