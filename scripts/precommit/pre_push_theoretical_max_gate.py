@@ -20,7 +20,7 @@ DEFAULT_OUT_ROOT = Path("target/remote-precommit")
 DEFAULT_LOCK_NAME = "tenex-remote-validation"
 
 DEFAULT_MAC_HOST = ""
-DEFAULT_MAC_SOURCE_REPO = "~/src/tenex-source"
+DEFAULT_MAC_SOURCE_REPO = "~/src/tenex"
 DEFAULT_MAC_WORKTREE_ROOT = "~/src/tenex-worktrees"
 DEFAULT_MAC_RUN_ROOT = "~/.cache/tenex-remote-precommit"
 
@@ -41,6 +41,16 @@ coord_kind="remote-pre-push"
 test -x "$coord_helper"
 
 coord_hb_pid=
+cleanup_worktree() {
+  if [ -z "${source_repo:-}" ] || [ -z "${worktree_dir:-}" ]; then
+    return 0
+  fi
+
+  cd / 2>/dev/null || true
+  git -C "$source_repo" worktree remove --force "$worktree_dir" 2>/dev/null || true
+  git -C "$source_repo" worktree prune || true
+  rm -rf "$worktree_dir" || true
+}
 coord_release() {
   if [ -n "${coord_hb_pid:-}" ]; then
     kill "$coord_hb_pid" 2>/dev/null || true
@@ -82,6 +92,11 @@ worktree_dir="$worktree_root/$run_id"
 
 mkdir -p "$cov_out" "$worktree_root" "$run_dir"
 
+if [ ! -f "$source_repo/.cargo-llvm-cov-version" ]; then
+  echo "ERROR: SOURCE_REPO is not a tenex checkout: $source_repo" >&2
+  exit 1
+fi
+
 required_cov="$(tr -d '\r\n' < "$source_repo/.cargo-llvm-cov-version")"
 installed_cov="$(cargo llvm-cov --version 2>/dev/null | awk '{print $2}' || true)"
 if [ "$installed_cov" != "$required_cov" ]; then
@@ -94,17 +109,6 @@ git -C "$source_repo" worktree remove --force "$worktree_dir" 2>/dev/null || tru
 rm -rf "$worktree_dir"
 git -C "$source_repo" worktree prune
 git -C "$source_repo" worktree add --force --detach "$worktree_dir" "$base_sha"
-
-cleanup_worktree() {
-  if [ -z "${source_repo:-}" ] || [ -z "${worktree_dir:-}" ]; then
-    return 0
-  fi
-
-  cd / 2>/dev/null || true
-  git -C "$source_repo" worktree remove --force "$worktree_dir" 2>/dev/null || true
-  git -C "$source_repo" worktree prune || true
-  rm -rf "$worktree_dir" || true
-}
 
 cd "$worktree_dir"
 git reset --hard
@@ -329,7 +333,10 @@ def run_remote_platform(
     out_dir: Path,
     windows_wsl: bool,
 ) -> None:
-    remote_run_dir = expand_remote_home(run_root.rstrip("/")) + f"/{run_id}"
+    raw_run_root = run_root.rstrip("/")
+    remote_run_dir = raw_run_root + f"/{run_id}"
+    if not windows_wsl:
+        remote_run_dir = expand_remote_home(remote_run_dir)
 
     if windows_wsl:
         upload_cmd = (
@@ -342,9 +349,7 @@ def run_remote_platform(
             f"SOURCE_REPO='{source_repo}' WORKTREE_ROOT='{worktree_root}' RUN_ROOT='{run_root}' "
             f"TENEX_REMOTE_VALIDATION_LOCK_NAME='{lock_name}' bash -s\""
         )
-        tar_cmd = (
-            f"wsl.exe -e tar -C {remote_run_dir}/cov -czf - ."
-        )
+        tar_cmd = f'wsl.exe -e bash -lc "tar -C {remote_run_dir}/cov -czf - ."'
     else:
         upload_cmd = f"mkdir -p {remote_run_dir} && cat > {remote_run_dir}/wip.patch"
         run_cmd = (
