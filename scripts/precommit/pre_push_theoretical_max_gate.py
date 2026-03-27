@@ -116,13 +116,14 @@ git clean -fd
 git apply --binary "$patch_path"
 
 cargo llvm-cov \
+  --branch \
   --all-targets \
   --all-features \
   --profile coverage \
   --ignore-filename-regex 'crates/vt100-ctt/' \
   --no-report \
   -- --list
-cargo llvm-cov report \
+cargo llvm-cov --branch report \
   --profile coverage \
   --ignore-filename-regex 'crates/vt100-ctt/' \
   --summary-only \
@@ -137,7 +138,7 @@ if [ ! -d target/llvm-cov-target/coverage ]; then
   exit 1
 fi
 
-cargo llvm-cov report \
+cargo llvm-cov --branch report \
   --profile coverage \
   --ignore-filename-regex 'crates/vt100-ctt/' \
   --summary-only \
@@ -191,7 +192,6 @@ def slugify(value: str) -> str:
     value = re.sub(r"[\s/]+", "-", value)
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value)
 
-
 def expand_remote_home(path: str) -> str:
     if path == "~":
         return "$HOME"
@@ -235,6 +235,7 @@ def export_instrumented_summary(
         cmd = [
             "cargo",
             "llvm-cov",
+            "--branch",
             "--all-targets",
             "--all-features",
             "--profile",
@@ -253,6 +254,7 @@ def export_instrumented_summary(
             [
                 "cargo",
                 "llvm-cov",
+                "--branch",
                 "report",
                 "--profile",
                 "coverage",
@@ -298,6 +300,7 @@ def export_coverage_summary(*, root: Path, out_dir: Path) -> Path:
         [
             "cargo",
             "llvm-cov",
+            "--branch",
             "report",
             "--profile",
             "coverage",

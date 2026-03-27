@@ -270,6 +270,13 @@ def main() -> int:
     }
 
     payload, markdown = compute_summary(platforms)
+    union_branches = int(payload["union"]["branches"]["amount"])
+    if union_branches == 0:
+        print(
+            "ERROR: branch coverage is not being collected, union branches amount is 0",
+            file=sys.stderr,
+        )
+        return 1
 
     args.out.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",

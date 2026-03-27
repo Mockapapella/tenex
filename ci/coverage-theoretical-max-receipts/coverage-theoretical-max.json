@@ -3,8 +3,8 @@
   "platforms": {
     "linux": {
       "branches": {
-        "amount": 0,
-        "theoretical_max_percent": "100.00000000000000000000000000"
+        "amount": 3568,
+        "theoretical_max_percent": "99.38718662952646239554317549"
       },
       "functions": {
         "amount": 3418,
@@ -21,8 +21,8 @@
     },
     "macos": {
       "branches": {
-        "amount": 0,
-        "theoretical_max_percent": "100.00000000000000000000000000"
+        "amount": 3534,
+        "theoretical_max_percent": "98.44011142061281337047353760"
       },
       "functions": {
         "amount": 3433,
@@ -39,8 +39,8 @@
     },
     "windows": {
       "branches": {
-        "amount": 0,
-        "theoretical_max_percent": "100.00000000000000000000000000"
+        "amount": 3568,
+        "theoretical_max_percent": "99.38718662952646239554317549"
       },
       "functions": {
         "amount": 3418,
@@ -58,7 +58,7 @@
   },
   "union": {
     "branches": {
-      "amount": 0
+      "amount": 3590
     },
     "functions": {
       "amount": 3459

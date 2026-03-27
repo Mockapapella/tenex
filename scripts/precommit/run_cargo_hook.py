@@ -153,7 +153,7 @@ def verify_llvm_cov_version(root: Path) -> bool:
     return False
 
 
-def build_command(mode: str) -> list[str]:
+def build_command(mode: str, *, root: Path) -> list[str]:
     build_jobs = os.environ.get("TENEX_CARGO_BUILD_JOBS")
     job_args: list[str] = []
     if build_jobs:
@@ -173,6 +173,7 @@ def build_command(mode: str) -> list[str]:
     command = [
         "cargo",
         "llvm-cov",
+        "--branch",
         *job_args,
         "--all-targets",
         "--all-features",
@@ -209,7 +210,7 @@ def main() -> int:
 
     cleanup_hook_muxd(state_dir, mux_socket)
     try:
-        command = build_command(args.mode)
+        command = build_command(args.mode, root=root)
         result = subprocess.run(
             command,
             cwd=root,
