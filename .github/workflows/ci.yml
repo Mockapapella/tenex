@@ -85,8 +85,9 @@ jobs:
           python-version-file: .python-version
       - name: Install Rust
         if: ${{ !matrix.use_wsl }}
-        uses: dtolnay/rust-toolchain@nightly-2025-11-07
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: nightly-2025-11-07
           components: clippy, rustfmt, llvm-tools-preview
       - name: Read cargo-llvm-cov version
         if: ${{ !matrix.use_wsl }}
@@ -650,8 +651,9 @@ jobs:
           python-version-file: .python-version
       - name: Install Rust
         if: ${{ !matrix.use_wsl }}
-        uses: dtolnay/rust-toolchain@nightly-2025-11-07
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: nightly-2025-11-07
           components: llvm-tools-preview
       - name: Read cargo-llvm-cov version
         if: ${{ !matrix.use_wsl }}
