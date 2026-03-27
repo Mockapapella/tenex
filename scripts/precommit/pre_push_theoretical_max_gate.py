@@ -479,6 +479,7 @@ def main() -> int:
 
     git(["fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"], root=root, capture=False)
     base_sha = git(["rev-parse", args.base_ref], root=root)
+    index_tree = git(["write-tree"], root=root)
 
     branch = git(["rev-parse", "--abbrev-ref", "HEAD"], root=root)
     run_id = (
@@ -490,6 +491,7 @@ def main() -> int:
     out_dir = out_root / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "base-ref.txt").write_text(base_sha + "\n", encoding="utf-8")
+    (out_dir / "index-tree.txt").write_text(index_tree + "\n", encoding="utf-8")
 
     patch_path = create_patch(root=root, base_sha=base_sha, out_dir=out_dir)
     patch_bytes = patch_path.read_bytes()
@@ -550,6 +552,7 @@ def main() -> int:
     latest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(theoretical_max, latest_dir / "coverage-theoretical-max.json")
     (latest_dir / "run-id.txt").write_text(run_id + "\n", encoding="utf-8")
+    (latest_dir / "index-tree.txt").write_text(index_tree + "\n", encoding="utf-8")
 
     for platform in ("linux", "macos", "windows"):
         json_path = out_dir / platform / "llvm-cov-report.summary.json.gz"
