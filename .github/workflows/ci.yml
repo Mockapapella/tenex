@@ -319,8 +319,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d target/llvm-cov-target/coverage ]; then
-            echo "No coverage artifacts found; skipping llvm-cov report export."
-            exit 0
+            echo "No coverage artifacts found; collecting coverage."
+            python3 scripts/precommit/run_cargo_hook.py coverage
+          fi
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "ERROR: No coverage artifacts found; aborting llvm-cov report export." >&2
+            exit 1
           fi
           cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
           cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
@@ -357,8 +361,12 @@ jobs:
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           cd "$fast_repo"
           if [ ! -d target/llvm-cov-target/coverage ]; then
-            echo "No coverage artifacts found; skipping llvm-cov report export."
-            exit 0
+            echo "No coverage artifacts found; collecting coverage."
+            python3 scripts/precommit/run_cargo_hook.py coverage
+          fi
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "ERROR: No coverage artifacts found; aborting llvm-cov report export." >&2
+            exit 1
           fi
           cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$mounted/llvm-cov-report.txt"
           cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path "$mounted/llvm-cov-report.lcov"
