@@ -5,7 +5,6 @@ import argparse
 import gzip
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,31 +27,10 @@ class PlatformCoverage:
 
 
 def repo_root() -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        root = result.stdout.strip()
-        if root:
-            return Path(root)
+    for candidate in (Path.cwd(), *Path.cwd().parents):
+        if (candidate / ".git").exists():
+            return candidate
     return Path.cwd()
-
-
-def git_head_sha(root: Path) -> Optional[str]:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    sha = result.stdout.strip()
-    return sha or None
 
 
 def normalize_source_path(raw: str, root: Path) -> Optional[str]:
@@ -117,20 +95,6 @@ def parse_llvm_cov_summary_json(path: Path, root: Path) -> PlatformCoverage:
         by_file[source] = metrics
 
     return PlatformCoverage(by_file=by_file, unknown_sources=unknown_sources)
-
-
-def percent_bps(numerator: int, denominator: int, *, empty_is_100: bool = False) -> int:
-    if denominator <= 0:
-        if empty_is_100 and numerator == 0:
-            return 10_000
-        return 0
-    return (numerator * 10_000 + denominator // 2) // denominator
-
-
-def format_bps(bps: int) -> str:
-    whole = bps // 100
-    frac = bps % 100
-    return f"{whole}.{frac:02d}%"
 
 
 def format_ratio_percent_decimal(
@@ -207,52 +171,27 @@ def union_instrumented(platforms: dict[str, PlatformCoverage]) -> dict[str, int]
 
 
 def compute_summary(
-    platforms: dict[str, PlatformCoverage], sha: Optional[str]
+    platforms: dict[str, PlatformCoverage],
 ) -> tuple[dict, str]:
     union_counts = union_instrumented(platforms)
 
     payload: dict[str, object] = {
-        "commit": {"sha": sha} if sha else None,
         "decimal_places": DEFAULT_DECIMAL_PLACES,
-        "union": {metric: {"instrumented": union_counts[metric]} for metric in METRICS},
+        "union": {metric: {"amount": union_counts[metric]} for metric in METRICS},
         "platforms": {},
     }
 
     def metric_row(
         *,
         instrumented: int,
-        covered: int,
         union_count: int,
         decimal_places: int,
     ) -> dict[str, object]:
-        missed = instrumented - covered
-
-        theoretical_bps = percent_bps(instrumented, union_count, empty_is_100=True)
-        actual_bps = percent_bps(covered, union_count, empty_is_100=True)
-        coverable_bps = percent_bps(covered, instrumented, empty_is_100=True)
-
         return {
-            "instrumented": instrumented,
-            "covered": covered,
-            "missed_coverable": missed,
-            "theoretical_max_bps": theoretical_bps,
-            "actual_bps": actual_bps,
-            "coverage_of_coverable_bps": coverable_bps,
+            "amount": instrumented,
             "theoretical_max_percent": format_ratio_percent_decimal(
                 instrumented,
                 union_count,
-                decimal_places,
-                empty_is_100=True,
-            ),
-            "actual_percent": format_ratio_percent_decimal(
-                covered,
-                union_count,
-                decimal_places,
-                empty_is_100=True,
-            ),
-            "coverage_of_coverable_percent": format_ratio_percent_decimal(
-                covered,
-                instrumented,
                 decimal_places,
                 empty_is_100=True,
             ),
@@ -262,14 +201,11 @@ def compute_summary(
     for os_name in ("linux", "macos", "windows"):
         coverage = platforms[os_name]
         totals = platform_totals(coverage)
-        row: dict[str, object] = {
-            "unknown_sources": len(coverage.unknown_sources),
-        }
+        row: dict[str, object] = {}
         for metric in METRICS:
             counts = totals[metric]
             row[metric] = metric_row(
                 instrumented=counts.instrumented,
-                covered=counts.covered,
                 union_count=union_counts[metric],
                 decimal_places=DEFAULT_DECIMAL_PLACES,
             )
@@ -280,7 +216,7 @@ def compute_summary(
     markdown_lines = [
         "## Coverage theoretical max",
         "",
-        "- Union instrumented:",
+        "- Union amount:",
         f"  - regions: `{union_counts['regions']}`",
         f"  - functions: `{union_counts['functions']}`",
         f"  - lines: `{union_counts['lines']}`",
@@ -293,8 +229,8 @@ def compute_summary(
             [
                 f"### {metric.capitalize()}",
                 "",
-                "| OS | Coverable | Covered | Missed | Theoretical max | Actual | Covered/coverable |",
-                "|---|---:|---:|---:|---:|---:|---:|",
+                "| OS | Amount | Theoretical max |",
+                "|---|---:|---:|",
             ]
         )
         for name, row in rows:
@@ -303,31 +239,12 @@ def compute_summary(
                 "| "
                 + name
                 + " | "
-                + f"`{metrics['instrumented']}`"
+                + f"`{metrics['amount']}`"
                 + " | "
-                + f"`{metrics['covered']}`"
-                + " | "
-                + f"`{metrics['missed_coverable']}`"
-                + " | "
-                + format_bps(metrics["theoretical_max_bps"])
-                + " | "
-                + format_bps(metrics["actual_bps"])
-                + " | "
-                + format_bps(metrics["coverage_of_coverable_bps"])
+                + f"`{metrics['theoretical_max_percent']}%`"
                 + " |"
             )
         markdown_lines.append("")
-
-    markdown_lines.extend(
-        [
-            "### Theoretical max (26 dp)",
-            "",
-        ]
-    )
-    for name, row in rows:
-        for metric in ("regions", "functions", "lines", "branches"):
-            percent_value = row[metric]["theoretical_max_percent"]
-            markdown_lines.append(f"- {metric} {name}: `{percent_value}%`")
 
     markdown = "\n".join(markdown_lines) + "\n"
     return payload, markdown
@@ -345,7 +262,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     root = repo_root()
-    sha = git_head_sha(root)
 
     platforms = {
         "linux": parse_llvm_cov_summary_json(args.linux_json, root),
@@ -353,7 +269,7 @@ def main() -> int:
         "windows": parse_llvm_cov_summary_json(args.windows_json, root),
     }
 
-    payload, markdown = compute_summary(platforms, sha)
+    payload, markdown = compute_summary(platforms)
 
     args.out.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",

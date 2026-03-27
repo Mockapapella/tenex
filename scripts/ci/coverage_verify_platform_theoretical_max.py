@@ -62,29 +62,29 @@ def main() -> int:
         f"- Platform: `{args.platform}`",
         f"- Unknown sources: `{len(actual_platform.unknown_sources)}`",
         "",
-        "- Union instrumented:",
-        f"  - regions: `{expected_payload['union']['regions']['instrumented']}`",
-        f"  - functions: `{expected_payload['union']['functions']['instrumented']}`",
-        f"  - lines: `{expected_payload['union']['lines']['instrumented']}`",
-        f"  - branches: `{expected_payload['union']['branches']['instrumented']}`",
+        "- Union amount:",
+        f"  - regions: `{expected_payload['union']['regions']['amount']}`",
+        f"  - functions: `{expected_payload['union']['functions']['amount']}`",
+        f"  - lines: `{expected_payload['union']['lines']['amount']}`",
+        f"  - branches: `{expected_payload['union']['branches']['amount']}`",
         "",
     ]
 
     errors: list[str] = []
 
     for metric in ("lines", "functions", "regions", "branches"):
-        expected_union = int(expected_payload["union"][metric]["instrumented"])
+        expected_union = int(expected_payload["union"][metric]["amount"])
         expected_metric = expected_platform[metric]
-        expected_instrumented = int(expected_metric["instrumented"])
+        expected_amount = int(expected_metric["amount"])
         expected_theoretical_percent = str(expected_metric["theoretical_max_percent"])
 
         counts = actual_totals[metric]
-        instrumented = counts.instrumented
+        amount = counts.instrumented
         covered = counts.covered
-        missed = instrumented - covered
+        missed = amount - covered
 
         theoretical_percent = coverage_theoretical_max.format_ratio_percent_decimal(
-            instrumented,
+            amount,
             expected_union,
             decimal_places,
             empty_is_100=True,
@@ -100,7 +100,7 @@ def main() -> int:
             [
                 f"### {metric.capitalize()}",
                 "",
-                f"- Instrumented: `{instrumented}`",
+                f"- Amount: `{amount}`",
                 f"- Covered: `{covered}`",
                 f"- Missed coverable: `{missed}`",
                 f"- Theoretical max (computed): `{theoretical_percent}%`",
@@ -110,10 +110,10 @@ def main() -> int:
             ]
         )
 
-        if instrumented != expected_instrumented:
+        if amount != expected_amount:
             errors.append(
-                f"ERROR: instrumented {metric} count mismatch for {args.platform}: "
-                f"expected {expected_instrumented}, got {instrumented}",
+                f"ERROR: amount {metric} count mismatch for {args.platform}: "
+                f"expected {expected_amount}, got {amount}",
             )
 
         if theoretical_percent != expected_theoretical_percent:

@@ -543,6 +543,11 @@ def main() -> int:
     if result.returncode != 0:
         return result.returncode
 
+    latest_dir = out_root / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(theoretical_max, latest_dir / "coverage-theoretical-max.json")
+    (latest_dir / "run-id.txt").write_text(run_id + "\n", encoding="utf-8")
+
     for platform in ("linux", "macos", "windows"):
         json_path = out_dir / platform / "llvm-cov-report.summary.json.gz"
         verify = subprocess.run(

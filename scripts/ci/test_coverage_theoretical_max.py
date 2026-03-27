@@ -162,15 +162,14 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
                     windows_path, root
                 ),
             }
-            payload, markdown = coverage_theoretical_max.compute_summary(platforms, sha=None)
+            payload, markdown = coverage_theoretical_max.compute_summary(platforms)
 
-            self.assertEqual(payload["union"]["lines"]["instrumented"], 3)
-            self.assertEqual(payload["union"]["functions"]["instrumented"], 2)
-            self.assertEqual(payload["union"]["regions"]["instrumented"], 4)
-            self.assertEqual(payload["union"]["branches"]["instrumented"], 0)
+            self.assertEqual(payload["union"]["lines"]["amount"], 3)
+            self.assertEqual(payload["union"]["functions"]["amount"], 2)
+            self.assertEqual(payload["union"]["regions"]["amount"], 4)
+            self.assertEqual(payload["union"]["branches"]["amount"], 0)
 
-            self.assertEqual(payload["platforms"]["linux"]["lines"]["instrumented"], 2)
-            self.assertEqual(payload["platforms"]["linux"]["lines"]["covered"], 1)
+            self.assertEqual(payload["platforms"]["linux"]["lines"]["amount"], 2)
 
             self.assertIn("### Lines", markdown)
             self.assertIn("| linux |", markdown)
@@ -178,4 +177,3 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

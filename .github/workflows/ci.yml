@@ -912,6 +912,46 @@ jobs:
             --windows-json artifacts/windows/llvm-cov-instrumented.summary.json.gz \
             --out coverage-theoretical-max.json
 
+      - name: Verify committed theoretical max matches
+        run: |
+          set -euo pipefail
+          receipt_dir="ci/coverage-theoretical-max-receipts"
+          receipt_report="${receipt_dir}/coverage-theoretical-max.json"
+          receipt_sha="${receipt_dir}/coverage-theoretical-max.sha256"
+
+          if [ ! -f "$receipt_report" ]; then
+            echo "ERROR: Missing ${receipt_report}" >&2
+            echo "Run locally: TENEX_REMOTE_MAC_HOST=<host> TENEX_REMOTE_WINDOWS_HOST=<host> python3 scripts/precommit/pre_push_theoretical_max_gate.py" >&2
+            echo "Then commit (post-commit hook amends the theoretical-max receipt)." >&2
+            exit 1
+          fi
+
+          diff -u "$receipt_report" coverage-theoretical-max.json
+
+          if [ ! -f "$receipt_sha" ]; then
+            echo "ERROR: Missing ${receipt_sha}" >&2
+            exit 1
+          fi
+
+          python3 - "$receipt_sha" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          sha_path = pathlib.Path(sys.argv[1])
+          line = sha_path.read_text(encoding="utf-8").strip()
+          expected_hash, expected_path = line.split(maxsplit=1)
+          report_path = pathlib.Path(expected_path)
+          if not report_path.is_file():
+              raise SystemExit(f"ERROR: sha references missing file: {expected_path}")
+
+          actual_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
+          if actual_hash != expected_hash:
+              raise SystemExit(
+                  f"ERROR: sha mismatch for {expected_path}: expected {expected_hash}, got {actual_hash}"
+              )
+          PY
+
       - name: Upload theoretical max coverage summary
         uses: actions/upload-artifact@v4
         with:
