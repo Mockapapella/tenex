@@ -1,0 +1,73 @@
+{
+  "decimal_places": 26,
+  "platforms": {
+    "linux": {
+      "branches": {
+        "amount": 0,
+        "theoretical_max_percent": "100.00000000000000000000000000"
+      },
+      "functions": {
+        "amount": 3418,
+        "theoretical_max_percent": "98.81468632552760913558832032"
+      },
+      "lines": {
+        "amount": 37289,
+        "theoretical_max_percent": "99.27584462607491813317004340"
+      },
+      "regions": {
+        "amount": 63915,
+        "theoretical_max_percent": "99.21454184194594930224616197"
+      }
+    },
+    "macos": {
+      "branches": {
+        "amount": 0,
+        "theoretical_max_percent": "100.00000000000000000000000000"
+      },
+      "functions": {
+        "amount": 3433,
+        "theoretical_max_percent": "99.24833766984677652500722752"
+      },
+      "lines": {
+        "amount": 37375,
+        "theoretical_max_percent": "99.50480551636005431165304438"
+      },
+      "regions": {
+        "amount": 64064,
+        "theoretical_max_percent": "99.44583288058241877648592850"
+      }
+    },
+    "windows": {
+      "branches": {
+        "amount": 0,
+        "theoretical_max_percent": "100.00000000000000000000000000"
+      },
+      "functions": {
+        "amount": 3418,
+        "theoretical_max_percent": "98.81468632552760913558832032"
+      },
+      "lines": {
+        "amount": 37289,
+        "theoretical_max_percent": "99.27584462607491813317004340"
+      },
+      "regions": {
+        "amount": 63915,
+        "theoretical_max_percent": "99.21454184194594930224616197"
+      }
+    }
+  },
+  "union": {
+    "branches": {
+      "amount": 0
+    },
+    "functions": {
+      "amount": 3459
+    },
+    "lines": {
+      "amount": 37561
+    },
+    "regions": {
+      "amount": 64421
+    }
+  }
+}

@@ -81,6 +81,40 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: theoretical-max-receipt-required
+        name: "push: ensure theoretical max receipt exists"
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+                exit 0
+              fi
+
+              receipt_dir="ci/coverage-theoretical-max-receipts"
+              receipt_report="${receipt_dir}/coverage-theoretical-max.json"
+              receipt_sha="${receipt_dir}/coverage-theoretical-max.sha256"
+
+              missing=0
+              if [ ! -f "$receipt_report" ]; then
+                echo "ERROR: Missing ${receipt_report}" >&2
+                missing=1
+              fi
+              if [ ! -f "$receipt_sha" ]; then
+                echo "ERROR: Missing ${receipt_sha}" >&2
+                missing=1
+              fi
+
+              if [ "$missing" -ne 0 ]; then
+                echo "" >&2
+                echo "Generate the theoretical max receipt by running the cross-OS gate, then committing." >&2
+                echo "Example: TENEX_REMOTE_MAC_HOST=<host> TENEX_REMOTE_WINDOWS_HOST=<host> pre-commit run cross-os-theoretical-max" >&2
+                exit 1
+              fi
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: cargo-fmt
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
@@ -95,21 +129,21 @@ repos:
 
       - id: precommit-hook-unit-tests
         name: pre-commit hook unit tests
-        entry: python3 scripts/precommit/test_run_cargo_hook.py
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              python3 scripts/precommit/test_run_cargo_hook.py
+              python3 scripts/ci/test_coverage_theoretical_max.py
         language: system
         pass_filenames: false
 
-      - id: cargo-test
-        name: cargo test
-        entry: python3 scripts/precommit/run_cargo_hook.py test
+      - id: cross-os-theoretical-max
+        name: "commit: enforce cross-OS theoretical max coverage"
+        entry: python3 scripts/precommit/pre_push_theoretical_max_gate.py
         language: system
         pass_filenames: false
-
-      - id: cargo-coverage
-        name: cargo llvm-cov (90% lines + functions)
-        entry: python3 scripts/precommit/run_cargo_hook.py coverage
-        language: system
-        pass_filenames: false
+        stages: [pre-commit]
 
       - id: llvm-cov-report-amend
         name: "commit: embed llvm-cov per-file report"
@@ -203,6 +237,63 @@ repos:
 
               git add "$report_path" "$sha_path"
               TENEX_SKIP_COV_REPORT_AMEND=1 git commit --amend --no-edit --no-verify
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [post-commit]
+
+      - id: coverage-theoretical-max-receipt-amend
+        name: "commit: embed coverage theoretical max receipt"
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+
+              if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+                exit 0
+              fi
+
+              if [ "${TENEX_SKIP_THEORETICAL_MAX_RECEIPT_AMEND:-}" = "1" ]; then
+                exit 0
+              fi
+
+              git_dir="$(git rev-parse --git-dir)"
+              if [ -d "$git_dir/rebase-apply" ] || [ -d "$git_dir/rebase-merge" ]; then
+                exit 0
+              fi
+
+              out_root="${TENEX_REMOTE_PRECOMMIT_OUT_ROOT:-target/remote-precommit}"
+              latest="${out_root}/latest/coverage-theoretical-max.json"
+              if [ ! -f "$latest" ]; then
+                echo "Skipping theoretical max receipt embed: missing ${latest}" >&2
+                exit 0
+              fi
+
+              receipt_dir="ci/coverage-theoretical-max-receipts"
+              receipt_path="${receipt_dir}/coverage-theoretical-max.json"
+              sha_path="${receipt_dir}/coverage-theoretical-max.sha256"
+
+              mkdir -p "$receipt_dir"
+              cp "$latest" "$receipt_path"
+
+              python3 - "$receipt_path" "$sha_path" <<'PY'
+              import hashlib
+              import pathlib
+              import sys
+
+              report_path = pathlib.Path(sys.argv[1])
+              sha_path = pathlib.Path(sys.argv[2])
+
+              digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+              sha_path.write_text(f"{digest}  {report_path.as_posix()}\n", encoding="utf-8")
+              PY
+
+              if [ -z "$(git status --porcelain=v1 -- "$receipt_path" "$sha_path")" ]; then
+                exit 0
+              fi
+
+              git add "$receipt_path" "$sha_path"
+              TENEX_SKIP_THEORETICAL_MAX_RECEIPT_AMEND=1 git commit --amend --no-edit --no-verify
         language: system
         always_run: true
         pass_filenames: false
