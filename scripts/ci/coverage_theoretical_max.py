@@ -174,6 +174,8 @@ def compute_summary(
     platforms: dict[str, PlatformCoverage],
 ) -> tuple[dict, str]:
     union_counts = union_instrumented(platforms)
+    if union_counts["branches"] == 0:
+        raise ValueError("Branch coverage amounts are zero; branch coverage must be collected.")
 
     payload: dict[str, object] = {
         "decimal_places": DEFAULT_DECIMAL_PLACES,
@@ -201,6 +203,10 @@ def compute_summary(
     for os_name in ("linux", "macos", "windows"):
         coverage = platforms[os_name]
         totals = platform_totals(coverage)
+        if totals["branches"].instrumented == 0:
+            raise ValueError(
+                f"Branch coverage amount is zero on {os_name}; branch coverage must be collected.",
+            )
         row: dict[str, object] = {}
         for metric in METRICS:
             counts = totals[metric]
