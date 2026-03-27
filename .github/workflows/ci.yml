@@ -878,7 +878,7 @@ jobs:
             llvm-cov-instrumented.summary.json.gz
 
   coverage-theoretical-max:
-    name: coverage theoretical max
+    name: Verify theoretical max test coverage receipt
     runs-on: ubuntu-latest
     needs: coverage-theoretical-max-inputs
     steps:
