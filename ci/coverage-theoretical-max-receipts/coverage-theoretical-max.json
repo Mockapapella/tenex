@@ -11,8 +11,8 @@
         "theoretical_max_percent": "98.81468632552760913558832032"
       },
       "lines": {
-        "amount": 37289,
-        "theoretical_max_percent": "99.27584462607491813317004340"
+        "amount": 37292,
+        "theoretical_max_percent": "99.27590245980193802576935364"
       },
       "regions": {
         "amount": 63915,
@@ -29,8 +29,8 @@
         "theoretical_max_percent": "99.24833766984677652500722752"
       },
       "lines": {
-        "amount": 37375,
-        "theoretical_max_percent": "99.50480551636005431165304438"
+        "amount": 37378,
+        "theoretical_max_percent": "99.50484506442338409115110212"
       },
       "regions": {
         "amount": 64064,
@@ -47,8 +47,8 @@
         "theoretical_max_percent": "98.81468632552760913558832032"
       },
       "lines": {
-        "amount": 37289,
-        "theoretical_max_percent": "99.27584462607491813317004340"
+        "amount": 37292,
+        "theoretical_max_percent": "99.27590245980193802576935364"
       },
       "regions": {
         "amount": 63915,
@@ -64,7 +64,7 @@
       "amount": 3459
     },
     "lines": {
-      "amount": 37561
+      "amount": 37564
     },
     "regions": {
       "amount": 64421
