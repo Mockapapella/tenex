@@ -85,8 +85,9 @@ jobs:
           python-version-file: .python-version
       - name: Install Rust
         if: ${{ !matrix.use_wsl }}
-        uses: dtolnay/rust-toolchain@1.91.1
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: nightly-2025-11-07
           components: clippy, rustfmt, llvm-tools-preview
       - name: Read cargo-llvm-cov version
         if: ${{ !matrix.use_wsl }}
@@ -318,13 +319,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d target/llvm-cov-target/coverage ]; then
-            echo "No coverage artifacts found; skipping llvm-cov report export."
-            exit 0
+            echo "No coverage artifacts found; collecting coverage."
+            python3 scripts/precommit/run_cargo_hook.py coverage
           fi
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "ERROR: No coverage artifacts found; aborting llvm-cov report export." >&2
+            exit 1
+          fi
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > llvm-cov-report.txt
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path llvm-cov-report.lcov
           gzip -9 -f llvm-cov-report.lcov
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path llvm-cov-report.summary.json
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path llvm-cov-report.summary.json
           gzip -9 -f llvm-cov-report.summary.json
           python - <<'PY'
           import hashlib
@@ -356,13 +361,17 @@ jobs:
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           cd "$fast_repo"
           if [ ! -d target/llvm-cov-target/coverage ]; then
-            echo "No coverage artifacts found; skipping llvm-cov report export."
-            exit 0
+            echo "No coverage artifacts found; collecting coverage."
+            python3 scripts/precommit/run_cargo_hook.py coverage
           fi
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$mounted/llvm-cov-report.txt"
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path "$mounted/llvm-cov-report.lcov"
+          if [ ! -d target/llvm-cov-target/coverage ]; then
+            echo "ERROR: No coverage artifacts found; aborting llvm-cov report export." >&2
+            exit 1
+          fi
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$mounted/llvm-cov-report.txt"
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --lcov --output-path "$mounted/llvm-cov-report.lcov"
           gzip -9 -f "$mounted/llvm-cov-report.lcov"
-          cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path "$mounted/llvm-cov-report.summary.json"
+          cargo llvm-cov --branch report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' --summary-only --json --output-path "$mounted/llvm-cov-report.summary.json"
           gzip -9 -f "$mounted/llvm-cov-report.summary.json"
           cd "$mounted"
           python3 - <<'PY'
@@ -650,8 +659,9 @@ jobs:
           python-version-file: .python-version
       - name: Install Rust
         if: ${{ !matrix.use_wsl }}
-        uses: dtolnay/rust-toolchain@1.91.1
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: nightly-2025-11-07
           components: llvm-tools-preview
       - name: Read cargo-llvm-cov version
         if: ${{ !matrix.use_wsl }}
@@ -811,19 +821,20 @@ jobs:
         run: |
           set -euo pipefail
           cargo llvm-cov \
+            --branch \
             --all-targets \
             --all-features \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --no-report \
             -- --list
-          cargo llvm-cov report \
+          cargo llvm-cov --branch report \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --lcov \
             --output-path llvm-cov-instrumented.lcov
           gzip -9 -f llvm-cov-instrumented.lcov
-          cargo llvm-cov report \
+          cargo llvm-cov --branch report \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --summary-only \
@@ -842,19 +853,20 @@ jobs:
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           cd "$fast_repo"
           cargo llvm-cov \
+            --branch \
             --all-targets \
             --all-features \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --no-report \
             -- --list
-          cargo llvm-cov report \
+          cargo llvm-cov --branch report \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --lcov \
             --output-path "$mounted/llvm-cov-instrumented.lcov"
           gzip -9 -f "$mounted/llvm-cov-instrumented.lcov"
-          cargo llvm-cov report \
+          cargo llvm-cov --branch report \
             --profile coverage \
             --ignore-filename-regex 'crates/vt100-ctt/' \
             --summary-only \
@@ -874,7 +886,7 @@ jobs:
             llvm-cov-instrumented.summary.json.gz
 
   coverage-theoretical-max:
-    name: coverage theoretical max
+    name: Verify theoretical max test coverage receipt
     runs-on: ubuntu-latest
     needs: coverage-theoretical-max-inputs
     steps:

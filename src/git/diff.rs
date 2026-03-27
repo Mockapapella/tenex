@@ -456,22 +456,19 @@ impl<'a> Generator<'a> {
                 .or_else(|| delta.old_file().path())
                 .unwrap_or_else(|| Path::new(""));
 
-            let file_idx = file_indices.get(file_path).copied().map_or_else(
-                || {
-                    let file_path_buf = file_path.to_path_buf();
-                    files.push(FileChange {
-                        path: file_path_buf.clone(),
-                        status: delta_to_status(delta.status()),
-                        lines: Vec::new(),
-                        additions: 0,
-                        deletions: 0,
-                    });
-                    let idx = files.len() - 1;
-                    file_indices.insert(file_path_buf, idx);
-                    idx
-                },
-                |file_idx| file_idx,
-            );
+            let file_idx = file_indices.get(file_path).copied().unwrap_or_else(|| {
+                let file_path_buf = file_path.to_path_buf();
+                files.push(FileChange {
+                    path: file_path_buf.clone(),
+                    status: delta_to_status(delta.status()),
+                    lines: Vec::new(),
+                    additions: 0,
+                    deletions: 0,
+                });
+                let idx = files.len() - 1;
+                file_indices.insert(file_path_buf, idx);
+                idx
+            });
             let file = &mut files[file_idx];
 
             let content = String::from_utf8_lossy(line.content()).to_string();

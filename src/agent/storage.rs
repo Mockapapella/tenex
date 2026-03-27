@@ -806,7 +806,7 @@ impl Storage {
 
     /// Helper to recursively add visible agents with pre-computed info
     #[expect(
-        clippy::only_used_in_recursion,
+        clippy::self_only_used_in_recursion,
         reason = "&self is needed for lifetime 'a to tie result to Storage"
     )]
     fn add_visible_with_info_recursive<'a>(

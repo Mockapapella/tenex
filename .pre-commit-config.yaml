@@ -264,9 +264,27 @@ repos:
 
               out_root="${TENEX_REMOTE_PRECOMMIT_OUT_ROOT:-target/remote-precommit}"
               latest="${out_root}/latest/coverage-theoretical-max.json"
+              latest_tree="${out_root}/latest/index-tree.txt"
               if [ ! -f "$latest" ]; then
                 echo "Skipping theoretical max receipt embed: missing ${latest}" >&2
                 exit 0
+              fi
+              if [ ! -f "$latest_tree" ]; then
+                echo "Skipping theoretical max receipt embed: missing ${latest_tree}" >&2
+                exit 0
+              fi
+
+              latest_tree_hash="$(tr -d '\r\n' < "$latest_tree")"
+              head_tree="$(git rev-parse HEAD^{tree})"
+              if [ "$latest_tree_hash" != "$head_tree" ]; then
+                echo "ERROR: Refusing to embed theoretical max receipt computed for a different git index tree." >&2
+                echo "latest index tree: ${latest_tree_hash}" >&2
+                echo "HEAD tree: ${head_tree}" >&2
+                echo "" >&2
+                echo "Run the cross-OS gate, then amend the commit:" >&2
+                echo "  TENEX_REMOTE_MAC_HOST=<host> TENEX_REMOTE_WINDOWS_HOST=<host> pre-commit run cross-os-theoretical-max" >&2
+                echo "  git commit --amend --no-edit" >&2
+                exit 1
               fi
 
               receipt_dir="ci/coverage-theoretical-max-receipts"

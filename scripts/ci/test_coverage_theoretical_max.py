@@ -83,7 +83,7 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
                             "lines": {"count": 2, "covered": 1},
                             "functions": {"count": 1, "covered": 1},
                             "regions": {"count": 3, "covered": 2},
-                            "branches": {"count": 0, "covered": 0},
+                            "branches": {"count": 1, "covered": 0},
                         },
                     }
                 ],
@@ -117,7 +117,7 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
                             "lines": {"count": 2, "covered": 1},
                             "functions": {"count": 1, "covered": 1},
                             "regions": {"count": 3, "covered": 2},
-                            "branches": {"count": 0, "covered": 0},
+                            "branches": {"count": 1, "covered": 0},
                         },
                     }
                 ],
@@ -131,7 +131,7 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
                             "lines": {"count": 3, "covered": 3},
                             "functions": {"count": 2, "covered": 2},
                             "regions": {"count": 4, "covered": 4},
-                            "branches": {"count": 0, "covered": 0},
+                            "branches": {"count": 2, "covered": 0},
                         },
                     }
                 ],
@@ -145,7 +145,7 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
                             "lines": {"count": 2, "covered": 2},
                             "functions": {"count": 1, "covered": 1},
                             "regions": {"count": 3, "covered": 3},
-                            "branches": {"count": 0, "covered": 0},
+                            "branches": {"count": 1, "covered": 0},
                         },
                     }
                 ],
@@ -167,7 +167,7 @@ class CoverageTheoreticalMaxTests(unittest.TestCase):
             self.assertEqual(payload["union"]["lines"]["amount"], 3)
             self.assertEqual(payload["union"]["functions"]["amount"], 2)
             self.assertEqual(payload["union"]["regions"]["amount"], 4)
-            self.assertEqual(payload["union"]["branches"]["amount"], 0)
+            self.assertEqual(payload["union"]["branches"]["amount"], 2)
 
             self.assertEqual(payload["platforms"]["linux"]["lines"]["amount"], 2)
 
