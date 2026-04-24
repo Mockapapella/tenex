@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.10] - 2026-04-24
+
+### Added
+
+- **Docker runtime**: `/toggle_docker` can launch new root agents in Docker, with child agents and terminals inheriting the root runtime; Docker-backed root worktrees skip links for ignored repo files.
+- **Platform coverage**: CI now runs native macOS, Linux, and Windows WSL2 checks with per-platform coverage receipts.
+- **Mux output streaming**: Preview rendering can read raw mux output incrementally instead of recapturing pane history on every refresh.
+
+### Changed
+
+- **Platform support**: Tenex now supports Linux and macOS natively, with Windows through WSL2.
+- **Coverage gates**: CI and pre-commit now enforce cross-OS coverage receipts and theoretical maximum coverage checks.
+- **Preview sizing**: The mux keeps the largest requested pane size per target so multiple clients do not shrink each other's previews.
+
+### Fixed
+
+- **Remote branch renames**: Renaming an agent now pushes the new remote branch while preserving the old one so existing PRs stay open.
+- **Legacy conversation IDs**: Existing Claude agents are backfilled with conversation IDs so reconnect and resume behavior is more reliable.
+- **Worktree instructions**: New worktrees link local `AGENTS.md` and `CLAUDE.md` instruction files again.
+- **Docker startup**: Docker roots stage writable SSH and agent config into managed runtime homes, keep root worktrees isolated, and clean containers during reset or agent removal.
+- **Mux stability**: Tenex detects mux protocol mismatches, tracks mux daemon liveness on non-Linux platforms, and handles stale process checks more reliably.
+- **Agent activity**: Activity indicators update correctly after Docker-backed agent switching.
+
 ## [1.0.9] - 2026-02-08
 
 ### Added
