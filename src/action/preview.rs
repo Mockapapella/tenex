@@ -29,6 +29,8 @@ impl ValidIn<PreviewFocusedMode> for UnfocusPreviewAction {
         _state: PreviewFocusedMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
+        #[cfg(any(test, coverage))]
+        super::force_infallible_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -41,6 +43,8 @@ impl ValidIn<PreviewFocusedMode> for ForwardKeystrokeAction<'_> {
         _state: PreviewFocusedMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
+        #[cfg(any(test, coverage))]
+        super::force_infallible_action_error_if_enabled_for_tests()?;
         if let Some(sequence) = keycode_to_input_sequence(self.code, self.modifiers) {
             self.batched_keys.push(sequence);
         }
@@ -220,6 +224,65 @@ mod tests {
     }
 
     #[test]
+    fn test_keycode_to_input_sequence_covers_more_special_keys() {
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::BackTab, KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[Z")
+        );
+
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(2), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}OQ")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(3), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}OR")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(4), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}OS")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(5), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[15~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(6), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[17~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(7), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[18~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(8), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[19~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(9), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[20~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(10), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[21~")
+        );
+        assert_eq!(
+            keycode_to_input_sequence(KeyCode::F(11), KeyModifiers::NONE).as_deref(),
+            Some("\u{1b}[23~")
+        );
+
+        assert!(keycode_to_input_sequence(KeyCode::F(13), KeyModifiers::NONE).is_none());
+    }
+
+    #[test]
+    fn test_apply_modifier_falls_back_for_unknown_escape_sequences() {
+        assert_eq!(apply_modifier(b"\x1b[1", 5), b"\x1b[1".to_vec());
+        assert_eq!(apply_modifier(b"\x1b[123", 5), b"\x1b[123".to_vec());
+        assert_eq!(apply_modifier(b"\x1bO", 5), b"\x1bO".to_vec());
+        assert_eq!(apply_modifier(b"hello", 5), b"hello".to_vec());
+    }
+
+    #[test]
     fn test_keycode_to_input_sequence_alt_prefix_for_non_escape_base() {
         assert_eq!(
             keycode_to_input_sequence(KeyCode::Enter, KeyModifiers::ALT)
@@ -229,8 +292,8 @@ mod tests {
     }
 
     #[test]
-    fn test_preview_focused_actions_buffer_and_exit() -> anyhow::Result<()> {
-        let temp_file = NamedTempFile::new()?;
+    fn test_preview_focused_actions_buffer_and_exit() {
+        let temp_file = NamedTempFile::new().unwrap();
         let storage = Storage::with_path(temp_file.path().to_path_buf());
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
 
@@ -241,7 +304,8 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
                 batched_keys: &mut batched_keys,
             }
-            .execute(PreviewFocusedMode, &mut data)?,
+            .execute(PreviewFocusedMode, &mut data)
+            .unwrap(),
             PreviewFocusedMode.into()
         );
         assert_eq!(batched_keys, vec!["a".to_string()]);
@@ -253,16 +317,17 @@ mod tests {
                 modifiers: KeyModifiers::CONTROL,
                 batched_keys: &mut batched_keys,
             }
-            .execute(PreviewFocusedMode, &mut data)?,
+            .execute(PreviewFocusedMode, &mut data)
+            .unwrap(),
             PreviewFocusedMode.into()
         );
         assert!(batched_keys.is_empty());
 
         assert_eq!(
-            UnfocusPreviewAction.execute(PreviewFocusedMode, &mut data)?,
+            UnfocusPreviewAction
+                .execute(PreviewFocusedMode, &mut data)
+                .unwrap(),
             AppMode::normal()
         );
-
-        Ok(())
     }
 }

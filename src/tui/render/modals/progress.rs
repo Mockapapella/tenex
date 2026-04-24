@@ -53,7 +53,10 @@ pub fn render_preparing_docker_modal(frame: &mut Frame<'_>, message: &str) {
         Style::default().fg(colors::TEXT_MUTED),
     )));
 
-    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).max(7);
+    let height = u16::try_from(lines.len())
+        .unwrap_or(0)
+        .saturating_add(2)
+        .max(7);
     let area = centered_rect_absolute(50, height, frame.area());
 
     let paragraph = Paragraph::new(lines)
@@ -78,17 +81,29 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
-    fn test_render_preparing_docker_modal() -> Result<(), std::io::Error> {
+    fn test_render_preparing_docker_modal() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
 
-        terminal.draw(|frame| {
-            render_preparing_docker_modal(
-                frame,
-                "Building the shipped Tenex Docker worker image for first use.",
-            );
-        })?;
+        terminal
+            .draw(|frame| {
+                render_preparing_docker_modal(
+                    frame,
+                    "Building the shipped Tenex Docker worker image for first use.",
+                );
+            })
+            .expect("draw");
+    }
 
-        Ok(())
+    #[test]
+    fn test_render_preparing_docker_modal_empty_message() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                render_preparing_docker_modal(frame, "");
+            })
+            .expect("draw");
     }
 }

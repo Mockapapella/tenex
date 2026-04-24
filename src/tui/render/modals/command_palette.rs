@@ -18,9 +18,10 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
 
     let max_visible: usize = 8;
     let visible_count = total_count.min(max_visible).max(1);
+    let visible_count_u16 = u16::try_from(visible_count).unwrap_or(0);
 
     // Header + blank + list + blank + help
-    let content_height = 1u16 + 1u16 + u16::try_from(visible_count).unwrap_or(1) + 1u16 + 1u16;
+    let content_height = 1u16 + 1u16 + visible_count_u16 + 1u16 + 1u16;
     let total_height = content_height.saturating_add(2); // borders
 
     let area = centered_rect_absolute(60, total_height, frame.area());
@@ -54,11 +55,6 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
         .command_palette
         .selected
         .min(total_count.saturating_sub(1));
-    let scroll_offset = if selected_idx >= max_visible {
-        selected_idx - max_visible + 1
-    } else {
-        0
-    };
 
     if filtered.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -66,13 +62,7 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
             Style::default().fg(colors::TEXT_MUTED),
         )));
     } else {
-        for (idx, cmd) in filtered
-            .iter()
-            .copied()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(max_visible)
-        {
+        for (idx, cmd) in filtered.iter().copied().enumerate().take(max_visible) {
             let is_selected = idx == selected_idx;
             let style = if is_selected {
                 Style::default()
@@ -85,10 +75,8 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
             let prefix = if is_selected { "▶ " } else { "  " };
 
             let mut name = cmd.name.to_string();
-            if !cmd.description.is_empty() {
-                name.push_str("  ");
-                name.push_str(cmd.description);
-            }
+            name.push_str("  ");
+            name.push_str(cmd.description);
 
             lines.push(Line::from(Span::styled(format!("{prefix}{name}"), style)));
         }

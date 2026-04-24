@@ -9,6 +9,10 @@ use crate::state::{AppMode, ErrorModalMode, RebaseBranchSelectorMode, SuccessMod
 
 use super::super::Actions;
 
+fn output_indicates_rebase_conflict(combined_output: &str) -> bool {
+    combined_output.contains("CONFLICT") || combined_output.contains("could not apply")
+}
+
 impl Actions {
     /// Start the rebase flow - show branch selector (Ctrl+r)
     ///
@@ -90,7 +94,7 @@ impl Actions {
             let combined = format!("{stdout}{stderr}");
 
             // Check if there are merge conflicts (git may output to stdout or stderr)
-            if combined.contains("CONFLICT") || combined.contains("could not apply") {
+            if output_indicates_rebase_conflict(&combined) {
                 info!(
                     current = %current_branch,
                     target = %target_branch,
@@ -101,13 +105,7 @@ impl Actions {
             }
 
             // Show error with both stdout and stderr for context
-            let error_msg = if !stderr.trim().is_empty() {
-                stderr.trim().to_string()
-            } else if !stdout.trim().is_empty() {
-                stdout.trim().to_string()
-            } else {
-                "Unknown error".to_string()
-            };
+            let error_msg = super::merge::git_failure_message(stdout.as_ref(), stderr.as_ref());
             app_data.git_op.clear();
             app_data.review.clear();
             return Ok(ErrorModalMode {
@@ -127,5 +125,67 @@ impl Actions {
             message: format!("Rebased {current_branch} onto {target_branch}"),
         }
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{Agent, Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_output_indicates_rebase_conflict_recognizes_markers() {
+        assert!(output_indicates_rebase_conflict(
+            "error: could not apply abc123"
+        ));
+        assert!(output_indicates_rebase_conflict(
+            "CONFLICT (content): Merge conflict"
+        ));
+        assert!(!output_indicates_rebase_conflict(
+            "fatal: not a git repository"
+        ));
+    }
+
+    fn create_test_app(repo_root: &Path, state_path: PathBuf) -> crate::App {
+        let config = Config {
+            worktree_dir: repo_root.join(".tenex-test-worktrees"),
+            branch_prefix: "tenex-test-rebase/".to_string(),
+            ..Config::default()
+        };
+        let storage = Storage::with_path(state_path);
+        crate::App::new(config, storage, Settings::default(), false)
+    }
+
+    #[test]
+    fn test_execute_rebase_propagates_rebase_spawn_errors() {
+        let _guard_env = crate::test_support::lock_env_test_environment();
+
+        let repo = TempDir::new().expect("temp repo");
+        let state_path = repo.path().join("state.json");
+        let mut app = create_test_app(repo.path(), state_path);
+
+        let mut agent = Agent::new(
+            "rebase-agent".to_string(),
+            "echo".to_string(),
+            "feature".to_string(),
+            repo.path().to_path_buf(),
+        );
+        agent.repo_root = Some(repo.path().to_path_buf());
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+
+        app.data.git_op.agent_id = Some(agent_id);
+        app.data.git_op.branch_name = "feature".to_string();
+        app.data.git_op.target_branch = "master".to_string();
+
+        let missing_git = repo.path().join("missing-git");
+        let err = crate::git::with_git_program_override_for_tests(missing_git, || {
+            Actions::execute_rebase(&mut app.data).unwrap_err()
+        });
+        assert!(err.to_string().contains("Failed to execute rebase"));
     }
 }

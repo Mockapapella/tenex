@@ -181,6 +181,113 @@ fn test_auto_connect_skips_different_prefix() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// Test that `auto_connect_worktrees` ignores worktrees outside this instance's worktree dir.
+#[test]
+fn test_auto_connect_skips_worktree_outside_instance_dir() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("auto_connect_outside")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let repo = git2::Repository::open(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = format!("{}/outside-dir", fixture.session_prefix);
+
+    let outside_dir = tempfile::TempDir::new()?;
+    let worktree_path = outside_dir.path().join("worktree");
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
+
+    handler.auto_connect_worktrees(&mut app)?;
+    assert_eq!(app.data.storage.len(), 0);
+
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+    Ok(())
+}
+
+/// Test that `auto_connect_worktrees` skips worktrees with isolated state markers.
+#[test]
+fn test_auto_connect_skips_worktree_with_isolated_state_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("auto_connect_isolated")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let repo = git2::Repository::open(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = format!("{}/isolated-marker", fixture.session_prefix);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
+
+    std::fs::write(worktree_path.join("state.json"), "{}")?;
+
+    handler.auto_connect_worktrees(&mut app)?;
+    assert_eq!(app.data.storage.len(), 0);
+
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+    Ok(())
+}
+
+/// Test that `auto_connect_worktrees` continues when worktree head info cannot be read.
+#[test]
+fn test_auto_connect_skips_worktree_when_head_info_errors() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("auto_connect_head_info_err")?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let repo = git2::Repository::open(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = format!("{}/bad-head", fixture.session_prefix);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, &branch_name)?;
+
+    let git_marker = worktree_path.join(".git");
+    if git_marker.is_dir() {
+        std::fs::remove_dir_all(&git_marker)?;
+    } else if git_marker.exists() {
+        std::fs::remove_file(&git_marker)?;
+    }
+
+    handler.auto_connect_worktrees(&mut app)?;
+    assert_eq!(app.data.storage.len(), 0);
+
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+    Ok(())
+}
+
 /// Test that `auto_connect_worktrees` handles multiple existing worktrees
 #[test]
 fn test_auto_connect_multiple_worktrees() -> Result<(), Box<dyn std::error::Error>> {

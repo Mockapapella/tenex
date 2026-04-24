@@ -191,6 +191,16 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{App, Settings};
+    use tempfile::TempDir;
+
+    fn error_modal_message(app: &App) -> Option<&str> {
+        if let crate::state::AppMode::ErrorModal(error) = &app.mode {
+            Some(error.message.as_str())
+        } else {
+            None
+        }
+    }
 
     #[test]
     fn test_new() {
@@ -265,6 +275,15 @@ mod tests {
     }
 
     #[test]
+    fn test_select_next_noops_when_filtered_empty() {
+        let mut state = ModelSelectorState::new();
+        state.filter = "nope".to_string();
+        state.selected = 2;
+        state.select_next();
+        assert_eq!(state.selected, 2);
+    }
+
+    #[test]
     fn test_select_prev_wraps() {
         let mut state = ModelSelectorState::new();
         state.selected = 0;
@@ -278,6 +297,15 @@ mod tests {
         state.selected = 2;
         state.select_prev();
         assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn test_select_prev_noops_when_filtered_empty() {
+        let mut state = ModelSelectorState::new();
+        state.filter = "nope".to_string();
+        state.selected = 2;
+        state.select_prev();
+        assert_eq!(state.selected, 2);
     }
 
     #[test]
@@ -328,5 +356,75 @@ mod tests {
         state.clear();
         assert!(state.filter.is_empty());
         assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_set_agent_program_and_save_sets_error_modal_when_save_fails() {
+        let mut app = App::default();
+        app.set_agent_program_and_save(AgentProgram::Codex);
+
+        let message = error_modal_message(&app).expect("Expected error modal");
+        assert!(message.contains("Failed to save settings"));
+    }
+
+    #[test]
+    fn test_set_agent_program_and_save_sets_status_when_settings_writable() {
+        let temp_dir = TempDir::new().expect("TempDir::new");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path).expect("set_test_path_override");
+
+        let mut app = App::default();
+        app.set_agent_program_and_save(AgentProgram::Codex);
+
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Model set to codex")
+        );
+        assert_eq!(app.data.settings.agent_program, AgentProgram::Codex);
+        assert_eq!(error_modal_message(&app), None);
+    }
+
+    #[test]
+    fn test_set_custom_agent_command_and_save_sets_error_modal_when_save_fails() {
+        let mut app = App::default();
+        app.set_custom_agent_command_and_save("my-agent --flag".to_string());
+
+        let message = error_modal_message(&app).expect("Expected error modal");
+        assert!(message.contains("Failed to save settings"));
+    }
+
+    #[test]
+    fn test_set_custom_agent_command_and_save_sets_status_when_settings_writable() {
+        let temp_dir = TempDir::new().expect("TempDir::new");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path).expect("set_test_path_override");
+
+        let mut app = App::default();
+        app.set_custom_agent_command_and_save("my-agent --flag".to_string());
+
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Model set to custom")
+        );
+        assert_eq!(app.data.settings.agent_program, AgentProgram::Custom);
+        assert_eq!(app.data.settings.custom_agent_command, "my-agent --flag");
+        assert_eq!(error_modal_message(&app), None);
+    }
+
+    #[test]
+    fn test_agent_spawn_command_covers_custom_empty_and_non_empty() {
+        let mut app = App::default();
+        app.data.settings.agent_program = AgentProgram::Codex;
+        assert_eq!(app.agent_spawn_command(), "codex");
+
+        app.data.settings.agent_program = AgentProgram::Claude;
+        assert_eq!(app.agent_spawn_command(), app.data.config.default_program);
+
+        app.data.settings.agent_program = AgentProgram::Custom;
+        app.data.settings.custom_agent_command.clear();
+        assert_eq!(app.agent_spawn_command(), app.data.config.default_program);
+
+        app.data.settings.custom_agent_command = "custom-agent".to_string();
+        assert_eq!(app.agent_spawn_command(), "custom-agent");
     }
 }

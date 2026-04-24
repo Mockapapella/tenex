@@ -1,83 +1,72 @@
 //! Helpers for rendering vt100 screens to ANSI strings.
 
-use anyhow::{Result, bail};
 use vt100::Color;
 
-pub fn capture_lines(parser: &mut vt100::Parser, requested: usize) -> Result<String> {
+pub fn capture_lines(parser: &mut vt100::Parser, requested: usize) -> String {
     let (rows, _cols) = parser.screen().size();
     let height = usize::from(rows);
 
-    if height == 0 {
-        bail!("Invalid screen size");
+    let original_offset = parser.screen().scrollback();
+    parser.screen_mut().set_scrollback(usize::MAX);
+    let scrollback_len = parser.screen().scrollback();
+    let total_lines = scrollback_len.saturating_add(height);
+
+    let requested = if requested == usize::MAX {
+        total_lines
+    } else {
+        requested.min(total_lines)
+    };
+
+    let start_line = total_lines.saturating_sub(requested);
+    let mut collected: Vec<String> = Vec::with_capacity(requested);
+
+    if start_line >= scrollback_len {
+        parser.screen_mut().set_scrollback(0);
+        let rows = render_screen_rows(parser.screen());
+        let screen_start = start_line.saturating_sub(scrollback_len).min(height);
+        collected.extend(rows.into_iter().skip(screen_start));
+        let result = collected.join("\n");
+        parser.screen_mut().set_scrollback(original_offset);
+        return result;
     }
 
-    let original_offset = parser.screen().scrollback();
-    let result = (|| -> Result<String> {
-        parser.screen_mut().set_scrollback(usize::MAX);
-        let scrollback_len = parser.screen().scrollback();
-        let total_lines = scrollback_len.saturating_add(height);
+    let scrollback_start = start_line;
+    let first_page_start = scrollback_start.saturating_sub(scrollback_start % height);
+    let mut page_start = first_page_start;
+    let mut skip_within_page = scrollback_start.saturating_sub(first_page_start);
 
-        let requested = if requested == usize::MAX {
-            total_lines
-        } else {
-            requested.min(total_lines)
-        };
+    while page_start < scrollback_len {
+        let offset = scrollback_len.saturating_sub(page_start);
+        parser.screen_mut().set_scrollback(offset);
+        let rows = render_screen_rows(parser.screen());
+        let available = scrollback_len.saturating_sub(page_start).min(height);
+        let skip = skip_within_page.min(available);
 
-        let start_line = total_lines.saturating_sub(requested);
+        collected.extend(rows.into_iter().take(available).skip(skip));
 
-        let mut collected: Vec<String> = Vec::with_capacity(requested);
+        page_start = page_start.saturating_add(height);
+        skip_within_page = 0;
+    }
 
-        if start_line >= scrollback_len {
-            parser.screen_mut().set_scrollback(0);
-            let rows = render_screen_rows(parser.screen())?;
-            let screen_start = start_line.saturating_sub(scrollback_len).min(height);
-            collected.extend(rows.into_iter().skip(screen_start));
-            return Ok(collected.join("\n"));
-        }
+    parser.screen_mut().set_scrollback(0);
+    let rows = render_screen_rows(parser.screen());
+    collected.extend(rows);
 
-        let scrollback_start = start_line;
-        let first_page_start = scrollback_start.saturating_sub(scrollback_start % height);
-        let mut page_start = first_page_start;
-        let mut skip_within_page = scrollback_start.saturating_sub(first_page_start);
-
-        while page_start < scrollback_len {
-            let offset = scrollback_len.saturating_sub(page_start);
-            parser.screen_mut().set_scrollback(offset);
-            let rows = render_screen_rows(parser.screen())?;
-            let available = scrollback_len.saturating_sub(page_start).min(height);
-            let skip = skip_within_page.min(available);
-
-            collected.extend(rows.into_iter().take(available).skip(skip));
-
-            page_start = page_start.saturating_add(height);
-            skip_within_page = 0;
-        }
-
-        parser.screen_mut().set_scrollback(0);
-        let rows = render_screen_rows(parser.screen())?;
-        collected.extend(rows);
-
-        Ok(collected.join("\n"))
-    })();
-
+    let result = collected.join("\n");
     parser.screen_mut().set_scrollback(original_offset);
     result
 }
 
-pub fn render_screen_rows(screen: &vt100::Screen) -> Result<Vec<String>> {
+pub fn render_screen_rows(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
     let height = usize::from(rows);
     let mut lines = Vec::with_capacity(height);
-
-    if rows == 0 {
-        bail!("Invalid screen size");
-    }
 
     for row in 0..rows {
         lines.push(render_row(screen, row, cols));
     }
 
-    Ok(lines)
+    lines
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,18 +238,17 @@ mod tests {
     }
 
     #[test]
-    fn test_render_screen_rows_basic() -> Result<()> {
+    fn test_render_screen_rows_basic() {
         let mut parser = vt100::Parser::new(2, 3, 0);
         parser.process(b"\x1b[31mA\x1b[0m");
-        let lines = render_screen_rows(parser.screen())?;
+        let lines = render_screen_rows(parser.screen());
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains('A'));
         assert!(lines[0].ends_with("\x1b[0m"));
-        Ok(())
     }
 
     #[test]
-    fn test_capture_lines_includes_tail_lines() -> Result<()> {
+    fn test_capture_lines_includes_tail_lines() {
         use std::fmt::Write as _;
 
         let mut parser = vt100::Parser::new(5, 20, 1_000);
@@ -272,31 +260,65 @@ mod tests {
         output.push_str("L29");
         parser.process(output.as_bytes());
 
-        let captured = capture_lines(&mut parser, usize::MAX)?;
+        let captured = capture_lines(&mut parser, usize::MAX);
         let lines: Vec<&str> = captured.lines().collect();
-        if lines.len() < 10 {
-            bail!("Expected at least 10 lines, got {}", lines.len());
-        }
+        assert!(lines.len() >= 10);
 
         let tail_start = lines.len().saturating_sub(4);
-        let Some(tail) = lines.get(tail_start..) else {
-            bail!("Failed to slice captured tail");
-        };
+        let tail = &lines[tail_start..];
 
-        assert!(
-            lines.first().is_some_and(|line| line.contains("L0")),
-            "Expected captured output to start with L0"
-        );
-
-        assert!(
-            lines.last().is_some_and(|line| line.contains("L29")),
-            "Expected captured output to end with L29"
-        );
+        assert!(lines.first().is_some_and(|line| line.contains("L0")));
+        assert!(lines.last().is_some_and(|line| line.contains("L29")));
 
         assert!(tail[0].contains("L26"));
         assert!(tail[1].contains("L27"));
         assert!(tail[2].contains("L28"));
         assert!(tail[3].contains("L29"));
-        Ok(())
+    }
+
+    #[test]
+    fn test_render_row_writes_default_style_for_out_of_bounds_cells() {
+        let mut parser = vt100::Parser::new(1, 1, 0);
+        parser.process(b"A");
+
+        let line = render_row(parser.screen(), 0, 3);
+        assert!(line.contains('A'));
+        assert!(line.contains("\x1b[0m"));
+    }
+
+    #[test]
+    fn test_render_row_resets_style_for_out_of_bounds_cells() {
+        let mut parser = vt100::Parser::new(1, 1, 0);
+        parser.process(b"\x1b[31mA");
+
+        let line = render_row(parser.screen(), 0, 3);
+        assert!(line.contains("A\x1b[0m  \x1b[0m"));
+    }
+
+    #[test]
+    fn test_render_row_skips_wide_continuation_cells() {
+        let mut parser = vt100::Parser::new(1, 4, 0);
+        parser.process("你".as_bytes());
+
+        let lines = render_screen_rows(parser.screen());
+        assert!(lines[0].contains("你"));
+    }
+
+    #[test]
+    fn test_render_row_emits_modifiers_and_colors() {
+        let mut parser = vt100::Parser::new(1, 4, 0);
+        parser.process(b"\x1b[1;3;4;7;38;5;42;48;2;1;2;3mA");
+        parser.process(b"\x1b[38;2;4;5;6;48;5;7mB\x1b[0m");
+
+        let lines = render_screen_rows(parser.screen());
+        let line = &lines[0];
+        assert!(line.contains("38;5;42"));
+        assert!(line.contains("48;2;1;2;3"));
+        assert!(line.contains("38;2;4;5;6"));
+        assert!(line.contains("48;5;7"));
+        assert!(line.contains(";1"));
+        assert!(line.contains(";3"));
+        assert!(line.contains(";4"));
+        assert!(line.contains(";7"));
     }
 }

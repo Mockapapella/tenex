@@ -511,36 +511,50 @@ mod tests {
         text
     }
 
-    #[test]
-    fn test_render_agent_list_labels_plain_dir_agents() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn buffer_text_rows(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let width: usize = buffer.area.width.into();
+        let mut text = String::new();
+        for (idx, cell) in buffer.content.iter().enumerate() {
+            if idx > 0 && idx % width == 0 {
+                text.push('\n');
+            }
+            text.push_str(cell.symbol());
+        }
+        text
+    }
 
+    fn render_to_terminal(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, app);
+            })
+            .unwrap();
+        terminal
+    }
+
+    #[test]
+    fn test_render_agent_list_labels_plain_dir_agents() {
         let mut app = create_test_app_with_agents();
         let id = app
             .data
             .storage
             .iter()
             .find(|agent| agent.title == "agent-1")
-            .ok_or("missing agent-1")?
+            .expect("missing agent-1")
             .id;
-        if let Some(agent) = app.data.storage.get_mut(id) {
-            agent.workspace_kind = WorkspaceKind::PlainDir;
-        }
+        app.data.storage.get_mut(id).unwrap().workspace_kind = WorkspaceKind::PlainDir;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("no-git"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_changelog_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_changelog_mode() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(
@@ -552,19 +566,14 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("What's New"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_reconnect_prompt_swarm_title() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_reconnect_prompt_swarm_title() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(ReconnectPromptMode.into());
@@ -581,78 +590,56 @@ mod tests {
             swarm_child_count: Some(3),
         });
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Reconnect Swarm"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_terminal_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_terminal_prompt_mode() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(TerminalPromptMode.into());
         app.data.input.buffer = "echo hi".to_string();
         app.data.input.cursor = app.data.input.buffer.len();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("New Terminal"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_synthesis_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_synthesis_prompt_mode() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(SynthesisPromptMode.into());
         app.data.input.buffer = "extra".to_string();
         app.data.input.cursor = app.data.input.buffer.len();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Synthesize"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_normal_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_normal_mode() {
         let app = create_test_app_with_agents();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_content_pane_has_top_border() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_content_pane_has_top_border() {
         let width = 80_u16;
-        let backend = TestBackend::new(width, 24);
-        let mut terminal = Terminal::new(backend)?;
         let app = create_test_app_with_agents();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, width, 24);
 
         let buffer = terminal.backend().buffer();
 
@@ -667,29 +654,21 @@ mod tests {
 
         assert_eq!(top_left, Some("╔"));
         assert_eq!(top_right, Some("╗"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_help_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_help_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(HelpMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_creating_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_creating_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(CreatingMode.into());
         app.handle_char('t');
@@ -697,38 +676,28 @@ mod tests {
         app.handle_char('s');
         app.handle_char('t');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_prompting_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_prompting_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(PromptingMode.into());
         app.handle_char('f');
         app.handle_char('i');
         app.handle_char('x');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_prompting_mode_with_scrollbar() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_prompting_mode_with_scrollbar() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(PromptingMode.into());
         app.data.input.buffer = (0..30)
@@ -737,24 +706,14 @@ mod tests {
             .join("\n");
         app.data.input.cursor = app.data.input.buffer.len();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
-        let buffer = terminal.backend().buffer();
-        let mut text = String::new();
-        for cell in &buffer.content {
-            text.push_str(cell.symbol());
-        }
-
+        let text = buffer_text(&terminal);
         assert!(text.contains('█'));
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_kill_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirming_kill_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(
             ConfirmingMode {
@@ -763,19 +722,167 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_interrupt_agent_mode() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_confirming_kill_mode_no_agent_selected() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let storage = Storage::new();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No agent selected"));
+    }
+
+    #[test]
+    fn test_render_confirming_kill_mode_warns_on_non_deleting_branch() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("agent-1", Status::Running);
+        agent.branch = "feature/example".to_string();
+        storage.add(agent);
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("This will delete the worktree."));
+    }
+
+    #[test]
+    fn test_render_confirming_kill_mode_warns_on_tenex_branch_prefix() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("agent-1", Status::Running);
+        agent.branch = "tenex/example".to_string();
+        storage.add(agent);
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("tenex/example"));
+    }
+
+    #[test]
+    fn test_render_confirming_kill_mode_warns_on_plain_dir_root() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("agent-1", Status::Running);
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        storage.add(agent);
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("agent-1"));
+    }
+
+    #[test]
+    fn test_render_confirming_kill_mode_warns_on_child_agent() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+
+        let mut root = create_test_agent("root", Status::Running);
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let root_branch = root.branch.clone();
+        let root_path = root.worktree_path.clone();
+        storage.add(root);
+
+        let child = Agent::new_child(
+            "child".to_string(),
+            "echo".to_string(),
+            root_branch,
+            root_path,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        storage.add(child);
+
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.data.selected = 2;
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Kill,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("child"));
+    }
+
+    #[test]
+    fn test_render_confirming_interrupt_agent_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(
             ConfirmingMode {
@@ -784,21 +891,123 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_synthesize_mode_excludes_terminals()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_confirming_interrupt_agent_mode_no_agent_selected() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let storage = Storage::new();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::InterruptAgent,
+            }
+            .into(),
+        );
 
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No agent selected"));
+    }
+
+    #[test]
+    fn test_render_confirming_synthesize_mode_no_agent_selected() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let storage = Storage::new();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No agent selected"));
+    }
+
+    #[test]
+    fn test_render_confirming_synthesize_mode_pluralizes_agents() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let config = create_test_config();
+        let mut storage = Storage::new();
+
+        let root = create_test_agent("root", Status::Running);
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let root_branch = root.branch.clone();
+        let root_path = root.worktree_path.clone();
+        storage.add(root);
+
+        let child_1 = Agent::new_child(
+            "Child 1".to_string(),
+            "echo".to_string(),
+            root_branch.clone(),
+            root_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        storage.add(child_1);
+
+        let child_2 = Agent::new_child(
+            "Child 2".to_string(),
+            "echo".to_string(),
+            root_branch,
+            root_path,
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        storage.add(child_2);
+
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::Synthesize,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Synthesize 2 agents?"));
+    }
+
+    #[test]
+    fn test_render_confirming_synthesize_mode_excludes_terminals() {
         let config = create_test_config();
         let mut storage = Storage::new();
 
@@ -847,24 +1056,14 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
-        assert!(
-            text.contains("Synthesize 1 agent?"),
-            "Terminal descendants should not count towards synthesis"
-        );
-        Ok(())
+        assert!(text.contains("Synthesize 1 agent?"));
     }
 
     #[test]
-    fn test_render_confirming_synthesize_mode_only_terminals()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
-
+    fn test_render_confirming_synthesize_mode_only_terminals() {
         let config = create_test_config();
         let mut storage = Storage::new();
 
@@ -898,19 +1097,14 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let text = buffer_text(&terminal);
         assert!(text.contains("No non-terminal"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_reset_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirming_reset_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(
             ConfirmingMode {
@@ -919,19 +1113,14 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_quit_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirming_quit_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(
             ConfirmingMode {
@@ -940,19 +1129,14 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirming_restart_mux_daemon_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirming_restart_mux_daemon_mode() {
         let mut app = create_test_app_with_agents();
         app.data.ui.muxd_version_mismatch = Some(crate::app::MuxdVersionMismatchInfo {
             socket: "tenex-mux-test.sock".to_string(),
@@ -967,73 +1151,204 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_with_error() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_confirming_restart_mux_daemon_mode_without_mismatch_info() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let storage = Storage::new();
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::RestartMuxDaemon,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Restart mux daemon?"));
+    }
+
+    #[test]
+    fn test_render_confirming_restart_mux_daemon_mode_without_env_socket() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("agent-1", Status::Running));
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.data.ui.muxd_version_mismatch = Some(crate::app::MuxdVersionMismatchInfo {
+            socket: "tenex-mux-test.sock".to_string(),
+            daemon_version: "tenex-mux/0.0.0".to_string(),
+            expected_version: "tenex-mux/0.0.1".to_string(),
+            env_mux_socket: None,
+        });
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::RestartMuxDaemon,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Restart mux daemon?"));
+    }
+
+    #[test]
+    fn test_render_confirming_switch_branch_mode_with_target_branch() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("agent-1", Status::Running));
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.data.git_op.branch_name = "from-branch".to_string();
+        app.data.git_op.target_branch = "to-branch".to_string();
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::SwitchBranch,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Switch Branch?"));
+        assert!(text.contains("from-branch"));
+        assert!(text.contains("to-branch"));
+    }
+
+    #[test]
+    fn test_render_confirming_switch_branch_mode_without_target_branch() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let config = create_test_config();
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("agent-1", Status::Running));
+        let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+        app.data.git_op.branch_name = "from-branch".to_string();
+        app.data.git_op.target_branch = String::new();
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::SwitchBranch,
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("<none selected>"));
+    }
+
+    #[test]
+    fn test_render_with_error() {
         let mut app = create_test_app_with_agents();
         app.set_error("Something went wrong!");
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_with_status_message() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_success_modal_mode() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_test_app_with_agents();
+        app.enter_mode(
+            SuccessModalMode {
+                message: "Operation completed".to_string(),
+            }
+            .into(),
+        );
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Success"));
+        assert!(text.contains("Operation completed"));
+    }
+
+    #[test]
+    fn test_render_update_prompt_mode() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_test_app_with_agents();
+        let info = crate::update::UpdateInfo {
+            current_version: semver::Version::parse("1.0.0").unwrap(),
+            latest_version: semver::Version::parse("1.0.1").unwrap(),
+        };
+        app.enter_mode(UpdatePromptMode { info }.into());
+
+        terminal
+            .draw(|frame| {
+                render(frame, &app);
+            })
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Update Available"));
+        assert!(text.contains("1.0.0"));
+        assert!(text.contains("1.0.1"));
+    }
+
+    #[test]
+    fn test_render_with_status_message() {
         let mut app = create_test_app_with_agents();
         app.set_status("Operation completed");
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_status_bar_shows_error_when_not_in_modal()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_status_bar_shows_error_when_not_in_modal() {
         let mut app = create_test_app_with_agents();
         app.data.ui.last_error = Some("boom".to_string());
         app.mode = AppMode::normal();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        let mut text = String::new();
-        for cell in &buffer.content {
-            text.push_str(cell.symbol());
-        }
+        let terminal = render_to_terminal(&app, 80, 24);
+        let text = buffer_text(&terminal);
         assert!(text.contains("Error: boom"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_diff_tab() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_diff_tab() {
         let mut app = create_test_app_with_agents();
         app.switch_tab();
         assert_eq!(app.data.active_tab, crate::app::Tab::Diff);
@@ -1050,37 +1365,27 @@ mod tests {
  context",
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_preview_with_content() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_preview_with_content() {
         let mut app = create_test_app_with_agents();
         app.data
             .ui
             .set_preview_content("Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_preview_with_scroll() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_preview_with_scroll() {
         let mut app = create_test_app_with_agents();
         app.data.ui.set_preview_content(
             (0..100)
@@ -1090,22 +1395,16 @@ mod tests {
         );
         app.data.ui.preview_scroll = 50;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_preview_focused_sets_cursor_position_simple()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_preview_focused_sets_cursor_position_simple() {
         use ratatui::layout::Position;
 
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(PreviewFocusedMode.into());
         app.data.ui.set_preview_content(
@@ -1117,22 +1416,15 @@ mod tests {
         app.data.ui.preview_cursor_position = Some((3, 4, false));
         app.data.ui.preview_pane_size = Some((54, 50));
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let cursor = terminal.backend_mut().get_cursor_position()?;
+        let mut terminal = render_to_terminal(&app, 80, 24);
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
         assert_eq!(cursor, Position { x: 28, y: 6 });
-        Ok(())
     }
 
     #[test]
-    fn test_render_preview_focused_sets_cursor_position_with_scroll()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_preview_focused_sets_cursor_position_with_scroll() {
         use ratatui::layout::Position;
 
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
         app.enter_mode(PreviewFocusedMode.into());
         app.data.ui.set_preview_content(
@@ -1145,19 +1437,13 @@ mod tests {
         app.data.ui.preview_cursor_position = Some((7, 5, false));
         app.data.ui.preview_pane_size = Some((54, 20));
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let cursor = terminal.backend_mut().get_cursor_position()?;
+        let mut terminal = render_to_terminal(&app, 80, 24);
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
         assert_eq!(cursor, Position { x: 32, y: 21 });
-        Ok(())
     }
 
     #[test]
-    fn test_render_diff_with_scroll() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_diff_with_scroll() {
         let mut app = create_test_app_with_agents();
         app.switch_tab();
         app.data.ui.set_diff_content(
@@ -1168,19 +1454,14 @@ mod tests {
         );
         app.data.ui.diff_scroll = 50;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_empty_agents() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_empty_agents() {
         let app = App::new(
             create_test_config(),
             Storage::new(),
@@ -1188,20 +1469,14 @@ mod tests {
             false,
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_waiting_indicator_renders_unseen_waiting_half_moon()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_waiting_indicator_renders_unseen_waiting_half_moon() {
         let mut app = create_test_app_with_agents();
 
         let waiting_id = app
@@ -1210,30 +1485,18 @@ mod tests {
             .iter()
             .find(|agent| agent.title == "agent-1")
             .map(|agent| agent.id)
-            .ok_or("missing agent-1")?;
+            .expect("missing agent-1");
 
         app.data.ui.observe_agent_pane_digest(waiting_id, 123);
         app.data.ui.observe_agent_pane_digest(waiting_id, 123);
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        let mut text = String::new();
-        for cell in &buffer.content {
-            text.push_str(cell.symbol());
-        }
-
+        let terminal = render_to_terminal(&app, 80, 24);
+        let text = buffer_text(&terminal);
         assert!(text.contains("◐"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_waiting_indicator_renders_seen_waiting_circle()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_waiting_indicator_renders_seen_waiting_circle() {
         let mut app = create_test_app_with_agents();
 
         let waiting_id = app
@@ -1242,32 +1505,19 @@ mod tests {
             .iter()
             .find(|agent| agent.title == "agent-1")
             .map(|agent| agent.id)
-            .ok_or("missing agent-1")?;
+            .expect("missing agent-1");
 
         app.data.ui.observe_agent_pane_digest(waiting_id, 123);
         app.data.ui.observe_agent_pane_digest(waiting_id, 123);
         app.data.ui.mark_agent_pane_seen(waiting_id);
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        let mut text = String::new();
-        for cell in &buffer.content {
-            text.push_str(cell.symbol());
-        }
-
+        let terminal = render_to_terminal(&app, 80, 24);
+        let text = buffer_text(&terminal);
         assert!(text.contains("○"));
-        Ok(())
     }
 
     #[test]
-    fn test_render_agent_list_scrollbar_and_hierarchy_indicators()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 12);
-        let mut terminal = Terminal::new(backend)?;
-
+    fn test_render_agent_list_scrollbar_and_hierarchy_indicators() {
         let config = create_test_config();
         let mut storage = Storage::new();
 
@@ -1318,123 +1568,83 @@ mod tests {
         let mut app = App::new(config, storage, crate::app::Settings::default(), false);
         app.data.ui.agent_list_scroll = 0;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        let mut text = String::new();
-        for cell in &buffer.content {
-            text.push_str(cell.symbol());
-        }
-
+        let terminal = render_to_terminal(&app, 80, 12);
+        let text = buffer_text(&terminal);
         assert!(text.contains('░'));
         assert!(text.contains('▼'));
         assert!(text.contains('▶'));
-        Ok(())
     }
 
     #[test]
-    fn test_render_with_selection() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_with_selection() {
         let mut app = create_test_app_with_agents();
         app.select_next();
         app.select_next();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_various_sizes() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_various_sizes() {
         for (width, height) in [(40, 12), (80, 24), (120, 40), (200, 50)] {
-            let backend = TestBackend::new(width, height);
-            let mut terminal = Terminal::new(backend)?;
             let app = create_test_app_with_agents();
-
-            terminal.draw(|frame| {
-                render(frame, &app);
-            })?;
-
-            let buffer = terminal.backend().buffer();
-            assert!(!buffer.content.is_empty());
+            let terminal = render_to_terminal(&app, width, height);
+            assert!(!terminal.backend().buffer().content.is_empty());
         }
-        Ok(())
     }
 
     #[test]
-    fn test_render_scrolling_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_scrolling_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(ScrollingMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_scroll_exceeds_content() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_scroll_exceeds_content() {
         let mut app = create_test_app_with_agents();
         app.data.ui.set_preview_content("Line 1\nLine 2");
         // Set scroll position beyond content length
         app.data.ui.preview_scroll = 1000;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_error_modal() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_error_modal() {
         let mut app = create_test_app_with_agents();
         app.set_error("Something went wrong!");
 
-        // Verify app is in ErrorModal mode
-        assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+        let normal_app = create_test_app_with_agents();
+        for (candidate, expected) in [(&app, true), (&normal_app, false)] {
+            assert_eq!(matches!(&candidate.mode, AppMode::ErrorModal(_)), expected);
+        }
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_error_modal_long_message() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_error_modal_long_message() {
         let mut app = create_test_app_with_agents();
         app.set_error("This is a very long error message that should wrap to multiple lines in the error modal to ensure the word wrapping functionality works correctly");
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
@@ -1480,11 +1690,9 @@ mod tests {
     }
 
     #[test]
-    fn test_render_worktree_conflict_overlay() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_worktree_conflict_overlay() {
         use crate::app::WorktreeConflictInfo;
 
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info
@@ -1507,21 +1715,32 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_worktree_conflict_overlay_swarm() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_worktree_conflict_overlay_noops_without_conflict_info() {
+        let mut app = create_test_app_with_agents();
+
+        app.enter_mode(
+            ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            }
+            .into(),
+        );
+
+        let terminal = render_to_terminal(&app, 80, 24);
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Worktree Already Exists"));
+    }
+
+    #[test]
+    fn test_render_worktree_conflict_overlay_swarm() {
         use crate::app::WorktreeConflictInfo;
 
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
         // Set up worktree conflict info for a swarm
@@ -1544,21 +1763,16 @@ mod tests {
             .into(),
         );
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_reconnect_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_render_reconnect_prompt_mode() {
         use crate::app::WorktreeConflictInfo;
 
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
         let mut app = create_test_app_with_agents();
 
         // Set up for reconnect prompt mode
@@ -1580,13 +1794,10 @@ mod tests {
         app.handle_char('s');
         app.handle_char('t');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     fn create_test_branch_info(name: &str, is_remote: bool) -> crate::git::BranchInfo {
@@ -1608,42 +1819,30 @@ mod tests {
     }
 
     #[test]
-    fn test_render_review_info_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_review_info_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(ReviewInfoMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_review_child_count_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_review_child_count_mode() {
         let mut app = create_test_app_with_agents();
         app.data.spawn.child_count = 5;
         app.enter_mode(ReviewChildCountMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
+        let terminal = render_to_terminal(&app, 80, 24);
 
         let buffer = terminal.backend().buffer();
         assert!(!buffer.content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_mode() {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches
@@ -1655,19 +1854,12 @@ mod tests {
         ];
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_rebase_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_rebase_branch_selector_mode() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.branch_name = "feature/rebase-me".to_string();
@@ -1678,18 +1870,12 @@ mod tests {
         ];
         app.enter_mode(RebaseBranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
+        let terminal = render_to_terminal(&app, 80, 24);
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_merge_branch_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_merge_branch_selector_mode() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.branch_name = "feature/merge-me".to_string();
@@ -1700,18 +1886,28 @@ mod tests {
         ];
         app.enter_mode(MergeBranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
+        let terminal = render_to_terminal(&app, 80, 24);
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_branch_selector_with_filter() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_switch_branch_selector_mode() {
+        let mut app = create_test_app_with_agents();
+
+        app.data.git_op.branch_name = "feature/switch-me".to_string();
+        app.data.review.branches = vec![
+            create_test_branch_info("main", false),
+            create_test_branch_info("develop", false),
+            create_test_branch_info("main", true),
+        ];
+        app.enter_mode(SwitchBranchSelectorMode.into());
+
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
+    }
+
+    #[test]
+    fn test_render_branch_selector_with_filter() {
         let mut app = create_test_app_with_agents();
 
         // Set up some branches and a filter
@@ -1723,19 +1919,12 @@ mod tests {
         app.data.review.filter = "feature".to_string();
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_branch_selector_with_selection() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_with_selection() {
         let mut app = create_test_app_with_agents();
 
         // Set up branches with a selection
@@ -1747,38 +1936,24 @@ mod tests {
         app.data.review.selected = 1;
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_branch_selector_empty() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_empty() {
         let mut app = create_test_app_with_agents();
 
         // Empty branch list
         app.data.review.branches = vec![];
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_branch_selector_scrolled() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_scrolled() {
         let mut app = create_test_app_with_agents();
 
         // Create many branches to trigger scrolling
@@ -1790,20 +1965,32 @@ mod tests {
         app.data.review.selected = 20; // Select one that requires scrolling
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_branch_selector_scroll_indicator_below_only()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_scrolled_skips_remote_branches_above_offset() {
+        let mut app = create_test_app_with_agents();
+
+        let mut branches = Vec::new();
+        for i in 0..5 {
+            branches.push(create_test_branch_info(&format!("local-{i:02}"), false));
+        }
+        for i in 0..20 {
+            branches.push(create_test_branch_info(&format!("remote-{i:02}"), true));
+        }
+
+        app.data.review.branches = branches;
+        app.data.review.selected = 18;
+        app.enter_mode(BranchSelectorMode.into());
+
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
+    }
+
+    #[test]
+    fn test_render_branch_selector_scroll_indicator_below_only() {
         let mut app = create_test_app_with_agents();
 
         let branches = (0..12)
@@ -1813,19 +2000,12 @@ mod tests {
         app.data.review.selected = 0;
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
+        let terminal = render_to_terminal(&app, 80, 24);
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_branch_selector_scroll_indicator_above_only()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_scroll_indicator_above_only() {
         let mut app = create_test_app_with_agents();
 
         let branches = (0..12)
@@ -1835,59 +2015,62 @@ mod tests {
         app.data.review.selected = 11;
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
+        let terminal = render_to_terminal(&app, 80, 24);
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_branch_selector_mixed_local_remote() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_branch_selector_mixed_local_remote() {
         let mut app = create_test_app_with_agents();
 
         // Mix of local and remote branches
+        let remote_without_prefix = crate::git::BranchInfo {
+            name: "no-remote-prefix".to_string(),
+            full_name: "refs/remotes/no-remote-prefix".to_string(),
+            is_remote: true,
+            remote: None,
+            last_commit_time: None,
+        };
         app.data.review.branches = vec![
             create_test_branch_info("main", false),
             create_test_branch_info("feature", false),
             create_test_branch_info("main", true),
             create_test_branch_info("develop", true),
+            remote_without_prefix,
         ];
         app.enter_mode(BranchSelectorMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_child_count_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_child_count_mode() {
         let mut app = create_test_app_with_agents();
         app.data.spawn.child_count = 5;
         app.enter_mode(ChildCountMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_child_prompt_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_child_count_mode_shows_subagent_context_when_spawning_under() {
+        let mut app = create_test_app_with_agents();
+
+        let parent_id = app.data.storage.iter().next().expect("missing agent").id;
+        app.data.spawn.start_spawning_under(parent_id);
+        app.data.spawn.child_count = 2;
+        app.enter_mode(ChildCountMode.into());
+
+        let terminal = render_to_terminal(&app, 80, 24);
+        let text = buffer_text_rows(&terminal);
+        assert!(text.contains("Spawn sub-agents for selected"));
+        assert!(!text.contains("Spawn new root"));
+    }
+
+    #[test]
+    fn test_render_child_prompt_mode() {
         let mut app = create_test_app_with_agents();
         app.data.spawn.child_count = 3;
         app.enter_mode(ChildPromptMode.into());
@@ -1896,40 +2079,26 @@ mod tests {
         app.handle_char('s');
         app.handle_char('k');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_broadcasting_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_broadcasting_mode() {
         let mut app = create_test_app_with_agents();
         app.enter_mode(BroadcastingMode.into());
         app.handle_char('m');
         app.handle_char('s');
         app.handle_char('g');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     // === Push Feature Render Tests ===
 
     #[test]
-    fn test_render_confirm_push_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirm_push_mode() {
         let mut app = create_test_app_with_agents();
 
         // Get first agent's ID
@@ -1938,19 +2107,12 @@ mod tests {
         app.data.git_op.branch_name = "feature/test".to_string();
         app.enter_mode(ConfirmPushMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_confirm_push_mode_no_agent() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirm_push_mode_no_agent() {
         let mut app = create_test_app_with_agents();
 
         // Set invalid agent ID
@@ -1958,19 +2120,12 @@ mod tests {
         app.data.git_op.branch_name = "test".to_string();
         app.enter_mode(ConfirmPushMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_rename_root_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_rename_root_mode() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.original_branch = "old-name".to_string();
@@ -1978,19 +2133,12 @@ mod tests {
         app.data.git_op.is_root_rename = true;
         app.enter_mode(RenameBranchMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_rename_subagent_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_rename_subagent_mode() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.original_branch = "sub-agent".to_string();
@@ -1998,38 +2146,24 @@ mod tests {
         app.data.git_op.is_root_rename = false;
         app.enter_mode(RenameBranchMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_rename_empty_input() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_rename_empty_input() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.original_branch = "test-agent".to_string();
         app.data.input.buffer.clear();
         app.enter_mode(RenameBranchMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_confirm_push_for_pr_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_confirm_push_for_pr_mode() {
         let mut app = create_test_app_with_agents();
 
         app.data.git_op.branch_name = "feature/new-branch".to_string();
@@ -2037,204 +2171,134 @@ mod tests {
         app.data.git_op.has_unpushed = true;
         app.enter_mode(ConfirmPushForPRMode.into());
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_command_palette_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_command_palette_mode() {
         let mut app = create_test_app_with_agents();
 
         app.start_command_palette();
         assert_eq!(app.mode, AppMode::CommandPalette(CommandPaletteMode));
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_command_palette_with_filter() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_command_palette_with_filter() {
         let mut app = create_test_app_with_agents();
 
         app.start_command_palette();
         app.handle_char('m');
         app.handle_char('o');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_command_palette_empty_filter() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_command_palette_empty_filter() {
         let mut app = create_test_app_with_agents();
 
         app.start_command_palette();
         app.data.input.buffer = "/xyz".to_string();
         app.reset_slash_command_selection();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_model_selector_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_model_selector_mode() {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
         assert_eq!(app.mode, AppMode::ModelSelector(ModelSelectorMode));
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_model_selector_with_filter() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_model_selector_with_filter() {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
         app.handle_model_filter_char('c');
         app.handle_model_filter_char('l');
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_model_selector_empty_filter() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_model_selector_empty_filter() {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
         app.data.model_selector.filter = "xyz".to_string();
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_settings_menu_mode() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_settings_menu_mode() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(SettingsMenuMode.into());
         app.data.settings_menu.selected = 2;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_custom_agent_command_mode_for_roles() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_custom_agent_command_mode_for_roles() {
         let mut app = create_test_app_with_agents();
 
         app.enter_mode(CustomAgentCommandMode.into());
         app.data.input.buffer = "my-agent".to_string();
         app.data.input.cursor = app.data.input.buffer.len();
 
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
         for role in [
             crate::app::AgentRole::Default,
             crate::app::AgentRole::Planner,
             crate::app::AgentRole::Review,
         ] {
             app.data.model_selector.role = role;
-            terminal.draw(|frame| {
-                render(frame, &app);
-            })?;
-
-            let buffer = terminal.backend().buffer();
-            assert!(!buffer.content.is_empty());
+            terminal
+                .draw(|frame| {
+                    render(frame, &app);
+                })
+                .unwrap();
+            assert!(!terminal.backend().buffer().content.is_empty());
         }
-
-        Ok(())
     }
 
     #[test]
-    fn test_render_model_selector_mode_planner() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_model_selector_mode_planner() {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
         app.data.model_selector.role = crate::app::AgentRole::Planner;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 
     #[test]
-    fn test_render_model_selector_mode_review() -> Result<(), Box<dyn std::error::Error>> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+    fn test_render_model_selector_mode_review() {
         let mut app = create_test_app_with_agents();
 
         app.start_model_selector();
         app.data.model_selector.role = crate::app::AgentRole::Review;
 
-        terminal.draw(|frame| {
-            render(frame, &app);
-        })?;
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer.content.is_empty());
-        Ok(())
+        let terminal = render_to_terminal(&app, 80, 24);
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 }

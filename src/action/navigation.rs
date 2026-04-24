@@ -291,13 +291,13 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    fn create_test_data() -> Result<(AppData, NamedTempFile), std::io::Error> {
-        let temp_file = NamedTempFile::new()?;
+    fn create_test_data() -> (AppData, NamedTempFile) {
+        let temp_file = NamedTempFile::new().unwrap();
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((
+        (
             AppData::new(Config::default(), storage, Settings::default(), false),
             temp_file,
-        ))
+        )
     }
 
     fn add_two_agents(data: &mut AppData) {
@@ -316,45 +316,43 @@ mod tests {
     }
 
     #[test]
-    fn test_switch_tab_action_toggles_tabs() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut data, _temp) = create_test_data()?;
+    fn test_switch_tab_action_toggles_tabs() {
+        let (mut data, _temp) = create_test_data();
 
         data.active_tab = Tab::Preview;
         assert_eq!(
-            SwitchTabAction.execute(NormalMode, &mut data)?,
+            SwitchTabAction.execute(NormalMode, &mut data).unwrap(),
             AppMode::normal()
         );
         assert_eq!(data.active_tab, Tab::Diff);
 
         assert_eq!(
-            SwitchTabAction.execute(ScrollingMode, &mut data)?,
+            SwitchTabAction.execute(ScrollingMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert_eq!(data.active_tab, Tab::Commits);
 
         assert_eq!(
-            SwitchTabAction.execute(ScrollingMode, &mut data)?,
+            SwitchTabAction.execute(ScrollingMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert_eq!(data.active_tab, Tab::Preview);
 
         data.active_tab = Tab::Diff;
         assert_eq!(
-            SwitchTabAction.execute(DiffFocusedMode, &mut data)?,
+            SwitchTabAction.execute(DiffFocusedMode, &mut data).unwrap(),
             AppMode::normal()
         );
         assert_eq!(data.active_tab, Tab::Commits);
-
-        Ok(())
     }
 
     #[test]
-    fn test_next_prev_agent_actions_update_selection() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut data, _temp) = create_test_data()?;
+    fn test_next_prev_agent_actions_update_selection() {
+        let (mut data, _temp) = create_test_data();
 
         assert_eq!(data.selected, 1);
         assert_eq!(
-            NextAgentAction.execute(NormalMode, &mut data)?,
+            NextAgentAction.execute(NormalMode, &mut data).unwrap(),
             AppMode::normal()
         );
         assert_eq!(data.selected, 1);
@@ -362,21 +360,59 @@ mod tests {
         add_two_agents(&mut data);
         assert_eq!(data.selected, 1);
         assert_eq!(
-            NextAgentAction.execute(NormalMode, &mut data)?,
+            NextAgentAction.execute(NormalMode, &mut data).unwrap(),
             AppMode::normal()
         );
         assert_eq!(data.selected, 2);
         assert_eq!(
-            PrevAgentAction.execute(ScrollingMode, &mut data)?,
+            PrevAgentAction.execute(ScrollingMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert_eq!(data.selected, 1);
-        Ok(())
     }
 
     #[test]
-    fn test_scroll_actions_respect_active_tab() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut data, _temp) = create_test_data()?;
+    fn test_project_header_selection_actions() {
+        let (mut data, _temp) = create_test_data();
+        add_two_agents(&mut data);
+        assert_eq!(data.selected, 1);
+
+        assert_eq!(
+            SelectProjectHeaderAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
+            ScrollingMode.into()
+        );
+        assert_eq!(data.selected, 0);
+
+        assert_eq!(
+            SelectProjectFirstAgentAction
+                .execute(NormalMode, &mut data)
+                .unwrap(),
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 1);
+
+        assert_eq!(
+            SelectProjectHeaderAction
+                .execute(NormalMode, &mut data)
+                .unwrap(),
+            AppMode::normal()
+        );
+        assert_eq!(data.selected, 0);
+
+        assert_eq!(
+            SelectProjectFirstAgentAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
+            ScrollingMode.into()
+        );
+        assert_eq!(data.selected, 1);
+    }
+
+    #[test]
+    fn test_scroll_actions_respect_active_tab() {
+        let (mut data, _temp) = create_test_data();
 
         data.active_tab = Tab::Preview;
         data.ui.set_preview_content("line1\nline2\nline3\n");
@@ -384,7 +420,7 @@ mod tests {
         data.ui.preview_scroll = usize::MAX;
         data.ui.preview_follow = true;
         assert_eq!(
-            ScrollUpAction.execute(NormalMode, &mut data)?,
+            ScrollUpAction.execute(NormalMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert!(!data.ui.preview_follow);
@@ -392,31 +428,43 @@ mod tests {
         data.active_tab = Tab::Diff;
         data.ui.set_diff_content("a\nb\nc\nd\ne\n");
         assert_eq!(
-            ScrollDownAction.execute(DiffFocusedMode, &mut data)?,
+            ScrollDownAction
+                .execute(DiffFocusedMode, &mut data)
+                .unwrap(),
+            DiffFocusedMode.into()
+        );
+        assert_eq!(
+            ScrollUpAction.execute(DiffFocusedMode, &mut data).unwrap(),
             DiffFocusedMode.into()
         );
 
         assert_eq!(
-            ScrollTopAction.execute(ScrollingMode, &mut data)?,
+            ScrollTopAction.execute(ScrollingMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert_eq!(data.ui.diff_scroll, 0);
 
         assert_eq!(
-            ScrollBottomAction.execute(DiffFocusedMode, &mut data)?,
+            ScrollTopAction.execute(NormalMode, &mut data).unwrap(),
+            ScrollingMode.into()
+        );
+        assert_eq!(data.ui.diff_scroll, 0);
+
+        assert_eq!(
+            ScrollBottomAction
+                .execute(DiffFocusedMode, &mut data)
+                .unwrap(),
             DiffFocusedMode.into()
         );
         assert!(data.ui.diff_cursor > 0);
-        Ok(())
     }
 
     #[test]
-    fn test_scroll_up_does_not_pause_preview_when_not_scrollable()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_scroll_up_does_not_pause_preview_when_not_scrollable() {
         // Regression: When the preview buffer has no scrollback (common for full-screen/alt-screen
         // TUIs like Codex early in a session), a scroll-up gesture shouldn't flip follow off.
         // Otherwise Tenex looks "paused" even though there is nothing to scroll.
-        let (mut data, _temp) = create_test_data()?;
+        let (mut data, _temp) = create_test_data();
 
         data.active_tab = Tab::Preview;
         data.ui.set_preview_content("line1\nline2\nline3\n");
@@ -425,44 +473,69 @@ mod tests {
         data.ui.preview_follow = true;
 
         assert_eq!(
-            ScrollUpAction.execute(NormalMode, &mut data)?,
+            ScrollUpAction.execute(NormalMode, &mut data).unwrap(),
             ScrollingMode.into()
         );
         assert!(data.ui.preview_follow);
-
-        Ok(())
     }
 
     #[test]
-    fn test_focus_preview_action_enters_correct_focus_mode()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (mut data, _temp) = create_test_data()?;
+    fn test_focus_preview_action_enters_correct_focus_mode() {
+        let (mut data, _temp) = create_test_data();
 
         data.active_tab = Tab::Preview;
         assert_eq!(
-            FocusPreviewAction.execute(NormalMode, &mut data)?,
+            FocusPreviewAction.execute(NormalMode, &mut data).unwrap(),
             AppMode::normal()
         );
 
         add_two_agents(&mut data);
         data.active_tab = Tab::Preview;
         assert_eq!(
-            FocusPreviewAction.execute(NormalMode, &mut data)?,
+            FocusPreviewAction.execute(NormalMode, &mut data).unwrap(),
             PreviewFocusedMode.into()
         );
 
         data.active_tab = Tab::Diff;
         assert_eq!(
-            FocusPreviewAction.execute(ScrollingMode, &mut data)?,
+            FocusPreviewAction.execute(NormalMode, &mut data).unwrap(),
             DiffFocusedMode.into()
         );
+        data.active_tab = Tab::Commits;
+        assert_eq!(
+            FocusPreviewAction.execute(NormalMode, &mut data).unwrap(),
+            AppMode::normal()
+        );
 
-        let (mut data, _temp) = create_test_data()?;
         data.active_tab = Tab::Diff;
         assert_eq!(
-            FocusPreviewAction.execute(ScrollingMode, &mut data)?,
+            FocusPreviewAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
+            DiffFocusedMode.into()
+        );
+        data.active_tab = Tab::Preview;
+        assert_eq!(
+            FocusPreviewAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
+            PreviewFocusedMode.into()
+        );
+        data.active_tab = Tab::Commits;
+        assert_eq!(
+            FocusPreviewAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
             ScrollingMode.into()
         );
-        Ok(())
+
+        let (mut data, _temp) = create_test_data();
+        data.active_tab = Tab::Diff;
+        assert_eq!(
+            FocusPreviewAction
+                .execute(ScrollingMode, &mut data)
+                .unwrap(),
+            ScrollingMode.into()
+        );
     }
 }

@@ -300,7 +300,8 @@ mod tests {
         let short_id = agent.short_id();
 
         assert_eq!(short_id.len(), 8);
-        assert!(short_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+        assert!(short_id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!"g".chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -318,10 +319,19 @@ mod tests {
 
     #[test]
     fn test_age_string() {
-        let agent = create_test_agent();
-        let age = agent.age_string();
+        let mut agent = create_test_agent();
 
-        assert!(age.ends_with('s') || age.ends_with('m'));
+        agent.created_at = Utc::now() - chrono::Duration::days(2);
+        assert!(agent.age_string().ends_with('d'));
+
+        agent.created_at = Utc::now() - chrono::Duration::hours(3);
+        assert!(agent.age_string().ends_with('h'));
+
+        agent.created_at = Utc::now() - chrono::Duration::minutes(5);
+        assert!(agent.age_string().ends_with('m'));
+
+        agent.created_at = Utc::now() - chrono::Duration::seconds(10);
+        assert!(agent.age_string().ends_with('s'));
     }
 
     #[test]
@@ -335,17 +345,16 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_serde_roundtrip() {
         let agent = create_test_agent();
-        let json = serde_json::to_string(&agent)?;
-        let parsed: Agent = serde_json::from_str(&json)?;
+        let json = serde_json::to_string(&agent).unwrap();
+        let parsed: Agent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(agent.id, parsed.id);
         assert_eq!(agent.title, parsed.title);
         assert_eq!(agent.program, parsed.program);
         assert_eq!(agent.status, parsed.status);
         assert_eq!(agent.branch, parsed.branch);
-        Ok(())
     }
 
     #[test]
@@ -393,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip_with_hierarchy() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_serde_roundtrip_with_hierarchy() {
         let parent = create_test_agent();
         let child = Agent::new_child(
             "Child".to_string(),
@@ -408,17 +417,16 @@ mod tests {
             },
         );
 
-        let json = serde_json::to_string(&child)?;
-        let parsed: Agent = serde_json::from_str(&json)?;
+        let json = serde_json::to_string(&child).unwrap();
+        let parsed: Agent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(child.parent_id, parsed.parent_id);
         assert_eq!(child.window_index, parsed.window_index);
         assert_eq!(child.collapsed, parsed.collapsed);
-        Ok(())
     }
 
     #[test]
-    fn test_serde_backwards_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_serde_backwards_compatibility() {
         // Test that old JSON with removed fields deserializes correctly.
         let old_json = r#"{
             "id": "12345678-1234-1234-1234-123456789012",
@@ -433,12 +441,11 @@ mod tests {
             "updated_at": "2024-01-01T00:00:00Z"
         }"#;
 
-        let agent: Agent = serde_json::from_str(old_json)?;
+        let agent: Agent = serde_json::from_str(old_json).unwrap();
         assert!(agent.parent_id.is_none());
         assert!(agent.window_index.is_none());
         assert_eq!(agent.runtime, AgentRuntime::Host);
         assert!(agent.collapsed); // default value
-        Ok(())
     }
 
     #[test]
@@ -453,5 +460,11 @@ mod tests {
         let mut agent = create_test_agent();
         agent.program = "terminal".to_string();
         assert!(agent.is_terminal_agent());
+    }
+
+    #[test]
+    fn test_is_terminal_agent_false_when_not_terminal() {
+        let agent = create_test_agent();
+        assert!(!agent.is_terminal_agent());
     }
 }

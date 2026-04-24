@@ -205,6 +205,25 @@ mod tests {
     use crate::app::Settings;
     use crate::config::Config;
 
+    fn project_info(item: &SidebarItem<'_>) -> Option<(PathBuf, String, bool, usize)> {
+        match item {
+            SidebarItem::Project(project) => Some((
+                project.root.clone(),
+                project.label.clone(),
+                project.collapsed,
+                project.agent_count,
+            )),
+            SidebarItem::Agent(_) => None,
+        }
+    }
+
+    fn agent_title(item: &SidebarItem<'_>) -> Option<String> {
+        match item {
+            SidebarItem::Agent(agent) => Some(agent.info.agent.title.clone()),
+            SidebarItem::Project(_) => None,
+        }
+    }
+
     #[test]
     fn test_sidebar_items_groups_by_repo_root_and_respects_collapsed_projects() {
         let mut app_data = AppData::new(
@@ -254,37 +273,31 @@ mod tests {
         let items = app_data.sidebar_items();
         assert_eq!(items.len(), 5);
 
-        assert!(matches!(
-            &items[0],
-            SidebarItem::Project(project)
-                if project.root == repo_a
-                    && project.label == "repo-a"
-                    && !project.collapsed
-                    && project.agent_count == 2
-        ));
+        let (root, label, collapsed, agent_count) = project_info(&items[0]).unwrap();
+        assert_eq!(root, repo_a);
+        assert_eq!(label, "repo-a");
+        assert!(!collapsed);
+        assert_eq!(agent_count, 2);
+        assert!(agent_title(&items[0]).is_none());
 
-        assert!(matches!(
-            &items[1],
-            SidebarItem::Agent(agent) if agent.info.agent.title == "root-a"
-        ));
-        assert!(matches!(
-            &items[2],
-            SidebarItem::Agent(agent) if agent.info.agent.title == "child-a"
-        ));
-        assert!(matches!(
-            &items[3],
-            SidebarItem::Project(project)
-                if project.root == repo_b && project.label == "repo-b" && project.agent_count == 1
-        ));
+        assert!(project_info(&items[1]).is_none());
+        assert_eq!(agent_title(&items[1]).as_deref(), Some("root-a"));
+
+        assert!(project_info(&items[2]).is_none());
+        assert_eq!(agent_title(&items[2]).as_deref(), Some("child-a"));
+
+        let (root, label, _collapsed, agent_count) = project_info(&items[3]).unwrap();
+        assert_eq!(root, repo_b);
+        assert_eq!(label, "repo-b");
+        assert_eq!(agent_count, 1);
 
         app_data.ui.collapsed_projects.insert(repo_a);
         let items = app_data.sidebar_items();
         assert_eq!(items.len(), 3);
 
-        assert!(matches!(
-            &items[0],
-            SidebarItem::Project(project) if project.collapsed && project.agent_count == 2
-        ));
+        let (_root, _label, collapsed, agent_count) = project_info(&items[0]).unwrap();
+        assert!(collapsed);
+        assert_eq!(agent_count, 2);
     }
 
     #[test]
@@ -330,6 +343,17 @@ mod tests {
     }
 
     #[test]
+    fn test_project_label_for_root_uses_full_path_when_parent_empty() {
+        let root = std::path::Path::new("/");
+        let base = project_base_name(root);
+        let mut counts = std::collections::HashMap::new();
+        counts.insert(base, 2);
+
+        let label = project_label_for_root(root, &counts);
+        assert_eq!(label, "/");
+    }
+
+    #[test]
     fn test_project_headers_are_sorted_alphabetically() {
         let mut app_data = AppData::new(
             Config::default(),
@@ -372,6 +396,48 @@ mod tests {
     }
 
     #[test]
+    fn test_project_header_sort_uses_label_then_root_as_tiebreaker() {
+        let mut app_data = AppData::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+
+        let first_root = PathBuf::from("/tmp/one/repo");
+        let second_root = PathBuf::from("/var/one/repo");
+
+        let mut second_agent = Agent::new(
+            "second".to_string(),
+            "echo".to_string(),
+            "branch-second".to_string(),
+            PathBuf::from("/var/one/repo-wt"),
+        );
+        second_agent.repo_root = Some(second_root.clone());
+        app_data.storage.add(second_agent);
+
+        let mut first_agent = Agent::new(
+            "first".to_string(),
+            "echo".to_string(),
+            "branch-first".to_string(),
+            PathBuf::from("/tmp/one/repo-wt"),
+        );
+        first_agent.repo_root = Some(first_root.clone());
+        app_data.storage.add(first_agent);
+
+        let roots: Vec<PathBuf> = app_data
+            .sidebar_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                SidebarItem::Project(project) => Some(project.root),
+                SidebarItem::Agent(_) => None,
+            })
+            .collect();
+
+        assert_eq!(roots, vec![first_root, second_root]);
+    }
+
+    #[test]
     fn test_project_headers_fall_back_to_worktree_path() {
         let mut app_data = AppData::new(
             Config::default(),
@@ -388,9 +454,17 @@ mod tests {
         ));
 
         let items = app_data.sidebar_items();
-        assert!(matches!(
-            &items[0],
-            SidebarItem::Project(project) if project.label == "fallback-worktree"
-        ));
+        for (label, expected) in [
+            ("fallback-worktree", true),
+            ("not-fallback-worktree", false),
+        ] {
+            assert_eq!(
+                matches!(
+                    &items[0],
+                    SidebarItem::Project(project) if project.label == label
+                ),
+                expected
+            );
+        }
     }
 }

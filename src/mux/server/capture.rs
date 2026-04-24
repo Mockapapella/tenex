@@ -16,7 +16,7 @@ impl Capture {
         let window = super::super::backend::resolve_window(session)?;
         let result = {
             let guard = window.lock();
-            super::super::render::render_screen_rows(guard.parser.screen())?.join("\n")
+            super::super::render::render_screen_rows(guard.parser.screen()).join("\n")
         };
         Ok(result)
     }
@@ -31,7 +31,7 @@ impl Capture {
         let lines = usize::try_from(lines).map_or(usize::MAX, |value| value);
         let result = {
             let mut guard = window.lock();
-            super::super::render::capture_lines(&mut guard.parser, lines)?
+            super::super::render::capture_lines(&mut guard.parser, lines)
         };
         Ok(result)
     }
@@ -45,7 +45,7 @@ impl Capture {
         let window = super::super::backend::resolve_window(session)?;
         let result = {
             let mut guard = window.lock();
-            super::super::render::capture_lines(&mut guard.parser, usize::MAX)?
+            super::super::render::capture_lines(&mut guard.parser, usize::MAX)
         };
         Ok(result)
     }
@@ -195,8 +195,39 @@ mod tests {
         let _ = Capture::pane_size(session_name);
         let _ = Capture::cursor_position(session_name);
         let _ = Capture::pane_current_command(session_name);
+        let _ = Capture::tail(session_name, 10);
 
         let _ = SessionManager::kill(session_name);
+    }
+
+    #[test]
+    fn test_capture_propagates_missing_session_errors() {
+        let session_name = "tenex-test-capture-missing-session";
+        let _ = SessionManager::kill(session_name);
+
+        let err = Capture::capture_pane(session_name).expect_err("capture pane should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::capture_pane_with_history(session_name, 10)
+            .expect_err("capture pane with history should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::capture_full_history(session_name)
+            .expect_err("capture full history should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::pane_size(session_name).expect_err("pane size should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::cursor_position(session_name).expect_err("cursor position should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::pane_current_command(session_name)
+            .expect_err("pane current command should error");
+        assert!(format!("{err}").contains("Session"));
+
+        let err = Capture::tail(session_name, 10).expect_err("tail should error");
+        assert!(format!("{err}").contains("Session"));
     }
 
     #[test]
@@ -204,5 +235,35 @@ mod tests {
         assert!(!has_visible_text("   \t"));
         assert!(!has_visible_text("\u{1b}[0m   \u{1b}[0m"));
         assert!(has_visible_text(" x "));
+    }
+
+    #[test]
+    fn test_skip_escape_sequence_handles_trailing_escape_byte() {
+        let bytes = b"\x1b";
+        assert_eq!(skip_escape_sequence(bytes, 0), 1);
+    }
+
+    #[test]
+    fn test_skip_escape_sequence_advances_for_unknown_sequence() {
+        let bytes = b"\x1bX";
+        assert_eq!(skip_escape_sequence(bytes, 0), 2);
+    }
+
+    #[test]
+    fn test_skip_escape_sequence_handles_osc_sequences() {
+        let bytes = b"\x1b]0;123";
+        assert_eq!(
+            skip_escape_sequence(bytes, 0),
+            bytes.len().saturating_add(1)
+        );
+    }
+
+    #[test]
+    fn test_skip_escape_sequence_advances_when_csi_missing_terminator() {
+        let bytes = b"\x1b[123";
+        assert_eq!(
+            skip_escape_sequence(bytes, 0),
+            bytes.len().saturating_add(1)
+        );
     }
 }

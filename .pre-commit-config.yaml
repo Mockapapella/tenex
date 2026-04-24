@@ -123,7 +123,17 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy (all targets, all features, deny warnings)
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: bash -c
+        args:
+          - |
+              set -euo pipefail
+              if [ -z "${RUSTC_ICE:-}" ]; then
+                export RUSTC_ICE="${XDG_CACHE_HOME:-$HOME/.cache}/tenex/rustc-ice"
+              fi
+              if [ "${RUSTC_ICE}" != "0" ]; then
+                mkdir -p "$RUSTC_ICE"
+              fi
+              cargo clippy --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
 

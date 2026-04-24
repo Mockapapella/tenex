@@ -92,9 +92,7 @@ pub fn changelog_max_scroll(data: &AppData, state: &ChangelogMode) -> usize {
     let mut wrapped_lines = wrapped_line_count(&state.lines, inner_width);
     if inner_width != 0 && wrapped_lines > visible_height {
         let reserved_width = inner_width.saturating_sub(1);
-        if reserved_width != inner_width {
-            wrapped_lines = wrapped_line_count(&state.lines, reserved_width);
-        }
+        wrapped_lines = wrapped_line_count(&state.lines, reserved_width);
     }
 
     wrapped_lines.saturating_sub(visible_height)
@@ -237,9 +235,6 @@ fn wrap_single_line(line: &str, width: usize) -> Vec<String> {
 
     let first_available = width.saturating_sub(spec.first_prefix.len());
     let subsequent_available = width.saturating_sub(spec.subsequent_prefix.len());
-    if first_available == 0 || subsequent_available == 0 {
-        return chunk_into_width(line, width);
-    }
 
     let mut out = Vec::new();
     let mut current = String::new();
@@ -258,7 +253,8 @@ fn wrap_single_line(line: &str, width: usize) -> Vec<String> {
             if current.is_empty() {
                 if remaining.len() <= available {
                     current.push_str(remaining);
-                    break;
+                    remaining = "";
+                    continue;
                 }
 
                 let (chunk, rest) = split_at_char_boundary(remaining, available);
@@ -284,7 +280,8 @@ fn wrap_single_line(line: &str, width: usize) -> Vec<String> {
             {
                 current.push(' ');
                 current.push_str(remaining);
-                break;
+                remaining = "";
+                continue;
             }
 
             let prefix = if is_first_line {
@@ -298,14 +295,12 @@ fn wrap_single_line(line: &str, width: usize) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
-        let prefix = if is_first_line {
-            spec.first_prefix
-        } else {
-            &spec.subsequent_prefix
-        };
-        out.push(prefixed(prefix, &current));
-    }
+    let prefix = if is_first_line {
+        spec.first_prefix
+    } else {
+        &spec.subsequent_prefix
+    };
+    out.push(prefixed(prefix, &current));
 
     out
 }
@@ -328,10 +323,7 @@ fn split_at_char_boundary(s: &str, max_bytes: usize) -> (&str, &str) {
     }
 
     if cut == 0 {
-        let Some(first_char) = s.chars().next() else {
-            return ("", "");
-        };
-        let cut = first_char.len_utf8();
+        let cut = s.char_indices().nth(1).map_or(s.len(), |(idx, _)| idx);
         return s.split_at(cut);
     }
 
@@ -347,9 +339,6 @@ fn chunk_into_width(mut s: &str, width: usize) -> Vec<String> {
 
     while !s.is_empty() {
         let (chunk, rest) = split_at_char_boundary(s, width);
-        if chunk.is_empty() {
-            break;
-        }
 
         out.push(chunk.to_string());
         s = rest;
@@ -442,6 +431,8 @@ impl ValidIn<HelpMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: HelpMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        #[cfg(test)]
+        super::picker::force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -450,6 +441,8 @@ impl ValidIn<ErrorModalMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ErrorModalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        #[cfg(any(test, coverage))]
+        super::force_infallible_action_error_if_enabled_for_tests()?;
         app_data.ui.clear_error();
         Ok(AppMode::normal())
     }
@@ -459,6 +452,8 @@ impl ValidIn<SuccessModalMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: SuccessModalMode, _app_data: &mut AppData) -> Result<Self::NextState> {
+        #[cfg(any(test, coverage))]
+        super::force_infallible_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -517,6 +512,22 @@ mod tests {
     }
 
     #[test]
+    fn test_changelog_max_scroll_returns_zero_when_inner_width_is_zero() {
+        let mut data = app_data();
+        data.ui.terminal_dimensions = Some((3, 24));
+
+        let state = ChangelogMode {
+            title: "Changelog".to_string(),
+            lines: (0..50)
+                .map(|idx| format!("- This is a long changelog entry {idx}"))
+                .collect(),
+            mark_seen_version: None,
+        };
+
+        assert_eq!(changelog_max_scroll(&data, &state), 0);
+    }
+
+    #[test]
     fn test_terminal_frame_area_uses_preview_dimensions_when_missing_terminal_size() {
         let mut data = app_data();
         data.ui.terminal_dimensions = None;
@@ -551,8 +562,19 @@ mod tests {
 
     #[test]
     fn test_wrap_single_line_returns_line_when_content_is_empty() {
-        let wrapped = wrap_single_line("  -   ", 12);
+        let wrapped = wrap_single_line("  -   ", 5);
         assert_eq!(wrapped, vec!["  -   ".to_string()]);
+    }
+
+    #[test]
+    fn test_wrap_single_line_returns_empty_when_width_zero() {
+        assert!(wrap_single_line("line", 0).is_empty());
+    }
+
+    #[test]
+    fn test_wrap_single_line_collapses_extra_spaces_without_wrapping() {
+        let wrapped = wrap_single_line("- a  b", 5);
+        assert_eq!(wrapped, vec!["- a b".to_string()]);
     }
 
     #[test]
@@ -578,8 +600,49 @@ mod tests {
     }
 
     #[test]
+    fn test_wrap_single_line_splits_digits_only_input() {
+        let wrapped = wrap_single_line("123", 2);
+        assert_eq!(wrapped, vec!["12".to_string(), "3".to_string()]);
+    }
+
+    #[test]
+    fn test_wrap_single_line_supports_asterisk_bullets() {
+        let wrapped = wrap_single_line("* abc def", 6);
+        assert_eq!(wrapped, vec!["* abc".to_string(), "  def".to_string()]);
+    }
+
+    #[test]
+    fn test_wrap_single_line_supports_plus_bullets() {
+        let wrapped = wrap_single_line("+ abc def", 6);
+        assert_eq!(wrapped, vec!["+ abc".to_string(), "  def".to_string()]);
+    }
+
+    #[test]
+    fn test_wrap_single_line_does_not_treat_non_dot_digit_prefix_as_numbered_list() {
+        let wrapped = wrap_single_line("12x one two", 6);
+        assert_eq!(
+            wrapped,
+            vec!["12x".to_string(), "one".to_string(), "two".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_wrap_single_line_does_not_treat_dot_without_space_as_numbered_list() {
+        let wrapped = wrap_single_line("12.a one", 6);
+        assert_eq!(wrapped, vec!["12.a".to_string(), "one".to_string()]);
+    }
+
+    #[test]
     fn test_wrapped_line_count_returns_zero_when_width_zero() {
         assert_eq!(wrapped_line_count(&[String::from("line")], 0), 0);
+    }
+
+    #[test]
+    fn test_wrapped_line_count_includes_empty_lines() {
+        assert_eq!(
+            wrapped_line_count(&[String::new(), String::from("line")], 10),
+            2
+        );
     }
 
     #[test]
@@ -590,7 +653,28 @@ mod tests {
     }
 
     #[test]
+    fn test_split_at_char_boundary_splits_multibyte() {
+        let (left, right) = split_at_char_boundary("✅done", 1);
+        assert_eq!(left, "✅");
+        assert_eq!(right, "done");
+    }
+
+    #[test]
     fn test_chunk_into_width_returns_empty_when_width_zero() {
         assert!(chunk_into_width("abcdef", 0).is_empty());
+    }
+
+    #[test]
+    fn test_wrap_single_line_wraps_indented_content() {
+        let wrapped = wrap_single_line("  hello world from tenex", 10);
+        assert_eq!(
+            wrapped,
+            vec![
+                "  hello".to_string(),
+                "  world".to_string(),
+                "  from".to_string(),
+                "  tenex".to_string()
+            ]
+        );
     }
 }

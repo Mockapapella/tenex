@@ -35,15 +35,7 @@ impl Default for Config {
             // Unit tests should never depend on the presence of an external agent binary (like
             // `claude`) on the host machine. Using a long-running shell command keeps mux sessions
             // alive long enough for follow-up operations in tests.
-            default_program: if cfg!(test) {
-                if cfg!(windows) {
-                    "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string()
-                } else {
-                    "sh -c 'sleep 3600'".to_string()
-                }
-            } else {
-                "claude --allow-dangerously-skip-permissions".to_string()
-            },
+            default_program: default_agent_program(cfg!(test)),
             branch_prefix: "agent/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
@@ -52,26 +44,62 @@ impl Default for Config {
     }
 }
 
+fn default_agent_program(test_mode: bool) -> String {
+    if test_mode {
+        #[cfg(windows)]
+        {
+            return "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string();
+        }
+        #[cfg(not(windows))]
+        {
+            return "sh -c 'sleep 3600'".to_string();
+        }
+    }
+
+    "claude --allow-dangerously-skip-permissions".to_string()
+}
+
 impl Config {
-    fn resolve_state_path_override(raw: &str) -> PathBuf {
-        let candidate = PathBuf::from(raw);
+    fn default_instance_root_from(home_dir: Option<PathBuf>) -> PathBuf {
+        let home_dir = home_dir.unwrap_or_else(|| PathBuf::from("."));
+        home_dir.join(".tenex")
+    }
+
+    fn resolve_state_path_override_with_cwd(candidate: PathBuf, cwd: Option<PathBuf>) -> PathBuf {
         if candidate.is_absolute() {
             return candidate;
         }
 
-        if let Ok(cwd) = std::env::current_dir() {
+        if let Some(cwd) = cwd {
             return cwd.join(candidate);
         }
 
         candidate
     }
 
+    fn resolve_state_path_override(raw: &str) -> PathBuf {
+        let candidate = PathBuf::from(raw);
+        Self::resolve_state_path_override_with_cwd(candidate, std::env::current_dir().ok())
+    }
+
+    fn state_path_from_env_value(raw: &str) -> Option<PathBuf> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        Some(Self::resolve_state_path_override(trimmed))
+    }
+
+    fn state_path_from_env_var(raw: Result<String, std::env::VarError>) -> Option<PathBuf> {
+        raw.ok()
+            .and_then(|value| Self::state_path_from_env_value(&value))
+    }
+
     /// Root directory for Tenex's default instance.
     #[must_use]
     pub fn default_instance_root() -> PathBuf {
-        paths::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".tenex")
+        Self::default_instance_root_from(paths::home_dir())
     }
 
     /// Default location of Tenex's persistent state file.
@@ -87,14 +115,8 @@ impl Config {
     /// fallback) relative to the resulting state file path.
     #[must_use]
     pub fn state_path() -> PathBuf {
-        if let Ok(raw) = std::env::var("TENEX_STATE_PATH") {
-            let trimmed = raw.trim();
-            if !trimmed.is_empty() {
-                return Self::resolve_state_path_override(trimmed);
-            }
-        }
-
-        Self::default_state_path()
+        Self::state_path_from_env_var(std::env::var("TENEX_STATE_PATH"))
+            .unwrap_or_else(Self::default_state_path)
     }
 
     /// Root directory for the current Tenex instance.
@@ -103,10 +125,7 @@ impl Config {
     /// - With `TENEX_STATE_PATH`: the parent directory of the resolved state path
     #[must_use]
     pub fn instance_root() -> PathBuf {
-        Self::state_path()
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf()
+        Self::instance_root_from_state_path(&Self::state_path())
     }
 
     /// Path to the settings file for the current Tenex instance.
@@ -125,6 +144,12 @@ impl Config {
     #[must_use]
     pub fn default_worktree_dir() -> PathBuf {
         Self::instance_root().join("worktrees")
+    }
+
+    fn instance_root_from_state_path(state_path: &Path) -> PathBuf {
+        state_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     }
 
     fn project_dir_name(repo_root: &Path) -> String {
@@ -199,6 +224,14 @@ mod tests {
     }
 
     #[test]
+    fn test_default_agent_program_non_test_returns_claude() {
+        assert_eq!(
+            default_agent_program(false),
+            "claude --allow-dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
     fn test_generate_branch_name() {
         let config = Config::default();
 
@@ -233,10 +266,142 @@ mod tests {
 
     #[test]
     fn test_state_path_relative_env_resolves_from_cwd() {
-        let expected = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("state.json");
+        let expected = std::env::current_dir().unwrap().join("state.json");
+        assert_eq!(
+            Config::resolve_state_path_override_with_cwd(
+                PathBuf::from("state.json"),
+                Some(expected.parent().unwrap().to_path_buf())
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_state_path_relative_env_falls_back_when_cwd_is_missing() {
+        assert_eq!(
+            Config::resolve_state_path_override_with_cwd(PathBuf::from("state.json"), None),
+            PathBuf::from("state.json")
+        );
+    }
+
+    #[test]
+    fn test_state_path_from_env_value_ignores_blank_value() {
+        assert!(Config::state_path_from_env_value("   ").is_none());
+    }
+
+    #[test]
+    fn test_state_path_from_env_var_returns_none_when_env_missing() {
+        assert!(Config::state_path_from_env_var(Err(std::env::VarError::NotPresent)).is_none());
+    }
+
+    #[test]
+    fn test_state_path_from_env_var_returns_none_for_blank_value() {
+        assert!(Config::state_path_from_env_var(Ok("   ".to_string())).is_none());
+    }
+
+    #[test]
+    fn test_state_path_from_env_var_accepts_absolute_path() {
+        let expected = std::env::temp_dir().join("state.json");
+        assert_eq!(
+            Config::state_path_from_env_var(Ok(expected.to_string_lossy().to_string())),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn test_resolve_state_path_override_with_cwd_prefers_absolute_candidate() {
+        let absolute = std::env::temp_dir().join("state.json");
+        let cwd = std::env::temp_dir().join("other");
+        assert_eq!(
+            Config::resolve_state_path_override_with_cwd(absolute.clone(), Some(cwd)),
+            absolute
+        );
+    }
+
+    #[test]
+    fn test_resolve_state_path_override_joins_current_dir_for_relative_path() {
+        let expected = std::env::current_dir().unwrap().join("state.json");
         assert_eq!(Config::resolve_state_path_override("state.json"), expected);
+    }
+
+    #[test]
+    fn test_default_instance_root_from_none_falls_back_to_dot_tenex() {
+        assert_eq!(
+            Config::default_instance_root_from(None),
+            PathBuf::from(".").join(".tenex")
+        );
+    }
+
+    #[test]
+    fn test_default_instance_root_from_some_appends_tenex_dir() {
+        let home = std::env::temp_dir().join("tenex-home");
+        assert_eq!(
+            Config::default_instance_root_from(Some(home.clone())),
+            home.join(".tenex")
+        );
+    }
+
+    #[test]
+    fn test_instance_root_from_state_path_falls_back_when_parent_missing() {
+        #[cfg(windows)]
+        let root = Path::new("C:\\");
+        #[cfg(not(windows))]
+        let root = Path::new("/");
+
+        assert_eq!(
+            Config::instance_root_from_state_path(root),
+            PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn test_instance_root_from_state_path_returns_parent_directory() {
+        let state_path = std::env::temp_dir().join("state.json");
+        assert_eq!(
+            Config::instance_root_from_state_path(&state_path),
+            std::env::temp_dir()
+        );
+    }
+
+    #[test]
+    fn test_project_dir_name_defaults_when_repo_root_missing_file_name() {
+        assert_eq!(Config::project_dir_name(Path::new("")), "project");
+    }
+
+    #[test]
+    fn test_worktree_leaf_dir_name_strips_prefix_and_replaces_slashes() {
+        assert_eq!(
+            Config::worktree_leaf_dir_name("agent/feature/foo", "agent/"),
+            "feature-foo"
+        );
+    }
+
+    #[test]
+    fn test_worktree_leaf_dir_name_falls_back_to_tenex_prefix() {
+        assert_eq!(
+            Config::worktree_leaf_dir_name("tenex/feature/foo", "agent/"),
+            "feature-foo"
+        );
+    }
+
+    #[test]
+    fn test_worktree_leaf_dir_name_preserves_branch_when_no_prefix_matches() {
+        assert_eq!(
+            Config::worktree_leaf_dir_name("feature/foo", "agent/"),
+            "feature-foo"
+        );
+    }
+
+    #[test]
+    fn test_worktree_path_for_repo_root_uses_project_name_and_leaf_name() {
+        let mut config = Config::default();
+        let worktree_dir = std::env::temp_dir().join("tenex-worktrees");
+        config.worktree_dir = worktree_dir.clone();
+
+        assert_eq!(
+            config.worktree_path_for_repo_root(Path::new("repo"), "agent/feature/foo"),
+            worktree_dir.join("repo").join("feature-foo")
+        );
     }
 
     #[test]

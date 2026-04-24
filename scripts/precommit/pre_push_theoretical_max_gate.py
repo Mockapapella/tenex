@@ -33,6 +33,12 @@ DEFAULT_WINDOWS_RUN_ROOT = "~/.cache/tenex-remote-precommit"
 REMOTE_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+if [ -z "${RUSTC_ICE:-}" ]; then
+  export RUSTC_ICE="${XDG_CACHE_HOME:-$HOME/.cache}/tenex/rustc-ice"
+fi
+if [ "${RUSTC_ICE}" != "0" ]; then
+  mkdir -p "$RUSTC_ICE"
+fi
 
 coord_helper="$HOME/.local/bin/tenex-remote-coordination"
 coord_state="${XDG_STATE_HOME:-$HOME/.local/state}/tenex/remote-coordination"
@@ -113,7 +119,7 @@ git -C "$source_repo" worktree add --force --detach "$worktree_dir" "$base_sha"
 cd "$worktree_dir"
 git reset --hard
 git clean -fd
-git apply --binary "$patch_path"
+git apply --binary --allow-empty "$patch_path"
 
 cargo llvm-cov \
   --branch \
@@ -224,11 +230,20 @@ def export_instrumented_summary(
     if not run_cargo_hook.verify_llvm_cov_version(root):
         raise RuntimeError("cargo-llvm-cov version mismatch")
 
+    # Keep the instrumented summary in sync with the later coverage run.
+    #
+    # `run_cargo_hook.py coverage` wipes `target/llvm-cov-target` before collecting coverage, but
+    # this pre-push step previously reused whatever was already present. That could produce
+    # mismatched instrumented totals (for example, branch counts) and fail the theoretical-max
+    # enforcement even when coverage itself was improving.
+    shutil.rmtree(root / "target" / "llvm-cov-target", ignore_errors=True)
+
     state_dir = Path(tempfile.mkdtemp(prefix="tenex-pre-push-"))
     mux_socket = str(state_dir / "mux.sock")
     env = os.environ.copy()
     env["TENEX_STATE_PATH"] = str(state_dir / "state.json")
     env["TENEX_MUX_SOCKET"] = mux_socket
+    run_cargo_hook.configure_rustc_ice(env)
 
     run_cargo_hook.cleanup_hook_muxd(state_dir, mux_socket)
     try:
@@ -284,10 +299,14 @@ def export_coverage_summary(*, root: Path, out_dir: Path) -> Path:
     out_json = out_dir / "llvm-cov-report.summary.json"
     out_gz = out_dir / "llvm-cov-report.summary.json.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
+    run_cargo_hook = load_run_cargo_hook(root)
+    env = os.environ.copy()
+    run_cargo_hook.configure_rustc_ice(env)
 
     result = subprocess.run(
         ["python3", "scripts/precommit/run_cargo_hook.py", "coverage"],
         cwd=root,
+        env=env,
         check=False,
     )
     if result.returncode != 0:
@@ -312,6 +331,7 @@ def export_coverage_summary(*, root: Path, out_dir: Path) -> Path:
             str(out_json),
         ],
         cwd=root,
+        env=env,
         check=False,
     )
     if result.returncode != 0:

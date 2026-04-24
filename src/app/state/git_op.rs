@@ -236,6 +236,22 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
+    use crate::git::BranchInfo;
+
+    fn branch(name: &str, is_remote: bool, remote: Option<&str>) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            full_name: if is_remote {
+                format!("refs/remotes/{}/{}", remote.unwrap_or(""), name)
+            } else {
+                format!("refs/heads/{name}")
+            },
+            is_remote,
+            remote: remote.map(str::to_string),
+            last_commit_time: None,
+        }
+    }
 
     #[test]
     fn test_git_op_state_new() {
@@ -367,5 +383,105 @@ mod tests {
         let mut state = GitOpState::new();
         state.set_target_branch("main".to_string());
         assert_eq!(state.target_branch, "main");
+    }
+
+    #[test]
+    fn test_app_start_rebase_sets_state_and_mode() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("main", false, None)];
+
+        app.start_rebase(agent_id, "feature".to_string(), branches);
+
+        let normal_app = App::default();
+        for (candidate, expected) in [(&app, true), (&normal_app, false)] {
+            assert_eq!(
+                matches!(
+                    &candidate.mode,
+                    crate::state::AppMode::RebaseBranchSelector(_)
+                ),
+                expected
+            );
+        }
+        assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.data.git_op.branch_name, "feature");
+        assert_eq!(
+            app.data.git_op.operation_type,
+            Some(GitOperationType::Rebase)
+        );
+        assert_eq!(app.data.review.branches.len(), 1);
+    }
+
+    #[test]
+    fn test_app_start_merge_sets_state_and_mode() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("main", false, None)];
+
+        app.start_merge(agent_id, "feature".to_string(), branches);
+
+        let normal_app = App::default();
+        for (candidate, expected) in [(&app, true), (&normal_app, false)] {
+            assert_eq!(
+                matches!(
+                    &candidate.mode,
+                    crate::state::AppMode::MergeBranchSelector(_)
+                ),
+                expected
+            );
+        }
+        assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+        assert_eq!(app.data.git_op.branch_name, "feature");
+        assert_eq!(
+            app.data.git_op.operation_type,
+            Some(GitOperationType::Merge)
+        );
+        assert_eq!(app.data.review.branches.len(), 1);
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_sets_local_target() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("main", false, None)];
+
+        app.start_merge(agent_id, "feature".to_string(), branches);
+        assert!(app.confirm_rebase_merge_branch());
+        assert_eq!(app.data.git_op.target_branch, "main");
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_formats_remote_target_with_remote_name() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("feature", true, Some("origin"))];
+
+        app.start_rebase(agent_id, "current".to_string(), branches);
+        assert!(app.confirm_rebase_merge_branch());
+        assert_eq!(app.data.git_op.target_branch, "origin/feature");
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_uses_remote_name_fallback_when_missing() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("feature", true, None)];
+
+        app.start_rebase(agent_id, "current".to_string(), branches);
+        assert!(app.confirm_rebase_merge_branch());
+        assert_eq!(app.data.git_op.target_branch, "feature");
+    }
+
+    #[test]
+    fn test_confirm_rebase_merge_branch_returns_false_without_selection() {
+        let mut app = App::default();
+        let agent_id = uuid::Uuid::new_v4();
+        let branches = vec![branch("main", false, None)];
+
+        app.start_merge(agent_id, "feature".to_string(), branches);
+        app.data.review.filter = "nope".to_string();
+
+        assert!(!app.confirm_rebase_merge_branch());
+        assert!(app.data.git_op.target_branch.is_empty());
     }
 }

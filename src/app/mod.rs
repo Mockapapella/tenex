@@ -17,3 +17,8 @@ pub use state::{
     App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, MuxdVersionMismatchInfo,
     PaneActivityDigestMode, PreviewSelectionPoint, Tab, WorktreeConflictInfo,
 };
+
+#[cfg(test)]
+pub(crate) fn set_gh_binary_override_for_tests(path: std::path::PathBuf) {
+    handlers::set_gh_binary_override_for_tests(path);
+}

@@ -32,6 +32,8 @@ const GIT_REPO_DIR_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_GIT_REPO_DIR";
 const WORKTREE_ROOT_VAR: &str = "TENEX_DOCKER_RUNTIME_SMOKE_WORKTREE_ROOT";
 #[cfg(unix)]
 const GIT_ROOT_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_SMOKE_GIT_ROOT_CHILD";
+#[cfg(unix)]
+const TOGGLE_DOCKER_FAILURE_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_TOGGLE_DOCKER_FAILURE_CHILD";
 
 #[cfg(unix)]
 const WORKER_DOCKERFILE_TEMPLATE: &str = include_str!("../docker/worker.Dockerfile");
@@ -141,6 +143,37 @@ exit 0
             state = state.display(),
             layout_hash = current_container_layout_hash(),
         ),
+    )?;
+    let mut perms = fs::metadata(&script)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script, perms)?;
+    Ok(script)
+}
+
+#[cfg(unix)]
+fn write_version_fail_docker_script(dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("docker");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+	set -eu
+	if [ "$1" = "version" ]; then
+	  scenario="$TENEX_DOCKER_SCENARIO"
+	  if [ -z "$scenario" ]; then
+	    scenario="ok"
+	  fi
+	  case "$scenario" in
+	    ok) exit 0 ;;
+	    stderr) echo 'stderr failure' >&2; exit 1 ;;
+	    stdout) echo 'stdout failure'; exit 1 ;;
+	    empty) exit 1 ;;
+	    *) exit 1 ;;
+  esac
+fi
+exit 0
+"#,
     )?;
     let mut perms = fs::metadata(&script)?.permissions();
     perms.set_mode(0o755);
@@ -593,6 +626,101 @@ fn test_codex_settings_sets_expected_fields() {
     assert_eq!(settings.agent_program, tenex::app::AgentProgram::Codex);
     assert!(settings.docker_for_new_roots);
 }
+
+#[cfg(unix)]
+#[test]
+fn test_toggle_docker_reports_docker_version_failures() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os(TOGGLE_DOCKER_FAILURE_CHILD_FLAG).is_some() {
+        let expected_detail =
+            std::env::var("TENEX_DOCKER_EXPECT_DETAIL").unwrap_or_else(|_| String::new());
+        let state_path = tempfile::NamedTempFile::new()?.into_temp_path();
+        let mut app = tenex::App::new(
+            tenex::config::Config::default(),
+            tenex::agent::Storage::with_path(state_path.to_path_buf()),
+            codex_settings(false),
+            false,
+        );
+
+        app.data.input.buffer = "/toggle_docker".to_string();
+        let mode = app.data.submit_slash_command_palette();
+        let tenex::AppMode::ErrorModal(error) = mode else {
+            return Err(format!("Expected ErrorModal, got {mode:?}").into());
+        };
+        assert!(
+            error
+                .message
+                .contains("Cannot enable Docker for new root agents"),
+            "unexpected error message: {}",
+            error.message
+        );
+        if !expected_detail.is_empty() {
+            assert!(
+                error.message.contains(&expected_detail),
+                "expected {expected_detail:?} in message: {}",
+                error.message
+            );
+        }
+
+        return Ok(());
+    }
+
+    let temp = TempDir::new()?;
+    let docker_dir = temp.path().join("docker-bin");
+    let missing_dir = temp.path().join("missing-bin");
+    fs::create_dir_all(&docker_dir)?;
+    fs::create_dir_all(&missing_dir)?;
+    write_version_fail_docker_script(&docker_dir)?;
+
+    let current_exe = std::env::current_exe()?;
+
+    let scenarios = [
+        (
+            "stderr",
+            "stderr failure",
+            docker_dir.to_string_lossy().to_string(),
+        ),
+        (
+            "stdout",
+            "stdout failure",
+            docker_dir.to_string_lossy().to_string(),
+        ),
+        (
+            "empty",
+            "the Docker daemon may be unavailable",
+            docker_dir.to_string_lossy().to_string(),
+        ),
+        (
+            "missing",
+            "Docker is not installed or not on PATH",
+            missing_dir.to_string_lossy().to_string(),
+        ),
+    ];
+
+    for (scenario, expected_detail, path_override) in scenarios {
+        let output = Command::new(&current_exe)
+            .arg("--exact")
+            .arg("test_toggle_docker_reports_docker_version_failures")
+            .arg("--nocapture")
+            .env(TOGGLE_DOCKER_FAILURE_CHILD_FLAG, "1")
+            .env("TENEX_DOCKER_SCENARIO", scenario)
+            .env("TENEX_DOCKER_EXPECT_DETAIL", expected_detail)
+            .env("PATH", path_override)
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "child test failed for scenario {scenario}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+#[test]
+fn test_toggle_docker_reports_docker_version_failures() {}
 
 #[test]
 fn test_docker_root_agent_stages_ssh_home_in_integration_path()

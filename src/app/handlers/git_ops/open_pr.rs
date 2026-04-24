@@ -8,17 +8,41 @@ use crate::state::{AppMode, ConfirmPushForPRMode, ErrorModalMode};
 
 use super::super::Actions;
 
-#[cfg(test)]
-use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::OnceLock;
+use std::cell::RefCell;
+
+thread_local! {
+    static GH_BINARY_OVERRIDE: RefCell<std::ffi::OsString> = RefCell::new(std::ffi::OsString::from("gh"));
+}
 
 #[cfg(test)]
-static GH_BINARY_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+pub(super) fn set_gh_binary_override(path: std::path::PathBuf) {
+    GH_BINARY_OVERRIDE.with(|value| {
+        let _ = value.replace(path.into_os_string());
+    });
+}
 
 #[cfg(test)]
-pub(super) fn set_gh_binary_override(path: PathBuf) {
-    let _ = GH_BINARY_OVERRIDE.set(path);
+pub(super) fn with_gh_binary_override<T>(
+    program: impl Into<std::ffi::OsString>,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct GhBinaryOverrideGuard {
+        previous: std::ffi::OsString,
+    }
+
+    impl Drop for GhBinaryOverrideGuard {
+        fn drop(&mut self) {
+            GH_BINARY_OVERRIDE.with(|value| {
+                let _ = value.replace(self.previous.clone());
+            });
+        }
+    }
+
+    GH_BINARY_OVERRIDE.with(|value| {
+        let previous = value.replace(program.into());
+        let _guard = GhBinaryOverrideGuard { previous };
+        f()
+    })
 }
 
 impl Actions {
@@ -253,20 +277,9 @@ impl Actions {
         );
 
         // Use gh pr create with --web flag to open in browser
-        let gh = {
-            #[cfg(test)]
-            {
-                GH_BINARY_OVERRIDE
-                    .get()
-                    .map_or_else(|| std::ffi::OsStr::new("gh"), |path| path.as_os_str())
-            }
-            #[cfg(not(test))]
-            {
-                std::ffi::OsStr::new("gh")
-            }
-        };
+        let gh = GH_BINARY_OVERRIDE.with(|value| value.borrow().clone());
 
-        let output = std::process::Command::new(gh)
+        let output = std::process::Command::new(&gh)
             .args(["pr", "create", "--web", "--base", &base_branch])
             .current_dir(&worktree_path)
             .output();
@@ -291,5 +304,298 @@ impl Actions {
 
         app_data.git_op.clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::App;
+    use crate::agent::{Agent, Storage};
+    use crate::app::Settings;
+    use crate::config::Config;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+    use tempfile::TempDir;
+
+    fn create_test_app() -> (App, NamedTempFile) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        (
+            App::new(Config::default(), storage, Settings::default(), false),
+            temp_file,
+        )
+    }
+
+    #[test]
+    fn test_open_pr_flow_propagates_has_unpushed_errors() {
+        let (mut app, _temp) = create_test_app();
+        let missing_worktree_path = std::env::temp_dir().join(format!(
+            "tenex-open-pr-missing-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        assert!(!missing_worktree_path.exists());
+
+        let agent = Agent::new(
+            "agent".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            missing_worktree_path,
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.select_agent_by_id(agent_id);
+
+        let err = Actions::open_pr_flow(&mut app.data).expect_err("expected open_pr_flow to fail");
+        assert!(err.to_string().contains("Failed to check remote branch"));
+    }
+
+    #[cfg(unix)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "Matches the hook signature used by write_fake_script_with_hooks."
+    )]
+    fn ok_hook(_: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn write_fake_script(dir: &Path, name: &str, body: &str) -> Result<PathBuf> {
+        write_fake_script_with_hooks(dir, name, body, ok_hook, ok_hook)
+    }
+
+    #[cfg(unix)]
+    fn write_fake_script_with_hooks<F, G>(
+        dir: &Path,
+        name: &str,
+        body: &str,
+        after_write: F,
+        after_metadata: G,
+    ) -> Result<PathBuf>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+        G: FnOnce(&Path) -> Result<()>,
+    {
+        let script = dir.join(name);
+        fs::write(&script, body)?;
+        after_write(&script)?;
+
+        let mut perms = fs::metadata(&script)?.permissions();
+        after_metadata(&script)?;
+
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms)?;
+        Ok(script)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_has_unpushed_commits_reports_error_when_rev_list_spawn_fails() {
+        let worktree = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let script =
+            write_fake_script(temp.path(), "git", "#!/bin/sh\nrm -- \"$0\"\nexit 0\n").unwrap();
+
+        let err = crate::git::with_git_program_override_for_tests(script, || {
+            Actions::has_unpushed_commits(worktree.path(), "feature")
+        })
+        .expect_err("expected rev-list spawn to fail");
+
+        assert!(err.to_string().contains("Failed to count unpushed commits"));
+    }
+
+    #[test]
+    fn test_execute_push_and_open_pr_reports_error_when_push_spawn_fails() {
+        let (mut app, _temp) = create_test_app();
+        let worktree = TempDir::new().unwrap();
+
+        let agent = Agent::new(
+            "agent".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            worktree.path().to_path_buf(),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+
+        app.data
+            .git_op
+            .start_open_pr(agent_id, "feature".to_string(), "main".to_string(), true);
+
+        let missing_program = worktree.path().join("git-missing");
+        let err = crate::git::with_git_program_override_for_tests(missing_program, || {
+            Actions::execute_push_and_open_pr(&mut app.data)
+        })
+        .expect_err("expected push spawn to fail");
+
+        assert!(err.to_string().contains("Failed to push to remote"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_open_pr_in_browser_success_sets_status_and_clears_state() {
+        let (mut app, _temp) = create_test_app();
+        let worktree = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_script(temp.path(), "gh", "#!/bin/sh\nexit 0\n").unwrap();
+
+        let agent = Agent::new(
+            "agent".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            worktree.path().to_path_buf(),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+
+        app.data
+            .git_op
+            .start_open_pr(agent_id, "feature".to_string(), "main".to_string(), false);
+
+        with_gh_binary_override(script, || Actions::open_pr_in_browser(&mut app.data)).unwrap();
+
+        let message = app.data.ui.status_message.unwrap_or_default();
+        assert!(message.contains("Opening PR:"));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.base_branch.is_empty());
+    }
+
+    #[test]
+    fn test_open_pr_in_browser_reports_error_when_gh_missing_and_clears_state() {
+        let (mut app, _temp) = create_test_app();
+        let worktree = TempDir::new().unwrap();
+
+        let agent = Agent::new(
+            "agent".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            worktree.path().to_path_buf(),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+
+        app.data
+            .git_op
+            .start_open_pr(agent_id, "feature".to_string(), "main".to_string(), false);
+
+        let missing = worktree.path().join("gh-missing");
+        let err = with_gh_binary_override(missing, || Actions::open_pr_in_browser(&mut app.data))
+            .expect_err("expected missing gh binary to fail");
+
+        assert!(
+            err.to_string()
+                .contains("gh CLI not found. Install it with: brew install gh")
+        );
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.base_branch.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_succeeds_and_sets_permissions() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_script(temp.path(), "git", "#!/bin/sh\nexit 0\n").unwrap();
+
+        let meta = fs::metadata(&script).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_reports_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let missing_dir = temp.path().join("missing");
+
+        let err = write_fake_script(&missing_dir, "git", "#!/bin/sh\nexit 0\n")
+            .expect_err("expected write to fail");
+        let io_err = err
+            .downcast_ref::<std::io::Error>()
+            .expect("expected io error");
+        assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_reports_metadata_errors() {
+        let temp = TempDir::new().unwrap();
+
+        let err = write_fake_script_with_hooks(
+            temp.path(),
+            "git",
+            "#!/bin/sh\nexit 0\n",
+            |script| {
+                fs::remove_file(script).unwrap();
+                Ok(())
+            },
+            ok_hook,
+        )
+        .expect_err("expected metadata to fail");
+        let io_err = err
+            .downcast_ref::<std::io::Error>()
+            .expect("expected io error");
+        assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_reports_set_permissions_errors() {
+        let temp = TempDir::new().unwrap();
+
+        let err = write_fake_script_with_hooks(
+            temp.path(),
+            "git",
+            "#!/bin/sh\nexit 0\n",
+            |_| Ok(()),
+            |script| {
+                fs::remove_file(script).unwrap();
+                Ok(())
+            },
+        )
+        .expect_err("expected set_permissions to fail");
+        let io_err = err
+            .downcast_ref::<std::io::Error>()
+            .expect("expected io error");
+        assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_reports_after_write_hook_errors() {
+        let temp = TempDir::new().unwrap();
+
+        let err = write_fake_script_with_hooks(
+            temp.path(),
+            "git",
+            "#!/bin/sh\nexit 0\n",
+            |_| anyhow::bail!("after_write failed"),
+            ok_hook,
+        )
+        .expect_err("expected after_write hook to fail");
+        assert!(err.to_string().contains("after_write failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_fake_script_reports_after_metadata_hook_errors() {
+        let temp = TempDir::new().unwrap();
+
+        let err = write_fake_script_with_hooks(
+            temp.path(),
+            "git",
+            "#!/bin/sh\nexit 0\n",
+            ok_hook,
+            |_| anyhow::bail!("after_metadata failed"),
+        )
+        .expect_err("expected after_metadata hook to fail");
+        assert!(err.to_string().contains("after_metadata failed"));
     }
 }

@@ -41,7 +41,11 @@ fn runtime_for_conflict(
         .storage
         .iter()
         .find(|agent| {
-            agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path
+            if agent.branch != conflict.branch {
+                return false;
+            }
+
+            agent.worktree_path == conflict.worktree_path
         })
         .map(|agent| agent.runtime)
 }
@@ -58,9 +62,10 @@ impl Actions {
     fn prepare_agent_for_launch(app_data: &mut AppData, agent: &mut Agent) {
         if crate::conversation::detect_agent_cli(&agent.program)
             == crate::conversation::AgentCli::Claude
-            && agent.conversation_id.is_none()
         {
-            agent.conversation_id = Some(agent.id.to_string());
+            if agent.conversation_id.is_none() {
+                agent.conversation_id = Some(agent.id.to_string());
+            }
         }
 
         if agent.is_root() {
@@ -108,7 +113,8 @@ impl Actions {
             agent,
             crate::runtime::AgentLaunch::Spawn { prompt },
             &app_data.settings,
-        )?;
+        );
+        let command = command?;
         let started_at = SystemTime::now();
         self.session_manager
             .create(&agent.mux_session, &agent.worktree_path, Some(&command))?;
@@ -129,14 +135,16 @@ impl Actions {
             agent,
             crate::runtime::AgentLaunch::Spawn { prompt },
             &app_data.settings,
-        )?;
+        );
+        let command = command?;
         let started_at = SystemTime::now();
         let actual_index = self.session_manager.create_window(
             &agent.mux_session,
             title,
             &agent.worktree_path,
             Some(&command),
-        )?;
+        );
+        let actual_index = actual_index?;
         Self::finish_agent_launch(app_data, agent, started_at);
         let target = SessionManager::window_target(&agent.mux_session, actual_index);
         self.resize_target_to_preview(app_data, &target);
@@ -159,10 +167,11 @@ impl Actions {
     ) -> Result<AppMode> {
         debug!(title, prompt, "Creating new agent");
 
+        let current_dir = std::env::current_dir().ok();
         let repo_path = app_data
             .selected_project_root()
             .or_else(|| app_data.cwd_project_root.clone())
-            .or_else(|| std::env::current_dir().ok())
+            .or(current_dir)
             .context("Failed to resolve target directory")?;
         let Ok(repo) = git::open_repository(&repo_path) else {
             self.create_agent_in_plain_dir(app_data, title, prompt, &repo_path)?;
@@ -176,11 +185,8 @@ impl Actions {
         let worktree_mgr = WorktreeManager::new(&repo);
 
         // Check if worktree/branch already exists - prompt user for action
-        if worktree_mgr.exists(&branch) {
+        if let Some(conflict_worktree_path) = worktree_mgr.worktree_path(&branch) {
             debug!(branch, "Worktree already exists, prompting user");
-            let conflict_worktree_path = worktree_mgr
-                .worktree_path(&branch)
-                .unwrap_or_else(|| worktree_path.clone());
 
             // Get current HEAD info for new worktree context
             let (current_branch, current_commit) = worktree_mgr
@@ -255,11 +261,12 @@ impl Actions {
         let worktree_mgr = WorktreeManager::new(&repo);
         let runtime = crate::runtime::new_root_runtime(&app_data.settings);
 
-        worktree_mgr.create_with_new_branch_with_options(
+        let created = worktree_mgr.create_with_new_branch_with_options(
             worktree_path,
             branch,
             Self::root_worktree_create_options(runtime),
-        )?;
+        );
+        created?;
 
         let program = app_data.agent_spawn_command();
         let mut agent = Agent::new(
@@ -325,13 +332,15 @@ impl Actions {
         conflict: &WorktreeConflictInfo,
     ) -> usize {
         let mut ids_to_remove: Vec<Uuid> = Vec::new();
-        let mut sessions_to_consider: HashSet<String> = HashSet::new();
         let mut runtime_agents_by_session: HashMap<String, Agent> = HashMap::new();
 
         for agent in app_data.storage.iter() {
-            if agent.branch == conflict.branch && agent.worktree_path == conflict.worktree_path {
+            if agent.branch != conflict.branch {
+                continue;
+            }
+
+            if agent.worktree_path == conflict.worktree_path {
                 ids_to_remove.push(agent.id);
-                sessions_to_consider.insert(agent.mux_session.clone());
                 runtime_agents_by_session
                     .entry(agent.mux_session.clone())
                     .or_insert_with(|| agent.clone());
@@ -344,36 +353,35 @@ impl Actions {
 
         let ids_set: HashSet<Uuid> = ids_to_remove.iter().copied().collect();
 
-        for session in sessions_to_consider {
+        for (session, runtime_agent) in runtime_agents_by_session {
             let session_used_elsewhere = app_data
                 .storage
                 .iter()
-                .any(|agent| agent.mux_session == session && !ids_set.contains(&agent.id));
-            if session_used_elsewhere {
-                continue;
-            }
-            let _ = self.session_manager.kill(&session);
-            if let Some(agent) = runtime_agents_by_session.get(&session)
-                && let Err(err) = crate::runtime::cleanup_runtime(agent)
-            {
-                warn!(
-                    session = %session,
-                    error = %err,
-                    "Failed to clean up runtime for conflicting agent"
-                );
+                .any(|agent| {
+                    if agent.mux_session != session {
+                        return false;
+                    }
+
+                    !ids_set.contains(&agent.id)
+                });
+
+            if !session_used_elsewhere {
+                let _ = self.session_manager.kill(&session);
+                if let Err(err) = crate::runtime::cleanup_runtime(&runtime_agent) {
+                    warn!(
+                        session = %session,
+                        error = %err,
+                        "Failed to clean up runtime for conflicting agent"
+                    );
+                }
             }
         }
 
-        let mut removed = 0;
+        let removed = ids_to_remove.len();
         for id in ids_to_remove {
-            if app_data.storage.remove(id).is_some() {
-                removed += 1;
-            }
+            app_data.storage.remove(id);
         }
-
-        if removed > 0 {
-            app_data.validate_selection();
-        }
+        app_data.validate_selection();
 
         removed
     }
@@ -483,14 +491,15 @@ impl Actions {
             self.spawn_children(app_data, conflict.prompt.as_deref())
         } else {
             // Single agent creation
-            self.create_agent_internal(
+            let created = self.create_agent_internal(
                 app_data,
                 &conflict.repo_root,
                 &conflict.title,
                 conflict.prompt.as_deref(),
                 &conflict.branch,
                 &conflict.worktree_path,
-            )?;
+            );
+            created?;
             Ok(AppMode::normal())
         }
     }
@@ -523,16 +532,17 @@ impl Actions {
 
             // Child agent: kill just this window and its descendants
             // Get the root's session for killing windows
-            let root = app_data.storage.root_ancestor(agent_id);
-            let root_session = root.map_or_else(|| session.clone(), |r| r.mux_session.clone());
-            let root_id = root.map(|r| r.id);
+            let root = app_data.storage.root_ancestor(agent_id).unwrap_or(agent);
+            let root_session = root.mux_session.clone();
+            let root_id = root.id;
 
             // Collect all window indices being deleted
             let mut deleted_indices: Vec<u32> = Vec::new();
             let descendants = app_data.storage.descendants(agent_id);
             for desc in &descendants {
-                if let Some(idx) = desc.window_index {
-                    deleted_indices.push(idx);
+                match desc.window_index {
+                    Some(idx) => deleted_indices.push(idx),
+                    None => {}
                 }
             }
 
@@ -550,14 +560,12 @@ impl Actions {
 
             // Update window indices for remaining agents under the same root
             // When the mux renumbers windows, indices shift down
-            if let Some(rid) = root_id {
-                super::window::adjust_window_indices_after_deletion(
-                    app_data,
-                    rid,
-                    agent_id,
-                    &deleted_indices,
-                );
-            }
+            super::window::adjust_window_indices_after_deletion(
+                app_data,
+                root_id,
+                agent_id,
+                &deleted_indices,
+            );
 
             // Remove agent and all descendants from storage
             app_data.storage.remove_with_descendants(agent_id);
@@ -665,7 +673,8 @@ impl Actions {
                 branch: target.branch.clone(),
                 worktree_path: target.worktree_path,
             },
-        )?;
+        );
+        let new_id = new_id?;
 
         app_data.select_agent_by_id(new_id);
         Self::clear_switch_branch_state(app_data);
@@ -699,10 +708,6 @@ impl Actions {
         let Some(branch) = Self::resolve_target_branch(&repo, &branch_mgr, target_raw)? else {
             return Ok(None);
         };
-
-        if !branch_mgr.exists(&branch) {
-            return Ok(None);
-        }
 
         let worktree_path =
             Self::ensure_worktree_for_branch(config, repo_root, &worktree_mgr, &branch, runtime)?;
@@ -752,18 +757,17 @@ impl Actions {
         branch: &str,
         runtime: AgentRuntime,
     ) -> Result<std::path::PathBuf> {
-        if worktree_mgr.exists(branch) {
-            return Ok(worktree_mgr
-                .worktree_path(branch)
-                .unwrap_or_else(|| config.worktree_path_for_repo_root(repo_root, branch)));
+        if let Some(path) = worktree_mgr.worktree_path(branch) {
+            return Ok(path);
         }
 
         let worktree_path = config.worktree_path_for_repo_root(repo_root, branch);
-        worktree_mgr.create_with_options(
+        let created = worktree_mgr.create_with_options(
             &worktree_path,
             branch,
             Self::root_worktree_create_options(runtime),
-        )?;
+        );
+        created?;
         Ok(worktree_path)
     }
 
@@ -878,12 +882,16 @@ impl Actions {
         let root = app_data
             .storage
             .root_ancestor(selected_id)
-            .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
+            .unwrap_or(selected);
 
         let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
         let branch = root.branch.clone();
         let root_id = root.id;
+        let repo_root = root.repo_root.clone();
+        let workspace_kind = root.workspace_kind;
+        let runtime = root.runtime;
+        let runtime_scope = root.effective_runtime_scope().to_string();
 
         let title = app_data.spawn.next_terminal_name();
         debug!(title, startup_command, "Creating new terminal");
@@ -901,13 +909,13 @@ impl Actions {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index,
-                repo_root: root.repo_root.clone(),
+                repo_root,
             },
         );
         terminal.is_terminal = true;
-        terminal.workspace_kind = root.workspace_kind;
-        terminal.runtime = root.runtime;
-        terminal.runtime_scope = root.effective_runtime_scope().to_string();
+        terminal.workspace_kind = workspace_kind;
+        terminal.runtime = runtime;
+        terminal.runtime_scope = runtime_scope;
 
         crate::runtime::ensure_runtime_ready(&terminal, &app_data.settings)?;
         let terminal_command =
@@ -917,7 +925,8 @@ impl Actions {
             &title,
             &worktree_path,
             terminal_command.as_deref(),
-        )?;
+        );
+        let actual_index = actual_index?;
         let window_target = SessionManager::window_target(&root_session, actual_index);
         self.resize_target_to_preview(app_data, &window_target);
 
@@ -928,16 +937,16 @@ impl Actions {
         if terminal_command.is_none()
             && let Some(cmd) = startup_command
         {
-            self.session_manager
-                .send_keys_and_submit(&window_target, cmd)?;
+            // Best-effort convenience: if input fails to send, still keep the terminal.
+            let _ = self
+                .session_manager
+                .send_keys_and_submit(&window_target, cmd);
         }
 
         app_data.storage.add(terminal);
 
-        // Expand the parent to show the new terminal
-        if let Some(parent) = app_data.storage.get_mut(root_id) {
-            parent.collapsed = false;
-        }
+        // Expand the parent to show the new terminal.
+        app_data.storage.set_collapsed(root_id, false);
 
         app_data.storage.save()?;
 
@@ -952,7 +961,7 @@ mod tests {
     use super::*;
     use crate::App;
     use crate::agent::{AgentRuntime, Storage, WorkspaceKind};
-    use crate::app::Settings;
+    use crate::app::{AgentProgram, Settings};
     use crate::config::Config;
     use crate::state::{AppMode, ConfirmAction, ConfirmingMode};
     #[cfg(unix)]
@@ -964,13 +973,221 @@ mod tests {
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
 
-    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
-        let temp_file = NamedTempFile::new()?;
+    fn create_test_app() -> (App, NamedTempFile) {
+        let temp_file = NamedTempFile::new().expect("create temp state file");
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((
+        (
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
-        ))
+        )
+    }
+
+    fn canonicalize_or_self(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, f)
+    }
+
+    fn mode_is_error_modal(mode: &AppMode) -> bool {
+        matches!(mode, AppMode::ErrorModal(_))
+    }
+
+    fn mode_is_error_modal_containing(mode: &AppMode, needle: &str) -> bool {
+        matches!(mode, AppMode::ErrorModal(modal) if modal.message.contains(needle))
+    }
+
+    fn mode_is_normal(mode: &AppMode) -> bool {
+        matches!(mode, AppMode::Normal(_))
+    }
+
+    fn mode_is_worktree_conflict(mode: &AppMode) -> bool {
+        matches!(
+            mode,
+            AppMode::Confirming(ConfirmingMode {
+                action: ConfirmAction::WorktreeConflict,
+            })
+        )
+    }
+
+    fn conflict_info(branch: &str, worktree_path: PathBuf) -> WorktreeConflictInfo {
+        WorktreeConflictInfo {
+            title: "conflict".to_string(),
+            prompt: None,
+            branch: branch.to_string(),
+            worktree_path,
+            repo_root: PathBuf::from("/tmp"),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: None,
+        }
+    }
+
+    #[test]
+    fn test_app_mode_helpers_cover_both_outcomes() {
+        let normal = AppMode::normal();
+        let error: AppMode = ErrorModalMode {
+            message: "boom".to_string(),
+        }
+        .into();
+        let conflict: AppMode = ConfirmingMode {
+            action: ConfirmAction::WorktreeConflict,
+        }
+        .into();
+        assert!(mode_is_normal(&normal));
+        assert!(!mode_is_normal(&error));
+        assert!(mode_is_error_modal(&error));
+        assert!(!mode_is_error_modal(&normal));
+        assert!(mode_is_error_modal_containing(&error, "boom"));
+        assert!(!mode_is_error_modal_containing(&error, "nope"));
+        assert!(!mode_is_error_modal_containing(&normal, "boom"));
+        assert!(mode_is_worktree_conflict(&conflict));
+        assert!(!mode_is_worktree_conflict(&normal));
+    }
+
+    #[test]
+    fn test_runtime_for_conflict_returns_none_when_agent_worktree_differs() {
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let agent_path = worktree.path().join("agent");
+        let conflict_path = worktree.path().join("conflict");
+
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            test_sleep_program(),
+            "branch".to_string(),
+            agent_path,
+        );
+        agent.runtime = AgentRuntime::Docker;
+        app.data.storage.add(agent);
+
+        let conflict = conflict_info("branch", conflict_path);
+        assert_eq!(runtime_for_conflict(&app.data, &conflict), None);
+    }
+
+    #[test]
+    fn test_runtime_for_conflict_returns_none_when_branch_differs() {
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let path = worktree.path().to_path_buf();
+
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            test_sleep_program(),
+            "branch-a".to_string(),
+            path.clone(),
+        );
+        agent.runtime = AgentRuntime::Docker;
+        app.data.storage.add(agent);
+
+        let conflict = conflict_info("branch-b", path);
+        assert_eq!(runtime_for_conflict(&app.data, &conflict), None);
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_sets_claude_conversation_id_when_missing() {
+        let (mut app, _temp) = create_test_app();
+
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "claude".to_string(),
+            "muster/agent".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let expected = agent.id.to_string();
+
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+        assert_eq!(agent.conversation_id, Some(expected.clone()));
+
+        agent.conversation_id = Some("fixed".to_string());
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+        assert_eq!(agent.conversation_id, Some("fixed".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_for_conflict_returns_runtime_when_agent_matches() {
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let path = worktree.path().to_path_buf();
+
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            test_sleep_program(),
+            "branch".to_string(),
+            path.clone(),
+        );
+        agent.runtime = AgentRuntime::Docker;
+        app.data.storage.add(agent);
+
+        let conflict = conflict_info("branch", path);
+        assert_eq!(
+            runtime_for_conflict(&app.data, &conflict),
+            Some(AgentRuntime::Docker)
+        );
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_sets_conversation_id_for_claude_when_missing() {
+        let (mut app, _temp) = create_test_app();
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.conversation_id = None;
+
+        let expected = agent.id.to_string();
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+        assert_eq!(agent.conversation_id.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_does_not_overwrite_existing_conversation_id() {
+        let (mut app, _temp) = create_test_app();
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "claude".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.conversation_id = Some("existing".to_string());
+
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+        assert_eq!(agent.conversation_id.as_deref(), Some("existing"));
+    }
+
+    #[test]
+    fn test_finish_agent_launch_codex_path_does_not_panic() {
+        let (app, _temp) = create_test_app();
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "codex".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        Actions::finish_agent_launch(&app.data, &mut agent, SystemTime::now());
+    }
+
+    #[test]
+    fn test_resize_target_to_preview_attempts_resize_when_dimensions_known() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 24));
+
+        handler.resize_target_to_preview(&app.data, "missing-session");
     }
 
     fn test_sleep_program() -> String {
@@ -985,63 +1202,82 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
+    fn write_fake_docker_script(temp: &TempDir, body: &str) -> PathBuf {
         let script = temp.path().join("docker");
-        fs::write(&script, body)?;
-        let mut perms = fs::metadata(&script)?.permissions();
+        fs::write(&script, body).expect("write fake docker script");
+        let mut perms = fs::metadata(&script)
+            .expect("load fake docker script metadata")
+            .permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&script, perms)?;
-        Ok(script)
+        fs::set_permissions(&script, perms).expect("set fake docker script permissions");
+        script
     }
 
-    fn init_repo() -> Result<(TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
+    fn window_output_contains(window_target: &str, needle: &str, attempts: usize) -> bool {
+        let capture = crate::mux::OutputCapture::new();
+        for _ in 0..attempts {
+            let lines = capture
+                .tail(window_target, 25)
+                .expect("capture output tail");
+            if lines.iter().any(|line| line.contains(needle)) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    fn init_repo() -> (TempDir, std::path::PathBuf) {
         use git2::{Repository, RepositoryInitOptions, Signature};
 
-        let dir = TempDir::new()?;
+        let dir = TempDir::new().expect("create repo tempdir");
         let path = dir.path().to_path_buf();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
 
-        let repo = Repository::init_opts(&path, &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(&path, &init_opts).expect("init repo");
+        repo.set_head("refs/heads/master").expect("set HEAD");
         {
-            let mut config = repo.config()?;
-            config.set_str("user.name", "Test")?;
-            config.set_str("user.email", "test@test.com")?;
-            config.set_str("commit.gpgsign", "false")?;
+            let mut config = repo.config().expect("open repo config");
+            config.set_str("user.name", "Test").expect("set user.name");
+            config
+                .set_str("user.email", "test@test.com")
+                .expect("set user.email");
+            config
+                .set_str("commit.gpgsign", "false")
+                .expect("disable gpg signing");
         }
 
-        std::fs::write(path.join("README.md"), "# Test\n")?;
-        let sig = Signature::now("Test", "test@test.com")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("README.md"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        std::fs::write(path.join("README.md"), "# Test\n").expect("write README");
+        let sig = Signature::now("Test", "test@test.com").expect("create signature");
+        let mut index = repo.index().expect("open index");
+        index.add_path(Path::new("README.md")).expect("add README");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .expect("commit initial tree");
 
-        Ok((dir, path))
+        (dir, path)
     }
 
     #[test]
-    fn test_reconnect_to_worktree_no_conflict_info() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_reconnect_to_worktree_no_conflict_info() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // No conflict info set - should error
         let result = handler.reconnect_to_worktree(&mut app.data);
         assert!(result.is_err());
-        Ok(())
     }
 
     #[test]
-    fn test_reconnect_to_worktree_removes_existing_agents() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_reconnect_to_worktree_removes_existing_agents() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
-        let worktree = TempDir::new()?;
+        let worktree = TempDir::new().expect("create worktree dir");
         let worktree_path = worktree.path().to_path_buf();
         let branch = "tenex-test/asdf".to_string();
 
@@ -1067,10 +1303,17 @@ mod tests {
             swarm_child_count: None,
         });
 
-        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        let next = with_tracing_dispatch(|| handler.reconnect_to_worktree(&mut app.data))
+            .expect("reconnect to worktree");
         assert_eq!(next, AppMode::normal());
 
         assert!(app.data.storage.get(existing_id).is_none());
+        app.data.storage.add(Agent::new(
+            "sentinel".to_string(),
+            test_sleep_program(),
+            "tenex-test/sentinel".to_string(),
+            worktree_path.clone(),
+        ));
         assert_eq!(
             app.data
                 .storage
@@ -1085,24 +1328,23 @@ mod tests {
             .storage
             .iter()
             .find(|agent| agent.branch == branch)
-            .ok_or("Expected new agent")?
+            .expect("expected new agent")
             .mux_session
             .clone();
         let _ = crate::mux::SessionManager::new().kill(&new_session);
-
-        Ok(())
     }
 
     #[test]
-    fn test_create_agent_outside_git_uses_plain_dir_workspace()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_create_agent_outside_git_uses_plain_dir_workspace() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
-        let workdir = TempDir::new()?;
+        let workdir = TempDir::new().expect("create workdir");
         app.set_cwd_project_root(Some(workdir.path().to_path_buf()));
 
-        let next = handler.create_agent(&mut app.data, "plain-dir-agent", None)?;
+        let next = handler
+            .create_agent(&mut app.data, "plain-dir-agent", None)
+            .expect("create agent");
         assert_eq!(next, AppMode::normal());
 
         let created = app
@@ -1110,24 +1352,58 @@ mod tests {
             .storage
             .iter()
             .find(|agent| agent.title == "plain-dir-agent")
-            .ok_or("Expected agent to be created")?;
+            .expect("expected agent to be created");
         assert_eq!(created.workspace_kind, WorkspaceKind::PlainDir);
 
         // Stop the session to avoid leaking `sleep` processes.
         let _ = crate::mux::SessionManager::new().kill(&created.mux_session);
-
-        Ok(())
     }
 
     #[test]
-    fn test_reconnect_to_worktree_swarm_removes_existing_agents()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+    fn test_create_agent_plain_dir_propagates_storage_save_errors() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-plain");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
 
-        let worktree = TempDir::new()?;
+        let handler = Actions::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let workdir = TempDir::new().expect("create workdir");
+        app.set_cwd_project_root(Some(workdir.path().to_path_buf()));
+
+        let err = with_tracing_dispatch(|| {
+            handler.create_agent(&mut app.data, "plain-dir-save-error", None)
+        })
+        .expect_err("expected create_agent to fail");
+        assert!(err.to_string().contains("Failed to replace state file"));
+
+        for agent in app
+            .data
+            .storage
+            .iter()
+            .filter(|agent| agent.title == "plain-dir-save-error")
+        {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_swarm_removes_existing_agents() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
         let worktree_path = worktree.path().to_path_buf();
         let branch = "tenex-test/asdf".to_string();
+
+        app.data.storage.add(Agent::new(
+            "sentinel".to_string(),
+            test_sleep_program(),
+            "tenex-test/sentinel".to_string(),
+            worktree_path.clone(),
+        ));
 
         let root = Agent::new(
             "asdf".to_string(),
@@ -1164,7 +1440,8 @@ mod tests {
             swarm_child_count: Some(2),
         });
 
-        let next = handler.reconnect_to_worktree(&mut app.data)?;
+        let next = with_tracing_dispatch(|| handler.reconnect_to_worktree(&mut app.data))
+            .expect("reconnect to worktree");
         assert_eq!(next, AppMode::normal());
 
         assert_eq!(
@@ -1181,31 +1458,161 @@ mod tests {
             .storage
             .iter()
             .find(|agent| agent.branch == branch && agent.is_root())
-            .ok_or("Expected root agent")?
+            .expect("expected root agent")
             .mux_session
             .clone();
         let _ = crate::mux::SessionManager::new().kill(&new_root_session);
         let _ = crate::mux::SessionManager::new().kill(&root_session);
+    }
 
-        Ok(())
+    #[cfg(unix)]
+    #[test]
+    fn test_reconnect_to_worktree_swarm_propagates_launch_root_agent_errors() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/reconnect-swarm".to_string();
+
+        let mut existing = Agent::new(
+            "existing".to_string(),
+            test_sleep_program(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        existing.runtime = AgentRuntime::Host;
+        app.data.storage.add(existing);
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "swarm".to_string(),
+            prompt: Some("do stuff".to_string()),
+            branch,
+            worktree_path,
+            repo_root: std::path::PathBuf::from("/tmp"),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: Some(2),
+        });
+
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let _ = with_tracing_dispatch(|| handler.reconnect_to_worktree(&mut app.data))
+            .expect_err("expected reconnect_to_worktree to fail");
     }
 
     #[test]
-    fn test_recreate_worktree_no_conflict_info() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_recreate_worktree_no_conflict_info() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // No conflict info set - should error
         let result = handler.recreate_worktree(&mut app.data);
         assert!(result.is_err());
-        Ok(())
     }
 
     #[test]
-    fn test_switch_branch_returns_error_modal_when_repo_root_invalid()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_recreate_worktree_errors_when_repo_root_invalid() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
+        let worktree = TempDir::new().expect("create worktree dir");
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "invalid-repo".to_string(),
+            prompt: None,
+            branch: "feature".to_string(),
+            worktree_path: worktree.path().to_path_buf(),
+            repo_root: PathBuf::from("/tmp/tenex-nonexistent-repo-root"),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: None,
+        });
+
+        let err = with_tracing_dispatch(|| handler.recreate_worktree(&mut app.data))
+            .expect_err("expected recreate_worktree to error");
+        assert!(err.to_string().contains("Failed to open git repository"));
+    }
+
+    #[test]
+    fn test_recreate_worktree_propagates_worktree_remove_errors() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = worktree_dir.path().join("feature");
+        worktree_mgr
+            .create(&worktree_path, "feature")
+            .expect("create worktree");
+        worktree_mgr
+            .lock("feature", Some("locked"))
+            .expect("lock worktree");
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "locked".to_string(),
+            prompt: None,
+            branch: "feature".to_string(),
+            worktree_path,
+            repo_root,
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: None,
+        });
+
+        let err = with_tracing_dispatch(|| handler.recreate_worktree(&mut app.data))
+            .expect_err("expected recreate_worktree to error");
+        assert!(err.to_string().contains("Failed to remove worktree"));
+    }
+
+    #[test]
+    fn test_recreate_worktree_propagates_create_agent_internal_errors() {
+        let handler = Actions::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+        let (_repo_dir, repo_root) = init_repo();
+
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        let invalid_parent = worktree_dir.path().join("not-a-dir");
+        std::fs::write(&invalid_parent, "payload").expect("write file worktree parent");
+        let worktree_path = invalid_parent.join("feature");
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "create-agent-internal-fails".to_string(),
+            prompt: None,
+            branch: "feature".to_string(),
+            worktree_path,
+            repo_root,
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "deadbeef".to_string(),
+            swarm_child_count: None,
+        });
+
+        let err = with_tracing_dispatch(|| handler.recreate_worktree(&mut app.data))
+            .expect_err("expected recreate_worktree to error");
+        assert!(
+            err.to_string()
+                .contains("Failed to create parent directory")
+        );
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_repo_root_invalid() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
 
         let mut root = Agent::new(
             "root".to_string(),
@@ -1222,45 +1629,44 @@ mod tests {
         app.data.git_op.target_branch = "feature".to_string();
         app.data.review.filter = "m".to_string();
 
-        let next = handler.switch_branch(&mut app.data)?;
-        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal(&next));
+        assert!(!mode_is_normal(&next));
         assert!(app.data.git_op.agent_id.is_none());
         assert!(app.data.git_op.branch_name.is_empty());
         assert!(app.data.git_op.target_branch.is_empty());
         assert!(app.data.review.filter.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_switch_branch_returns_error_modal_when_target_branch_empty()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_switch_branch_returns_error_modal_when_target_branch_empty() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.data.git_op.branch_name = "main".to_string();
         app.data.git_op.target_branch = "   ".to_string();
         app.data.review.filter = "m".to_string();
 
-        let next = handler.switch_branch(&mut app.data)?;
-        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal(&next));
+        assert!(!mode_is_normal(&next));
         assert!(app.data.git_op.agent_id.is_none());
         assert!(app.data.git_op.branch_name.is_empty());
         assert!(app.data.git_op.target_branch.is_empty());
         assert!(app.data.review.filter.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_switch_branch_noops_when_already_on_branch() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_switch_branch_noops_when_already_on_branch() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.data.git_op.branch_name = "main".to_string();
         app.data.git_op.target_branch = "main".to_string();
 
-        let next = handler.switch_branch(&mut app.data)?;
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
         assert_eq!(next, AppMode::normal());
         assert!(
             app.data
@@ -1272,34 +1678,470 @@ mod tests {
         assert!(app.data.git_op.agent_id.is_none());
         assert!(app.data.git_op.branch_name.is_empty());
         assert!(app.data.git_op.target_branch.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_switch_branch_returns_error_modal_when_root_agent_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_switch_branch_returns_error_modal_when_root_agent_missing() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
         app.data.git_op.branch_name = "main".to_string();
         app.data.git_op.target_branch = "feature".to_string();
 
-        let next = handler.switch_branch(&mut app.data)?;
-        assert!(matches!(next, AppMode::ErrorModal(_)));
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal(&next));
+        assert!(!mode_is_normal(&next));
         assert!(app.data.git_op.agent_id.is_none());
         assert!(app.data.git_op.branch_name.is_empty());
         assert!(app.data.git_op.target_branch.is_empty());
-        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_agent_errors_when_target_directory_cannot_be_resolved() {
+        let _guard = crate::test_support::lock_env_test_environment();
+
+        let original_dir = std::env::current_dir().expect("read current dir");
+        let parent = TempDir::new().expect("create parent dir");
+        let cwd = parent.path().join("child");
+        std::fs::create_dir_all(&cwd).expect("create child dir");
+        std::env::set_current_dir(&cwd).expect("set cwd");
+        drop(parent);
+        assert!(std::env::current_dir().is_err());
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        app.set_cwd_project_root(None);
+
+        let err = handler
+            .create_agent(&mut app.data, "cannot-resolve-root", None)
+            .expect_err("expected create_agent to error");
+        assert!(
+            err.to_string()
+                .contains("Failed to resolve target directory")
+        );
+
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
     }
 
     #[test]
-    fn test_switch_branch_returns_error_modal_when_branch_missing_in_repo()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_create_agent_prompts_worktree_conflict_when_worktree_exists() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
 
-        let (_repo_dir, repo_path) = init_repo()?;
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.set_cwd_project_root(Some(repo_root.clone()));
+
+        let title = "worktree-conflict";
+        let branch = app.data.config.generate_branch_name(title);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let worktree_mgr = WorktreeManager::new(&repo);
+        worktree_mgr
+            .create_with_new_branch_with_options(
+                &worktree_path,
+                &branch,
+                WorktreeCreateOptions::default(),
+            )
+            .expect("create worktree");
+
+        let next = with_tracing_dispatch(|| handler.create_agent(&mut app.data, title, None))
+            .expect("create agent");
+        assert!(mode_is_worktree_conflict(&next));
+
+        let conflict = app
+            .data
+            .spawn
+            .worktree_conflict
+            .as_ref()
+            .expect("expected conflict info");
+        assert_eq!(conflict.branch, branch);
+        let actual_repo_root = canonicalize_or_self(&conflict.repo_root);
+        let expected_repo_root = canonicalize_or_self(&repo_root);
+        assert_eq!(actual_repo_root, expected_repo_root);
+
+        let actual_worktree = canonicalize_or_self(&conflict.worktree_path);
+        let expected_worktree = canonicalize_or_self(&worktree_path);
+        assert_eq!(actual_worktree, expected_worktree);
+        assert_eq!(conflict.title, title);
+        assert!(conflict.current_branch.contains("master"));
+        assert!(conflict.existing_branch.is_some());
+        assert!(conflict.existing_commit.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_agent_worktree_conflict_falls_back_when_head_info_unavailable() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.set_cwd_project_root(Some(repo_root.clone()));
+
+        let title = "broken-head-info";
+        let branch = app.data.config.generate_branch_name(title);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let worktree_mgr = WorktreeManager::new(&repo);
+        worktree_mgr
+            .create_with_new_branch_with_options(
+                &worktree_path,
+                &branch,
+                WorktreeCreateOptions::default(),
+            )
+            .expect("create worktree");
+
+        std::fs::write(
+            repo_root.join(".git").join("HEAD"),
+            "ref: refs/heads/does-not-exist\n",
+        )
+        .expect("write invalid HEAD");
+        std::fs::remove_file(worktree_path.join(".git")).expect("remove worktree git pointer");
+
+        let next = with_tracing_dispatch(|| handler.create_agent(&mut app.data, title, None))
+            .expect("create agent");
+        assert!(mode_is_worktree_conflict(&next));
+
+        let conflict = app
+            .data
+            .spawn
+            .worktree_conflict
+            .as_ref()
+            .expect("expected conflict info");
+        assert_eq!(conflict.current_branch, "unknown");
+        assert_eq!(conflict.current_commit, "unknown");
+        assert!(conflict.existing_branch.is_none());
+        assert!(conflict.existing_commit.is_none());
+    }
+
+    #[test]
+    fn test_create_agent_propagates_worktree_create_errors() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        let invalid_worktree_root = worktree_dir.path().join("not-a-dir");
+        std::fs::write(&invalid_worktree_root, "payload").expect("write worktree root file");
+
+        app.data.config.worktree_dir = invalid_worktree_root;
+        app.set_cwd_project_root(Some(repo_root));
+
+        let err =
+            with_tracing_dispatch(|| handler.create_agent(&mut app.data, "bad-worktree", None))
+                .expect_err("expected create_agent to error");
+        assert!(
+            err.to_string()
+                .contains("Failed to create parent directory")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_launch_child_agent_propagates_runtime_ready_errors() {
+        let handler = Actions::new();
+        let (app, _temp) = create_test_app();
+        let worktree = TempDir::new().expect("create worktree dir");
+        let docker = TempDir::new().expect("create docker dir");
+        let script =
+            write_fake_docker_script(&docker, "#!/bin/sh\necho 'docker down' >&2\nexit 1\n");
+
+        let mut agent = Agent::new(
+            "root".to_string(),
+            test_sleep_program(),
+            "tenex-test/root".to_string(),
+            worktree.path().to_path_buf(),
+        );
+        agent.runtime = AgentRuntime::Docker;
+
+        let err = crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.launch_child_agent(&app.data, &mut agent, "Child", None)
+        })
+        .expect_err("expected docker readiness to fail");
+        assert!(err.to_string().contains("Docker"));
+    }
+
+    #[test]
+    fn test_launch_child_agent_propagates_program_parse_errors() {
+        let handler = Actions::new();
+        let (app, _temp) = create_test_app();
+        let worktree = TempDir::new().expect("create worktree dir");
+
+        let mut agent = Agent::new(
+            "root".to_string(),
+            r#"claude "unterminated"#.to_string(),
+            "tenex-test/root".to_string(),
+            worktree.path().to_path_buf(),
+        );
+
+        let err = handler
+            .launch_child_agent(&app.data, &mut agent, "Child", None)
+            .expect_err("expected invalid program to error");
+        assert!(err.to_string().contains("Failed to parse command line"));
+    }
+
+    #[test]
+    fn test_create_agent_internal_reports_repo_open_errors() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let repo_root = TempDir::new().expect("create dir");
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+
+        let branch = "agent/internal-open-repo-error".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(repo_root.path(), &branch);
+
+        let err = handler
+            .create_agent_internal(
+                &mut app.data,
+                repo_root.path(),
+                "title",
+                None,
+                &branch,
+                &worktree_path,
+            )
+            .expect_err("expected create_agent_internal to fail");
+        assert!(err.to_string().contains("Failed to open git repository"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_agent_internal_propagates_launch_root_agent_errors_when_docker_unavailable() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        let docker = TempDir::new().expect("create docker dir");
+        let script =
+            write_fake_docker_script(&docker, "#!/bin/sh\necho 'docker down' >&2\nexit 1\n");
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.settings.docker_for_new_roots = true;
+
+        let branch = "agent/internal-docker".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+
+        let err = crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.create_agent_internal(
+                &mut app.data,
+                &repo_root,
+                "title",
+                None,
+                &branch,
+                &worktree_path,
+            )
+        })
+        .expect_err("expected create_agent_internal to fail");
+        assert!(err.to_string().contains("Docker is unavailable"));
+    }
+
+    #[test]
+    fn test_create_agent_internal_succeeds_when_repo_ok() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-int");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let title = "internal-success";
+        let branch = app.data.config.generate_branch_name(title);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+
+        with_tracing_dispatch(|| {
+            handler.create_agent_internal(
+                &mut app.data,
+                &repo_root,
+                title,
+                Some("do stuff"),
+                &branch,
+                &worktree_path,
+            )
+        })
+        .expect("create agent internal");
+
+        let created = app
+            .data
+            .storage
+            .iter()
+            .find(|agent| agent.branch == branch)
+            .expect("expected agent to be created");
+        let actual_worktree = canonicalize_or_self(&created.worktree_path);
+        let expected_worktree = canonicalize_or_self(&worktree_path);
+        assert_eq!(actual_worktree, expected_worktree);
+        assert_eq!(created.workspace_kind, WorkspaceKind::GitWorktree);
+        assert_eq!(created.repo_root.as_deref(), Some(repo_root.as_path()));
+
+        let _ = crate::mux::SessionManager::new().kill(&created.mux_session);
+    }
+
+    #[test]
+    fn test_canonicalize_or_self_falls_back_on_missing_path() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let missing = temp_dir.path().join(uuid::Uuid::new_v4().to_string());
+        let actual = canonicalize_or_self(&missing);
+        assert_eq!(actual, missing);
+    }
+
+    #[test]
+    fn test_create_agent_internal_propagates_storage_save_errors() {
+        let handler = Actions::new();
+        let temp_file = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let branch = "tenex-test/save-error".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+
+        let err = handler
+            .create_agent_internal(
+                &mut app.data,
+                &repo_root,
+                "save error",
+                None,
+                &branch,
+                &worktree_path,
+            )
+            .expect_err("expected create_agent_internal to fail");
+        assert!(err.to_string().contains("Failed to replace state file"));
+
+        for agent in app
+            .data
+            .storage
+            .iter()
+            .filter(|agent| agent.branch == branch)
+        {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_propagates_storage_save_errors() {
+        let handler = Actions::new();
+        let temp_file = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/asdf".to_string();
+        let root = Agent::new(
+            "asdf".to_string(),
+            test_sleep_program(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "asdf".to_string(),
+            prompt: None,
+            branch: branch.clone(),
+            worktree_path,
+            repo_root: std::path::PathBuf::from("/tmp"),
+            existing_branch: Some("main".to_string()),
+            existing_commit: Some("abc1234".to_string()),
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+
+        let err = handler
+            .reconnect_to_worktree(&mut app.data)
+            .expect_err("expected reconnect to fail");
+        assert!(err.to_string().contains("Failed to replace state file"));
+
+        for agent in app
+            .data
+            .storage
+            .iter()
+            .filter(|agent| agent.branch == branch)
+        {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+        let _ = crate::mux::SessionManager::new().kill(&root_session);
+    }
+
+    #[test]
+    fn test_reconnect_to_worktree_swarm_propagates_child_spawn_errors() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-reco");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        app.data.settings.docker_for_new_roots = false;
+        app.data.settings.agent_program = AgentProgram::Custom;
+        app.data.settings.custom_agent_command = test_sleep_program();
+        app.data.settings.planner_agent_program = AgentProgram::Custom;
+        app.data.settings.planner_custom_agent_command = "bad \"".to_string();
+        app.data.spawn.use_plan_prompt = true;
+
+        let repo_root = TempDir::new().expect("create repo root dir");
+        let worktree = TempDir::new().expect("create worktree dir");
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "swarm".to_string(),
+            prompt: Some("task".to_string()),
+            branch: "tenex-test/swarm".to_string(),
+            worktree_path: worktree.path().to_path_buf(),
+            repo_root: repo_root.path().to_path_buf(),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "abc".to_string(),
+            swarm_child_count: Some(1),
+        });
+
+        assert!(handler.reconnect_to_worktree(&mut app.data).is_err());
+
+        for agent in app.data.storage.iter() {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_branch_missing_in_repo() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let (_repo_dir, repo_path) = init_repo();
         let root = Agent::new(
             "root".to_string(),
             test_sleep_program(),
@@ -1313,22 +2155,90 @@ mod tests {
         app.data.git_op.branch_name = "master".to_string();
         app.data.git_op.target_branch = "branch-does-not-exist".to_string();
 
-        let next = handler.switch_branch(&mut app.data)?;
-        let AppMode::ErrorModal(modal) = next else {
-            return Err("Expected error modal".into());
-        };
-        assert!(modal.message.contains("Branch not found"));
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal_containing(&next, "Branch not found"));
         assert!(app.data.git_op.agent_id.is_none());
         assert!(app.data.git_op.branch_name.is_empty());
         assert!(app.data.git_op.target_branch.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_ensure_worktree_for_branch_reuses_existing_worktree()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (_repo_dir, repo_root) = init_repo()?;
-        let worktree_dir = TempDir::new()?;
+    fn test_switch_branch_returns_error_modal_when_kill_root_agent_tree_fails() {
+        let handler = Actions::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            test_sleep_program(),
+            "master".to_string(),
+            repo_root.clone(),
+        );
+        root.repo_root = Some(repo_root);
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        app.data.git_op.agent_id = Some(root_id);
+        app.data.git_op.branch_name = "master".to_string();
+        app.data.git_op.target_branch = "feature".to_string();
+
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal_containing(
+            &next,
+            "Switch branch failed"
+        ));
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_spawn_root_agent_fails() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            test_sleep_program(),
+            "master".to_string(),
+            repo_root.clone(),
+        );
+        root.program = "bad \"".to_string();
+        root.repo_root = Some(repo_root);
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        app.data.git_op.agent_id = Some(root_id);
+        app.data.git_op.branch_name = "master".to_string();
+        app.data.git_op.target_branch = "feature".to_string();
+
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal_containing(
+            &next,
+            "Switch branch failed"
+        ));
+    }
+
+    #[test]
+    fn test_ensure_worktree_for_branch_reuses_existing_worktree() {
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
 
         let config = Config {
             worktree_dir: worktree_dir.path().to_path_buf(),
@@ -1336,13 +2246,15 @@ mod tests {
             ..Config::default()
         };
 
-        let repo = git::open_repository(&repo_root)?;
+        let repo = git::open_repository(&repo_root).expect("open repository");
         let branch_mgr = git::BranchManager::new(&repo);
-        branch_mgr.create("feature")?;
+        branch_mgr.create("feature").expect("create branch");
 
         let worktree_mgr = WorktreeManager::new(&repo);
         let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
-        worktree_mgr.create(&worktree_path, "feature")?;
+        worktree_mgr
+            .create(&worktree_path, "feature")
+            .expect("create worktree");
 
         let reused = Actions::ensure_worktree_for_branch(
             &config,
@@ -1350,19 +2262,49 @@ mod tests {
             &worktree_mgr,
             "feature",
             AgentRuntime::Host,
-        )?;
+        )
+        .expect("ensure worktree");
         assert!(reused.exists());
-        Ok(())
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_ensure_worktree_for_branch_skips_ignored_file_links_for_docker()
-    -> Result<(), Box<dyn std::error::Error>> {
-        use git2::Signature;
+    fn test_prepare_branch_switch_target_propagates_remote_branch_commit_read_errors() {
+        use git2::Repository;
 
-        let (_repo_dir, repo_root) = init_repo()?;
-        let worktree_dir = TempDir::new()?;
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = Repository::open(&repo_root).expect("open repository");
+        let tree_id = repo
+            .head()
+            .expect("read HEAD")
+            .peel_to_commit()
+            .expect("peel HEAD commit")
+            .tree_id();
+        repo.reference(
+            "refs/remotes/origin/bad",
+            tree_id,
+            true,
+            "add bad remote ref",
+        )
+        .expect("create remote ref");
+
+        let config = Config::default();
+        let err = Actions::prepare_branch_switch_target(
+            &config,
+            &repo_root,
+            "origin/bad",
+            AgentRuntime::Host,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to read commit for remote branch")
+        );
+    }
+
+    #[test]
+    fn test_prepare_branch_switch_target_propagates_worktree_create_errors() {
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
 
         let config = Config {
             worktree_dir: worktree_dir.path().to_path_buf(),
@@ -1370,16 +2312,57 @@ mod tests {
             ..Config::default()
         };
 
-        let repo = git::open_repository(&repo_root)?;
-        let sig = Signature::now("Test", "test@test.com")?;
-        let parent_commit = repo.head()?.peel_to_commit()?;
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
 
-        std::fs::write(repo_root.join(".gitignore"), "ignored.txt\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new(".gitignore"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
+        let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
+        let parent_dir = worktree_path
+            .parent()
+            .expect("worktree path missing parent");
+        std::fs::create_dir_all(parent_dir).expect("create worktree parent dir");
+        std::fs::write(&worktree_path, "block").expect("write blocking file");
+
+        let err = Actions::prepare_branch_switch_target(
+            &config,
+            &repo_root,
+            "feature",
+            AgentRuntime::Host,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("worktree"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_worktree_for_branch_skips_ignored_file_links_for_docker() {
+        use git2::Signature;
+
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        let config = Config {
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            branch_prefix: "tenex-test/".to_string(),
+            ..Config::default()
+        };
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let sig = Signature::now("Test", "test@test.com").expect("create signature");
+        let parent_commit = repo
+            .head()
+            .expect("read HEAD")
+            .peel_to_commit()
+            .expect("peel HEAD commit");
+
+        std::fs::write(repo_root.join(".gitignore"), "ignored.txt\n").expect("write gitignore");
+        let mut index = repo.index().expect("open index");
+        index
+            .add_path(Path::new(".gitignore"))
+            .expect("add gitignore");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("find tree");
         repo.commit(
             Some("HEAD"),
             &sig,
@@ -1387,14 +2370,16 @@ mod tests {
             "Add gitignore",
             &tree,
             &[&parent_commit],
-        )?;
-        std::fs::write(repo_root.join("ignored.txt"), "payload")?;
+        )
+        .expect("commit gitignore");
+        std::fs::write(repo_root.join("ignored.txt"), "payload").expect("write ignored file");
         let agents_path = repo_root.join("AGENTS.md");
-        std::fs::write(&agents_path, "# local instructions\n")?;
-        std::os::unix::fs::symlink("AGENTS.md", repo_root.join("CLAUDE.md"))?;
+        std::fs::write(&agents_path, "# local instructions\n").expect("write AGENTS.md");
+        std::os::unix::fs::symlink("AGENTS.md", repo_root.join("CLAUDE.md"))
+            .expect("symlink CLAUDE.md");
 
         let branch_mgr = git::BranchManager::new(&repo);
-        branch_mgr.create("feature")?;
+        branch_mgr.create("feature").expect("create branch");
 
         let worktree_mgr = WorktreeManager::new(&repo);
         let created = Actions::ensure_worktree_for_branch(
@@ -1403,41 +2388,43 @@ mod tests {
             &worktree_mgr,
             "feature",
             AgentRuntime::Docker,
-        )?;
+        )
+        .expect("ensure docker worktree");
 
         assert!(std::fs::symlink_metadata(created.join("ignored.txt")).is_err());
         let linked_agents = created.join("AGENTS.md");
         assert!(
-            std::fs::symlink_metadata(&linked_agents)?
+            std::fs::symlink_metadata(&linked_agents)
+                .expect("read linked agents metadata")
                 .file_type()
                 .is_symlink()
         );
         assert_eq!(
-            std::fs::canonicalize(&linked_agents)?,
-            std::fs::canonicalize(&agents_path)?
+            std::fs::canonicalize(&linked_agents).expect("canonicalize linked agents"),
+            std::fs::canonicalize(&agents_path).expect("canonicalize agents")
         );
 
         let linked_claude = created.join("CLAUDE.md");
         assert!(
-            std::fs::symlink_metadata(&linked_claude)?
+            std::fs::symlink_metadata(&linked_claude)
+                .expect("read linked claude metadata")
                 .file_type()
                 .is_symlink()
         );
         assert_eq!(
-            std::fs::read_link(&linked_claude)?,
+            std::fs::read_link(&linked_claude).expect("read claude link"),
             PathBuf::from("AGENTS.md")
         );
         assert_eq!(
-            std::fs::canonicalize(&linked_claude)?,
-            std::fs::canonicalize(&agents_path)?
+            std::fs::canonicalize(&linked_claude).expect("canonicalize claude"),
+            std::fs::canonicalize(&agents_path).expect("canonicalize agents")
         );
-        Ok(())
     }
 
     #[test]
-    fn test_handle_confirm_kill() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_handle_confirm_kill() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // Add an agent
         app.data.storage.add(Agent::new(
@@ -1456,15 +2443,16 @@ mod tests {
         );
 
         // Confirm should kill and exit mode
-        handler.handle_action(&mut app, crate::config::Action::Confirm)?;
+        handler
+            .handle_action(&mut app, crate::config::Action::Confirm)
+            .expect("confirm kill");
         assert_eq!(app.mode, AppMode::normal());
-        Ok(())
     }
 
     #[test]
-    fn test_kill_agent_root() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_kill_agent_root() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // Add a root agent
         app.data.storage.add(Agent::new(
@@ -1475,17 +2463,102 @@ mod tests {
         ));
 
         // Kill should work (session doesn't exist, but should not error)
-        handler.kill_agent(&mut app.data)?;
+        handler.kill_agent(&mut app.data).expect("kill root agent");
         assert_eq!(app.data.storage.len(), 0);
-        Ok(())
+    }
+
+    #[test]
+    fn test_kill_agent_root_sets_delete_branch_for_tenex_namespace() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        app.data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex/root".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+
+        handler.kill_agent(&mut app.data).expect("kill root agent");
+        assert!(app.data.storage.is_empty());
+    }
+
+    #[test]
+    fn test_kill_agent_root_does_not_delete_non_prefixed_branch() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        app.data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "feature".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+
+        handler.kill_agent(&mut app.data).expect("kill root agent");
+        assert!(app.data.storage.is_empty());
+    }
+
+    #[test]
+    fn test_kill_root_agent_tree_skips_worktree_cleanup_when_repo_open_fails() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.repo_root = Some(temp.path().to_path_buf());
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        handler
+            .kill_root_agent_tree(&mut app.data, root_id, false)
+            .expect("kill root agent tree");
+        assert!(app.data.storage.is_empty());
+    }
+
+    #[test]
+    fn test_kill_root_agent_tree_skips_worktree_cleanup_when_cwd_unavailable() {
+        let _guard = crate::test_support::lock_env_test_environment();
+
+        let original_dir = std::env::current_dir().expect("read current dir");
+        let parent = TempDir::new().expect("create parent dir");
+        let cwd = parent.path().join("child");
+        std::fs::create_dir_all(&cwd).expect("create child dir");
+        std::env::set_current_dir(&cwd).expect("set cwd");
+        drop(parent);
+        assert!(std::env::current_dir().is_err());
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        handler
+            .kill_root_agent_tree(&mut app.data, root_id, false)
+            .expect("kill root agent tree");
+        assert!(app.data.storage.is_empty());
+
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_kill_agent_root_cleans_up_docker_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_kill_agent_root_cleans_up_docker_runtime() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
-        let temp = TempDir::new()?;
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
         let log = temp.path().join("docker.log");
         let script = write_fake_docker_script(
             &temp,
@@ -1493,7 +2566,7 @@ mod tests {
                 "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
                 log.display()
             ),
-        )?;
+        );
 
         let mut root = Agent::new(
             "root".to_string(),
@@ -1507,18 +2580,18 @@ mod tests {
 
         crate::runtime::with_docker_program_override_for_tests(script, || {
             handler.kill_agent(&mut app.data)
-        })?;
+        })
+        .expect("kill root agent");
 
-        let log_contents = fs::read_to_string(&log)?;
+        let log_contents = fs::read_to_string(&log).expect("read docker log");
         assert!(log_contents.contains(&format!("rm -f {expected_container}")));
         assert!(app.data.storage.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_kill_agent_child() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_kill_agent_child() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // Add a root agent (expanded to show children)
         let mut root = Agent::new(
@@ -1551,16 +2624,68 @@ mod tests {
         app.select_next();
 
         // Kill child should remove just the child
-        handler.kill_agent(&mut app.data)?;
+        handler.kill_agent(&mut app.data).expect("kill child agent");
         assert_eq!(app.data.storage.len(), 1);
         assert!(app.data.storage.get(root_id).is_some());
-        Ok(())
     }
 
     #[test]
-    fn test_kill_agent_with_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_kill_agent_child_handles_missing_window_indices_and_save_errors() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        let mut child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        child.window_index = None;
+        let child_id = child.id;
+        app.data.storage.add(child);
+        let mut grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: child_id,
+                mux_session: root_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        grandchild.window_index = None;
+        app.data.storage.add(grandchild);
+        app.data.select_agent_by_id(child_id);
+
+        let err = handler.kill_agent(&mut app.data).unwrap_err();
+        assert!(err.to_string().contains("Failed to replace state file"));
+    }
+
+    #[test]
+    fn test_kill_agent_with_descendants() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
 
         // Add a root agent
         let root = Agent::new(
@@ -1590,15 +2715,16 @@ mod tests {
         }
 
         // Kill root should remove all
-        handler.kill_agent(&mut app.data)?;
+        handler
+            .kill_agent(&mut app.data)
+            .expect("kill agent with descendants");
         assert_eq!(app.data.storage.len(), 0);
-        Ok(())
     }
 
     #[test]
-    fn test_spawn_terminal_creates_child_of_root() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_spawn_terminal_creates_child_of_root() {
         let handler = Actions::new();
-        let (mut app, _temp) = create_test_app()?;
+        let (mut app, _temp) = create_test_app();
 
         // Create a root agent with a child
         let mut root = Agent::new(
@@ -1637,6 +2763,924 @@ mod tests {
 
         // Should fail because mux session doesn't exist
         assert!(result.is_err());
-        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_injects_conversation_id_for_claude() {
+        let (mut app, _temp) = create_test_app();
+        let mut agent = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex-test/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+
+        let expected_conversation_id = agent.id.to_string();
+        assert_eq!(
+            agent.conversation_id.as_deref(),
+            Some(expected_conversation_id.as_str())
+        );
+        assert!(agent.mux_session.starts_with("tenex-"));
+        assert!(agent.mux_session.ends_with(&agent.short_id()));
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_does_not_override_child_mux_session() {
+        let (mut app, _temp) = create_test_app();
+
+        let root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "tenex-test/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let root_id = root.id;
+        let root_session = root.mux_session;
+
+        let mut child = Agent::new_child(
+            "child".to_string(),
+            "codex".to_string(),
+            "tenex-test/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        let original_session = child.mux_session.clone();
+
+        Actions::prepare_agent_for_launch(&mut app.data, &mut child);
+
+        assert_eq!(child.mux_session, original_session);
+        assert!(child.conversation_id.is_none());
+    }
+
+    #[test]
+    fn test_prepare_agent_for_launch_keeps_existing_docker_runtime_scope() {
+        let (mut app, _temp) = create_test_app();
+        let mut agent = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex-test/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.runtime = AgentRuntime::Docker;
+        agent.runtime_scope = "existing-scope".to_string();
+        Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
+        assert_eq!(agent.runtime_scope, "existing-scope");
+    }
+
+    #[test]
+    fn test_launch_root_agent_returns_error_when_program_invalid() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+        let mut agent = Agent::new(
+            "root".to_string(),
+            r#"claude "unterminated"#.to_string(),
+            "tenex-test/root".to_string(),
+            temp.path().to_path_buf(),
+        );
+
+        let err = handler
+            .launch_root_agent(&mut app.data, &mut agent, None)
+            .expect_err("expected invalid program to error");
+        assert!(err.to_string().contains("Failed to parse command line"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_launch_root_agent_returns_error_when_mux_socket_invalid() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let mut agent = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "tenex-test/root".to_string(),
+            temp.path().to_path_buf(),
+        );
+
+        let _ = handler
+            .launch_root_agent(&mut app.data, &mut agent, None)
+            .expect_err("expected invalid socket to error");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_launch_root_agent_returns_error_when_docker_unavailable() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+        let script = write_fake_docker_script(&temp, "#!/bin/sh\necho 'docker down' >&2\nexit 1\n");
+
+        let mut agent = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "tenex-test/root".to_string(),
+            temp.path().to_path_buf(),
+        );
+        agent.runtime = AgentRuntime::Docker;
+
+        let err = crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.launch_root_agent(&mut app.data, &mut agent, None)
+        })
+        .expect_err("expected docker readiness to fail");
+        assert!(err.to_string().contains("Docker is unavailable"));
+        assert!(err.to_string().contains("docker down"));
+    }
+
+    #[test]
+    fn test_create_agent_internal_errors_when_worktree_path_not_empty() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let branch = "tenex-test/branch".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+        std::fs::create_dir_all(&worktree_path).expect("create existing worktree path");
+        std::fs::write(worktree_path.join("payload.txt"), "payload").expect("write payload");
+
+        let err = handler
+            .create_agent_internal(
+                &mut app.data,
+                &repo_root,
+                "title",
+                None,
+                &branch,
+                &worktree_path,
+            )
+            .expect_err("expected create_agent_internal to fail");
+        assert!(err.to_string().contains("worktree"));
+    }
+
+    #[test]
+    fn test_remove_conflicting_agents_continues_when_session_used_elsewhere() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/asdf".to_string();
+
+        let mut conflict_agent = Agent::new(
+            "conflict".to_string(),
+            "codex".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        conflict_agent.mux_session = "shared-session".to_string();
+        let conflict_id = conflict_agent.id;
+        app.data.storage.add(conflict_agent);
+
+        let mut other_agent = Agent::new(
+            "other".to_string(),
+            "codex".to_string(),
+            "tenex-test/other".to_string(),
+            worktree_path.clone(),
+        );
+        other_agent.mux_session = "shared-session".to_string();
+        let other_id = other_agent.id;
+        app.data.storage.add(other_agent);
+
+        let removed = handler.remove_conflicting_agents(
+            &mut app.data,
+            &WorktreeConflictInfo {
+                title: "conflict".to_string(),
+                prompt: None,
+                branch,
+                worktree_path,
+                repo_root: PathBuf::from("/tmp"),
+                existing_branch: None,
+                existing_commit: None,
+                current_branch: "main".to_string(),
+                current_commit: "abc".to_string(),
+                swarm_child_count: None,
+            },
+        );
+
+        assert_eq!(removed, 1);
+        assert!(app.data.storage.get(conflict_id).is_none());
+        assert!(app.data.storage.get(other_id).is_some());
+    }
+
+    #[test]
+    fn test_remove_conflicting_agents_covers_other_sessions_and_other_worktrees() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        crate::mux::set_socket_override("tenex-mux\0invalid/socket")
+            .expect("Expected socket override");
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let conflict_worktree_path = worktree.path().join("conflict");
+        let other_worktree_path = worktree.path().join("other");
+
+        let branch = "tenex-test/asdf".to_string();
+
+        let mut other_session_agent = Agent::new(
+            "other-session".to_string(),
+            "codex".to_string(),
+            "tenex-test/other".to_string(),
+            conflict_worktree_path.clone(),
+        );
+        other_session_agent.mux_session = "other-session".to_string();
+        let other_session_id = other_session_agent.id;
+        app.data.storage.add(other_session_agent);
+
+        let mut other_worktree_agent = Agent::new(
+            "other-worktree".to_string(),
+            "codex".to_string(),
+            branch.clone(),
+            other_worktree_path,
+        );
+        other_worktree_agent.mux_session = "other-session-2".to_string();
+        let other_worktree_id = other_worktree_agent.id;
+        app.data.storage.add(other_worktree_agent);
+
+        let mut conflict_agent = Agent::new(
+            "conflict".to_string(),
+            "codex".to_string(),
+            branch.clone(),
+            conflict_worktree_path.clone(),
+        );
+        conflict_agent.mux_session = "conflict-session".to_string();
+        let conflict_id = conflict_agent.id;
+        app.data.storage.add(conflict_agent);
+
+        let removed = handler.remove_conflicting_agents(
+            &mut app.data,
+            &WorktreeConflictInfo {
+                title: "conflict".to_string(),
+                prompt: None,
+                branch,
+                worktree_path: conflict_worktree_path,
+                repo_root: PathBuf::from("/tmp"),
+                existing_branch: None,
+                existing_commit: None,
+                current_branch: "main".to_string(),
+                current_commit: "abc".to_string(),
+                swarm_child_count: None,
+            },
+        );
+
+        assert_eq!(removed, 1);
+        assert!(app.data.storage.get(conflict_id).is_none());
+        assert!(app.data.storage.get(other_session_id).is_some());
+        assert!(app.data.storage.get(other_worktree_id).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_conflicting_agents_warns_when_cleanup_runtime_fails() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 1\n",
+                log.display()
+            ),
+        );
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let worktree_path = worktree.path().to_path_buf();
+        let branch = "tenex-test/asdf".to_string();
+
+        let mut agent = Agent::new(
+            "conflict".to_string(),
+            "codex".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+        );
+        agent.runtime = AgentRuntime::Docker;
+        agent.mux_session = "conflict-session".to_string();
+        let expected_container = format!("tenex-runtime-{}", agent.mux_session).to_lowercase();
+        app.data.storage.add(agent);
+
+        let removed = crate::runtime::with_docker_program_override_for_tests(script, || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                handler.remove_conflicting_agents(
+                    &mut app.data,
+                    &WorktreeConflictInfo {
+                        title: "conflict".to_string(),
+                        prompt: None,
+                        branch: branch.clone(),
+                        worktree_path: worktree_path.clone(),
+                        repo_root: PathBuf::from("/tmp"),
+                        existing_branch: None,
+                        existing_commit: None,
+                        current_branch: "main".to_string(),
+                        current_commit: "abc".to_string(),
+                        swarm_child_count: None,
+                    },
+                )
+            })
+        });
+
+        assert_eq!(removed, 1);
+        let log_contents = std::fs::read_to_string(&log).expect("read docker log");
+        assert!(log_contents.contains(&format!("rm -f {expected_container}")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_kill_root_agent_tree_warns_when_cleanup_runtime_fails() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let temp = TempDir::new().expect("create temp dir");
+        let log = temp.path().join("docker.log");
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 1\n",
+                log.display()
+            ),
+        );
+
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, "feature");
+        worktree_mgr
+            .create(&worktree_path, "feature")
+            .expect("create worktree");
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            worktree_path,
+        );
+        root.repo_root = Some(repo_root);
+        root.runtime = AgentRuntime::Docker;
+        root.mux_session = "runtime-fail-session".to_string();
+        let expected_container = format!("tenex-runtime-{}", root.mux_session).to_lowercase();
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                handler.kill_root_agent_tree(&mut app.data, root_id, false)
+            })
+        })
+        .expect("kill root agent tree");
+
+        let log_contents = std::fs::read_to_string(&log).expect("read docker log");
+        assert!(log_contents.contains(&format!("rm -f {expected_container}")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_kill_root_agent_tree_warns_when_worktree_remove_fails() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, "feature");
+        worktree_mgr
+            .create(&worktree_path, "feature")
+            .expect("create worktree");
+        worktree_mgr
+            .lock("feature", Some("locked"))
+            .expect("lock worktree");
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "feature".to_string(),
+            worktree_path,
+        );
+        root.repo_root = Some(repo_root);
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            handler.kill_root_agent_tree(&mut app.data, root_id, false)
+        })
+        .expect("kill root agent tree");
+
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Warning:")
+        );
+    }
+
+    #[test]
+    fn test_kill_agent_child_with_descendant_collects_window_indices() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+        crate::mux::set_socket_override("tenex-mux\0invalid").expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        let child = Agent::new_child(
+            "child".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        let child_id = child.id;
+        app.data.storage.add(child);
+
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: child_id,
+                mux_session: root_session,
+                window_index: 3,
+                repo_root: None,
+            },
+        );
+        app.data.storage.add(grandchild);
+
+        app.select_next();
+        assert_eq!(app.selected_agent().map(|a| a.id), Some(child_id));
+
+        tracing::dispatcher::with_default(&dispatch, || handler.kill_agent(&mut app.data))
+            .expect("kill agent");
+
+        assert_eq!(app.data.storage.len(), 1);
+        assert!(app.data.storage.get(root_id).is_some());
+    }
+
+    #[test]
+    fn test_switch_branch_returns_error_modal_when_worktree_missing_on_disk() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, "feature");
+        worktree_mgr
+            .create(&worktree_path, "feature")
+            .expect("create worktree");
+        std::fs::remove_dir_all(&worktree_path).expect("remove worktree");
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            test_sleep_program(),
+            "master".to_string(),
+            repo_root.clone(),
+        );
+        root.repo_root = Some(repo_root);
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        app.data.git_op.agent_id = Some(root_id);
+        app.data.git_op.branch_name = "master".to_string();
+        app.data.git_op.target_branch = "feature".to_string();
+
+        let next = handler.switch_branch(&mut app.data).expect("switch branch");
+        assert!(mode_is_error_modal_containing(
+            &next,
+            "Worktree path does not exist"
+        ));
+        assert!(app.data.git_op.agent_id.is_none());
+        assert!(app.data.git_op.branch_name.is_empty());
+        assert!(app.data.git_op.target_branch.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_target_branch_errors_when_remote_ref_not_commit() {
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+
+        let blob = repo.blob(b"payload").expect("create blob");
+        repo.reference("refs/remotes/origin/bad", blob, true, "test")
+            .expect("create remote reference");
+
+        let err = Actions::resolve_target_branch(&repo, &branch_mgr, "origin/bad")
+            .expect_err("expected invalid remote ref to error");
+        assert!(
+            err.to_string()
+                .contains("Failed to read commit for remote branch 'origin/bad'")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_branch_creates_local_branch_for_remote() {
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+
+        let commit = repo
+            .head()
+            .expect("read HEAD")
+            .peel_to_commit()
+            .expect("peel HEAD commit");
+        repo.reference(
+            "refs/remotes/origin/feature",
+            commit.id(),
+            true,
+            "test remote branch",
+        )
+        .expect("failed to create remote reference");
+
+        let resolved = Actions::resolve_target_branch(&repo, &branch_mgr, "origin/feature")
+            .expect("resolve branch");
+        assert_eq!(resolved.as_deref(), Some("feature"));
+        assert!(branch_mgr.exists("feature"));
+    }
+
+    #[test]
+    fn test_resolve_target_branch_reuses_existing_local_branch_for_remote() {
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let commit = repo
+            .head()
+            .expect("read HEAD")
+            .peel_to_commit()
+            .expect("peel HEAD commit");
+        repo.reference(
+            "refs/remotes/origin/feature",
+            commit.id(),
+            true,
+            "test remote branch",
+        )
+        .expect("failed to create remote reference");
+
+        let resolved = Actions::resolve_target_branch(&repo, &branch_mgr, "origin/feature")
+            .expect("resolve branch");
+        assert_eq!(resolved.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn test_resolve_target_branch_reports_error_when_local_branch_name_invalid() {
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+
+        let commit = repo
+            .head()
+            .expect("read HEAD")
+            .peel_to_commit()
+            .expect("peel HEAD commit");
+        repo.reference(
+            "refs/remotes/origin/HEAD",
+            commit.id(),
+            true,
+            "test remote branch",
+        )
+        .expect("failed to create remote reference");
+
+        let err = Actions::resolve_target_branch(&repo, &branch_mgr, "origin/HEAD")
+            .expect_err("expected invalid local branch name to error");
+        assert!(
+            err.to_string()
+                .contains("Failed to create local branch 'HEAD'")
+        );
+    }
+
+    #[test]
+    fn test_ensure_worktree_for_branch_errors_when_target_path_not_empty() {
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new().expect("create worktree dir");
+
+        let config = Config {
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            branch_prefix: "tenex-test/".to_string(),
+            ..Config::default()
+        };
+
+        let repo = git::open_repository(&repo_root).expect("open repository");
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature").expect("create branch");
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
+        std::fs::create_dir_all(&worktree_path).expect("create worktree path");
+        std::fs::write(worktree_path.join("payload.txt"), "payload").expect("write payload");
+
+        let err = Actions::ensure_worktree_for_branch(
+            &config,
+            &repo_root,
+            &worktree_mgr,
+            "feature",
+            AgentRuntime::Host,
+        )
+        .expect_err("expected non-empty worktree path to error");
+        assert!(err.to_string().contains("worktree"));
+    }
+
+    #[test]
+    fn test_kill_root_agent_tree_returns_ok_when_root_missing() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        handler
+            .kill_root_agent_tree(&mut app.data, uuid::Uuid::new_v4(), false)
+            .expect("kill root agent tree");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_root_agent_in_worktree_propagates_storage_save_errors() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-root");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let worktree = TempDir::new().expect("create worktree dir");
+        let err = handler
+            .spawn_root_agent_in_worktree(
+                &mut app.data,
+                RootLaunchSpec {
+                    title: "root".to_string(),
+                    program: test_sleep_program(),
+                    runtime: AgentRuntime::Host,
+                    repo_root: worktree.path().to_path_buf(),
+                    branch: "master".to_string(),
+                    worktree_path: worktree.path().to_path_buf(),
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to replace state file"));
+
+        for agent in app.data.storage.iter() {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_terminal_docker_runtime_skips_host_startup_input() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-dock");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let repo_dir = TempDir::new().expect("create repo dir");
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "main".to_string(),
+            repo_dir.path().to_path_buf(),
+        );
+        root.runtime = AgentRuntime::Docker;
+        root.collapsed = false;
+        let root_id = root.id;
+        let session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.select_agent_by_id(root_id);
+
+        let manager = SessionManager::new();
+        manager
+            .create(&session, repo_dir.path(), None)
+            .expect("create mux session");
+
+        let docker_dir = TempDir::new().expect("create docker dir");
+        let script = write_fake_docker_script(
+            &docker_dir,
+            "#!/bin/sh\ncase \"$1\" in\n  version) exit 0;;\n  image) echo '<no value>'; exit 0;;\n  build) cat >/dev/null; exit 0;;\n  inspect) echo 'No such container' >&2; exit 1;;\n  run) echo fake-container-id; exit 0;;\n  exec) exit 0;;\n  *) echo \"unexpected docker args: $*\" >&2; exit 1;;\nesac\n",
+        );
+
+        let next = crate::runtime::with_docker_program_override_for_tests(script, || {
+            handler.spawn_terminal(&mut app.data, Some("echo TENEX_TERMINAL_STARTUP"))
+        })
+        .expect("spawn docker terminal");
+        app.apply_mode(next);
+        assert_eq!(app.mode, AppMode::normal());
+
+        let _ = manager.kill(&session);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_terminal_propagates_storage_save_errors() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-tsave");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let storage = Storage::with_path(temp_dir.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let repo_dir = TempDir::new().expect("create repo dir");
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "main".to_string(),
+            repo_dir.path().to_path_buf(),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.select_agent_by_id(root_id);
+
+        let manager = SessionManager::new();
+        manager
+            .create(&session, repo_dir.path(), None)
+            .expect("create mux session");
+
+        let err = handler.spawn_terminal(&mut app.data, None).unwrap_err();
+        assert!(err.to_string().contains("Failed to replace state file"));
+
+        let _ = manager.kill(&session);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_terminal_sends_startup_command_on_host_runtime() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-thost");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let repo_dir = TempDir::new().expect("create repo dir");
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "main".to_string(),
+            repo_dir.path().to_path_buf(),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.select_agent_by_id(root_id);
+
+        let manager = SessionManager::new();
+        manager
+            .create(&session, repo_dir.path(), None)
+            .expect("create mux session");
+
+        let next = tracing::dispatcher::with_default(&dispatch, || {
+            handler.spawn_terminal(&mut app.data, Some("echo TENEX_TERMINAL_STARTUP"))
+        })
+        .expect("spawn terminal");
+        app.apply_mode(next);
+        assert_eq!(app.mode, AppMode::normal());
+
+        let children = app.data.storage.children(root_id);
+        let terminal = children.first().expect("expected terminal");
+        let window_target = SessionManager::window_target(
+            &terminal.mux_session,
+            terminal.window_index.expect("missing window index"),
+        );
+
+        let found = window_output_contains(&window_target, "TENEX_TERMINAL_STARTUP", 25);
+        let _ = manager.kill(&session);
+        assert!(found);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_terminal_startup_command_helpers_cover_timeout_path() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-ttime");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let repo_dir = TempDir::new().expect("create repo dir");
+        let mut root = Agent::new(
+            "root".to_string(),
+            "codex".to_string(),
+            "main".to_string(),
+            repo_dir.path().to_path_buf(),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.select_agent_by_id(root_id);
+
+        let manager = SessionManager::new();
+        manager
+            .create(&session, repo_dir.path(), None)
+            .expect("create mux session");
+
+        let next = handler
+            .spawn_terminal(&mut app.data, Some("echo TENEX_TERMINAL_STARTUP"))
+            .expect("spawn terminal");
+        app.apply_mode(next);
+        assert_eq!(app.mode, AppMode::normal());
+
+        let children = app.data.storage.children(root_id);
+        let terminal = children.first().expect("expected terminal");
+        let window_target = SessionManager::window_target(
+            &terminal.mux_session,
+            terminal.window_index.expect("missing window index"),
+        );
+
+        let found = window_output_contains(&window_target, "TENEX_NEVER_PRESENT", 5);
+        let _ = manager.kill(&session);
+        assert!(!found);
     }
 }
