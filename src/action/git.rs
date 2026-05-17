@@ -934,9 +934,34 @@ exit 1
         .expect("git push should succeed");
         git_ok(
             repo_path.as_path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "push",
+                "origin",
+                "main:main",
+            ],
+        )
+        .expect("main branch should be pushed");
+        git_ok(
+            origin_dir.path(),
+            &["symbolic-ref", "HEAD", "refs/heads/main"],
+        )
+        .expect("origin default branch should be set");
+        git_ok(
+            repo_path.as_path(),
             &["-c", "protocol.file.allow=always", "fetch", "origin"],
         )
         .expect("git fetch should succeed");
+        git_ok(
+            repo_path.as_path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        )
+        .expect("origin HEAD should point at main");
 
         let agent = Agent::new(
             "agent-1".to_string(),

@@ -112,7 +112,10 @@ fn muxd_pids_for_socket(socket: &str, instance_root: &Path) -> std::collections:
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("");
-        if !name.starts_with("tenex-muxd-") || !name.ends_with(".pid") {
+        let has_pid_extension = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pid"));
+        if !name.starts_with("tenex-muxd-") || !has_pid_extension {
             continue;
         }
 
@@ -122,18 +125,21 @@ fn muxd_pids_for_socket(socket: &str, instance_root: &Path) -> std::collections:
         let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&raw) else {
             continue;
         };
-        let pid = payload.get("pid").and_then(|value| value.as_u64());
-        let reported_socket = payload.get("socket").and_then(|value| value.as_str());
+        let pid = payload.get("pid").and_then(serde_json::Value::as_u64);
+        let reported_socket = payload.get("socket").and_then(serde_json::Value::as_str);
         let Some(pid) = pid else {
             continue;
         };
-        if pid == 0 || pid > u32::MAX as u64 {
+        let Ok(pid) = u32::try_from(pid) else {
+            continue;
+        };
+        if pid == 0 {
             continue;
         }
         if reported_socket.map(str::trim) != Some(socket.trim()) {
             continue;
         }
-        pids.insert(pid as u32);
+        pids.insert(pid);
     }
 
     pids

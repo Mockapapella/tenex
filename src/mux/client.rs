@@ -301,6 +301,11 @@ fn start_daemon(endpoint: &SocketEndpoint) -> Result<()> {
 
     cmd.env("TENEX_MUX_SOCKET", &endpoint.display);
     maybe_inherit_state_path(&mut cmd, std::env::var("TENEX_STATE_PATH").ok().as_deref());
+    #[cfg(coverage)]
+    {
+        // The mux daemon is coverage-off and may be signal-terminated by tests.
+        cmd.env_remove("LLVM_PROFILE_FILE");
+    }
 
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

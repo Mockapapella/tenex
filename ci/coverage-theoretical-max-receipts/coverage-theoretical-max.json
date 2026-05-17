@@ -11,11 +11,11 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35932,
+        "amount": 35954,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62007,
+        "amount": 62022,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
@@ -29,11 +29,11 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35932,
+        "amount": 35954,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62007,
+        "amount": 62022,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
@@ -47,11 +47,11 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35932,
+        "amount": 35954,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62007,
+        "amount": 62022,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     }
@@ -64,10 +64,10 @@
       "amount": 3298
     },
     "lines": {
-      "amount": 35932
+      "amount": 35954
     },
     "regions": {
-      "amount": 62007
+      "amount": 62022
     }
   }
 }
