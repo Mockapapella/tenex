@@ -53,8 +53,15 @@ fn run() -> anyhow::Result<()> {
 
     let mut app = App::new(config, storage, Settings::default(), false);
     app.data.settings.keyboard_remap_asked = true;
-    app.data.active_tab = Tab::Diff;
-    app.data.should_quit = true;
+    app.data.active_tab = if cfg!(debug_assertions)
+        && std::env::var_os("TENEX_TEST_TUI_SMOKE_PREVIEW_TAB").is_some()
+    {
+        Tab::Preview
+    } else {
+        Tab::Diff
+    };
+    app.data.should_quit = !(cfg!(debug_assertions)
+        && std::env::var_os("TENEX_TEST_TUI_SMOKE_WAIT_FOR_QUIT").is_some());
     app.validate_selection();
 
     let _ = tenex::tui::run(app)?;

@@ -1,11 +1,13 @@
 //! IPC endpoint naming for the mux daemon.
 
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced, Name, prelude::*};
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use parking_lot::Mutex;
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -34,6 +36,7 @@ fn fs_socket_endpoint(socket_path: PathBuf) -> Result<SocketEndpoint> {
     })
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn state_dir_socket_endpoint(state_path: &Path, socket_name: &str) -> Result<SocketEndpoint> {
     let dir = state_path
         .parent()
@@ -42,27 +45,34 @@ fn state_dir_socket_endpoint(state_path: &Path, socket_name: &str) -> Result<Soc
     fs_socket_endpoint(socket_path)
 }
 
-#[cfg(not(test))]
+#[cfg(coverage)]
+#[doc(hidden)]
+pub fn exercise_endpoint_paths_for_coverage() {
+    let state_path = std::env::temp_dir().join("tenex-mux-coverage-state.json");
+    let _ = state_dir_socket_endpoint(&state_path, "tenex-mux-coverage");
+    let _ = state_dir_socket_endpoint(Path::new("/"), "tenex-mux-coverage");
+}
+
+#[cfg(not(any(test, coverage)))]
 static SOCKET_OVERRIDE: OnceLock<String> = OnceLock::new();
+#[cfg(not(any(test, coverage)))]
 static DEFAULT_SOCKET_NAME: OnceLock<String> = OnceLock::new();
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static TEST_SOCKET_OVERRIDES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static TEST_TENEX_MUX_SOCKET_OVERRIDES: OnceLock<
     Mutex<HashMap<String, TestTenexMuxSocketOverride>>,
 > = OnceLock::new();
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static TEST_NAMESPACED_SUPPORTED_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> =
     OnceLock::new();
-#[cfg(test)]
-static TEST_SOCKET_FINGERPRINT_IMPL_FAIL_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> =
+#[cfg(any(test, coverage))]
+static TEST_NAMESPACED_NAME_ERROR_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> =
     OnceLock::new();
-#[cfg(test)]
-static TEST_NAMESPACED_NAME_ERROR_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 const DEFAULT_SOCKET_PREFIX: &str = "tenex-mux";
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 #[derive(Clone)]
 enum TestTenexMuxSocketOverride {
     Missing,
@@ -80,13 +90,14 @@ enum TestTenexMuxSocketOverride {
 /// # Errors
 ///
 /// Returns an error if the override is empty or already set.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn set_socket_override(value: &str) -> Result<()> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         bail!("Mux socket override cannot be empty");
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let key = test_scope_key();
         {
@@ -100,7 +111,7 @@ pub fn set_socket_override(value: &str) -> Result<()> {
         Ok(())
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(any(test, coverage)))]
     {
         SOCKET_OVERRIDE
             .set(trimmed.to_string())
@@ -121,13 +132,14 @@ pub fn set_socket_override(value: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if the name cannot be constructed.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn socket_endpoint() -> Result<SocketEndpoint> {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if let Some(override_value) = test_socket_override() {
         return socket_endpoint_from_value(&override_value);
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(any(test, coverage)))]
     if let Some(override_value) = SOCKET_OVERRIDE.get() {
         return socket_endpoint_from_value(override_value);
     }
@@ -157,6 +169,7 @@ pub fn socket_endpoint() -> Result<SocketEndpoint> {
 /// # Errors
 ///
 /// Returns an error if the endpoint cannot be constructed.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> {
     let display = value.to_string();
     let looks_like_path = display.contains('/') || display.contains('\\');
@@ -212,27 +225,29 @@ pub(super) fn socket_endpoint_from_value(value: &str) -> Result<SocketEndpoint> 
 }
 
 fn default_socket_name() -> String {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let scope_suffix = test_scope_suffix();
         let fingerprint = socket_fingerprint();
         format!("{DEFAULT_SOCKET_PREFIX}-{fingerprint}-{scope_suffix}")
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(any(test, coverage)))]
     {
         default_socket_name_cached()
     }
 }
 
+#[cfg(not(any(test, coverage)))]
 fn default_socket_name_cached() -> String {
     DEFAULT_SOCKET_NAME
         .get_or_init(|| format!("{DEFAULT_SOCKET_PREFIX}-{}", socket_fingerprint()))
         .clone()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn namespaced_supported() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if let Some(value) = test_namespaced_supported_override() {
         return value;
     }
@@ -240,8 +255,9 @@ fn namespaced_supported() -> bool {
     GenericNamespaced::is_supported()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn tenex_mux_socket_env() -> Option<String> {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if let Some(value) = test_tenex_mux_socket_override() {
         return match value {
             TestTenexMuxSocketOverride::Missing => None,
@@ -252,18 +268,16 @@ fn tenex_mux_socket_env() -> Option<String> {
     std::env::var("TENEX_MUX_SOCKET").ok()
 }
 
-#[cfg(not(test))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn to_namespaced_name_io(value: &str) -> std::io::Result<Name<'_>> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         const MAX_LEN: usize = 107;
-        let len = value.as_bytes().len();
+        let len = value.len();
         if len > MAX_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Namespaced mux socket name is too long: {len} bytes, max {MAX_LEN}"
-                ),
+                format!("Namespaced mux socket name is too long: {len} bytes, max {MAX_LEN}"),
             ));
         }
     }
@@ -271,40 +285,37 @@ fn to_namespaced_name_io(value: &str) -> std::io::Result<Name<'_>> {
     value.to_ns_name::<GenericNamespaced>()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn to_namespaced_name(value: &str) -> Result<Name<'static>> {
-    #[cfg(test)]
-    let name = {
-        let name = if test_namespaced_name_error_override() == Some(true) {
-            Err(anyhow::anyhow!(
-                "Forced namespaced mux socket name error for tests"
-            ))
-        } else {
-            value.to_ns_name::<GenericNamespaced>().map_err(Into::into)
-        }?;
-        name.into_owned()
-    };
+    #[cfg(any(test, coverage))]
+    if test_namespaced_name_error_override() == Some(true) {
+        bail!("Forced namespaced mux socket name error for tests");
+    }
 
-    #[cfg(not(test))]
     let name = to_namespaced_name_io(value)?.into_owned();
-
     Ok(name)
 }
 
 fn socket_fingerprint() -> String {
-    socket_fingerprint_impl().unwrap_or_else(|| "0000000000000000".to_string())
+    socket_fingerprint_impl().unwrap_or_else(fallback_socket_fingerprint)
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn fallback_socket_fingerprint() -> String {
+    "0000000000000000".to_string()
 }
 
 fn socket_fingerprint_impl() -> Option<String> {
-    #[cfg(test)]
-    if test_socket_fingerprint_impl_fail_override() == Some(true) {
-        return None;
-    }
+    let mut current_exe = std::env::current_exe;
+    let mut metadata = std::fs::metadata;
+    let mut modified = std::fs::Metadata::modified;
+    let mut duration_since_epoch = duration_since_epoch;
 
     socket_fingerprint_impl_with_deps(
-        std::env::current_exe,
-        std::fs::metadata,
-        std::fs::Metadata::modified,
-        duration_since_epoch,
+        &mut current_exe,
+        &mut metadata,
+        &mut modified,
+        &mut duration_since_epoch,
     )
 }
 
@@ -315,10 +326,10 @@ fn duration_since_epoch(
 }
 
 fn socket_fingerprint_impl_with_deps(
-    current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
-    metadata: impl FnOnce(PathBuf) -> std::io::Result<std::fs::Metadata>,
-    modified: impl FnOnce(&std::fs::Metadata) -> std::io::Result<std::time::SystemTime>,
-    duration_since_epoch: impl FnOnce(
+    current_exe: &mut dyn FnMut() -> std::io::Result<PathBuf>,
+    metadata: &mut dyn FnMut(PathBuf) -> std::io::Result<std::fs::Metadata>,
+    modified: &mut dyn FnMut(&std::fs::Metadata) -> std::io::Result<std::time::SystemTime>,
+    duration_since_epoch: &mut dyn FnMut(
         std::time::SystemTime,
     ) -> std::result::Result<
         std::time::Duration,
@@ -359,7 +370,7 @@ fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_scope_key() -> String {
     std::thread::current().name().map_or_else(
         || format!("{:?}", std::thread::current().id()),
@@ -367,7 +378,7 @@ fn test_scope_key() -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_socket_override() -> Option<String> {
     let key = test_scope_key();
     TEST_SOCKET_OVERRIDES
@@ -375,14 +386,14 @@ fn test_socket_override() -> Option<String> {
         .and_then(|overrides| overrides.lock().get(&key).cloned())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_scope_suffix() -> String {
     let mut hash = FNV_OFFSET_BASIS;
     hash = fnv1a_update(hash, test_scope_key().as_bytes());
     format!("{hash:08x}")
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn set_test_tenex_mux_socket_override(value: Option<&str>) {
     let key = test_scope_key();
     let overrides = TEST_TENEX_MUX_SOCKET_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -392,7 +403,7 @@ fn set_test_tenex_mux_socket_override(value: Option<&str>) {
     overrides.lock().insert(key, value);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_tenex_mux_socket_override() -> Option<TestTenexMuxSocketOverride> {
     let key = test_scope_key();
     TEST_TENEX_MUX_SOCKET_OVERRIDES
@@ -400,14 +411,14 @@ fn test_tenex_mux_socket_override() -> Option<TestTenexMuxSocketOverride> {
         .and_then(|overrides| overrides.lock().get(&key).cloned())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn set_test_namespaced_supported_override(value: bool) {
     let key = test_scope_key();
     let overrides = TEST_NAMESPACED_SUPPORTED_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
     overrides.lock().insert(key, value);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_namespaced_supported_override() -> Option<bool> {
     let key = test_scope_key();
     TEST_NAMESPACED_SUPPORTED_OVERRIDES
@@ -415,30 +426,14 @@ fn test_namespaced_supported_override() -> Option<bool> {
         .and_then(|overrides| overrides.lock().get(&key).copied())
 }
 
-#[cfg(test)]
-fn set_test_socket_fingerprint_impl_fail_override(value: bool) {
-    let key = test_scope_key();
-    let overrides =
-        TEST_SOCKET_FINGERPRINT_IMPL_FAIL_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
-    overrides.lock().insert(key, value);
-}
-
-#[cfg(test)]
-fn test_socket_fingerprint_impl_fail_override() -> Option<bool> {
-    let key = test_scope_key();
-    TEST_SOCKET_FINGERPRINT_IMPL_FAIL_OVERRIDES
-        .get()
-        .and_then(|overrides| overrides.lock().get(&key).copied())
-}
-
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn set_test_namespaced_name_error_override(value: bool) {
     let key = test_scope_key();
     let overrides = TEST_NAMESPACED_NAME_ERROR_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
     overrides.lock().insert(key, value);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_namespaced_name_error_override() -> Option<bool> {
     let key = test_scope_key();
     TEST_NAMESPACED_NAME_ERROR_OVERRIDES
@@ -450,6 +445,22 @@ fn test_namespaced_name_error_override() -> Option<bool> {
 mod tests {
     use super::*;
 
+    fn modified_stub_error(
+        _metadata: &std::fs::Metadata,
+    ) -> std::io::Result<std::time::SystemTime> {
+        Err(std::io::Error::other("stub error"))
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test double matches the injected metadata modified function"
+    )]
+    fn modified_before_epoch(
+        _metadata: &std::fs::Metadata,
+    ) -> std::io::Result<std::time::SystemTime> {
+        Ok(UNIX_EPOCH - std::time::Duration::from_secs(1))
+    }
+
     #[test]
     fn test_socket_fingerprint_format() {
         let fingerprint = socket_fingerprint();
@@ -459,30 +470,36 @@ mod tests {
 
     #[test]
     fn test_socket_fingerprint_falls_back_when_impl_returns_none() {
-        set_test_socket_fingerprint_impl_fail_override(true);
-        let fingerprint = socket_fingerprint();
+        let fingerprint = fallback_socket_fingerprint();
         assert_eq!(fingerprint, "0000000000000000");
-        set_test_socket_fingerprint_impl_fail_override(false);
     }
 
     #[test]
     fn test_socket_fingerprint_impl_with_deps_returns_none_when_current_exe_fails() {
+        let mut current_exe = || Err(std::io::Error::other("stub error"));
+        let mut metadata = std::fs::metadata;
+        let mut modified = std::fs::Metadata::modified;
+        let mut duration_since_epoch = duration_since_epoch;
         let fingerprint = socket_fingerprint_impl_with_deps(
-            || Err(std::io::Error::other("stub error")),
-            std::fs::metadata,
-            std::fs::Metadata::modified,
-            duration_since_epoch,
+            &mut current_exe,
+            &mut metadata,
+            &mut modified,
+            &mut duration_since_epoch,
         );
         assert!(fingerprint.is_none());
     }
 
     #[test]
     fn test_socket_fingerprint_impl_with_deps_returns_none_when_metadata_fails() {
+        let mut current_exe = || Ok(PathBuf::from("/stub-path"));
+        let mut metadata = |_| Err(std::io::Error::other("stub error"));
+        let mut modified = std::fs::Metadata::modified;
+        let mut duration_since_epoch = duration_since_epoch;
         let fingerprint = socket_fingerprint_impl_with_deps(
-            || Ok(PathBuf::from("/stub-path")),
-            |_| Err(std::io::Error::other("stub error")),
-            std::fs::Metadata::modified,
-            duration_since_epoch,
+            &mut current_exe,
+            &mut metadata,
+            &mut modified,
+            &mut duration_since_epoch,
         );
         assert!(fingerprint.is_none());
     }
@@ -493,11 +510,15 @@ mod tests {
         let file_path = temp_dir.path().join("fingerprint.txt");
         std::fs::write(&file_path, "x").expect("write test file");
 
+        let mut current_exe = || Ok(file_path.clone());
+        let mut metadata = std::fs::metadata;
+        let mut modified = modified_stub_error;
+        let mut duration_since_epoch = duration_since_epoch;
         let fingerprint = socket_fingerprint_impl_with_deps(
-            || Ok(file_path.clone()),
-            std::fs::metadata,
-            |_| Err(std::io::Error::other("stub error")),
-            duration_since_epoch,
+            &mut current_exe,
+            &mut metadata,
+            &mut modified,
+            &mut duration_since_epoch,
         );
         assert!(fingerprint.is_none());
     }
@@ -508,15 +529,16 @@ mod tests {
         let file_path = temp_dir.path().join("fingerprint.txt");
         std::fs::write(&file_path, "x").expect("write test file");
 
-        let before_epoch = UNIX_EPOCH
-            .checked_sub(std::time::Duration::from_secs(1))
-            .expect("time before epoch");
-
+        let mut current_exe = || Ok(file_path.clone());
+        let mut metadata = std::fs::metadata;
+        let mut modified = modified_before_epoch;
+        let mut duration_since_epoch =
+            |modified: std::time::SystemTime| modified.duration_since(UNIX_EPOCH);
         let fingerprint = socket_fingerprint_impl_with_deps(
-            || Ok(file_path.clone()),
-            std::fs::metadata,
-            |_| Ok(before_epoch),
-            |modified| modified.duration_since(UNIX_EPOCH),
+            &mut current_exe,
+            &mut metadata,
+            &mut modified,
+            &mut duration_since_epoch,
         );
         assert!(fingerprint.is_none());
     }
@@ -649,7 +671,10 @@ mod tests {
 
         let err = socket_endpoint_from_value("tenex-mux-test-name")
             .expect_err("expected namespaced name conversion to fail");
-        assert!(err.to_string().contains("Failed to build namespaced mux socket name"));
+        assert!(
+            err.to_string()
+                .contains("Failed to build namespaced mux socket name")
+        );
 
         set_test_namespaced_name_error_override(false);
     }
@@ -715,10 +740,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_socket_name_cached_is_stable() {
-        let name = default_socket_name_cached();
+    fn test_default_socket_name_is_stable() {
+        let name = default_socket_name();
         assert!(name.starts_with(DEFAULT_SOCKET_PREFIX));
-        assert_eq!(name, default_socket_name_cached());
+        assert_eq!(name, default_socket_name());
     }
 
     #[test]

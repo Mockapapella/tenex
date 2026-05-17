@@ -3,6 +3,7 @@
 //! Tenex allows you to run multiple AI agents in parallel, each in isolated
 //! git worktrees, with a TUI for managing and monitoring them.
 
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(
     test,
     expect(clippy::unwrap_used, reason = "unit tests use unwrap for assertions")

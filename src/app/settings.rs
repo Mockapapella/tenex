@@ -22,6 +22,37 @@ static TEST_SETTINGS_PATH_OVERRIDES: OnceLock<Mutex<HashMap<String, PathBuf>>> =
 static TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> =
     OnceLock::new();
 
+#[cfg(test)]
+fn new_settings_serialize_error_overrides() -> Mutex<HashMap<String, bool>> {
+    Mutex::new(HashMap::new())
+}
+
+#[cfg(test)]
+fn test_settings_serialize_error_overrides() -> &'static Mutex<HashMap<String, bool>> {
+    TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES.get_or_init(new_settings_serialize_error_overrides)
+}
+
+#[cfg(test)]
+struct ForcedSerializeErrorGuard {
+    key: String,
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl Drop for ForcedSerializeErrorGuard {
+    fn drop(&mut self) {
+        let mut overrides = test_settings_serialize_error_overrides().lock();
+        match self.previous {
+            Some(value) => {
+                overrides.insert(self.key.clone(), value);
+            }
+            None => {
+                overrides.remove(&self.key);
+            }
+        }
+    }
+}
+
 const fn default_docker_for_new_roots() -> bool {
     false
 }
@@ -170,38 +201,20 @@ impl Settings {
 
     #[cfg(test)]
     fn test_force_serialize_error() -> bool {
-        TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES
-            .get()
-            .and_then(|overrides| overrides.lock().get(&Self::test_scope_key()).copied())
+        test_settings_serialize_error_overrides()
+            .lock()
+            .get(&Self::test_scope_key())
+            .copied()
             .unwrap_or(false)
     }
 
     #[cfg(test)]
-    fn with_forced_serialize_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
+    fn force_serialize_error_for_tests() -> ForcedSerializeErrorGuard {
         let key = Self::test_scope_key();
-        let overrides =
-            TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
-
-        let previous = {
-            let mut overrides = overrides.lock();
-            overrides.insert(key.clone(), true)
-        };
-
-        let result = f();
-
-        {
-            let mut overrides = overrides.lock();
-            match previous {
-                Some(value) => {
-                    overrides.insert(key, value);
-                }
-                None => {
-                    overrides.remove(&key);
-                }
-            }
-        }
-
-        result
+        let previous = test_settings_serialize_error_overrides()
+            .lock()
+            .insert(key.clone(), true);
+        ForcedSerializeErrorGuard { key, previous }
     }
 
     #[cfg(test)]
@@ -436,11 +449,10 @@ mod tests {
             ..Settings::default()
         };
 
-        let err = Settings::with_forced_serialize_error_for_tests(|| {
-            settings
-                .save()
-                .expect_err("expected forced serialization error")
-        });
+        let _guard = Settings::force_serialize_error_for_tests();
+        let err = settings
+            .save()
+            .expect_err("expected forced serialization error");
         assert!(
             err.to_string()
                 .contains("forced settings serialization error for test")
@@ -462,15 +474,19 @@ mod tests {
 
     #[test]
     fn test_with_forced_serialize_error_restores_previous_override() {
-        Settings::with_forced_serialize_error_for_tests(|| {
+        {
+            let _outer = Settings::force_serialize_error_for_tests();
             assert!(Settings::test_force_serialize_error());
 
-            Settings::with_forced_serialize_error_for_tests(|| {
+            {
+                let _inner = Settings::force_serialize_error_for_tests();
                 assert!(Settings::test_force_serialize_error());
-            });
+            }
 
             assert!(Settings::test_force_serialize_error());
-        });
+        }
+
+        assert!(!Settings::test_force_serialize_error());
     }
 
     #[test]

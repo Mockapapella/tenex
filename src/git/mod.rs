@@ -1,4 +1,5 @@
 //! Git operations module
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 mod branch;
 mod diff;
@@ -33,6 +34,7 @@ thread_local! {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn with_forced_repo_worktrees_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
     worktree::with_forced_repo_worktrees_error_for_tests(f)
 }

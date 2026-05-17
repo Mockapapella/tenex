@@ -1,5 +1,7 @@
 //! Client for talking to the mux daemon.
 
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use super::endpoint::{SocketEndpoint, socket_endpoint};
 use super::ipc;
 use super::protocol::{MuxRequest, MuxResponse};
@@ -244,7 +246,11 @@ impl MuxClient {
     }
 }
 
-fn send_request(stream: &mut (impl Read + Write), req: &MuxRequest) -> Result<MuxResponse> {
+trait ClientStream: Read + Write {}
+
+impl<T: Read + Write + ?Sized> ClientStream for T {}
+
+fn send_request(stream: &mut dyn ClientStream, req: &MuxRequest) -> Result<MuxResponse> {
     ipc::write_json(stream, req)?;
     ipc::read_json(stream)
 }
@@ -359,34 +365,30 @@ fn test_scope_key() -> String {
 }
 
 #[cfg(test)]
-    mod tests {
-        use super::*;
-        use interprocess::local_socket::traits::ListenerExt as _;
-        use std::fs;
-        #[cfg(unix)]
-        use std::os::unix::fs::PermissionsExt;
-        use std::time::Instant;
+mod tests {
+    use super::*;
+    use interprocess::local_socket::traits::ListenerExt as _;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
 
-        #[test]
-        fn test_resolve_tenex_executable_from_current_exe_returns_original_when_already_tenex() {
-            let exe_name = format!(
-                "{}{}",
-                env!("CARGO_PKG_NAME"),
-                std::env::consts::EXE_SUFFIX
-            );
-            let exe = PathBuf::from(exe_name);
+    #[test]
+    fn test_resolve_tenex_executable_from_current_exe_returns_original_when_already_tenex() {
+        let exe_name = format!("{}{}", env!("CARGO_PKG_NAME"), std::env::consts::EXE_SUFFIX);
+        let exe = PathBuf::from(exe_name);
 
-            let resolved =
-                resolve_tenex_executable_from_current_exe(&exe).expect("Resolve tenex executable");
+        let resolved =
+            resolve_tenex_executable_from_current_exe(&exe).expect("Resolve tenex executable");
 
-            assert_eq!(resolved, exe);
-        }
+        assert_eq!(resolved, exe);
+    }
 
-        struct ChildGuard(std::process::Child);
+    struct ChildGuard(std::process::Child);
 
-        impl Drop for ChildGuard {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
             let _ = self.0.wait();
         }
     }
@@ -947,10 +949,9 @@ fn test_scope_key() -> String {
             .expect("Resolve endpoint for start_daemon spawn error test");
         let temp_dir = tempfile::TempDir::new().expect("Create spawn error temp dir");
         let fake_exe = temp_dir.path().join(env!("CARGO_PKG_NAME"));
-        let err = with_current_exe_override(CurrentExeOverride::Ok(fake_exe), || {
-            start_daemon(&endpoint)
-        })
-        .expect_err("Expected spawn error");
+        let err =
+            with_current_exe_override(CurrentExeOverride::Ok(fake_exe), || start_daemon(&endpoint))
+                .expect_err("Expected spawn error");
         assert!(err.to_string().contains("Failed to spawn mux daemon"));
     }
 

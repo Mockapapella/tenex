@@ -1,6 +1,10 @@
 //! Integration coverage for `tenex::tui::test_support`.
 
 #![cfg(feature = "test-support")]
+#![expect(
+    clippy::expect_used,
+    reason = "coverage tests assert fixture setup directly"
+)]
 
 use tenex::agent::{Agent, Storage};
 use tenex::app::Settings;
@@ -69,7 +73,10 @@ fn test_flush_pending_clipboard_test_support_exercises_all_outcomes() {
     app.data.ui.pending_clipboard = Some("a\nb".to_string());
     let mut out = Vec::new();
     test_support::flush_pending_clipboard(&mut out, &mut app);
-    assert_eq!(app.data.ui.status_message.as_deref(), Some("Copied 2 lines"));
+    assert_eq!(
+        app.data.ui.status_message.as_deref(),
+        Some("Copied 2 lines")
+    );
 
     app.data.ui.pending_clipboard = Some("hello".to_string());
     let mut failing = FailingWriter;

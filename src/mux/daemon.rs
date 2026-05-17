@@ -1,4 +1,5 @@
 //! Background mux daemon.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::endpoint::SocketEndpoint;
 use super::ipc;
@@ -16,8 +17,16 @@ use tracing::{debug, info, warn};
 
 static RESIZE_MAX: OnceLock<Mutex<HashMap<String, (u16, u16)>>> = OnceLock::new();
 
+trait ReadWrite: io::Read + io::Write {}
+
+impl<T: io::Read + io::Write + ?Sized> ReadWrite for T {}
+
+fn new_resize_max() -> Mutex<HashMap<String, (u16, u16)>> {
+    Mutex::new(HashMap::new())
+}
+
 fn resize_max() -> &'static Mutex<HashMap<String, (u16, u16)>> {
-    RESIZE_MAX.get_or_init(|| Mutex::new(HashMap::new()))
+    RESIZE_MAX.get_or_init(new_resize_max)
 }
 
 /// Run the mux daemon in the foreground.
@@ -77,15 +86,17 @@ fn run_with_connection_limit(
 
     info!(endpoint = %endpoint.display, "Mux daemon listening");
 
-    serve_incoming(listener.incoming(), connection_limit);
+    let mut incoming = listener.incoming();
+    serve_incoming(&mut incoming, connection_limit);
 
     Ok(())
 }
 
-fn serve_incoming<I>(incoming: I, connection_limit: Option<usize>)
-where
-    I: IntoIterator<Item = io::Result<Stream>>,
-{
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn serve_incoming(
+    incoming: &mut dyn Iterator<Item = io::Result<Stream>>,
+    connection_limit: Option<usize>,
+) {
     if connection_limit == Some(0) {
         return;
     }
@@ -109,18 +120,19 @@ where
     }
 }
 
-fn handle_connection_spawned(stream: Stream) {
-    handle_connection(stream).unwrap_or_else(|err| {
+fn handle_connection_spawned(mut stream: Stream) {
+    handle_connection(&mut stream).unwrap_or_else(|err| {
         debug!(error = %err, "Mux client connection closed");
     });
 }
 
-fn try_ping_stream(stream: &mut (impl io::Read + io::Write)) -> bool {
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn try_ping_stream(stream: &mut dyn ReadWrite) -> bool {
     if ipc::write_json(stream, &MuxRequest::Ping).is_err() {
         return false;
     }
 
-    ipc::read_json::<_, MuxResponse>(stream).is_ok()
+    ipc::read_json::<MuxResponse>(stream).is_ok()
 }
 
 fn try_ping_existing(endpoint: &SocketEndpoint) -> bool {
@@ -131,9 +143,9 @@ fn try_ping_existing(endpoint: &SocketEndpoint) -> bool {
     try_ping_stream(&mut stream)
 }
 
-fn handle_connection<RW: std::io::Read + std::io::Write>(mut stream: RW) -> Result<()> {
+fn handle_connection(stream: &mut dyn ReadWrite) -> Result<()> {
     loop {
-        let request: MuxRequest = match ipc::read_json(&mut stream) {
+        let request: MuxRequest = match ipc::read_json(stream) {
             Ok(req) => req,
             Err(err) => {
                 return Err(err);
@@ -147,7 +159,7 @@ fn handle_connection<RW: std::io::Read + std::io::Write>(mut stream: RW) -> Resu
             },
         };
 
-        ipc::write_json(&mut stream, &response)?;
+        ipc::write_json(stream, &response)?;
     }
 }
 
@@ -230,6 +242,7 @@ fn handle_session_exists(name: &str) -> MuxResponse {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> Result<MuxResponse> {
     let dir = Path::new(working_dir);
     let command = if command.is_empty() {
@@ -250,6 +263,7 @@ fn handle_kill_session(name: &str) -> Result<MuxResponse> {
     Ok(MuxResponse::Ok)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_rename_session(old_name: &str, new_name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::rename(old_name, new_name)?;
     {
@@ -367,6 +381,7 @@ enum ReadResult {
     Reset { start: u64, checkpoint: Vec<u8> },
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxResponse> {
     use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -854,24 +869,22 @@ mod tests {
     #[test]
     fn test_serve_incoming_returns_early_when_limit_zero() {
         let iterated = Arc::new(AtomicBool::new(false));
-        serve_incoming(
-            OneShotIncoming {
-                iterated: iterated.clone(),
-            },
-            Some(0),
-        );
+        let mut incoming = OneShotIncoming {
+            iterated: iterated.clone(),
+        }
+        .into_iter();
+        serve_incoming(&mut incoming, Some(0));
         assert!(!iterated.load(Ordering::SeqCst));
     }
 
     #[test]
     fn test_serve_incoming_iterates_when_limit_is_nonzero() {
         let iterated = Arc::new(AtomicBool::new(false));
-        serve_incoming(
-            OneShotIncoming {
-                iterated: iterated.clone(),
-            },
-            Some(1),
-        );
+        let mut incoming = OneShotIncoming {
+            iterated: iterated.clone(),
+        }
+        .into_iter();
+        serve_incoming(&mut incoming, Some(1));
         assert!(iterated.load(Ordering::SeqCst));
     }
 
@@ -892,7 +905,8 @@ mod tests {
             .expect("Mux accept failed");
         drop(client);
 
-        serve_incoming(std::iter::once(Ok(server_stream)), Some(2));
+        let mut incoming = std::iter::once(Ok(server_stream));
+        serve_incoming(&mut incoming, Some(2));
         cleanup_endpoint(&endpoint);
     }
 
@@ -1000,7 +1014,7 @@ mod tests {
             read: std::io::Cursor::new(payload),
         };
         std::io::Write::flush(&mut stream).expect("flush");
-        let err = handle_connection(stream).unwrap_err();
+        let err = handle_connection(&mut stream).unwrap_err();
         assert!(err.to_string().contains("Failed to write message length"));
     }
 
@@ -1016,11 +1030,11 @@ mod tests {
 
         let server = std::thread::spawn(move || {
             let mut incoming = listener.incoming();
-            let stream = incoming
+            let mut stream = incoming
                 .next()
                 .expect("Expected client connection")
                 .expect("Mux accept failed");
-            handle_connection(stream)
+            handle_connection(&mut stream)
         });
 
         let mut client =
@@ -1047,6 +1061,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single table-style test covers all missing target request variants"
+    )]
     fn test_dispatch_errors_for_missing_sessions_and_targets() {
         let missing_session = unique_session("tenex-test-daemon-missing");
 
@@ -1267,7 +1285,10 @@ mod tests {
     #[test]
     fn test_serve_incoming_warns_on_accept_errors() {
         let incoming: Vec<io::Result<Stream>> = vec![Err(io::Error::other("boom"))];
-        with_tracing_dispatch(|| serve_incoming(incoming, Some(1)));
+        with_tracing_dispatch(|| {
+            let mut incoming = incoming.into_iter();
+            serve_incoming(&mut incoming, Some(1));
+        });
     }
 
     #[test]

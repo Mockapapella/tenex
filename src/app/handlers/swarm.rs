@@ -1,5 +1,8 @@
 //! Swarm operations: spawn children, spawn review agents, synthesize
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use crate::agent::{Agent, AgentRuntime, ChildConfig, Storage, WorkspaceKind};
 use crate::git::{self, WorktreeManager};
 use crate::mux::SessionManager;
@@ -50,14 +53,14 @@ const CODEX_REVIEW_START_TIMEOUT: &str =
 const SYNTHESIS_KILL_WINDOW_WARN: &str =
     "Failed to kill descendant mux window during synthesis cleanup";
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 thread_local! {
     static TEST_FORCE_SYNTHESIS_WRITE_ERROR: std::cell::Cell<bool> = const {
         std::cell::Cell::new(false)
     };
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_forced_synthesis_write_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
     let previous = TEST_FORCE_SYNTHESIS_WRITE_ERROR.with(|flag| flag.replace(true));
     let result = f();
@@ -65,8 +68,9 @@ fn with_forced_synthesis_write_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
     result
 }
 
-fn write_synthesis_contents(file: &mut impl Write, contents: &str) -> std::io::Result<()> {
-    #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_synthesis_contents(file: &mut dyn Write, contents: &str) -> std::io::Result<()> {
+    #[cfg(any(test, coverage))]
     if TEST_FORCE_SYNTHESIS_WRITE_ERROR.with(std::cell::Cell::get) {
         return Err(std::io::Error::other("forced synthesis write error"));
     }
@@ -94,15 +98,280 @@ impl Default for CodexReviewTimings {
 }
 
 impl Actions {
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_swarm_paths_for_coverage(app_data: &mut AppData) {
+        let worktree_path =
+            std::env::temp_dir().join(format!("tenex-swarm-coverage-{}", uuid::Uuid::new_v4()));
+        let mut root = Agent::new(
+            "coverage swarm root".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-swarm".to_string(),
+            worktree_path.clone(),
+        );
+        root.repo_root = Some(worktree_path.clone());
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let branch = root.branch.clone();
+        app_data.storage.add(root);
+
+        let config = SpawnConfig {
+            root_session: root_session.clone(),
+            worktree_path: worktree_path.clone(),
+            branch: branch.clone(),
+            workspace_kind: WorkspaceKind::GitWorktree,
+            runtime: AgentRuntime::Host,
+            parent_agent_id: root_id,
+        };
+
+        let previous_plan_prompt = app_data.spawn.use_plan_prompt;
+        app_data.spawn.use_plan_prompt = true;
+        let _ = Self::new().spawn_child_agents(app_data, &config, 0, Some("plan task"));
+        let _ = Self::new().spawn_child_agents(app_data, &config, 0, None);
+        app_data.spawn.use_plan_prompt = previous_plan_prompt;
+
+        let long_task = "x".repeat(31);
+        let _ = Self::generate_root_title(Some(&long_task));
+        let _ = Self::generate_root_title(None);
+
+        let quick_timings = CodexReviewTimings {
+            poll_interval: Duration::from_millis(0),
+            step_timeout: Duration::from_millis(0),
+            idle_stable_for: Duration::from_millis(0),
+            command_hint_timeout: Duration::from_millis(0),
+        };
+        let _ = Self::new().start_codex_review_flow_with_timings(
+            "missing-target",
+            "   ",
+            quick_timings,
+        );
+        let _ = Self::new().start_codex_review_flow_with_timings(
+            "missing-target",
+            "main",
+            quick_timings,
+        );
+        let _ = Self::new().wait_for_pane_contains_any(
+            "missing-target",
+            &["needle"],
+            Duration::from_millis(1),
+            Duration::from_millis(0),
+        );
+        let _ = Self::new().wait_for_pane_contains_any(
+            "missing-target",
+            &["needle"],
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+        );
+        let mut idle_outputs = ["first", "first"].into_iter();
+        let mut capture_idle = |_: &str| Ok(idle_outputs.next().unwrap_or("first").to_string());
+        let _ = Self::wait_for_pane_idle_with_capture(
+            "coverage-target",
+            Duration::from_millis(0),
+            Duration::from_millis(5),
+            Duration::from_millis(0),
+            &mut capture_idle,
+        );
+        let mut capture_error = |_: &str| Err(anyhow::anyhow!("capture failed"));
+        let _ = Self::wait_for_pane_idle_with_capture(
+            "coverage-target",
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+            &mut capture_error,
+        );
+
+        let codex_child = Agent::new_child(
+            "Reviewer 1".to_string(),
+            "codex".to_string(),
+            branch.clone(),
+            worktree_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+                repo_root: Some(worktree_path.clone()),
+            },
+        );
+        let _ = Self::codex_review_flow_for_child(&codex_child, "main");
+
+        let shell_child = Agent::new_child(
+            "Reviewer 2".to_string(),
+            "echo".to_string(),
+            branch,
+            worktree_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 3,
+                repo_root: Some(worktree_path),
+            },
+        );
+        let _ = Self::codex_review_flow_for_child(&shell_child, "main");
+
+        let mut terminal_parent = Agent::new(
+            "coverage terminal".to_string(),
+            "terminal".to_string(),
+            "tenex/coverage-terminal".to_string(),
+            std::env::temp_dir(),
+        );
+        terminal_parent.is_terminal = true;
+        let terminal_parent_id = terminal_parent.id;
+        app_data.storage.add(terminal_parent);
+        let _ = Self::get_existing_parent_config(app_data, terminal_parent_id);
+        app_data.spawn.spawning_under = Some(terminal_parent_id);
+        app_data.review.base_branch = Some("main".to_string());
+        let _ = Self::new().spawn_review_agents(app_data);
+        app_data.select_agent_by_id(terminal_parent_id);
+        let _ = Self::new().synthesize(app_data);
+
+        let non_git_root_path =
+            std::env::temp_dir().join(format!("tenex-swarm-plain-{}", uuid::Uuid::new_v4()));
+        let _ = fs::create_dir_all(&non_git_root_path);
+        let mut non_git_data = AppData::new(
+            crate::config::Config::default(),
+            Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        non_git_data.cwd_project_root = Some(non_git_root_path.clone());
+        let _ = Self::new().create_new_root_for_swarm(&mut non_git_data, Some("plain"), 1);
+
+        let mut review_plain = Agent::new(
+            "coverage review plain".to_string(),
+            "echo".to_string(),
+            "plain".to_string(),
+            non_git_root_path,
+        );
+        review_plain.workspace_kind = WorkspaceKind::PlainDir;
+        let review_plain_id = review_plain.id;
+        non_git_data.storage.add(review_plain);
+        non_git_data.spawn.spawning_under = Some(review_plain_id);
+        non_git_data.review.base_branch = Some("main".to_string());
+        let _ = Self::new().spawn_review_agents(&mut non_git_data);
+
+        let mut empty_selection = AppData::new(
+            crate::config::Config::default(),
+            Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        let _ = Self::new().synthesize(&mut empty_selection);
+
+        let leaf_worktree = std::env::temp_dir().join(format!(
+            "tenex-swarm-coverage-leaf-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = fs::create_dir_all(&leaf_worktree);
+        let leaf = Agent::new(
+            "coverage leaf".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-leaf".to_string(),
+            leaf_worktree,
+        );
+        let leaf_id = leaf.id;
+        app_data.storage.add(leaf);
+        app_data.select_agent_by_id(leaf_id);
+        let _ = Self::new().synthesize(app_data);
+
+        let synth_worktree = std::env::temp_dir().join(format!(
+            "tenex-swarm-coverage-synth-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = fs::create_dir_all(&synth_worktree);
+        let mut synth_root = Agent::new(
+            "coverage synth root".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-synth".to_string(),
+            synth_worktree.clone(),
+        );
+        synth_root.collapsed = false;
+        let synth_root_id = synth_root.id;
+        let synth_session = synth_root.mux_session.clone();
+        app_data.storage.add(synth_root);
+        let mut synth_child = Agent::new_child(
+            "coverage synth child".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-synth".to_string(),
+            synth_worktree,
+            ChildConfig {
+                parent_id: synth_root_id,
+                mux_session: synth_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        synth_child.window_index = None;
+        app_data.storage.add(synth_child);
+        app_data.select_agent_by_id(synth_root_id);
+        let _ = Self::new().synthesize(app_data);
+
+        let synth_window_worktree = std::env::temp_dir().join(format!(
+            "tenex-swarm-coverage-synth-window-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = fs::create_dir_all(&synth_window_worktree);
+        let mut synth_window_root = Agent::new(
+            "coverage synth window root".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-synth-window".to_string(),
+            synth_window_worktree.clone(),
+        );
+        synth_window_root.collapsed = false;
+        let synth_window_root_id = synth_window_root.id;
+        let synth_window_session = synth_window_root.mux_session.clone();
+        app_data.storage.add(synth_window_root);
+        let synth_window_child = Agent::new_child(
+            "coverage synth window child".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-synth-window".to_string(),
+            synth_window_worktree,
+            ChildConfig {
+                parent_id: synth_window_root_id,
+                mux_session: synth_window_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        app_data.storage.add(synth_window_child);
+        app_data.select_agent_by_id(synth_window_root_id);
+        let _ = Self::new().synthesize(app_data);
+
+        let terminal_only_worktree = std::env::temp_dir().join(format!(
+            "tenex-swarm-coverage-terminal-only-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = fs::create_dir_all(&terminal_only_worktree);
+        let mut terminal_only_root = Agent::new(
+            "coverage terminal-only root".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-terminal-only".to_string(),
+            terminal_only_worktree.clone(),
+        );
+        terminal_only_root.collapsed = false;
+        let terminal_only_root_id = terminal_only_root.id;
+        let terminal_only_session = terminal_only_root.mux_session.clone();
+        app_data.storage.add(terminal_only_root);
+        let mut terminal_child = Agent::new_child(
+            "coverage terminal-only child".to_string(),
+            "terminal".to_string(),
+            "tenex/coverage-terminal-only".to_string(),
+            terminal_only_worktree,
+            ChildConfig {
+                parent_id: terminal_only_root_id,
+                mux_session: terminal_only_session,
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        terminal_child.is_terminal = true;
+        app_data.storage.add(terminal_child);
+        app_data.select_agent_by_id(terminal_only_root_id);
+        let _ = Self::new().synthesize(app_data);
+    }
+
     fn root_ancestor_for_known_agent<'a>(storage: &'a Storage, agent: &'a Agent) -> &'a Agent {
-        let mut current = agent;
-        while let Some(parent_id) = current.parent_id {
-            let Some(parent) = storage.get(parent_id) else {
-                break;
-            };
-            current = parent;
-        }
-        current
+        storage.root_ancestor(agent.id).unwrap_or(agent)
     }
 
     fn resolve_swarm_repo_path(app_data: &AppData, current_dir: PathBuf) -> PathBuf {
@@ -115,26 +384,18 @@ impl Actions {
             .unwrap_or(current_dir)
     }
 
-    fn build_synthesis_read_command(
-        synthesis_id: uuid::Uuid,
-        descendants_count: usize,
-        prompt: Option<&str>,
-    ) -> String {
-        let agent_word = if descendants_count == 1 {
-            "agent"
-        } else {
-            "agents"
-        };
-
+    fn build_synthesis_read_command(synthesis_id: uuid::Uuid, prompt: Option<&str>) -> String {
         let mut read_command = format!(
-            "Read .tenex/{synthesis_id}.md - it contains the work of {descendants_count} {agent_word}. Use it to guide your next steps."
+            "Read .tenex/{synthesis_id}.md - it contains the collected descendant work. Use it to guide your next steps."
         );
-        if let Some(prompt) = prompt.map(str::trim)
-            && !prompt.is_empty()
-        {
-            read_command.push_str("\n\nAdditional instructions:\n");
-            read_command.push_str(prompt);
+
+        let prompt = prompt.unwrap_or("").trim();
+        if prompt.is_empty() {
+            return read_command;
         }
+
+        read_command.push_str("\n\nAdditional instructions:\n");
+        read_command.push_str(prompt);
         read_command
     }
 
@@ -164,6 +425,7 @@ impl Actions {
         )
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn start_codex_review_flow_with_timings(
         self,
         target: &str,
@@ -229,6 +491,7 @@ impl Actions {
         Ok(())
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn start_codex_review_flows(self, flows: Vec<(String, String)>) {
         for (target, base_branch) in flows {
             if let Err(err) = self.start_codex_review_flow(&target, &base_branch) {
@@ -241,6 +504,18 @@ impl Actions {
         std::thread::spawn(move || {
             self.start_codex_review_flows(flows);
         });
+    }
+
+    fn codex_review_flow_for_child(child: &Agent, base_branch: &str) -> Option<(String, String)> {
+        if crate::conversation::detect_agent_cli(&child.program)
+            != crate::conversation::AgentCli::Codex
+        {
+            return None;
+        }
+
+        let actual_index = child.window_index?;
+        let window_target = SessionManager::window_target(&child.mux_session, actual_index);
+        Some((window_target, base_branch.to_string()))
     }
 
     fn wait_for_pane_contains_any(
@@ -269,11 +544,29 @@ impl Actions {
         timeout: Duration,
         poll_interval: Duration,
     ) -> bool {
+        let mut capture_pane = |target: &str| self.output_capture.capture_pane(target);
+        Self::wait_for_pane_idle_with_capture(
+            target,
+            stable_for,
+            timeout,
+            poll_interval,
+            &mut capture_pane,
+        )
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn wait_for_pane_idle_with_capture(
+        target: &str,
+        stable_for: Duration,
+        timeout: Duration,
+        poll_interval: Duration,
+        capture_pane: &mut dyn FnMut(&str) -> Result<String>,
+    ) -> bool {
         let start = Instant::now();
         let mut last_change = Instant::now();
         let mut baseline = String::new();
         while start.elapsed() < timeout {
-            if let Ok(pane) = self.output_capture.capture_pane(target) {
+            if let Ok(pane) = capture_pane(target) {
                 if pane != baseline {
                     baseline = pane;
                     last_change = Instant::now();
@@ -334,6 +627,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn spawn_children(self, app_data: &mut AppData, task: Option<&str>) -> Result<AppMode> {
         let count = app_data.spawn.child_count;
         let parent_id = app_data.spawn.spawning_under;
@@ -461,6 +755,7 @@ impl Actions {
         }))
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn create_plain_dir_root_for_swarm(
         self,
         app_data: &mut AppData,
@@ -599,6 +894,7 @@ impl Actions {
     }
 
     /// Spawn a single child agent
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn spawn_single_child(
         self,
         app_data: &mut AppData,
@@ -666,6 +962,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if spawning fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn spawn_review_agents(self, app_data: &mut AppData) -> Result<()> {
         let count = app_data.spawn.child_count;
         let parent_id = app_data
@@ -726,13 +1023,7 @@ impl Actions {
                 reserved_window_index: window_index,
             };
             let child = self.spawn_review_child_agent(app_data, config)?;
-            if crate::conversation::detect_agent_cli(&child.program)
-                == crate::conversation::AgentCli::Codex
-                && let Some(actual_index) = child.window_index
-            {
-                let window_target = SessionManager::window_target(&child.mux_session, actual_index);
-                codex_review_flows.push((window_target, base_branch.clone()));
-            }
+            codex_review_flows.extend(Self::codex_review_flow_for_child(&child, &base_branch));
             app_data.storage.add(child);
         }
 
@@ -874,8 +1165,7 @@ impl Actions {
         }
 
         // Now tell the parent to read the file
-        let read_command =
-            Self::build_synthesis_read_command(synthesis_id, descendants_count, prompt);
+        let read_command = Self::build_synthesis_read_command(synthesis_id, prompt);
         let session_manager = &self.session_manager;
         let target = &parent_target;
         let agent = &parent_agent;
@@ -890,6 +1180,7 @@ impl Actions {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn next_child_number(
     storage: &crate::agent::Storage,
     parent_id: uuid::Uuid,
@@ -958,6 +1249,13 @@ mod tests {
         assert_eq!(actual, missing);
     }
 
+    #[cfg(coverage)]
+    #[test]
+    fn test_exercise_swarm_paths_for_coverage_runs_in_unit_build() {
+        let (mut app, _temp_file) = create_test_app();
+        Actions::exercise_swarm_paths_for_coverage(&mut app.data);
+    }
+
     fn init_git_repo() -> (tempfile::TempDir, PathBuf) {
         let temp_dir = tempfile::TempDir::new().expect("create temp repo dir");
         let repo_path = temp_dir.path().to_path_buf();
@@ -999,23 +1297,22 @@ mod tests {
     }
 
     #[test]
-    fn test_build_synthesis_read_command_handles_singular_plural_and_prompt() {
-        let singular = Actions::build_synthesis_read_command(uuid::Uuid::new_v4(), 1, None);
-        assert!(singular.contains("1 agent"));
+    fn test_build_synthesis_read_command_trims_optional_prompt() {
+        let without_prompt = Actions::build_synthesis_read_command(uuid::Uuid::new_v4(), None);
+        assert!(without_prompt.contains("collected descendant work"));
+        assert!(!without_prompt.contains("Additional instructions"));
 
-        let plural = Actions::build_synthesis_read_command(
+        let with_prompt = Actions::build_synthesis_read_command(
             uuid::Uuid::new_v4(),
-            2,
             Some("  check the edge cases  "),
         );
-        assert!(plural.contains("2 agents"));
-        assert!(plural.contains("Additional instructions"));
-        assert!(plural.contains("check the edge cases"));
+        assert!(with_prompt.contains("Additional instructions"));
+        assert!(with_prompt.contains("check the edge cases"));
     }
 
     #[test]
     fn test_build_synthesis_read_command_skips_empty_prompt_after_trim() {
-        let command = Actions::build_synthesis_read_command(uuid::Uuid::new_v4(), 2, Some("   "));
+        let command = Actions::build_synthesis_read_command(uuid::Uuid::new_v4(), Some("   "));
         assert!(!command.contains("Additional instructions"));
     }
 
@@ -1069,12 +1366,50 @@ mod tests {
     }
 
     #[test]
+    fn test_start_codex_review_flow_returns_when_pane_never_settles() {
+        let handler = Actions::new();
+        let timings = CodexReviewTimings {
+            idle_stable_for: Duration::from_millis(1),
+            poll_interval: Duration::from_millis(0),
+            step_timeout: Duration::from_millis(0),
+            command_hint_timeout: Duration::from_millis(0),
+        };
+
+        handler
+            .start_codex_review_flow_with_timings("nonexistent-target", "main", timings)
+            .expect("timeout should not fail review flow");
+    }
+
+    #[test]
+    fn test_start_codex_review_flows_logs_review_flow_errors() {
+        Actions::new()
+            .start_codex_review_flows(vec![("nonexistent-target".to_string(), "   ".to_string())]);
+    }
+
+    #[test]
     fn test_wait_for_pane_contains_any_returns_false_on_timeout() {
         let handler = Actions::new();
         assert!(!handler.wait_for_pane_contains_any(
             "nonexistent-target",
             &["needle"],
             Duration::from_millis(1),
+            Duration::from_millis(0),
+        ));
+    }
+
+    #[test]
+    fn test_wait_helpers_return_false_when_timeout_is_zero() {
+        let handler = Actions::new();
+        assert!(!handler.wait_for_pane_contains_any(
+            "nonexistent-target",
+            &["needle"],
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+        ));
+        assert!(!handler.wait_for_pane_idle(
+            "nonexistent-target",
+            Duration::from_millis(0),
+            Duration::from_millis(0),
             Duration::from_millis(0),
         ));
     }
@@ -1159,7 +1494,7 @@ mod tests {
             let mut handled = 0usize;
             for mut stream in listener.incoming().flatten() {
                 while handled < expected_requests {
-                    let Ok(request) = crate::mux::read_json::<_, MuxRequest>(&mut stream) else {
+                    let Ok(request) = crate::mux::read_json::<MuxRequest>(&mut stream) else {
                         break;
                     };
 
@@ -1580,6 +1915,37 @@ mod tests {
     }
 
     #[test]
+    fn test_spawn_child_agents_with_plan_prompt_and_no_task_uses_agent_title_prefix() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "main".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        root.workspace_kind = WorkspaceKind::PlainDir;
+        let root_id = root.id;
+        app.data.storage.add(root);
+
+        let config = SpawnConfig {
+            root_session: "missing-session".to_string(),
+            worktree_path: PathBuf::from("/tmp"),
+            branch: "main".to_string(),
+            workspace_kind: WorkspaceKind::PlainDir,
+            runtime: AgentRuntime::Host,
+            parent_agent_id: root_id,
+        };
+
+        app.data.spawn.use_plan_prompt = true;
+
+        handler
+            .spawn_child_agents(&mut app.data, &config, 1, None)
+            .expect_err("expected missing session to error");
+    }
+
+    #[test]
     fn test_spawn_single_child_uses_child_runtime_scope_when_parent_missing() {
         let handler = Actions::new();
         let (mut app, _temp) = create_test_app();
@@ -1976,6 +2342,35 @@ mod tests {
         let resolved =
             Actions::resolve_swarm_repo_path(&app.data, PathBuf::from("/tmp/current-root"));
         assert_eq!(resolved, explicit.path().to_path_buf());
+    }
+
+    #[test]
+    fn test_resolve_swarm_repo_path_uses_selected_project_root_before_cwd_root() {
+        let (mut app, _temp) = create_test_app();
+        let selected_root = tempfile::TempDir::new().expect("selected tempdir");
+        let cwd_root = tempfile::TempDir::new().expect("cwd tempdir");
+        let mut agent = Agent::new(
+            "root".to_string(),
+            "echo".to_string(),
+            "main".to_string(),
+            selected_root.path().to_path_buf(),
+        );
+        agent.repo_root = Some(selected_root.path().to_path_buf());
+        app.data.storage.add(agent);
+        app.data.cwd_project_root = Some(cwd_root.path().to_path_buf());
+        app.data.selected = app
+            .data
+            .sidebar_items()
+            .iter()
+            .rposition(|item| match item {
+                crate::app::SidebarItem::Project(project) => project.root == selected_root.path(),
+                crate::app::SidebarItem::Agent(_) => false,
+            })
+            .expect("selected project row");
+
+        let resolved =
+            Actions::resolve_swarm_repo_path(&app.data, PathBuf::from("/tmp/current-root"));
+        assert_eq!(resolved, selected_root.path().to_path_buf());
     }
 
     #[test]

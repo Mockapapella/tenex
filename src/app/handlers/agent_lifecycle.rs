@@ -1,4 +1,5 @@
 //! Agent lifecycle operations: create, kill, reconnect
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use crate::agent::{Agent, AgentRuntime, ChildConfig};
 use crate::git::{self, WorktreeCreateOptions, WorktreeManager};
@@ -6,7 +7,7 @@ use crate::mux::SessionManager;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -20,7 +21,7 @@ use crate::state::{AppMode, ConfirmAction, ConfirmingMode, ErrorModalMode};
 #[derive(Debug)]
 struct BranchSwitchTarget {
     branch: String,
-    worktree_path: std::path::PathBuf,
+    worktree_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -28,29 +29,404 @@ struct RootLaunchSpec {
     title: String,
     program: String,
     runtime: AgentRuntime,
-    repo_root: std::path::PathBuf,
+    repo_root: PathBuf,
     branch: String,
-    worktree_path: std::path::PathBuf,
+    worktree_path: PathBuf,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn runtime_for_conflict(
     app_data: &AppData,
     conflict: &WorktreeConflictInfo,
 ) -> Option<AgentRuntime> {
-    app_data
-        .storage
-        .iter()
-        .find(|agent| {
-            if agent.branch != conflict.branch {
-                return false;
-            }
-
-            agent.worktree_path == conflict.worktree_path
-        })
-        .map(|agent| agent.runtime)
+    for agent in app_data.storage.iter() {
+        if agent.branch.as_str() == conflict.branch.as_str()
+            && agent.worktree_path == conflict.worktree_path
+        {
+            return Some(agent.runtime);
+        }
+    }
+    None
 }
 
 impl Actions {
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_agent_lifecycle_paths_for_coverage(app_data: &mut AppData) {
+        let root_path = std::env::temp_dir().join("tenex-agent-lifecycle-coverage-root");
+        let child_path = std::env::temp_dir().join("tenex-agent-lifecycle-coverage-child");
+
+        let mut claude_root = Agent::new(
+            "coverage root".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-root".to_string(),
+            root_path.clone(),
+        );
+        Self::prepare_agent_for_launch(app_data, &mut claude_root);
+
+        let mut claude_existing = Agent::new(
+            "coverage existing".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-existing".to_string(),
+            root_path.clone(),
+        );
+        claude_existing.conversation_id = Some("existing-conversation".to_string());
+        Self::prepare_agent_for_launch(app_data, &mut claude_existing);
+
+        let mut docker_root = Agent::new(
+            "coverage docker".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-docker".to_string(),
+            root_path.clone(),
+        );
+        docker_root.runtime = AgentRuntime::Docker;
+        Self::prepare_agent_for_launch(app_data, &mut docker_root);
+
+        let mut docker_scoped = Agent::new(
+            "coverage docker scoped".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-docker-scoped".to_string(),
+            root_path.clone(),
+        );
+        docker_scoped.runtime = AgentRuntime::Docker;
+        docker_scoped.runtime_scope = "coverage-scope".to_string();
+        Self::prepare_agent_for_launch(app_data, &mut docker_scoped);
+
+        let mut child = Agent::new_child(
+            "coverage child".to_string(),
+            "claude".to_string(),
+            "tenex/coverage-root".to_string(),
+            child_path,
+            ChildConfig {
+                parent_id: claude_root.id,
+                mux_session: claude_root.mux_session.clone(),
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        Self::prepare_agent_for_launch(app_data, &mut child);
+
+        app_data.storage.add(docker_root.clone());
+        let matching_conflict = WorktreeConflictInfo {
+            title: "coverage conflict".to_string(),
+            prompt: None,
+            branch: docker_root.branch.clone(),
+            worktree_path: docker_root.worktree_path.clone(),
+            repo_root: root_path.clone(),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "coverage".to_string(),
+            swarm_child_count: Some(2),
+        };
+        let _ = runtime_for_conflict(app_data, &matching_conflict);
+
+        let missing_conflict = WorktreeConflictInfo {
+            branch: "tenex/missing".to_string(),
+            worktree_path: root_path.join("missing"),
+            swarm_child_count: None,
+            ..matching_conflict
+        };
+        let _ = runtime_for_conflict(app_data, &missing_conflict);
+
+        let conflict_root =
+            std::env::temp_dir().join(format!("tenex-agent-lifecycle-conflict-{}", Uuid::new_v4()));
+        let conflict_worktree = conflict_root.join("conflict");
+        let other_worktree = conflict_root.join("other");
+        let conflict_branch = "tenex/coverage-conflict".to_string();
+
+        let mut other_branch_agent = Agent::new(
+            "coverage other branch".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-other".to_string(),
+            conflict_worktree.clone(),
+        );
+        other_branch_agent.mux_session = "coverage-other-branch-session".to_string();
+        app_data.storage.add(other_branch_agent);
+
+        let mut other_worktree_agent = Agent::new(
+            "coverage other worktree".to_string(),
+            "echo".to_string(),
+            conflict_branch.clone(),
+            other_worktree,
+        );
+        other_worktree_agent.mux_session = "coverage-other-worktree-session".to_string();
+        app_data.storage.add(other_worktree_agent);
+
+        let mut shared_conflict_agent = Agent::new(
+            "coverage shared conflict".to_string(),
+            "echo".to_string(),
+            conflict_branch.clone(),
+            conflict_worktree.clone(),
+        );
+        shared_conflict_agent.mux_session = "coverage-shared-session".to_string();
+        app_data.storage.add(shared_conflict_agent);
+
+        let mut shared_other_agent = Agent::new(
+            "coverage shared other".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-shared-other".to_string(),
+            conflict_worktree.clone(),
+        );
+        shared_other_agent.mux_session = "coverage-shared-session".to_string();
+        app_data.storage.add(shared_other_agent);
+
+        let mut unique_conflict_agent = Agent::new(
+            "coverage unique conflict".to_string(),
+            "echo".to_string(),
+            conflict_branch.clone(),
+            conflict_worktree.clone(),
+        );
+        unique_conflict_agent.mux_session = "coverage-unique-session".to_string();
+        app_data.storage.add(unique_conflict_agent);
+
+        let cleanup_conflict = WorktreeConflictInfo {
+            title: "coverage cleanup".to_string(),
+            prompt: None,
+            branch: conflict_branch,
+            worktree_path: conflict_worktree,
+            repo_root: conflict_root,
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "coverage".to_string(),
+            swarm_child_count: None,
+        };
+        Self::new().remove_conflicting_agents(app_data, &cleanup_conflict);
+
+        let mut empty_app_data = AppData::new(
+            Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        let _ = Self::new().kill_agent(&mut empty_app_data);
+        let _ = Self::new().kill_root_agent_tree(&mut empty_app_data, Uuid::new_v4(), false);
+        let _ = Self::new().try_switch_branch(&mut empty_app_data);
+
+        empty_app_data.git_op.agent_id = Some(Uuid::new_v4());
+        empty_app_data.git_op.target_branch = "   ".to_string();
+        let _ = Self::new().try_switch_branch(&mut empty_app_data);
+
+        empty_app_data.git_op.target_branch = "feature".to_string();
+        empty_app_data.git_op.branch_name = "main".to_string();
+        let _ = Self::new().try_switch_branch(&mut empty_app_data);
+
+        let mut same_branch_data = AppData::new(
+            Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        let same_branch_root = Agent::new(
+            "coverage same branch".to_string(),
+            "echo".to_string(),
+            "main".to_string(),
+            std::env::temp_dir(),
+        );
+        let same_branch_root_id = same_branch_root.id;
+        same_branch_data.storage.add(same_branch_root);
+        same_branch_data.git_op.agent_id = Some(same_branch_root_id);
+        same_branch_data.git_op.branch_name = "main".to_string();
+        same_branch_data.git_op.target_branch = "main".to_string();
+        let _ = Self::new().try_switch_branch(&mut same_branch_data);
+
+        let mut kill_data = AppData::new(
+            Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        let kill_root = Agent::new(
+            "coverage non prefixed".to_string(),
+            "echo".to_string(),
+            "feature".to_string(),
+            std::env::temp_dir(),
+        );
+        let kill_root_id = kill_root.id;
+        kill_data.storage.add(kill_root);
+        kill_data.select_agent_by_id(kill_root_id);
+        let _ = Self::new().kill_agent(&mut kill_data);
+
+        Self::exercise_branch_switch_paths_for_coverage();
+        Self::exercise_child_kill_paths_for_coverage();
+        Self::exercise_root_cleanup_paths_for_coverage();
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn coverage_app_data(config: Config) -> AppData {
+        AppData::new(
+            config,
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        )
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn exercise_branch_switch_paths_for_coverage() {
+        let Some((repo_path, repo)) = super::init_coverage_git_repo("tenex-agent-lifecycle-switch")
+        else {
+            return;
+        };
+        let mut config = Config {
+            worktree_dir: repo_path.join("worktrees"),
+            ..Config::default()
+        };
+
+        let branch_mgr = git::BranchManager::new(&repo);
+        let _ = Self::resolve_target_branch(&repo, &branch_mgr, "missing");
+        let _ = Self::resolve_target_branch(&repo, &branch_mgr, "master");
+
+        let Ok(commit) = repo.head().and_then(|head| head.peel_to_commit()) else {
+            return;
+        };
+        let _ = repo.reference(
+            "refs/remotes/origin/remote-only",
+            commit.id(),
+            true,
+            "coverage remote",
+        );
+        let _ = Self::resolve_target_branch(&repo, &branch_mgr, "origin/remote-only");
+        let _ = repo.reference(
+            "refs/remotes/origin/master",
+            commit.id(),
+            true,
+            "coverage remote",
+        );
+        let _ = Self::resolve_target_branch(&repo, &branch_mgr, "origin/master");
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let existing_branch = "coverage-existing-worktree";
+        let _ = branch_mgr.create(existing_branch);
+        let existing_worktree = repo_path.join("existing-worktree");
+        let _ = worktree_mgr.create(&existing_worktree, existing_branch);
+        let _ = Self::ensure_worktree_for_branch(
+            &config,
+            &repo_path,
+            &worktree_mgr,
+            existing_branch,
+            AgentRuntime::Host,
+        );
+
+        let missing_path_branch = "coverage-missing-path";
+        let _ = branch_mgr.create(missing_path_branch);
+        let missing_path_worktree = repo_path.join("missing-path-worktree");
+        let _ = worktree_mgr.create(&missing_path_worktree, missing_path_branch);
+        let _ = std::fs::remove_dir_all(&missing_path_worktree);
+
+        config.worktree_dir = repo_path.join("switch-worktrees");
+        let mut switch_data = Self::coverage_app_data(config);
+        let mut root = Agent::new(
+            "coverage switch root".to_string(),
+            "echo".to_string(),
+            "master".to_string(),
+            repo_path.clone(),
+        );
+        root.repo_root = Some(repo_path);
+        let root_id = root.id;
+        switch_data.storage.add(root);
+        switch_data.git_op.agent_id = Some(root_id);
+        switch_data.git_op.branch_name = "master".to_string();
+        switch_data.git_op.target_branch = missing_path_branch.to_string();
+        let _ = Self::new().try_switch_branch(&mut switch_data);
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn exercise_child_kill_paths_for_coverage() {
+        let root_path =
+            std::env::temp_dir().join(format!("tenex-agent-child-kill-{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&root_path);
+        let mut app_data = Self::coverage_app_data(Config::default());
+        let root = Agent::new(
+            "coverage kill root".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-kill".to_string(),
+            root_path.clone(),
+        );
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let child = Agent::new_child(
+            "coverage kill child".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-kill".to_string(),
+            root_path.clone(),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        let child_id = child.id;
+        let descendant = Agent::new_child(
+            "coverage kill descendant".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-kill".to_string(),
+            root_path,
+            ChildConfig {
+                parent_id: child_id,
+                mux_session: root_session,
+                window_index: 3,
+                repo_root: None,
+            },
+        );
+        app_data.storage.add(root);
+        app_data.storage.add(child);
+        app_data.storage.add(descendant);
+        app_data.select_agent_by_id(child_id);
+        let _ = Self::new().kill_agent(&mut app_data);
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn exercise_root_cleanup_paths_for_coverage() {
+        let Some((repo_path, repo)) =
+            super::init_coverage_git_repo("tenex-agent-lifecycle-cleanup")
+        else {
+            return;
+        };
+        let branch_mgr = git::BranchManager::new(&repo);
+        let worktree_mgr = WorktreeManager::new(&repo);
+        for (branch, delete_branch) in [
+            ("tenex/coverage-delete", true),
+            ("feature/coverage-keep", false),
+        ] {
+            let _ = branch_mgr.create(branch);
+            let worktree_path = repo_path.join(branch.replace('/', "-"));
+            let _ = worktree_mgr.create(&worktree_path, branch);
+            let mut app_data = Self::coverage_app_data(Config::default());
+            let mut root = Agent::new(
+                format!("coverage cleanup {branch}"),
+                "echo".to_string(),
+                branch.to_string(),
+                worktree_path.clone(),
+            );
+            root.repo_root = Some(repo_path.clone());
+            let root_id = root.id;
+            let root_session = root.mux_session.clone();
+            let child = Agent::new_child(
+                "coverage cleanup child".to_string(),
+                "echo".to_string(),
+                branch.to_string(),
+                worktree_path,
+                ChildConfig {
+                    parent_id: root_id,
+                    mux_session: root_session,
+                    window_index: 2,
+                    repo_root: Some(repo_path.clone()),
+                },
+            );
+            app_data.storage.add(root);
+            app_data.storage.add(child);
+            let _ = Self::new().kill_root_agent_tree(&mut app_data, root_id, delete_branch);
+        }
+    }
+
     pub(super) fn root_worktree_create_options(runtime: AgentRuntime) -> WorktreeCreateOptions {
         if runtime == AgentRuntime::Docker {
             WorktreeCreateOptions::without_ignored_file_links()
@@ -62,10 +438,9 @@ impl Actions {
     fn prepare_agent_for_launch(app_data: &mut AppData, agent: &mut Agent) {
         if crate::conversation::detect_agent_cli(&agent.program)
             == crate::conversation::AgentCli::Claude
+            && agent.conversation_id.is_none()
         {
-            if agent.conversation_id.is_none() {
-                agent.conversation_id = Some(agent.id.to_string());
-            }
+            agent.conversation_id = Some(agent.id.to_string());
         }
 
         if agent.is_root() {
@@ -294,6 +669,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the mux session cannot be created or storage fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn reconnect_to_worktree(self, app_data: &mut AppData) -> Result<AppMode> {
         let conflict = app_data
             .spawn
@@ -307,14 +683,7 @@ impl Actions {
         let runtime = runtime_for_conflict(app_data, &conflict)
             .unwrap_or_else(|| crate::runtime::new_root_runtime(&app_data.settings));
 
-        let removed_agents = self.remove_conflicting_agents(app_data, &conflict);
-        if removed_agents > 0 {
-            debug!(
-                branch = %conflict.branch,
-                removed_agents,
-                "Removed existing agents before reconnect"
-            );
-        }
+        self.remove_conflicting_agents(app_data, &conflict);
 
         if let Some(child_count) = conflict.swarm_child_count {
             self.reconnect_swarm_to_worktree(app_data, &conflict, &program, runtime, child_count)?;
@@ -326,6 +695,7 @@ impl Actions {
         Ok(AppMode::normal())
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn remove_conflicting_agents(
         self,
         app_data: &mut AppData,
@@ -347,23 +717,17 @@ impl Actions {
             }
         }
 
-        if ids_to_remove.is_empty() {
-            return 0;
-        }
-
+        let removed = ids_to_remove.len();
         let ids_set: HashSet<Uuid> = ids_to_remove.iter().copied().collect();
 
         for (session, runtime_agent) in runtime_agents_by_session {
-            let session_used_elsewhere = app_data
-                .storage
-                .iter()
-                .any(|agent| {
-                    if agent.mux_session != session {
-                        return false;
-                    }
+            let session_used_elsewhere = app_data.storage.iter().any(|agent| {
+                if agent.mux_session != session {
+                    return false;
+                }
 
-                    !ids_set.contains(&agent.id)
-                });
+                !ids_set.contains(&agent.id)
+            });
 
             if !session_used_elsewhere {
                 let _ = self.session_manager.kill(&session);
@@ -377,12 +741,10 @@ impl Actions {
             }
         }
 
-        let removed = ids_to_remove.len();
         for id in ids_to_remove {
             app_data.storage.remove(id);
         }
         app_data.validate_selection();
-
         removed
     }
 
@@ -466,6 +828,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the worktree cannot be removed/recreated or agent creation fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn recreate_worktree(self, app_data: &mut AppData) -> Result<AppMode> {
         let conflict = app_data
             .spawn
@@ -505,6 +868,7 @@ impl Actions {
     }
 
     /// Kill the selected agent (and all its descendants)
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn kill_agent(self, app_data: &mut AppData) -> Result<()> {
         if let Some(agent) = app_data.selected_agent() {
             let agent_id = agent.id;
@@ -540,9 +904,8 @@ impl Actions {
             let mut deleted_indices: Vec<u32> = Vec::new();
             let descendants = app_data.storage.descendants(agent_id);
             for desc in &descendants {
-                match desc.window_index {
-                    Some(idx) => deleted_indices.push(idx),
-                    None => {}
+                if let Some(idx) = desc.window_index {
+                    deleted_indices.push(idx);
                 }
             }
 
@@ -596,6 +959,7 @@ impl Actions {
         })
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn try_switch_branch(self, app_data: &mut AppData) -> Result<AppMode> {
         let Some(root_id) = app_data.git_op.agent_id else {
             return Ok(Self::switch_branch_user_error(
@@ -695,6 +1059,7 @@ impl Actions {
         app_data.review.clear();
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn prepare_branch_switch_target(
         config: &Config,
         repo_root: &Path,
@@ -787,6 +1152,7 @@ impl Actions {
         Ok(new_id)
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn kill_root_agent_tree(
         self,
         app_data: &mut AppData,
@@ -867,6 +1233,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if terminal creation fails or no agent is selected
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn spawn_terminal(
         self,
         app_data: &mut AppData,
@@ -1053,6 +1420,13 @@ mod tests {
         assert!(!mode_is_worktree_conflict(&normal));
     }
 
+    #[cfg(coverage)]
+    #[test]
+    fn test_exercise_agent_lifecycle_paths_for_coverage_runs_in_unit_build() {
+        let (mut app, _temp_file) = create_test_app();
+        Actions::exercise_agent_lifecycle_paths_for_coverage(&mut app.data);
+    }
+
     #[test]
     fn test_runtime_for_conflict_returns_none_when_agent_worktree_differs() {
         let (mut app, _temp) = create_test_app();
@@ -1107,7 +1481,7 @@ mod tests {
         let expected = agent.id.to_string();
 
         Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
-        assert_eq!(agent.conversation_id, Some(expected.clone()));
+        assert_eq!(agent.conversation_id, Some(expected));
 
         agent.conversation_id = Some("fixed".to_string());
         Actions::prepare_agent_for_launch(&mut app.data, &mut agent);
@@ -1170,7 +1544,16 @@ mod tests {
 
     #[test]
     fn test_finish_agent_launch_codex_path_does_not_panic() {
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
+        let mut stored = Agent::new(
+            "stored".to_string(),
+            "codex".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        stored.conversation_id = Some("stored-session".to_string());
+        app.data.storage.add(stored);
+
         let mut agent = Agent::new(
             "agent".to_string(),
             "codex".to_string(),

@@ -54,14 +54,25 @@ thread_local! {
 
 #[cfg(any(test, coverage))]
 #[doc(hidden)]
-/// Run `f` with otherwise-infallible actions forced to return an error.
-pub fn with_forced_infallible_action_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
+#[derive(Debug)]
+pub struct ForcedInfallibleActionErrorGuard {
+    previous: bool,
+}
+
+#[cfg(any(test, coverage))]
+impl Drop for ForcedInfallibleActionErrorGuard {
+    fn drop(&mut self) {
+        TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(|slot| slot.set(self.previous));
+    }
+}
+
+#[cfg(any(test, coverage))]
+#[doc(hidden)]
+/// Force otherwise-infallible actions to return an error until the guard is dropped.
+#[must_use]
+pub fn force_infallible_action_error_for_tests() -> ForcedInfallibleActionErrorGuard {
+    let previous = TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(|slot| slot.replace(true));
+    ForcedInfallibleActionErrorGuard { previous }
 }
 
 #[cfg(any(test, coverage))]
@@ -1349,20 +1360,19 @@ mod tests {
         app.data.active_tab = crate::app::Tab::Diff;
         app.enter_mode(DiffFocusedMode.into());
 
-        with_forced_infallible_action_error_for_tests(|| {
-            for (code, mods) in [
-                (KeyCode::Char('q'), KeyModifiers::CONTROL),
-                (KeyCode::Up, KeyModifiers::NONE),
-                (KeyCode::Down, KeyModifiers::NONE),
-            ] {
-                let err = dispatch_diff_focused_mode(&mut app, code, mods)
-                    .expect_err("expected forced diff focused dispatch error");
-                assert!(
-                    err.to_string()
-                        .contains("forced infallible action error for test")
-                );
-            }
-        });
+        let _guard = force_infallible_action_error_for_tests();
+        for (code, mods) in [
+            (KeyCode::Char('q'), KeyModifiers::CONTROL),
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Down, KeyModifiers::NONE),
+        ] {
+            let err = dispatch_diff_focused_mode(&mut app, code, mods)
+                .expect_err("expected forced diff focused dispatch error");
+            assert!(
+                err.to_string()
+                    .contains("forced infallible action error for test")
+            );
+        }
     }
 
     #[test]
@@ -1447,6 +1457,20 @@ mod tests {
 
         dispatch_normal_mode(&mut app, KeyAction::SwitchBranch).unwrap();
         assert!(mode_is_error_modal_or_switch_branch_selector(&app.mode));
+        app.apply_mode(AppMode::normal());
+
+        dispatch_normal_mode(&mut app, KeyAction::Rebase).unwrap();
+        assert_eq!(
+            app.mode,
+            AppMode::RebaseBranchSelector(RebaseBranchSelectorMode)
+        );
+        app.apply_mode(AppMode::normal());
+
+        dispatch_normal_mode(&mut app, KeyAction::Merge).unwrap();
+        assert_eq!(
+            app.mode,
+            AppMode::MergeBranchSelector(MergeBranchSelectorMode)
+        );
         app.apply_mode(AppMode::normal());
 
         dispatch_normal_mode(&mut app, KeyAction::CommandPalette).unwrap();
@@ -1728,28 +1752,26 @@ mod tests {
     fn test_dispatch_error_modal_mode_propagates_dismiss_errors() {
         let (mut app, _temp) = create_test_app();
 
-        with_forced_infallible_action_error_for_tests(|| {
-            let err = dispatch_error_modal_mode(&mut app, "boom".to_string())
-                .expect_err("expected forced dismiss error");
-            assert!(
-                err.to_string()
-                    .contains("forced infallible action error for test")
-            );
-        });
+        let _guard = force_infallible_action_error_for_tests();
+        let err = dispatch_error_modal_mode(&mut app, "boom".to_string())
+            .expect_err("expected forced dismiss error");
+        assert!(
+            err.to_string()
+                .contains("forced infallible action error for test")
+        );
     }
 
     #[test]
     fn test_dispatch_success_modal_mode_propagates_dismiss_errors() {
         let (mut app, _temp) = create_test_app();
 
-        with_forced_infallible_action_error_for_tests(|| {
-            let err = dispatch_success_modal_mode(&mut app, "ok".to_string())
-                .expect_err("expected forced dismiss error");
-            assert!(
-                err.to_string()
-                    .contains("forced infallible action error for test")
-            );
-        });
+        let _guard = force_infallible_action_error_for_tests();
+        let err = dispatch_success_modal_mode(&mut app, "ok".to_string())
+            .expect_err("expected forced dismiss error");
+        assert!(
+            err.to_string()
+                .contains("forced infallible action error for test")
+        );
     }
 
     #[test]
@@ -1799,31 +1821,30 @@ mod tests {
         let mut keys = Vec::new();
         app.enter_mode(PreviewFocusedMode.into());
 
-        with_forced_infallible_action_error_for_tests(|| {
-            let err = dispatch_preview_focused_mode(
-                &mut app,
-                KeyCode::Char('q'),
-                KeyModifiers::CONTROL,
-                &mut keys,
-            )
-            .expect_err("expected forced unfocus error");
-            assert!(
-                err.to_string()
-                    .contains("forced infallible action error for test")
-            );
+        let _guard = force_infallible_action_error_for_tests();
+        let err = dispatch_preview_focused_mode(
+            &mut app,
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+            &mut keys,
+        )
+        .expect_err("expected forced unfocus error");
+        assert!(
+            err.to_string()
+                .contains("forced infallible action error for test")
+        );
 
-            let err = dispatch_preview_focused_mode(
-                &mut app,
-                KeyCode::Char('x'),
-                KeyModifiers::NONE,
-                &mut keys,
-            )
-            .expect_err("expected forced forward keystroke error");
-            assert!(
-                err.to_string()
-                    .contains("forced infallible action error for test")
-            );
-        });
+        let err = dispatch_preview_focused_mode(
+            &mut app,
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            &mut keys,
+        )
+        .expect_err("expected forced forward keystroke error");
+        assert!(
+            err.to_string()
+                .contains("forced infallible action error for test")
+        );
     }
 
     #[test]

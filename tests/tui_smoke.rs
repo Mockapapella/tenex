@@ -6,6 +6,13 @@ use std::io::{Read, Write};
 fn run_tui_smoke_in_pty(
     extra_env: &[(&str, &str)],
 ) -> Result<(portable_pty::ExitStatus, Vec<u8>), Box<dyn std::error::Error>> {
+    run_tui_smoke_in_pty_with_input_delay(extra_env, std::time::Duration::ZERO)
+}
+
+fn run_tui_smoke_in_pty_with_input_delay(
+    extra_env: &[(&str, &str)],
+    input_delay: std::time::Duration,
+) -> Result<(portable_pty::ExitStatus, Vec<u8>), Box<dyn std::error::Error>> {
     let pty_system = portable_pty::native_pty_system();
     let portable_pty::PtyPair { master, slave } = pty_system.openpty(PtySize {
         rows: 24,
@@ -23,17 +30,20 @@ fn run_tui_smoke_in_pty(
     let mut child = slave.spawn_command(cmd)?;
     drop(slave);
 
-    if let Ok(mut writer) = master.take_writer() {
-        let _ = writer.write_all(b"q");
-        let _ = writer.flush();
-    }
-
     let mut reader = master.try_clone_reader()?;
     let reader_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = reader.read_to_end(&mut buf);
         buf
     });
+
+    if let Ok(mut writer) = master.take_writer() {
+        if !input_delay.is_zero() {
+            std::thread::sleep(input_delay);
+        }
+        let _ = writer.write_all(b"\x11");
+        let _ = writer.flush();
+    }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -243,6 +253,39 @@ fn test_tui_smoke_binary_exits_successfully_with_unknown_tui_failpoint()
     assert!(
         status.success(),
         "expected tui_smoke to succeed with unknown failpoint, got status={status:?} output={}",
+        String::from_utf8_lossy(&output),
+    );
+    Ok(())
+}
+
+#[test]
+fn test_tui_smoke_binary_exits_successfully_with_preview_diff_digest_refresh()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (status, output) = run_tui_smoke_in_pty_with_input_delay(
+        &[
+            ("TENEX_TEST_TUI_SMOKE_PREVIEW_TAB", "1"),
+            ("TENEX_TEST_TUI_SMOKE_WAIT_FOR_QUIT", "1"),
+        ],
+        std::time::Duration::from_millis(1_200),
+    )?;
+    assert!(
+        status.success(),
+        "expected tui_smoke to succeed with preview diff digest refresh, got status={status:?} output={}",
+        String::from_utf8_lossy(&output),
+    );
+    Ok(())
+}
+
+#[test]
+fn test_tui_smoke_binary_exits_successfully_with_diff_refresh_while_waiting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (status, output) = run_tui_smoke_in_pty_with_input_delay(
+        &[("TENEX_TEST_TUI_SMOKE_WAIT_FOR_QUIT", "1")],
+        std::time::Duration::from_millis(1_200),
+    )?;
+    assert!(
+        status.success(),
+        "expected tui_smoke to succeed with diff refresh while waiting, got status={status:?} output={}",
         String::from_utf8_lossy(&output),
     );
     Ok(())

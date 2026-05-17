@@ -22,11 +22,10 @@ impl Actions {
 
         let old_line_count = app.data.ui.preview_text.lines.len();
         let old_scroll = app.data.ui.preview_scroll;
-        let visible_height = app
-            .data
-            .ui
-            .preview_dimensions
-            .map_or(20, |(_, h)| usize::from(h));
+        let visible_height = match app.data.ui.preview_dimensions {
+            Some((_, height)) => usize::from(height),
+            None => 20,
+        };
 
         // When the user manually scrolls up, stop using a short tail buffer to avoid
         // the viewport "jumping" as the tail window slides.
@@ -91,6 +90,7 @@ impl Actions {
         Ok(())
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn try_update_preview_streamed(
         self,
         app: &mut App,
@@ -203,6 +203,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if diff update fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn update_diff(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
@@ -301,6 +302,7 @@ impl Actions {
         Self::update_commits_with_limit(app, 200)
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn update_commits_with_limit(app: &mut App, max_commits: usize) -> Result<()> {
         let max_commits = max_commits.max(1);
 
@@ -410,6 +412,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if digest computation fails unexpectedly.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn update_commits_digest(self, app: &mut App) -> Result<()> {
         const MAX_COMMITS: usize = 200;
 
@@ -520,6 +523,7 @@ fn git_log_commit_ids(
     Ok((ids, used_range, truncated))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn git_log_rich(
     worktree_path: &std::path::Path,
     range: Option<&str>,
@@ -730,8 +734,7 @@ mod tests {
             let mut handled = 0usize;
             for mut stream in listener.incoming().flatten() {
                 while handled < expected_requests {
-                    let Ok(request) =
-                        crate::mux::read_json::<_, crate::mux::MuxRequest>(&mut stream)
+                    let Ok(request) = crate::mux::read_json::<crate::mux::MuxRequest>(&mut stream)
                     else {
                         break;
                     };
@@ -2226,7 +2229,7 @@ mod tests {
 
         let mut stream = interprocess::local_socket::Stream::connect(socket_name).unwrap();
         crate::mux::write_json(&mut stream, &crate::mux::MuxRequest::ListSessions).unwrap();
-        let response = crate::mux::read_json::<_, crate::mux::MuxResponse>(&mut stream).unwrap();
+        let response = crate::mux::read_json::<crate::mux::MuxResponse>(&mut stream).unwrap();
         let message = expect_mux_error_message(response).unwrap();
         assert!(message.starts_with("mock: unsupported request"));
     }

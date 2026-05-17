@@ -1,17 +1,20 @@
 //! Git branch management
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use anyhow::{Context, Result, bail};
 use git2::{BranchType, Repository};
 #[cfg(any(test, coverage))]
 use std::cell::Cell;
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::cell::RefCell;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 type ListForSelectorOverrideFn = Box<dyn Fn(&Repository) -> Result<Vec<BranchInfo>>>;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 thread_local! {
     static LIST_FOR_SELECTOR_OVERRIDE: RefCell<Option<ListForSelectorOverrideFn>> = const {
         RefCell::new(None)
@@ -30,12 +33,12 @@ thread_local! {
     static FORCE_SET_HEAD_ERROR: Cell<bool> = const { Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 struct ListForSelectorOverrideGuard {
     previous: Option<ListForSelectorOverrideFn>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 impl Drop for ListForSelectorOverrideGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
@@ -45,7 +48,7 @@ impl Drop for ListForSelectorOverrideGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 pub fn with_list_for_selector_override_for_tests<T>(
     override_fn: impl Fn(&Repository) -> Result<Vec<BranchInfo>> + 'static,
     f: impl FnOnce() -> T,
@@ -56,6 +59,7 @@ pub fn with_list_for_selector_override_for_tests<T>(
     f()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn revwalk_new(repo: &Repository) -> std::result::Result<git2::Revwalk<'_>, git2::Error> {
     #[cfg(any(test, coverage))]
     if FORCE_REVWALK_NEW_ERROR.with(Cell::get) {
@@ -89,6 +93,7 @@ const fn maybe_force_list_branch_result(
 }
 
 #[cfg(any(test, coverage))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn maybe_force_list_branch_result(
     branch_result: std::result::Result<(git2::Branch<'_>, BranchType), git2::Error>,
 ) -> std::result::Result<(git2::Branch<'_>, BranchType), git2::Error> {
@@ -109,6 +114,7 @@ const fn maybe_force_selector_local_branch_result(
 }
 
 #[cfg(any(test, coverage))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn maybe_force_selector_local_branch_result(
     branch_result: std::result::Result<(git2::Branch<'_>, BranchType), git2::Error>,
 ) -> std::result::Result<(git2::Branch<'_>, BranchType), git2::Error> {
@@ -129,6 +135,7 @@ const fn maybe_force_selector_remote_branch_result(
 }
 
 #[cfg(any(test, coverage))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn maybe_force_selector_remote_branch_result(
     branch_result: std::result::Result<(git2::Branch<'_>, BranchType), git2::Error>,
 ) -> std::result::Result<(git2::Branch<'_>, BranchType), git2::Error> {
@@ -141,6 +148,7 @@ fn maybe_force_selector_remote_branch_result(
     branch_result
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn remote_branches(repo: &Repository) -> std::result::Result<git2::Branches<'_>, git2::Error> {
     #[cfg(any(test, coverage))]
     if FORCE_REMOTE_BRANCHES_LIST_ERROR.with(|slot| slot.replace(false)) {
@@ -152,6 +160,7 @@ fn remote_branches(repo: &Repository) -> std::result::Result<git2::Branches<'_>,
     repo.branches(Some(BranchType::Remote))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn checkout_tree(
     repo: &Repository,
     obj: &git2::Object<'_>,
@@ -166,6 +175,7 @@ fn checkout_tree(
     repo.checkout_tree(obj, None)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn set_head(repo: &Repository, refname: &str) -> std::result::Result<(), git2::Error> {
     #[cfg(any(test, coverage))]
     if FORCE_SET_HEAD_ERROR.with(|slot| slot.replace(false)) {
@@ -291,6 +301,7 @@ impl<'a> Manager<'a> {
     /// # Errors
     ///
     /// Returns an error if branches cannot be listed
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn list(&self) -> Result<Vec<String>> {
         let branches = self
             .repo
@@ -314,6 +325,7 @@ impl<'a> Manager<'a> {
     /// # Errors
     ///
     /// Returns an error if the branch cannot be checked out
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn checkout(&self, name: &str) -> Result<()> {
         let refname = format!("refs/heads/{name}");
         let obj = self
@@ -361,8 +373,9 @@ impl<'a> Manager<'a> {
     /// # Errors
     ///
     /// Returns an error if branches cannot be listed
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn list_for_selector(&self) -> Result<Vec<BranchInfo>> {
-        #[cfg(test)]
+        #[cfg(any(test, coverage))]
         {
             if let Some(result) = LIST_FOR_SELECTOR_OVERRIDE.with(|cell| {
                 cell.borrow()

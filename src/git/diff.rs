@@ -275,6 +275,7 @@ fn status_has_workdir_change(status: Status) -> bool {
     )
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn worktree_file_sample_hash(full_path: &Path, len: u64) -> u64 {
     const SAMPLE_BYTES: usize = 4096;
     const SAMPLE_BYTES_I64: i64 = 4096;

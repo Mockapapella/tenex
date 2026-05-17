@@ -61,7 +61,14 @@ trait EventReader {
 }
 
 fn poll_for_tui(timeout: Duration) -> io::Result<bool> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::PollImmediate) {
+    poll_for_tui_with_failpoint(timeout, tui_run_failpoint())
+}
+
+fn poll_for_tui_with_failpoint(
+    timeout: Duration,
+    failpoint: Option<TuiRunFailpoint>,
+) -> io::Result<bool> {
+    if failpoint == Some(TuiRunFailpoint::PollImmediate) {
         return Err(io::Error::other("Forced poll_immediate error for test"));
     }
 
@@ -105,6 +112,7 @@ enum TuiRunFailpoint {
     PollImmediate,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn tui_run_failpoint() -> Option<TuiRunFailpoint> {
     #[cfg(not(debug_assertions))]
     {
@@ -114,16 +122,21 @@ fn tui_run_failpoint() -> Option<TuiRunFailpoint> {
     #[cfg(debug_assertions)]
     {
         let value = std::env::var("TENEX_TEST_TUI_FAILPOINT").ok()?;
-        match value.trim() {
-            "enable_raw_mode" => Some(TuiRunFailpoint::EnableRawMode),
-            "enter_tui_screen" => Some(TuiRunFailpoint::EnterTuiScreen),
-            "create_terminal" => Some(TuiRunFailpoint::CreateTerminal),
-            "disable_raw_mode" => Some(TuiRunFailpoint::DisableRawMode),
-            "leave_tui_screen" => Some(TuiRunFailpoint::LeaveTuiScreen),
-            "show_cursor" => Some(TuiRunFailpoint::ShowCursor),
-            "poll_immediate" => Some(TuiRunFailpoint::PollImmediate),
-            _ => None,
-        }
+        parse_tui_run_failpoint(&value)
+    }
+}
+
+#[cfg(debug_assertions)]
+fn parse_tui_run_failpoint(value: &str) -> Option<TuiRunFailpoint> {
+    match value.trim() {
+        "enable_raw_mode" => Some(TuiRunFailpoint::EnableRawMode),
+        "enter_tui_screen" => Some(TuiRunFailpoint::EnterTuiScreen),
+        "create_terminal" => Some(TuiRunFailpoint::CreateTerminal),
+        "disable_raw_mode" => Some(TuiRunFailpoint::DisableRawMode),
+        "leave_tui_screen" => Some(TuiRunFailpoint::LeaveTuiScreen),
+        "show_cursor" => Some(TuiRunFailpoint::ShowCursor),
+        "poll_immediate" => Some(TuiRunFailpoint::PollImmediate),
+        _ => None,
     }
 }
 
@@ -399,10 +412,7 @@ fn configure_keyboard_enhancement(stdout: &mut dyn io::Write) -> bool {
     )
 }
 
-fn enable_keyboard_enhancement_with_support(
-    stdout: &mut dyn io::Write,
-    supported: bool,
-) -> bool {
+fn enable_keyboard_enhancement_with_support(stdout: &mut dyn io::Write, supported: bool) -> bool {
     if supported {
         info!("Terminal supports keyboard enhancement protocol - Ctrl+M will work");
         let mut stdout = DynWrite { inner: stdout };
@@ -455,7 +465,7 @@ fn send_keys_and_flush_clipboard(
     flush_pending_clipboard(stdout, app);
 }
 
-fn init_preview_dimensions(terminal: &impl TerminalInfo, app: &mut App, action_handler: Actions) {
+fn init_preview_dimensions(terminal: &dyn TerminalInfo, app: &mut App, action_handler: Actions) {
     if app.data.ui.preview_dimensions.is_some() && app.data.ui.terminal_dimensions.is_some() {
         return;
     }
@@ -474,9 +484,9 @@ fn init_preview_dimensions(terminal: &impl TerminalInfo, app: &mut App, action_h
 }
 
 fn drain_events(
-    terminal: &impl TerminalInfo,
+    terminal: &dyn TerminalInfo,
     app: &mut App,
-    event_handler: &impl EventReader,
+    event_handler: &dyn EventReader,
 ) -> Result<DrainedEvents> {
     let mut last_resize: Option<(u16, u16)> = None;
     let mut batched_keys: Vec<String> = Vec::new();
@@ -563,17 +573,24 @@ fn maybe_refresh_preview(
     }
 }
 
-fn should_refresh_diff(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffRefreshTarget {
+    Diff,
+    Digest,
+}
+
+fn diff_refresh_target(
     active_tab: Tab,
     needs_content_update: bool,
     diff_due: bool,
     diff_force_refresh: bool,
-) -> bool {
+) -> Option<DiffRefreshTarget> {
     if active_tab == Tab::Diff || diff_force_refresh {
-        return needs_content_update || diff_due || diff_force_refresh;
+        return (needs_content_update || diff_due || diff_force_refresh)
+            .then_some(DiffRefreshTarget::Diff);
     }
 
-    diff_due
+    diff_due.then_some(DiffRefreshTarget::Digest)
 }
 
 fn should_refresh_commits(active_tab: Tab, needs_content_update: bool, commits_due: bool) -> bool {
@@ -619,10 +636,14 @@ const fn compute_sent_keys_in_preview(
         || (!batched_keys.is_empty() && matches!(mode, &AppMode::PreviewFocused(_)))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "main loop keeps terminal redraw and periodic refresh timing together"
+)]
 fn run_loop(
-    terminal: &mut impl TerminalOps,
+    terminal: &mut dyn TerminalOps,
     app: &mut App,
-    event_handler: &impl EventReader,
+    event_handler: &dyn EventReader,
     action_handler: Actions,
     clipboard_out: &mut dyn io::Write,
 ) -> Result<Option<UpdateInfo>> {
@@ -699,16 +720,19 @@ fn run_loop(
 
         // Diff refresh is expensive; throttle it while still updating promptly on selection/tab changes.
         let diff_due = last_diff_update.elapsed() >= diff_refresh_interval;
-        if should_refresh_diff(
+        if let Some(target) = diff_refresh_target(
             app.data.active_tab,
             needs_content_update,
             diff_due,
             app.data.ui.diff_force_refresh,
         ) {
-            if app.data.active_tab == Tab::Diff || app.data.ui.diff_force_refresh {
-                let _ = action_handler.update_diff(app);
-            } else {
-                let _ = action_handler.update_diff_digest(app);
+            match target {
+                DiffRefreshTarget::Diff => {
+                    let _ = action_handler.update_diff(app);
+                }
+                DiffRefreshTarget::Digest => {
+                    let _ = action_handler.update_diff_digest(app);
+                }
             }
             last_diff_update = Instant::now();
         }
@@ -843,7 +867,9 @@ pub mod test_support {
         /// Force the next reload check to run immediately.
         pub fn force_due(&mut self) {
             self.0.last_check = super::Instant::now()
-                .checked_sub(super::Duration::from_millis(super::STATE_FILE_SYNC_INTERVAL_MS + 1))
+                .checked_sub(super::Duration::from_millis(
+                    super::STATE_FILE_SYNC_INTERVAL_MS + 1,
+                ))
                 .unwrap_or_else(super::Instant::now);
         }
 
@@ -1315,6 +1341,35 @@ mod tests {
     #[test]
     fn test_env_var_truthy_defaults_to_false() {
         assert!(!env_var_truthy(None));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_poll_for_tui_reports_poll_failpoint() {
+        let err = poll_for_tui_with_failpoint(Duration::ZERO, Some(TuiRunFailpoint::PollImmediate))
+            .expect_err("expected poll failpoint");
+
+        assert!(err.to_string().contains("poll_immediate"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_parse_tui_run_failpoint_covers_contract() {
+        let cases = [
+            ("enable_raw_mode", Some(TuiRunFailpoint::EnableRawMode)),
+            ("enter_tui_screen", Some(TuiRunFailpoint::EnterTuiScreen)),
+            ("create_terminal", Some(TuiRunFailpoint::CreateTerminal)),
+            ("disable_raw_mode", Some(TuiRunFailpoint::DisableRawMode)),
+            ("leave_tui_screen", Some(TuiRunFailpoint::LeaveTuiScreen)),
+            ("show_cursor", Some(TuiRunFailpoint::ShowCursor)),
+            ("poll_immediate", Some(TuiRunFailpoint::PollImmediate)),
+            (" poll_immediate ", Some(TuiRunFailpoint::PollImmediate)),
+            ("unknown", None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(parse_tui_run_failpoint(input), expected);
+        }
     }
 
     #[test]
@@ -2116,16 +2171,29 @@ mod tests {
     }
 
     #[test]
-    fn test_should_refresh_diff_skips_selection_updates_when_diff_tab_inactive() {
-        assert!(!should_refresh_diff(Tab::Preview, true, false, false));
-        assert!(should_refresh_diff(Tab::Preview, false, true, false));
+    fn test_diff_refresh_target_skips_selection_updates_when_diff_tab_inactive() {
+        assert_eq!(diff_refresh_target(Tab::Preview, true, false, false), None);
+        assert_eq!(
+            diff_refresh_target(Tab::Preview, false, true, false),
+            Some(DiffRefreshTarget::Digest)
+        );
     }
 
     #[test]
-    fn test_should_refresh_diff_still_updates_when_diff_tab_active_or_forced() {
-        assert!(should_refresh_diff(Tab::Diff, true, false, false));
-        assert!(should_refresh_diff(Tab::Diff, false, true, false));
-        assert!(should_refresh_diff(Tab::Preview, false, false, true));
+    fn test_diff_refresh_target_updates_when_diff_tab_active_or_forced() {
+        assert_eq!(
+            diff_refresh_target(Tab::Diff, true, false, false),
+            Some(DiffRefreshTarget::Diff)
+        );
+        assert_eq!(
+            diff_refresh_target(Tab::Diff, false, true, false),
+            Some(DiffRefreshTarget::Diff)
+        );
+        assert_eq!(diff_refresh_target(Tab::Diff, false, false, false), None);
+        assert_eq!(
+            diff_refresh_target(Tab::Preview, false, false, true),
+            Some(DiffRefreshTarget::Diff)
+        );
     }
 
     #[test]
@@ -3567,9 +3635,8 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
         let events = FakeEventReader::new(vec![Event::Key(key)]);
 
-        let err = crate::action::with_forced_infallible_action_error_for_tests(|| {
-            drain_events(&terminal, &mut app, &events).expect_err("expected drain error")
-        });
+        let _guard = crate::action::force_infallible_action_error_for_tests();
+        let err = drain_events(&terminal, &mut app, &events).expect_err("expected drain error");
 
         assert!(err.to_string().contains("forced infallible action error"));
     }

@@ -168,6 +168,13 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     assert!(result.is_ok());
 
     assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    for ch in "compare the alternatives".chars() {
+        tenex::action::dispatch_synthesis_prompt_mode(
+            &mut app,
+            KeyCode::Char(ch),
+            KeyModifiers::NONE,
+        )?;
+    }
     tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
 
     // Should only have root remaining (all 5 descendants removed)

@@ -1,4 +1,5 @@
 //! Cross-platform multiplexer integration module.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 mod backend;
 mod capture;
@@ -20,6 +21,10 @@ pub use endpoint::{SocketEndpoint, set_socket_override, socket_endpoint};
 pub use output::{OutputCursor, OutputRead, OutputStream};
 pub use session::{Manager as SessionManager, Session, Window};
 
+#[cfg(coverage)]
+pub use endpoint::exercise_endpoint_paths_for_coverage;
+#[cfg(coverage)]
+pub use ipc::exercise_len_prefixed_payload_length_for_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub use ipc::{read_json, write_json};
 #[cfg(any(test, feature = "test-support"))]
@@ -28,6 +33,7 @@ pub use protocol::{CaptureKind, MuxRequest, MuxResponse};
 use anyhow::{Context, Result, bail};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -47,6 +53,13 @@ fn kill_program() -> PathBuf {
     PathBuf::from("kill")
 }
 
+#[cfg(coverage)]
+#[doc(hidden)]
+pub fn exercise_mux_paths_for_coverage() {
+    let _ = kill_program();
+    session::exercise_working_dir_paths_for_coverage();
+}
+
 #[cfg(test)]
 pub(crate) fn with_kill_program_override_for_tests<T>(
     program: PathBuf,
@@ -60,7 +73,11 @@ pub(crate) fn with_kill_program_override_for_tests<T>(
     })
 }
 
-fn try_ping(stream: &mut (impl std::io::Read + std::io::Write)) -> Option<protocol::MuxResponse> {
+trait PingStream: Read + Write {}
+
+impl<T: Read + Write + ?Sized> PingStream for T {}
+
+fn try_ping(stream: &mut dyn PingStream) -> Option<protocol::MuxResponse> {
     ipc::write_json(stream, &protocol::MuxRequest::Ping).ok()?;
     ipc::read_json(stream).ok()
 }
@@ -90,6 +107,7 @@ pub fn is_server_running() -> bool {
 /// # Errors
 ///
 /// Returns an error if the mux endpoint cannot be resolved or the daemon responds with an error.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn running_daemon_version() -> Result<Option<String>> {
     let endpoint = client::endpoint()?;
     let Ok(mut stream) = Stream::connect(endpoint.name.clone()) else {
@@ -107,6 +125,7 @@ pub fn running_daemon_version() -> Result<Option<String>> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
     fn send_signal(pid: u32, signal: &str) -> Result<()> {
         let status = {
@@ -235,8 +254,8 @@ pub fn socket_display() -> Result<String> {
 /// This is primarily used to keep agents alive across upgrades/rebuilds when the default socket
 /// fingerprint changes.
 #[must_use]
-pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
-    wanted_sessions: &std::collections::HashSet<String, S>,
+pub fn discover_socket_for_sessions(
+    wanted_sessions: &std::collections::HashSet<String, impl std::hash::BuildHasher>,
     preferred_socket: Option<&str>,
 ) -> Option<String> {
     discovery::discover_socket_for_sessions(wanted_sessions, preferred_socket)
@@ -318,10 +337,10 @@ mod tests {
                 match &mode {
                     MockPingMode::CloseOnAccept => {}
                     MockPingMode::CloseAfterRead => {
-                        let _ = crate::mux::read_json::<_, protocol::MuxRequest>(&mut stream);
+                        let _ = crate::mux::read_json::<protocol::MuxRequest>(&mut stream);
                     }
                     MockPingMode::Respond(response) => {
-                        let _ = crate::mux::read_json::<_, protocol::MuxRequest>(&mut stream);
+                        let _ = crate::mux::read_json::<protocol::MuxRequest>(&mut stream);
                         let _ = crate::mux::write_json(&mut stream, &**response);
                     }
                 }

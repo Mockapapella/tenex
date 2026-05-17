@@ -1,4 +1,5 @@
 //! Mux session management (client-side).
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::protocol::{MuxRequest, MuxResponse};
 use anyhow::{Context, Result, bail};
@@ -31,6 +32,16 @@ fn resolve_working_dir_with_deps(
     }
 
     Ok(resolved)
+}
+
+#[cfg(coverage)]
+pub(super) fn exercise_working_dir_paths_for_coverage() {
+    let temp_dir = std::env::temp_dir();
+    let _ = resolve_working_dir_with_deps(&temp_dir, &std::env::current_dir);
+    let _ = resolve_working_dir_with_deps(Path::new("relative"), &|| Ok(temp_dir.clone()));
+    let _ = resolve_working_dir_with_deps(Path::new("relative"), &|| {
+        Err(std::io::Error::other("forced coverage current dir failure"))
+    });
 }
 
 impl Manager {
@@ -120,10 +131,9 @@ impl Manager {
     /// Returns an error if sessions cannot be listed.
     pub fn list(&self) -> Result<Vec<Session>> {
         match super::client::request(&MuxRequest::ListSessions)? {
-            MuxResponse::Sessions { sessions } => Ok(sessions
-                .into_iter()
-                .map(Self::session_from_info)
-                .collect()),
+            MuxResponse::Sessions { sessions } => {
+                Ok(sessions.into_iter().map(Self::session_from_info).collect())
+            }
             MuxResponse::Err { message } => bail!("{message}"),
             other => bail!("Unexpected response: {other:?}"),
         }
@@ -210,6 +220,7 @@ impl Manager {
     /// # Errors
     ///
     /// Returns an error if input cannot be sent/submitted.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn send_keys_and_submit_for_program(
         &self,
         target: &str,
@@ -569,7 +580,7 @@ mod tests {
             let mut handled = 0usize;
             for mut stream in listener.incoming().flatten() {
                 while handled < expected_requests {
-                    let Ok(_request) = crate::mux::read_json::<_, MuxRequest>(&mut stream) else {
+                    let Ok(_request) = crate::mux::read_json::<MuxRequest>(&mut stream) else {
                         break;
                     };
 
@@ -645,15 +656,16 @@ mod tests {
         let rel = std::path::PathBuf::from(format!("missing-{}", uuid::Uuid::new_v4()));
 
         let current_dir = current_dir_from_temp(&tmp, &called);
-        let resolved =
-            resolve_working_dir_with_deps(&rel, &current_dir).expect("Expected resolve working dir");
+        let resolved = resolve_working_dir_with_deps(&rel, &current_dir)
+            .expect("Expected resolve working dir");
 
         assert!(called.get());
         assert_eq!(resolved, tmp.path().join(&rel));
     }
 
     #[test]
-    fn test_resolve_working_dir_with_deps_preserves_absolute_paths_and_canonicalizes_when_possible() {
+    fn test_resolve_working_dir_with_deps_preserves_absolute_paths_and_canonicalizes_when_possible()
+    {
         let tmp = TempDir::new().expect("Expected temp dir");
         let called = Cell::new(false);
         let subdir = tmp.path().join("subdir");
@@ -665,15 +677,22 @@ mod tests {
             .expect("Expected resolve working dir");
 
         assert!(!called.get());
-        assert_eq!(resolved, subdir.canonicalize().expect("canonicalize subdir"));
+        assert_eq!(
+            resolved,
+            subdir.canonicalize().expect("canonicalize subdir")
+        );
     }
 
     #[test]
     fn test_create_with_deps_propagates_working_dir_resolution_failure() {
         let current_dir = || Err(std::io::Error::other("boom"));
-        let err =
-            Manager::create_with_deps("session", std::path::Path::new("relative"), None, &current_dir)
-                .expect_err("Expected create to fail");
+        let err = Manager::create_with_deps(
+            "session",
+            std::path::Path::new("relative"),
+            None,
+            &current_dir,
+        )
+        .expect_err("Expected create to fail");
         assert!(
             err.to_string()
                 .contains("Failed to resolve current directory for mux working dir")

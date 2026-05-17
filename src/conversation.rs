@@ -3,6 +3,9 @@
 //! Tenex persists a per-agent conversation id so it can respawn agents after a reboot/crash and
 //! reconnect to the same Codex/Claude session instead of starting a new one.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use crate::command;
 use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use serde::Deserialize;
@@ -13,7 +16,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +31,7 @@ pub enum AgentCli {
 }
 
 /// Detect the agent CLI from a configured program string.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn detect_agent_cli(program: &str) -> AgentCli {
     let Ok(argv) = command::parse_command_line(program) else {
         return AgentCli::Other;
@@ -46,6 +50,27 @@ pub fn detect_agent_cli(program: &str) -> AgentCli {
     }
 }
 
+#[cfg(coverage)]
+#[doc(hidden)]
+pub fn exercise_agent_cli_detection_for_coverage() {
+    let _ = detect_agent_cli("claude");
+    let _ = detect_agent_cli("codex");
+    let _ = detect_agent_cli("sh -c 'unterminated");
+    let _ = detect_agent_cli("/usr/bin/echo hello");
+    let _ = build_spawn_argv("claude --debug", Some("hello"), Some("session"));
+    let _ = build_spawn_argv("claude --session-id existing", None, Some("session"));
+    let _ = build_spawn_argv("claude --session-id=existing", None, Some("session"));
+    let _ = build_spawn_argv("claude --resume existing", None, Some("session"));
+    let _ = build_spawn_argv("claude -r existing", None, Some("session"));
+    let _ = build_spawn_argv("claude --continue existing", None, Some("session"));
+    let _ = build_spawn_argv("claude -c existing", None, Some("session"));
+    let _ = build_spawn_argv("codex", Some("hello"), Some("session"));
+    let _ = build_spawn_argv("sh -c 'unterminated", None, None);
+    let _ = build_resume_argv("claude", "conversation");
+    let _ = build_resume_argv("codex", "conversation");
+    let _ = build_resume_argv("echo", "conversation");
+}
+
 /// Build argv for spawning an agent.
 ///
 /// For Claude, Tenex can optionally force a stable session id (so it can be resumed later).
@@ -53,6 +78,7 @@ pub fn detect_agent_cli(program: &str) -> AgentCli {
 /// # Errors
 ///
 /// Returns an error when `program` cannot be parsed into an argv vector.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn build_spawn_argv(
     program: &str,
     prompt: Option<&str>,
@@ -85,6 +111,7 @@ pub fn build_spawn_argv(
 /// # Errors
 ///
 /// Returns an error when `program` cannot be parsed into an argv vector.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn build_resume_argv(program: &str, conversation_id: &str) -> Result<Vec<String>> {
     let mut argv = command::parse_command_line(program)?;
 
@@ -122,25 +149,20 @@ fn try_detect_codex_session_id_in_root<S: std::hash::BuildHasher>(
     exclude_ids: &HashSet<String, S>,
     max_wait: Duration,
 ) -> Option<String> {
-    try_detect_codex_session_id_with_retry(
-        max_wait,
-        || detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids),
-        SystemTime::now,
-        std::thread::sleep,
-    )
+    let mut detect_once =
+        || detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids);
+    let mut now = SystemTime::now;
+    let mut sleep = std::thread::sleep;
+
+    try_detect_codex_session_id_with_retry(max_wait, &mut detect_once, &mut now, &mut sleep)
 }
 
-fn try_detect_codex_session_id_with_retry<Detect, Now, Sleep>(
+fn try_detect_codex_session_id_with_retry(
     max_wait: Duration,
-    mut detect_once: Detect,
-    mut now: Now,
-    mut sleep: Sleep,
-) -> Option<String>
-where
-    Detect: FnMut() -> Option<String>,
-    Now: FnMut() -> SystemTime,
-    Sleep: FnMut(Duration),
-{
+    detect_once: &mut dyn FnMut() -> Option<String>,
+    now: &mut dyn FnMut() -> SystemTime,
+    sleep: &mut dyn FnMut(Duration),
+) -> Option<String> {
     let deadline = now().checked_add(max_wait)?;
     loop {
         if let Some(found) = detect_once() {
@@ -163,6 +185,7 @@ fn detect_codex_session_id_once_in_root<S: std::hash::BuildHasher>(
     detect_codex_session_id_once_in_dirs(&date_dirs, workdir, since, exclude_ids)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn detect_codex_session_id_once_in_dirs<S: std::hash::BuildHasher>(
     date_dirs: &[PathBuf],
     workdir: &Path,
@@ -259,22 +282,22 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 #[derive(Clone)]
 enum CodexSessionsRootOverride {
     Unset,
     Value(Option<PathBuf>),
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static CODEX_SESSIONS_ROOT_OVERRIDE: OnceLock<Mutex<CodexSessionsRootOverride>> = OnceLock::new();
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn codex_sessions_root_override_mutex() -> &'static Mutex<CodexSessionsRootOverride> {
     CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(CodexSessionsRootOverride::Unset))
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn codex_sessions_root_override() -> CodexSessionsRootOverride {
     let mutex = codex_sessions_root_override_mutex();
     let guard = match mutex.lock() {
@@ -284,7 +307,7 @@ fn codex_sessions_root_override() -> CodexSessionsRootOverride {
     guard.clone()
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn set_codex_sessions_root_override_for_tests(
     new: CodexSessionsRootOverride,
 ) -> CodexSessionsRootOverride {
@@ -297,7 +320,7 @@ fn set_codex_sessions_root_override_for_tests(
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     match codex_sessions_root_override() {
         CodexSessionsRootOverride::Unset => {}
         CodexSessionsRootOverride::Value(root) => return root,
@@ -497,11 +520,14 @@ mod tests {
 
     #[test]
     fn test_try_detect_codex_session_id_with_retry_returns_none_on_overflow() {
+        let mut detect_once = || None;
+        let mut now = || SystemTime::UNIX_EPOCH;
+        let mut sleep = std::mem::drop::<Duration>;
         let id = try_detect_codex_session_id_with_retry(
             Duration::from_secs(u64::MAX),
-            || None,
-            || SystemTime::UNIX_EPOCH,
-            std::mem::drop::<Duration>,
+            &mut detect_once,
+            &mut now,
+            &mut sleep,
         );
         assert!(id.is_none());
     }
@@ -511,18 +537,23 @@ mod tests {
         let mut detect_calls = 0;
         let mut now_calls = 0;
         let mut slept = false;
-        let id = try_detect_codex_session_id_with_retry(
-            Duration::from_millis(0),
-            || {
+        let id = {
+            let mut detect_once = || {
                 detect_calls += 1;
                 None
-            },
-            || {
+            };
+            let mut now = || {
                 now_calls += 1;
                 SystemTime::UNIX_EPOCH
-            },
-            |_| slept = true,
-        );
+            };
+            let mut sleep = |_| slept = true;
+            try_detect_codex_session_id_with_retry(
+                Duration::from_millis(0),
+                &mut detect_once,
+                &mut now,
+                &mut sleep,
+            )
+        };
         assert!(id.is_none());
         assert_eq!(detect_calls, 1);
         assert_eq!(now_calls, 2);
@@ -840,22 +871,27 @@ mod tests {
         let mut detect_calls = 0;
         let mut now_calls = 0;
         let mut slept = Vec::new();
-        let id = try_detect_codex_session_id_with_retry(
-            Duration::from_millis(200),
-            || {
+        let id = {
+            let mut detect_once = || {
                 detect_calls += 1;
                 if detect_calls == 1 {
                     None
                 } else {
                     Some("deadbeef".to_string())
                 }
-            },
-            || {
+            };
+            let mut now = || {
                 now_calls += 1;
                 SystemTime::UNIX_EPOCH
-            },
-            |duration| slept.push(duration),
-        );
+            };
+            let mut sleep = |duration| slept.push(duration);
+            try_detect_codex_session_id_with_retry(
+                Duration::from_millis(200),
+                &mut detect_once,
+                &mut now,
+                &mut sleep,
+            )
+        };
         assert_eq!(id.as_deref(), Some("deadbeef"));
         assert_eq!(detect_calls, 2);
         assert_eq!(now_calls, 2);

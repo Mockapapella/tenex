@@ -4,6 +4,8 @@
 //! socket fingerprint changes). This module helps locate the daemon that owns a set of stored
 //! sessions so agents can survive restarts.
 
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use super::endpoint::socket_endpoint_from_value;
 use super::ipc;
 #[cfg(not(target_os = "linux"))]
@@ -11,67 +13,73 @@ use super::pidfile;
 use super::protocol::{MuxRequest, MuxResponse};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as StreamTrait;
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::cell::{Cell, RefCell};
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, coverage, target_os = "linux"))]
 use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::path::Path;
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::time::Duration;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 thread_local! {
     static TEST_PIDS_FOR_SOCKET: RefCell<HashMap<String, Vec<u32>>> = RefCell::new(HashMap::new());
     static TEST_PID_IS_ALIVE: RefCell<HashMap<u32, bool>> = RefCell::new(HashMap::new());
     static TEST_PROBE_DELAY_BEFORE_WRITE: Cell<bool> = const { Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 pub(super) fn set_test_mux_daemon_pids_for_socket(socket: &str, pids: Vec<u32>) {
     TEST_PIDS_FOR_SOCKET.with(|values| {
         values.borrow_mut().insert(socket.to_string(), pids);
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 pub(super) fn set_test_pid_is_alive(pid: u32, alive: bool) {
     TEST_PID_IS_ALIVE.with(|values| {
         values.borrow_mut().insert(pid, alive);
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 pub(super) fn clear_test_discovery_overrides() {
     TEST_PIDS_FOR_SOCKET.with(|values| values.borrow_mut().clear());
     TEST_PID_IS_ALIVE.with(|values| values.borrow_mut().clear());
     TEST_PROBE_DELAY_BEFORE_WRITE.with(|cell| cell.set(false));
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_mux_daemon_pids_for_socket_override(socket: &str) -> Option<Vec<u32>> {
     TEST_PIDS_FOR_SOCKET.with(|values| values.borrow().get(socket).cloned())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn test_pid_is_alive_override(pid: u32) -> Option<bool> {
     TEST_PID_IS_ALIVE.with(|values| values.borrow().get(&pid).copied())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 struct TestProbeDelayBeforeWriteGuard {
     previous: bool,
 }
 
-#[cfg(test)]
+#[cfg(all(any(test, coverage), target_os = "linux"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn socket_display_is_path(display: &str) -> bool {
+    display.find(&['/', '\\'][..]).is_some()
+}
+
+#[cfg(any(test, coverage))]
 impl Drop for TestProbeDelayBeforeWriteGuard {
     fn drop(&mut self) {
         TEST_PROBE_DELAY_BEFORE_WRITE.with(|cell| cell.set(self.previous));
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_test_probe_delay_before_write<T>(f: impl FnOnce() -> T) -> T {
     let previous = TEST_PROBE_DELAY_BEFORE_WRITE.with(|cell| cell.replace(true));
     let _guard = TestProbeDelayBeforeWriteGuard { previous };
@@ -83,8 +91,8 @@ fn with_test_probe_delay_before_write<T>(f: impl FnOnce() -> T) -> T {
 ///
 /// `preferred_socket` is checked first when provided.
 #[must_use]
-pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
-    wanted_sessions: &HashSet<String, S>,
+pub fn discover_socket_for_sessions(
+    wanted_sessions: &HashSet<String, impl std::hash::BuildHasher>,
     preferred_socket: Option<&str>,
 ) -> Option<String> {
     if wanted_sessions.is_empty() {
@@ -99,9 +107,7 @@ pub fn discover_socket_for_sessions<S: std::hash::BuildHasher>(
         candidates.push(socket.to_string());
     }
 
-    if let Ok(default_socket) = super::socket_display() {
-        candidates.push(default_socket);
-    }
+    candidates.extend(super::socket_display().ok());
 
     candidates.extend(running_mux_sockets());
 
@@ -117,10 +123,6 @@ where
     S: std::hash::BuildHasher,
     F: FnMut(&str, &HashSet<String, S>) -> Option<usize>,
 {
-    if candidates.is_empty() {
-        return None;
-    }
-
     let mut seen = HashSet::new();
     candidates.retain(|candidate| seen.insert(candidate.clone()));
 
@@ -146,7 +148,7 @@ where
 }
 
 pub(super) fn mux_daemon_pids_for_socket(socket: &str) -> Vec<u32> {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if let Some(pids) = test_mux_daemon_pids_for_socket_override(socket) {
         return pids;
     }
@@ -172,7 +174,7 @@ pub(super) fn mux_daemon_pids_for_socket(socket: &str) -> Vec<u32> {
 }
 
 pub(super) fn pid_is_alive(pid: u32) -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if let Some(alive) = test_pid_is_alive_override(pid) {
         return alive;
     }
@@ -312,7 +314,7 @@ fn probe_session_matches<S: std::hash::BuildHasher>(
     let endpoint = socket_endpoint_from_value(socket).ok()?;
     let mut stream = Stream::connect(endpoint.name).ok()?;
 
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     if TEST_PROBE_DELAY_BEFORE_WRITE.with(Cell::get) {
         std::thread::sleep(Duration::from_millis(30));
     }
@@ -340,11 +342,11 @@ fn running_mux_sockets() -> Vec<String> {
 #[cfg(target_os = "linux")]
 fn running_mux_sockets_in_proc_root(proc_root: &Path) -> Vec<String> {
     let mut sockets = HashSet::new();
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     let want_path_sockets = super::socket_display()
         .ok()
-        .is_some_and(|display| display.contains('/') || display.contains('\\'));
-    #[cfg(test)]
+        .is_some_and(|display| socket_display_is_path(&display));
+    #[cfg(any(test, coverage))]
     let wanted_state_path = std::env::var("TENEX_STATE_PATH")
         .ok()
         .map(|value| value.trim().to_string())
@@ -376,7 +378,7 @@ fn running_mux_sockets_in_proc_root(proc_root: &Path) -> Vec<String> {
 
         let parsed = parse_environ(&environ);
 
-        #[cfg(test)]
+        #[cfg(any(test, coverage))]
         if let Some(wanted_state_path) = wanted_state_path.as_deref()
             && parsed.get("TENEX_STATE_PATH").map(|value| value.trim()) != Some(wanted_state_path)
         {
@@ -389,9 +391,9 @@ fn running_mux_sockets_in_proc_root(proc_root: &Path) -> Vec<String> {
                 continue;
             }
 
-            #[cfg(test)]
-            let is_path = trimmed.contains('/') || trimmed.contains('\\');
-            #[cfg(test)]
+            #[cfg(any(test, coverage))]
+            let is_path = socket_display_is_path(trimmed);
+            #[cfg(any(test, coverage))]
             if is_path != want_path_sockets {
                 continue;
             }

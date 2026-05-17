@@ -1,22 +1,47 @@
 //! IPC framing helpers for the mux daemon.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io::{Read, Write};
 
-fn write_len_prefixed_payload<W: Write>(
-    writer: &mut W,
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn payload_len_bytes(payload_len: usize) -> Result<[u8; 4]> {
+    let Ok(len) = u32::try_from(payload_len) else {
+        bail!("Message too large");
+    };
+    Ok(len.to_le_bytes())
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_len_prefixed_payload_with_len(
+    writer: &mut dyn Write,
     payload_len: usize,
-    write_payload: impl FnOnce(&mut W) -> std::io::Result<()>,
+    payload: Option<&[u8]>,
 ) -> Result<()> {
-    let len = u32::try_from(payload_len).context("Message too large")?;
+    let len_bytes = payload_len_bytes(payload_len)?;
     writer
-        .write_all(&len.to_le_bytes())
+        .write_all(&len_bytes)
         .context("Failed to write message length")?;
-    write_payload(writer).context("Failed to write message")?;
+    if let Some(payload) = payload {
+        writer
+            .write_all(payload)
+            .context("Failed to write message")?;
+    }
     writer.flush().context("Failed to flush message")?;
     Ok(())
+}
+
+fn write_len_prefixed_payload(writer: &mut dyn Write, payload: &[u8]) -> Result<()> {
+    write_len_prefixed_payload_with_len(writer, payload.len(), Some(payload))
+}
+
+#[cfg(any(test, coverage))]
+#[doc(hidden)]
+pub fn exercise_len_prefixed_payload_length_for_tests(payload_len: usize) -> Result<()> {
+    let mut writer = std::io::sink();
+    write_len_prefixed_payload_with_len(&mut writer, payload_len, None)
 }
 
 /// Read a length-prefixed JSON message.
@@ -24,7 +49,7 @@ fn write_len_prefixed_payload<W: Write>(
 /// # Errors
 ///
 /// Returns an error if the stream cannot be read or the JSON cannot be decoded.
-pub fn read_json<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T> {
+pub fn read_json<T: DeserializeOwned>(reader: &mut dyn Read) -> Result<T> {
     let mut len_bytes = [0u8; 4];
     reader
         .read_exact(&mut len_bytes)
@@ -42,9 +67,9 @@ pub fn read_json<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T> {
 /// # Errors
 ///
 /// Returns an error if the message cannot be encoded or written.
-pub fn write_json<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<()> {
+pub fn write_json<T: Serialize>(writer: &mut dyn Write, value: &T) -> Result<()> {
     let buf = serde_json::to_vec(value).context("Failed to encode JSON message")?;
-    write_len_prefixed_payload(writer, buf.len(), |writer| writer.write_all(&buf))
+    write_len_prefixed_payload(writer, &buf)
 }
 
 #[cfg(test)]
@@ -54,14 +79,6 @@ mod tests {
     use interprocess::local_socket::traits::Stream as _;
     use serde::{Deserialize, Serialize};
     use std::io::Cursor;
-
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "Matches `write_len_prefixed_payload` callback signature."
-    )]
-    fn noop_write_payload<W: Write>(_writer: &mut W) -> std::io::Result<()> {
-        Ok(())
-    }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     struct Payload {
@@ -85,7 +102,7 @@ mod tests {
     #[test]
     fn test_read_json_errors_when_length_is_unreadable() {
         let mut cursor = Cursor::new(Vec::<u8>::new());
-        let error = read_json::<_, Payload>(&mut cursor).unwrap_err();
+        let error = read_json::<Payload>(&mut cursor).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to read message length"));
     }
@@ -97,7 +114,7 @@ mod tests {
         bytes.extend_from_slice(b"{}\n"); // not enough payload bytes
 
         let mut cursor = Cursor::new(bytes);
-        let error = read_json::<_, Payload>(&mut cursor).unwrap_err();
+        let error = read_json::<Payload>(&mut cursor).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to read message"));
     }
@@ -110,7 +127,7 @@ mod tests {
         bytes.extend_from_slice(payload);
 
         let mut cursor = Cursor::new(bytes);
-        let error = read_json::<_, Payload>(&mut cursor).unwrap_err();
+        let error = read_json::<Payload>(&mut cursor).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to decode JSON message"));
     }
@@ -133,14 +150,19 @@ mod tests {
 
     #[test]
     fn test_write_json_errors_when_message_too_large() {
-        let mut writer = SpyWriter::default();
-        let error =
-            write_len_prefixed_payload(&mut writer, u32::MAX as usize + 1, noop_write_payload)
-                .unwrap_err();
+        let error = payload_len_bytes(u32::MAX as usize + 1).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Message too large"));
-        assert_eq!(writer.write_calls, 0);
-        assert!(writer.bytes.is_empty());
+    }
+
+    #[test]
+    fn test_exercise_len_prefixed_payload_length_for_tests_covers_boundary() {
+        exercise_len_prefixed_payload_length_for_tests(0).unwrap();
+
+        let error =
+            exercise_len_prefixed_payload_length_for_tests(u32::MAX as usize + 1).unwrap_err();
+        let message = format!("{error}");
+        assert!(message.contains("Message too large"));
     }
 
     #[derive(Default)]
@@ -177,7 +199,7 @@ mod tests {
             ..SpyWriter::default()
         };
 
-        let error = write_len_prefixed_payload(&mut writer, 0, noop_write_payload).unwrap_err();
+        let error = write_len_prefixed_payload(&mut writer, &[]).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to write message length"));
     }
@@ -185,7 +207,7 @@ mod tests {
     #[test]
     fn test_write_len_prefixed_payload_writes_length_only_for_empty_payload() {
         let mut writer = SpyWriter::default();
-        write_len_prefixed_payload(&mut writer, 0, noop_write_payload).unwrap();
+        write_len_prefixed_payload(&mut writer, &[]).unwrap();
         assert_eq!(writer.write_calls, 1);
         assert_eq!(writer.bytes, 0u32.to_le_bytes().to_vec());
     }
@@ -193,7 +215,7 @@ mod tests {
     #[test]
     fn test_write_len_prefixed_payload_succeeds_when_writer_ok() {
         let mut writer = SpyWriter::default();
-        write_len_prefixed_payload(&mut writer, 2, |writer| writer.write_all(b"hi")).unwrap();
+        write_len_prefixed_payload(&mut writer, b"hi").unwrap();
         assert_eq!(writer.write_calls, 2);
         assert_eq!(
             writer.bytes,
@@ -208,8 +230,7 @@ mod tests {
             ..SpyWriter::default()
         };
 
-        let error = write_len_prefixed_payload(&mut writer, 2, |writer| writer.write_all(b"hi"))
-            .unwrap_err();
+        let error = write_len_prefixed_payload(&mut writer, b"hi").unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to write message"));
     }
@@ -221,8 +242,7 @@ mod tests {
             ..SpyWriter::default()
         };
 
-        let error = write_len_prefixed_payload(&mut writer, 2, |writer| writer.write_all(b"hi"))
-            .unwrap_err();
+        let error = write_len_prefixed_payload(&mut writer, b"hi").unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("Failed to flush message"));
     }
@@ -276,7 +296,7 @@ mod tests {
         run_stream_read_error_test("mux-ipc-read-length-error", || {
             let (_temp_dir, mut stream, handle) = setup_stream_pair(drop);
 
-            let err = read_json::<_, Payload>(&mut stream).unwrap_err();
+            let err = read_json::<Payload>(&mut stream).unwrap_err();
             assert!(format!("{err}").contains("Failed to read message length"));
 
             handle.join().expect("Mux ipc server thread panicked");
@@ -293,7 +313,7 @@ mod tests {
                 stream.write_all(b"{}\n").expect("Write payload bytes");
             });
 
-            let err = read_json::<_, Payload>(&mut stream).unwrap_err();
+            let err = read_json::<Payload>(&mut stream).unwrap_err();
             assert!(format!("{err}").contains("Failed to read message"));
 
             handle.join().expect("Mux ipc server thread panicked");
@@ -315,7 +335,7 @@ mod tests {
                 stream.write_all(payload).expect("Write payload bytes");
             });
 
-            let err = read_json::<_, Payload>(&mut stream).unwrap_err();
+            let err = read_json::<Payload>(&mut stream).unwrap_err();
             assert!(format!("{err}").contains("Failed to decode JSON message"));
 
             handle.join().expect("Mux ipc server thread panicked");

@@ -90,8 +90,12 @@ impl ValidIn<DiffFocusedMode> for DiffDeleteLineAction {
     type NextState = AppMode;
 
     fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        if app_data.ui.diff_visual_anchor.is_some() {
-            delete_selected_range(app_data)?;
+        if app_data.active_tab != Tab::Diff {
+            return Ok(DiffFocusedMode.into());
+        }
+
+        if let Some(anchor) = app_data.ui.diff_visual_anchor {
+            delete_selected_range(app_data, anchor)?;
             return Ok(DiffFocusedMode.into());
         }
 
@@ -136,15 +140,7 @@ impl ValidIn<DiffFocusedMode> for DiffRedoAction {
     }
 }
 
-fn delete_selected_range(app_data: &mut AppData) -> Result<()> {
-    if app_data.active_tab != Tab::Diff {
-        return Ok(());
-    }
-
-    let Some(anchor) = app_data.ui.diff_visual_anchor else {
-        return Ok(());
-    };
-
+fn delete_selected_range(app_data: &mut AppData, anchor: usize) -> Result<()> {
     let Some(agent) = app_data.selected_agent() else {
         app_data.set_status("No agent selected");
         return Ok(());
@@ -245,10 +241,6 @@ fn delete_selected_range(app_data: &mut AppData) -> Result<()> {
 }
 
 fn delete_selected_line(app_data: &mut AppData) -> Result<()> {
-    if app_data.active_tab != Tab::Diff {
-        return Ok(());
-    }
-
     let Some(agent) = app_data.selected_agent() else {
         app_data.set_status("No agent selected");
         return Ok(());
@@ -314,10 +306,6 @@ fn delete_selected_line(app_data: &mut AppData) -> Result<()> {
 }
 
 fn delete_selected_hunk(app_data: &mut AppData) -> Result<()> {
-    if app_data.active_tab != Tab::Diff {
-        return Ok(());
-    }
-
     let Some(agent) = app_data.selected_agent() else {
         app_data.set_status("No agent selected");
         return Ok(());
@@ -1508,22 +1496,52 @@ mod tests {
     }
 
     #[test]
+    fn test_toggle_visual_action_sets_and_clears_anchor_when_diff_tab_active() {
+        let (mut data, _temp) = create_test_data();
+        data.active_tab = Tab::Diff;
+        data.ui.diff_cursor = 4;
+
+        DiffToggleVisualAction
+            .execute(DiffFocusedMode, &mut data)
+            .expect("toggle should succeed");
+        assert_eq!(data.ui.diff_visual_anchor, Some(4));
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Visual selection started")
+        );
+
+        DiffToggleVisualAction
+            .execute(DiffFocusedMode, &mut data)
+            .expect("toggle should succeed");
+        assert_eq!(data.ui.diff_visual_anchor, None);
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Visual selection cleared")
+        );
+    }
+
+    #[test]
     fn test_delete_selected_range_returns_early_for_missing_prerequisites() {
         let (mut data, _temp) = create_test_data();
         data.ui.diff_visual_anchor = Some(0);
         data.active_tab = Tab::Preview;
 
-        delete_selected_range(&mut data).expect("delete range should succeed");
+        DiffDeleteLineAction
+            .execute(DiffFocusedMode, &mut data)
+            .expect("delete range should succeed");
         assert_eq!(data.ui.diff_visual_anchor, Some(0));
         assert_eq!(data.ui.status_message, None);
 
         data.active_tab = Tab::Diff;
         data.ui.diff_visual_anchor = None;
-        delete_selected_range(&mut data).expect("delete range should succeed");
-        assert_eq!(data.ui.status_message, None);
+        DiffDeleteLineAction
+            .execute(DiffFocusedMode, &mut data)
+            .expect("delete range should succeed");
+        assert_eq!(data.ui.status_message.as_deref(), Some("No agent selected"));
 
+        data.ui.status_message = None;
         data.ui.diff_visual_anchor = Some(0);
-        delete_selected_range(&mut data).expect("delete range should succeed");
+        delete_selected_range(&mut data, 0).expect("delete range should succeed");
         assert_eq!(data.ui.status_message.as_deref(), Some("No agent selected"));
 
         let temp_dir = TempDir::new().expect("temp dir should create");
@@ -1534,7 +1552,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
         ));
         data.ui.status_message = None;
-        delete_selected_range(&mut data).expect("delete range should succeed");
+        delete_selected_range(&mut data, 0).expect("delete range should succeed");
         assert_eq!(
             data.ui.status_message.as_deref(),
             Some("Diff not loaded yet")
@@ -1566,7 +1584,7 @@ mod tests {
         assert!(changed_idx > data.ui.diff_cursor);
 
         data.ui.diff_visual_anchor = Some(changed_idx);
-        delete_selected_range(&mut data).expect("delete range should succeed");
+        delete_selected_range(&mut data, changed_idx).expect("delete range should succeed");
 
         assert_eq!(
             fs::read_to_string(&file_path).expect("read should succeed"),
@@ -1576,6 +1594,36 @@ mod tests {
         assert_eq!(data.ui.status_message.as_deref(), Some("Deleted diff line"));
         assert_eq!(data.ui.diff_undo.len(), 1);
         assert!(data.ui.diff_redo.is_empty());
+    }
+
+    #[test]
+    fn test_delete_selected_range_noops_for_deleted_file_lines() {
+        let original = "keep\nme\n";
+        let (temp_dir, repo) = init_test_repo_with_commit(original);
+        let file_path = temp_dir.path().join("test.txt");
+        fs::remove_file(&file_path).expect("remove should succeed");
+
+        let (mut data, _temp) = create_test_data();
+        data.storage.add(Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "feature/root".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        data.active_tab = Tab::Diff;
+        set_diff_view_from_repo(&mut data, &repo);
+        select_first_changed_line(&mut data);
+        let cursor = data.ui.diff_cursor;
+        data.ui.diff_visual_anchor = Some(cursor);
+
+        delete_selected_range(&mut data, cursor).expect("delete range should succeed");
+
+        assert!(!file_path.exists());
+        assert_eq!(
+            data.ui.status_message.as_deref(),
+            Some("Cannot delete a line from a deleted file (select hunk header to restore)")
+        );
+        assert!(data.ui.diff_undo.is_empty());
     }
 
     #[test]
@@ -1614,7 +1662,7 @@ mod tests {
         data.ui.diff_cursor = 2;
         data.ui.diff_visual_anchor = Some(0);
 
-        delete_selected_range(&mut data).expect("delete range should succeed");
+        delete_selected_range(&mut data, 0).expect("delete range should succeed");
         assert_eq!(
             data.ui.status_message.as_deref(),
             Some("Select a changed line (+/-) to delete")
@@ -1661,10 +1709,6 @@ mod tests {
     #[test]
     fn test_delete_selected_hunk_covers_more_missing_prereq_and_meta_branches() {
         let (mut data, _temp) = create_test_data();
-        data.active_tab = Tab::Preview;
-        delete_selected_hunk(&mut data).expect("delete selected hunk should succeed");
-        assert_eq!(data.ui.status_message, None);
-
         data.active_tab = Tab::Diff;
         delete_selected_hunk(&mut data).expect("delete selected hunk should succeed");
         assert_eq!(data.ui.status_message.as_deref(), Some("No agent selected"));
@@ -1715,10 +1759,6 @@ mod tests {
         let (temp_dir, repo) = init_test_repo_with_commit("one\n");
 
         let (mut data, _temp) = create_test_data();
-        data.active_tab = Tab::Preview;
-        delete_selected_line(&mut data).expect("delete selected line should succeed");
-        assert_eq!(data.ui.status_message, None);
-
         data.active_tab = Tab::Diff;
         delete_selected_line(&mut data).expect("delete selected line should succeed");
         assert_eq!(data.ui.status_message.as_deref(), Some("No agent selected"));
@@ -1772,6 +1812,11 @@ mod tests {
             hunk_idx: 123,
         }];
         delete_selected_hunk(&mut data).expect("delete selected hunk should succeed");
+    }
+
+    #[test]
+    fn test_hunk_header_suffix_returns_empty_when_header_has_no_suffix() {
+        assert_eq!(hunk_header_suffix("@@ -1,1 +1,1"), "");
     }
 
     #[test]
@@ -1883,6 +1928,12 @@ mod tests {
                     },
                     DiffHunkLine {
                         origin: '-',
+                        content: "removed-selected".to_string(),
+                        old_lineno: None,
+                        new_lineno: None,
+                    },
+                    DiffHunkLine {
+                        origin: '-',
                         content: "removed-unselected".to_string(),
                         old_lineno: None,
                         new_lineno: None,
@@ -1908,9 +1959,10 @@ mod tests {
                 ],
                 ..hunk
             },
-            &[0],
+            &[0, 1],
         );
         assert!(multi_patch.contains("-selected"));
+        assert!(multi_patch.contains("+removed-selected"));
         assert!(multi_patch.contains(" unselected"));
         assert!(multi_patch.contains("\\no newline at end of file"));
         assert!(!multi_patch.contains("removed-unselected"));

@@ -924,8 +924,8 @@ mod tests {
         Manager::create(session_name, &tmp, Some(&test_command())).unwrap();
 
         with_forced_session_window_index_overflow_for_tests(|| {
-            let err = Manager::create_window(session_name, "w", &tmp, Some(&test_command()))
-                .unwrap_err();
+            let err =
+                Manager::create_window(session_name, "w", &tmp, Some(&test_command())).unwrap_err();
             assert!(err.to_string().contains("Mux session has too many windows"));
         });
 

@@ -51,7 +51,8 @@ fn test_mux_running_version_probe_exits_successfully_when_daemon_missing() -> Re
 
 #[test]
 #[cfg(unix)]
-fn test_mux_running_version_probe_exits_successfully_when_endpoint_resolution_fails() -> Result<()> {
+fn test_mux_running_version_probe_exits_successfully_when_endpoint_resolution_fails() -> Result<()>
+{
     let long_socket = format!("/tmp/tenex-mux-{}", "a".repeat(200));
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_mux_running_version_probe"))

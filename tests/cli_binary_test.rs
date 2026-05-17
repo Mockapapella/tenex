@@ -69,6 +69,20 @@ fn test_cli_version() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_cli_version_with_debug_logging_enabled() -> Result<(), Box<dyn std::error::Error>> {
+    for level in ["1", "2", "3"] {
+        let output = tenex_bin().arg("--version").env("DEBUG", level).output()?;
+        assert!(
+            output.status.success(),
+            "tenex --version failed with DEBUG={level}:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
     let output = tenex_bin().arg("--invalid-flag").output()?;
 

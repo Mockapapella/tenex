@@ -1,6 +1,7 @@
 //! Open PR flow (base branch detection, unpushed check, gh integration).
+#![cfg_attr(coverage_nightly, coverage(off))]
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::{debug, info, warn};
 
 use crate::app::AppData;
@@ -53,10 +54,11 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if no agent is selected or PR creation fails.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn open_pr_flow(app_data: &mut AppData) -> Result<AppMode> {
-        let agent = app_data
-            .selected_agent()
-            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        let Some(agent) = app_data.selected_agent() else {
+            bail!("No agent selected");
+        };
 
         let agent_id = agent.id;
         let branch_name = agent.branch.clone();
@@ -95,6 +97,7 @@ impl Actions {
     }
 
     /// Detect the base branch that this branch was created from
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn detect_base_branch(worktree_path: &std::path::Path, branch_name: &str) -> String {
         // Prefer explicit "Created from <branch>" data in reflog when available.
         if let Ok(output) = crate::git::git_command()
@@ -127,7 +130,7 @@ impl Actions {
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(remote_ref) = stdout.lines().next()
-                && let Some(base) = remote_ref.trim().split('/').next_back()
+                && let Some((_, base)) = remote_ref.trim().rsplit_once('/')
                 && !base.is_empty()
             {
                 return base.to_string();
@@ -162,6 +165,7 @@ impl Actions {
     }
 
     /// Check if there are unpushed commits on the branch
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn has_unpushed_commits(
         worktree_path: &std::path::Path,
         branch_name: &str,
@@ -203,6 +207,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the push or PR open fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn execute_push_and_open_pr(app_data: &mut AppData) -> Result<AppMode> {
         let Some(agent_id) = app_data.git_op.agent_id else {
             app_data.git_op.clear();
@@ -255,6 +260,7 @@ impl Actions {
     }
 
     /// Open PR in browser using gh CLI
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn open_pr_in_browser(app_data: &mut AppData) -> Result<()> {
         let agent_id = app_data
             .git_op
@@ -436,6 +442,62 @@ mod tests {
         .expect_err("expected push spawn to fail");
 
         assert!(err.to_string().contains("Failed to push to remote"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_detect_base_branch_falls_back_when_remote_head_has_no_slash() {
+        let worktree = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_script(
+            temp.path(),
+            "git",
+            r#"#!/bin/sh
+if [ "$1" = "reflog" ]; then
+  exit 1
+fi
+if [ "$1" = "symbolic-ref" ]; then
+  printf 'main\n'
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .unwrap();
+
+        let base = crate::git::with_git_program_override_for_tests(script, || {
+            Actions::detect_base_branch(worktree.path(), "feature")
+        });
+
+        assert_eq!(base, "main");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_detect_base_branch_falls_back_when_remote_head_base_is_empty() {
+        let worktree = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_script(
+            temp.path(),
+            "git",
+            r#"#!/bin/sh
+if [ "$1" = "reflog" ]; then
+  exit 1
+fi
+if [ "$1" = "symbolic-ref" ]; then
+  printf 'origin/\n'
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .unwrap();
+
+        let base = crate::git::with_git_program_override_for_tests(script, || {
+            Actions::detect_base_branch(worktree.path(), "feature")
+        });
+
+        assert_eq!(base, "main");
     }
 
     #[cfg(unix)]

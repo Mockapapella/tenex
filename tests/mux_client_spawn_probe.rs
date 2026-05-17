@@ -5,6 +5,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+struct CleanupGuard {
+    socket: String,
+    instance_root: PathBuf,
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        cleanup_muxd_for_socket(&self.socket, &self.instance_root);
+    }
+}
+
 fn is_pid_alive(pid: u32) -> bool {
     Command::new("kill")
         .arg("-0")
@@ -97,7 +108,10 @@ fn muxd_pids_for_socket(socket: &str, instance_root: &Path) -> std::collections:
         if !path.is_file() {
             continue;
         }
-        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
         if !name.starts_with("tenex-muxd-") || !name.ends_with(".pid") {
             continue;
         }
@@ -155,8 +169,8 @@ fn cleanup_muxd_for_socket(socket: &str, instance_root: &Path) {
 }
 
 #[test]
-fn test_mux_client_spawn_probe_covers_is_tenex_resolution_in_non_test_build(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_covers_is_tenex_resolution_in_non_test_build()
+-> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::TempDir::new()?;
 
     let probe_path = PathBuf::from(env!("CARGO_BIN_EXE_mux_client_spawn_probe"));
@@ -178,26 +192,14 @@ fn test_mux_client_spawn_probe_covers_is_tenex_resolution_in_non_test_build(
     let socket_display = socket_path.to_string_lossy().to_string();
     let instance_root = temp_dir.path().to_path_buf();
 
-    struct CleanupGuard {
-        socket: String,
-        instance_root: PathBuf,
-    }
-
-    impl Drop for CleanupGuard {
-        fn drop(&mut self) {
-            cleanup_muxd_for_socket(&self.socket, &self.instance_root);
-        }
-    }
-
     let _cleanup = CleanupGuard {
-        socket: socket_display.clone(),
-        instance_root: instance_root.clone(),
+        socket: socket_display,
+        instance_root,
     };
 
     let session_name = format!("tenex-test-mux-client-probe-{}", uuid::Uuid::new_v4());
     let mut cmd = Command::new(&tenex_path);
-    cmd
-        .env("TENEX_MUX_SOCKET", &socket_path)
+    cmd.env("TENEX_MUX_SOCKET", &socket_path)
         .env("TENEX_STATE_PATH", &state_path)
         .env("TENEX_TEST_MUX_SESSION_NAME", &session_name)
         .env("TENEX_TEST_MUX_WORKDIR", &workdir);
@@ -210,8 +212,8 @@ fn test_mux_client_spawn_probe_covers_is_tenex_resolution_in_non_test_build(
 }
 
 #[test]
-fn test_mux_client_spawn_probe_errors_when_session_name_missing(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_errors_when_session_name_missing()
+-> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"))
         .env_remove("TENEX_TEST_MUX_SESSION_NAME")
         .env_remove("TENEX_TEST_MUX_WORKDIR")
@@ -224,8 +226,8 @@ fn test_mux_client_spawn_probe_errors_when_session_name_missing(
 }
 
 #[test]
-fn test_mux_client_spawn_probe_errors_when_session_name_blank(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_errors_when_session_name_blank()
+-> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"))
         .env("TENEX_TEST_MUX_SESSION_NAME", " ")
         .env_remove("TENEX_TEST_MUX_WORKDIR")
@@ -238,36 +240,32 @@ fn test_mux_client_spawn_probe_errors_when_session_name_blank(
 }
 
 #[test]
-fn test_mux_client_spawn_probe_errors_when_workdir_missing() -> Result<(), Box<dyn std::error::Error>>
-{
+fn test_mux_client_spawn_probe_errors_when_workdir_missing()
+-> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"))
         .env("TENEX_TEST_MUX_SESSION_NAME", "tenex-test-mux-client-probe")
         .env_remove("TENEX_TEST_MUX_WORKDIR")
         .output()?;
     assert_eq!(output.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("TENEX_TEST_MUX_WORKDIR is required")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TENEX_TEST_MUX_WORKDIR is required"));
     Ok(())
 }
 
 #[test]
-fn test_mux_client_spawn_probe_errors_when_workdir_blank(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_errors_when_workdir_blank() -> Result<(), Box<dyn std::error::Error>>
+{
     let output = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"))
         .env("TENEX_TEST_MUX_SESSION_NAME", "tenex-test-mux-client-probe")
         .env("TENEX_TEST_MUX_WORKDIR", " ")
         .output()?;
     assert_eq!(output.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("TENEX_TEST_MUX_WORKDIR is required")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TENEX_TEST_MUX_WORKDIR is required"));
     Ok(())
 }
 
 #[test]
-fn test_mux_client_spawn_probe_errors_when_session_create_fails(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_errors_when_session_create_fails()
+-> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::TempDir::new()?;
     let parent_as_file = temp_dir.path().join("not-a-dir");
     fs::write(&parent_as_file, b"nope")?;
@@ -277,11 +275,13 @@ fn test_mux_client_spawn_probe_errors_when_session_create_fails(
     fs::create_dir_all(&workdir)?;
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"));
-    cmd
-        .env("TENEX_MUX_SOCKET", socket_path.to_string_lossy().to_string())
-        .env("TENEX_STATE_PATH", temp_dir.path().join("state.json"))
-        .env("TENEX_TEST_MUX_SESSION_NAME", "tenex-test-mux-client-probe")
-        .env("TENEX_TEST_MUX_WORKDIR", &workdir);
+    cmd.env(
+        "TENEX_MUX_SOCKET",
+        socket_path.to_string_lossy().to_string(),
+    )
+    .env("TENEX_STATE_PATH", temp_dir.path().join("state.json"))
+    .env("TENEX_TEST_MUX_SESSION_NAME", "tenex-test-mux-client-probe")
+    .env("TENEX_TEST_MUX_WORKDIR", &workdir);
     apply_llvm_profile_file_for_child(&mut cmd);
 
     let output = cmd.output()?;
@@ -291,8 +291,8 @@ fn test_mux_client_spawn_probe_errors_when_session_create_fails(
 }
 
 #[test]
-fn test_mux_client_spawn_probe_muxd_returns_success_when_existing_daemon_responds(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_muxd_returns_success_when_existing_daemon_responds()
+-> Result<(), Box<dyn std::error::Error>> {
     use interprocess::local_socket::ListenerOptions;
     use interprocess::local_socket::{GenericFilePath, prelude::*};
     use std::io::{Read, Write};
@@ -330,7 +330,9 @@ fn test_mux_client_spawn_probe_muxd_returns_success_when_existing_daemon_respond
                 stream.read_exact(&mut payload)?;
 
                 let response = br#""Ok""#;
-                stream.write_all(&(response.len() as u32).to_le_bytes())?;
+                let response_len = u32::try_from(response.len())
+                    .map_err(|_| std::io::Error::other("mock response too large"))?;
+                stream.write_all(&response_len.to_le_bytes())?;
                 stream.write_all(response)?;
                 stream.flush()?;
             }
@@ -354,17 +356,19 @@ fn test_mux_client_spawn_probe_muxd_returns_success_when_existing_daemon_respond
 }
 
 #[test]
-fn test_mux_client_spawn_probe_muxd_exits_nonzero_when_daemon_start_fails(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_mux_client_spawn_probe_muxd_exits_nonzero_when_daemon_start_fails()
+-> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::TempDir::new()?;
     let parent_as_file = temp_dir.path().join("not-a-dir");
     fs::write(&parent_as_file, b"nope")?;
 
     let socket_path = parent_as_file.join("mux.sock");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mux_client_spawn_probe"));
-    cmd
-        .arg("muxd")
-        .env("TENEX_MUX_SOCKET", socket_path.to_string_lossy().to_string())
+    cmd.arg("muxd")
+        .env(
+            "TENEX_MUX_SOCKET",
+            socket_path.to_string_lossy().to_string(),
+        )
         .env("TENEX_STATE_PATH", temp_dir.path().join("state.json"));
     apply_llvm_profile_file_for_child(&mut cmd);
 

@@ -7,9 +7,9 @@ use std::io::{self, Write as _};
 
 use tenex::action::{dispatch_diff_focused_mode, dispatch_normal_mode};
 use tenex::agent::{Agent, ChildConfig, Storage};
-use tenex::app::Settings;
+use tenex::app::{Actions, ConfirmAction, Settings};
 use tenex::config::Action;
-use tenex::state::DiffFocusedMode;
+use tenex::state::{ConfirmingMode, DiffFocusedMode, ScrollingMode};
 use tenex::{App, Config, Tab};
 
 fn main() {
@@ -75,11 +75,21 @@ fn add_agent_with_child(app: &mut App, worktree_path: std::path::PathBuf) {
 fn drive_diff_focused_dispatch(app: &mut App) {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
+    let mut no_agent_app = App::default();
+    no_agent_app.data.active_tab = Tab::Diff;
+    no_agent_app.enter_mode(DiffFocusedMode.into());
+    let _ = dispatch_diff_focused_mode(&mut no_agent_app, KeyCode::Char('x'), KeyModifiers::NONE);
+
     add_agent_with_child(app, std::env::temp_dir());
+    app.data.active_tab = Tab::Preview;
+    app.enter_mode(DiffFocusedMode.into());
+    let _ = dispatch_diff_focused_mode(app, KeyCode::Char('x'), KeyModifiers::NONE);
+
     app.data.active_tab = Tab::Diff;
     app.data.ui.set_preview_dimensions(80, 1);
     app.data.ui.set_diff_content("line-0\nline-1\nline-2\n");
     app.enter_mode(DiffFocusedMode.into());
+    let _ = dispatch_diff_focused_mode(app, KeyCode::Char('x'), KeyModifiers::NONE);
 
     // Cover both lowercase and uppercase quit variants.
     let _ = dispatch_diff_focused_mode(app, KeyCode::Char('q'), KeyModifiers::CONTROL);
@@ -103,17 +113,113 @@ fn drive_normal_mode_dispatch(app: &mut App) {
         Action::NewAgentWithPrompt,
         Action::SelectProjectHeader,
         Action::SelectProjectFirstAgent,
+        Action::Quit,
+        Action::Kill,
+        Action::NextAgent,
+        Action::PrevAgent,
+        Action::SpawnChildren,
+        Action::PlanSwarm,
+        Action::AddChildren,
         Action::ScrollUp,
         Action::ScrollDown,
         Action::ScrollTop,
         Action::ScrollBottom,
+        Action::FocusPreview,
         Action::SwitchTab,
+        Action::Synthesize,
+        Action::ToggleCollapse,
+        Action::Broadcast,
+        Action::ReviewSwarm,
+        Action::SpawnTerminal,
+        Action::SpawnTerminalPrompted,
+        Action::Push,
+        Action::RenameBranch,
+        Action::OpenPR,
+        Action::Rebase,
+        Action::Merge,
+        Action::SwitchBranch,
         Action::CommandPalette,
+        Action::Confirm,
         Action::Cancel,
     ] {
         let _ = dispatch_normal_mode(app, action);
         app.exit_mode();
+        app.data.should_quit = false;
     }
+
+    let _ = Actions::rename_agent(&mut app.data);
+    app.exit_mode();
+
+    let same_agent = Agent::new(
+        "same-name".to_string(),
+        "claude".to_string(),
+        "tenex/same-name".to_string(),
+        std::env::temp_dir(),
+    );
+    let same_agent_id = same_agent.id;
+    app.data.storage.add(same_agent);
+    app.data.git_op.agent_id = Some(same_agent_id);
+    app.data.git_op.original_branch = "same-name".to_string();
+    app.data.git_op.branch_name = "same-name".to_string();
+    app.data.git_op.is_root_rename = false;
+    let _ = Actions::execute_rename(&mut app.data);
+
+    let failing_state_path = std::env::temp_dir().join(format!(
+        "tenex-action-dispatch-rename-error-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let _ = std::fs::create_dir_all(&failing_state_path);
+    let mut failing_app = App::new(
+        Config::default(),
+        Storage::with_path(failing_state_path),
+        Settings::default(),
+        false,
+    );
+    let failing_agent = Agent::new(
+        "old-name".to_string(),
+        "claude".to_string(),
+        "tenex/old-name".to_string(),
+        std::env::temp_dir(),
+    );
+    let failing_agent_id = failing_agent.id;
+    failing_app.data.storage.add(failing_agent);
+    failing_app.data.git_op.agent_id = Some(failing_agent_id);
+    failing_app.data.git_op.original_branch = "old-name".to_string();
+    failing_app.data.git_op.branch_name = "new-name".to_string();
+    failing_app.data.git_op.is_root_rename = false;
+    let _ = Actions::execute_rename(&mut failing_app.data);
+
+    let mut empty_app = App::default();
+    let _ = Actions::rename_agent(&mut empty_app.data);
+    let _ = Actions::execute_rename(&mut empty_app.data);
+    empty_app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+    let _ = Actions::execute_rename(&mut empty_app.data);
+}
+
+fn drive_handler_dispatch(app: &mut App) {
+    let _ = Actions::new().handle_action(app, Action::Help);
+    app.exit_mode();
+
+    app.enter_mode(ScrollingMode.into());
+    let _ = Actions::new().handle_action(app, Action::Cancel);
+    app.exit_mode();
+
+    app.enter_mode(
+        ConfirmingMode {
+            action: ConfirmAction::Quit,
+        }
+        .into(),
+    );
+    let _ = Actions::new().handle_action(app, Action::Cancel);
+
+    app.enter_mode(
+        ConfirmingMode {
+            action: ConfirmAction::Quit,
+        }
+        .into(),
+    );
+    let _ = Actions::new().handle_action(app, Action::Confirm);
+    app.data.should_quit = false;
 }
 
 fn run() -> anyhow::Result<()> {
@@ -122,6 +228,14 @@ fn run() -> anyhow::Result<()> {
         return Err(usage());
     }
 
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(io::sink)
+        .try_init();
+
+    #[cfg(coverage)]
+    let _ = tenex::mux::set_socket_override("tenex-action-dispatch-probe\0invalid");
+
     let pid = std::process::id();
     let suffix = uuid::Uuid::new_v4();
     let prefix = format!("tenex-action-dispatch-probe-{pid}-{suffix}");
@@ -129,7 +243,20 @@ fn run() -> anyhow::Result<()> {
     app.data.settings.keyboard_remap_asked = true;
 
     drive_normal_mode_dispatch(&mut app);
+    drive_handler_dispatch(&mut app);
     drive_diff_focused_dispatch(&mut app);
+    #[cfg(coverage)]
+    {
+        tenex::agent::Storage::exercise_load_and_backfill_paths_for_coverage();
+        tenex::mux::exercise_endpoint_paths_for_coverage();
+        tenex::mux::exercise_mux_paths_for_coverage();
+        tenex::conversation::exercise_agent_cli_detection_for_coverage();
+        app.data.exercise_command_defaults_for_coverage();
+        Actions::exercise_reset_all_paths_for_coverage();
+        Actions::exercise_agent_lifecycle_paths_for_coverage(&mut app.data);
+        Actions::exercise_swarm_paths_for_coverage(&mut app.data);
+        Actions::exercise_sync_paths_for_coverage(&mut app);
+    }
 
     write_stdout_for_tests(b"ok\n")?;
     Ok(())

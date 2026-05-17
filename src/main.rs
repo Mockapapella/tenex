@@ -1,4 +1,5 @@
 //! Tenex - Terminal multiplexer for AI coding agents
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -45,10 +46,7 @@ fn main() -> Result<()> {
     let cli = parse_cli();
     let config = Config::default();
     let state_path = Config::state_path();
-    let env_mux_socket = std::env::var("TENEX_MUX_SOCKET")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let env_mux_socket = env_mux_socket();
 
     let deps = CliDeps {
         migrate_default_state_dir: tenex::migration::migrate_default_state_dir,
@@ -97,6 +95,7 @@ struct InteractiveDeps {
     respawn_missing_agents: RespawnMissingAgents,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn run_cli(
     cli: &Cli,
     config: Config,
@@ -106,16 +105,12 @@ fn run_cli(
 ) -> Result<()> {
     match &cli.command {
         Some(Commands::Reset { force }) => {
-            if let Err(err) = (deps.migrate_default_state_dir)() {
-                eprintln!("Warning: Failed to migrate Tenex state directory: {err}");
-            }
+            (deps.migrate_default_state_dir)().unwrap_or_else(|err| warn_migration_failure(&err));
             (deps.cmd_reset)(*force)
         }
         Some(Commands::Muxd) => (deps.run_mux_daemon)(),
         None => {
-            if let Err(err) = (deps.migrate_default_state_dir)() {
-                eprintln!("Warning: Failed to migrate Tenex state directory: {err}");
-            }
+            (deps.migrate_default_state_dir)().unwrap_or_else(|err| warn_migration_failure(&err));
 
             let settings = (deps.load_settings)();
             cmd_default(
@@ -129,6 +124,11 @@ fn run_cli(
     }
 }
 
+fn warn_migration_failure(err: &anyhow::Error) {
+    eprintln!("Warning: Failed to migrate Tenex state directory: {err}");
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn cmd_default(
     config: Config,
     state_path: &std::path::Path,
@@ -137,7 +137,7 @@ fn cmd_default(
     deps: &InteractiveDeps,
 ) -> Result<()> {
     let (mut storage, storage_load_error) =
-        load_storage_with_error_at(state_path, || Storage::load_from(state_path));
+        load_storage_result_with_error(state_path, Storage::load_from(state_path));
     ensure_instance_initialized(&config, &mut storage, state_path, env_mux_socket)?;
 
     let mut did_backfill = storage.backfill_workspace_kinds();
@@ -157,6 +157,7 @@ fn init_logging() {
     init_logging_with(&log_path, debug.as_deref());
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn init_logging_with(log_path: &std::path::Path, debug: Option<&str>) {
     if let Some(parent) = log_path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -220,11 +221,11 @@ fn parse_cli() -> Cli {
     }
 }
 
-fn load_storage_with_error_at(
+fn load_storage_result_with_error(
     state_path: &std::path::Path,
-    load: impl FnOnce() -> Result<Storage>,
+    result: Result<Storage>,
 ) -> (Storage, Option<String>) {
-    match load() {
+    match result {
         Ok(storage) => (storage, None),
         Err(err) => {
             let mut message = format!("Failed to load state file {}: {err}", state_path.display());
@@ -270,16 +271,13 @@ fn ensure_instance_initialized(
     )
 }
 
-fn ensure_instance_initialized_with<F>(
+fn ensure_instance_initialized_with(
     config: &Config,
     storage: &mut Storage,
     state_path: &std::path::Path,
     env_mux_socket: Option<&str>,
-    socket_display: F,
-) -> Result<()>
-where
-    F: Fn() -> Result<String>,
-{
+    socket_display: fn() -> Result<String>,
+) -> Result<()> {
     std::fs::create_dir_all(&config.worktree_dir).with_context(|| {
         format!(
             "Failed to create worktrees directory {}",
@@ -544,10 +542,9 @@ fn env_mux_socket() -> Option<String> {
     env_mux_socket_from(|| std::env::var("TENEX_MUX_SOCKET").ok())
 }
 
-fn env_mux_socket_from(get_env: impl FnOnce() -> Option<String>) -> Option<String> {
-    get_env()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn env_mux_socket_from(get_env: EnvMuxSocket) -> Option<String> {
+    let value = get_env()?.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn maybe_prompt_restart_mux_daemon_for_versions_with(
@@ -604,6 +601,7 @@ fn preserve_corrupt_state_file_with(
     Some(preserved)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn find_installed_binary(name: &str) -> std::path::PathBuf {
     use tenex::paths;
 
@@ -631,7 +629,7 @@ type RestartExec = fn(std::path::PathBuf, Vec<String>) -> std::io::Error;
 static RESTART_EXEC_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<RestartExec>>> =
     std::sync::OnceLock::new();
 
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, coverage), unix))]
 static INSTALLED_BINARY_OVERRIDE: std::sync::OnceLock<
     std::sync::Mutex<Option<std::path::PathBuf>>,
 > = std::sync::OnceLock::new();
@@ -647,7 +645,7 @@ fn restart_exec_override() -> Option<RestartExec> {
 
 #[cfg(unix)]
 fn installed_binary_for_restart(name: &str) -> std::path::PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let lock = INSTALLED_BINARY_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
         let guard = lock
@@ -686,6 +684,7 @@ fn restart_current_process() -> Result<()> {
 }
 
 #[cfg(windows)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn restart_current_process() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
@@ -771,6 +770,7 @@ impl ResetDeps {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn cmd_reset_with_storage(
     force: bool,
     storage: &mut Storage,
@@ -787,6 +787,7 @@ fn cmd_reset_with_storage(
     )
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn cmd_reset_with_storage_with_prompts(
     force: bool,
     storage: &mut Storage,
@@ -897,6 +898,7 @@ fn read_line_stdin(input: &mut String) -> std::io::Result<usize> {
     std::io::stdin().read_line(input)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn prompt_reset_scope(force: bool) -> Result<ResetScope> {
     if force {
         return Ok(ResetScope::ThisInstance);
@@ -914,6 +916,7 @@ fn prompt_reset_scope(force: bool) -> Result<ResetScope> {
     prompt_reset_scope_with_io(force, flush_stdout, read_line_stdin, &mut input)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn prompt_reset_scope_with_io(
     force: bool,
     flush_stdout: FlushStdout,
@@ -935,6 +938,7 @@ fn prompt_reset_scope_with_io(
     Ok(ResetScope::ThisInstance)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn list_orphaned_sessions_with(
     mux: SessionManager,
     mux_running: bool,
@@ -975,6 +979,7 @@ fn list_orphaned_sessions_with(
         .collect()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_reset_plan(storage: &Storage, orphaned_sessions: &[String]) {
     if !storage.is_empty() {
         println!("Agents to kill:\n");
@@ -998,6 +1003,7 @@ fn print_reset_plan(storage: &Storage, orphaned_sessions: &[String]) {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn confirm_reset(force: bool) -> Result<bool> {
     if force {
         return Ok(true);
@@ -1009,6 +1015,7 @@ fn confirm_reset(force: bool) -> Result<bool> {
     confirm_reset_with_io(force, flush_stdout, read_line_stdin, &mut input)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn confirm_reset_with_io(
     force: bool,
     flush_stdout: FlushStdout,
@@ -1682,7 +1689,7 @@ mod tests {
         let state_path = dir.path().join("state.json");
 
         let (storage, err) =
-            load_storage_with_error_at(&state_path, || Ok(Storage::with_path(state_path.clone())));
+            load_storage_result_with_error(&state_path, Ok(Storage::with_path(state_path.clone())));
         assert!(storage.is_empty());
         assert!(err.is_none());
 
@@ -1696,7 +1703,7 @@ mod tests {
         let state_path = dir.path().join("state.json");
 
         let (storage, err) =
-            load_storage_with_error_at(&state_path, || Err(anyhow::anyhow!("boom")));
+            load_storage_result_with_error(&state_path, Err(anyhow::anyhow!("boom")));
         assert!(storage.is_empty());
 
         let err = err.expect("Expected load_storage_with_error to return message");
@@ -1717,7 +1724,7 @@ mod tests {
         std::fs::write(&backup_path, "{").unwrap();
 
         let (storage, err) =
-            load_storage_with_error_at(&state_path, || Storage::load_from(&state_path));
+            load_storage_result_with_error(&state_path, Storage::load_from(&state_path));
         assert!(storage.is_empty());
         let err = err.expect("Expected load_storage_with_error to return message");
         assert!(err.contains("Failed to load state file"));
@@ -1747,7 +1754,7 @@ mod tests {
     #[test]
     fn test_load_storage_with_error_reports_failed_preserve_when_state_path_has_no_file_name() {
         let (_storage, err) =
-            load_storage_with_error_at(std::path::Path::new("/"), || Err(anyhow::anyhow!("boom")));
+            load_storage_result_with_error(std::path::Path::new("/"), Err(anyhow::anyhow!("boom")));
         let err = err.unwrap_or_default();
         assert!(err.contains("Failed to preserve unreadable state file"));
     }
@@ -1806,6 +1813,36 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| !value.is_empty())
         );
+        assert!(state_path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure_instance_initialized_reuses_stored_mux_socket_for_agents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new().unwrap();
+        let state_path = dir.path().join("state.json");
+        std::fs::write(&state_path, "{}").unwrap();
+        let config = Config {
+            worktree_dir: dir.path().join("worktrees"),
+            ..Config::default()
+        };
+
+        let mut storage = Storage::with_path(state_path.clone());
+        storage.instance_id = Some("deadbeef".to_string());
+        storage.mux_socket = Some("tenex-missing-socket".to_string());
+
+        let mut agent = tenex::Agent::new(
+            "Agent".to_string(),
+            "echo".to_string(),
+            "tenex/test-branch".to_string(),
+            dir.path().join("wt"),
+        );
+        agent.mux_session = format!("{}{}", storage.instance_session_prefix(), agent.short_id());
+        storage.add(agent);
+
+        ensure_instance_initialized(&config, &mut storage, &state_path, None).unwrap();
+        assert_eq!(storage.mux_socket.as_deref(), Some("tenex-missing-socket"));
         assert!(state_path.exists());
         Ok(())
     }
@@ -2779,10 +2816,7 @@ mod tests {
             Ok(())
         }
 
-        fn remove_worktree_ok(
-            _mgr: &tenex::git::WorktreeManager<'_>,
-            _branch: &str,
-        ) -> Result<()> {
+        fn remove_worktree_ok(_mgr: &tenex::git::WorktreeManager<'_>, _branch: &str) -> Result<()> {
             Ok(())
         }
 

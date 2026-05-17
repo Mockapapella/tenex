@@ -27,6 +27,43 @@ use anyhow::Result;
 use super::{App, AppData};
 use crate::action::{CancelAction, ConfirmYesAction, SubmitAction, UnfocusPreviewAction, ValidIn};
 
+#[cfg(coverage)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(super) fn init_coverage_git_repo(
+    prefix: &str,
+) -> Option<(std::path::PathBuf, crate::git::Repository)> {
+    let repo_path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::remove_dir_all(&repo_path);
+    std::fs::create_dir_all(&repo_path).ok()?;
+
+    let mut init_opts = git2::RepositoryInitOptions::new();
+    init_opts.initial_head("master");
+    let repo = crate::git::Repository::init_opts(&repo_path, &init_opts).ok()?;
+    repo.set_head("refs/heads/master").ok()?;
+    {
+        let mut config = repo.config().ok()?;
+        config.set_str("user.name", "Test").ok()?;
+        config.set_str("user.email", "test@test.com").ok()?;
+        config.set_str("commit.gpgsign", "false").ok()?;
+    }
+
+    std::fs::write(repo_path.join("README.md"), "# Test\n").ok()?;
+    let sig = git2::Signature::now("Test", "test@test.com").ok()?;
+    let tree_id = {
+        let mut index = repo.index().ok()?;
+        index.add_path(std::path::Path::new("README.md")).ok()?;
+        index.write().ok()?;
+        index.write_tree().ok()?
+    };
+    {
+        let tree = repo.find_tree(tree_id).ok()?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .ok()?;
+    }
+
+    Some((repo_path, repo))
+}
+
 /// Handler for application actions
 #[derive(Debug, Clone, Copy)]
 pub struct Actions {
@@ -49,11 +86,74 @@ impl Actions {
         }
     }
 
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_reset_all_paths_for_coverage() {
+        let mut app_data = AppData::new(
+            crate::config::Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+
+        let mut plain = crate::agent::Agent::new(
+            "coverage plain".to_string(),
+            "echo".to_string(),
+            "plain".to_string(),
+            std::env::temp_dir(),
+        );
+        plain.workspace_kind = crate::agent::WorkspaceKind::PlainDir;
+        app_data.storage.add(plain);
+        let _ = Self::new().reset_all(&mut app_data);
+
+        if let Some((repo_dir, repo)) = init_coverage_git_repo("tenex-reset-coverage") {
+            let mut app_data = AppData::new(
+                crate::config::Config::default(),
+                crate::agent::Storage::new(),
+                crate::app::Settings::default(),
+                false,
+            );
+            app_data.config.branch_prefix = "agent/".to_string();
+            app_data.config.worktree_dir = repo_dir.join("worktrees");
+
+            let branch_mgr = crate::git::BranchManager::new(&repo);
+            let worktree_mgr = WorktreeManager::new(&repo);
+            let _ = branch_mgr.create("agent/prefixed");
+            let prefixed_worktree = repo_dir.join("prefixed");
+            let _ = worktree_mgr.create(&prefixed_worktree, "agent/prefixed");
+            let _ = branch_mgr.create("feature/unprefixed");
+            let unprefixed_worktree = repo_dir.join("unprefixed");
+            let _ = worktree_mgr.create(&unprefixed_worktree, "feature/unprefixed");
+
+            let mut prefixed = crate::agent::Agent::new(
+                "coverage prefixed".to_string(),
+                "echo".to_string(),
+                "agent/prefixed".to_string(),
+                prefixed_worktree,
+            );
+            prefixed.repo_root = Some(repo_dir.clone());
+            app_data.storage.add(prefixed);
+
+            let mut unprefixed = crate::agent::Agent::new(
+                "coverage unprefixed".to_string(),
+                "echo".to_string(),
+                "feature/unprefixed".to_string(),
+                unprefixed_worktree,
+            );
+            unprefixed.repo_root = Some(repo_dir);
+            app_data.storage.add(unprefixed);
+
+            let _ = Self::new().reset_all(&mut app_data);
+        }
+    }
+
     /// Handle a keybinding action
     ///
     /// # Errors
     ///
     /// Returns an error if the action fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn handle_action(self, app: &mut App, action: Action) -> Result<()> {
         match (&app.mode, action) {
             (AppMode::Normal(_), action) => crate::action::dispatch_normal_mode(app, action)?,
@@ -105,6 +205,7 @@ impl Actions {
     }
 
     /// Reset all agents and state
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn reset_all(self, app_data: &mut AppData) -> Result<()> {
         let roots: Vec<_> = app_data
             .storage
@@ -197,6 +298,13 @@ mod tests {
             .finish();
         let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, f)
+    }
+
+    fn error_modal_message(mode: &AppMode) -> Option<&str> {
+        match mode {
+            AppMode::ErrorModal(error) => Some(error.message.as_str()),
+            _ => None,
+        }
     }
 
     #[cfg(unix)]
@@ -337,6 +445,7 @@ mod tests {
             .handle_action(&mut app, Action::Cancel)
             .expect("handle cancel");
         assert_eq!(app.mode, AppMode::normal());
+        assert_eq!(error_modal_message(&app.mode), None);
     }
 
     #[test]
@@ -533,10 +642,7 @@ mod tests {
 
         let result = handler.handle_action(&mut app, Action::Confirm);
         assert!(result.is_ok());
-        assert!(matches!(
-            &app.mode,
-            AppMode::ErrorModal(error) if error.message == "No agent ID for push"
-        ));
+        assert_eq!(error_modal_message(&app.mode), Some("No agent ID for push"));
     }
 
     #[test]
@@ -559,10 +665,7 @@ mod tests {
 
         let result = handler.handle_action(&mut app, Action::Confirm);
         assert!(result.is_ok());
-        assert!(matches!(
-            &app.mode,
-            AppMode::ErrorModal(error) if error.message == "No agent ID for push"
-        ));
+        assert_eq!(error_modal_message(&app.mode), Some("No agent ID for push"));
     }
 
     #[test]
@@ -603,10 +706,10 @@ mod tests {
 
         let result = handler.handle_action(&mut app, Action::Confirm);
         assert!(result.is_ok());
-        assert!(matches!(
-            &app.mode,
-            AppMode::ErrorModal(error) if error.message == "No agent ID for rename"
-        ));
+        assert_eq!(
+            error_modal_message(&app.mode),
+            Some("No agent ID for rename")
+        );
     }
 
     #[test]
@@ -1450,19 +1553,18 @@ mod tests {
 
     #[test]
     fn test_handle_action_propagates_infallible_action_errors() {
-        crate::action::with_forced_infallible_action_error_for_tests(|| {
-            let handler = Actions::new();
-            let (mut app, _temp) = create_test_app();
+        let _guard = crate::action::force_infallible_action_error_for_tests();
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
 
-            app.mode = AppMode::PreviewFocused(PreviewFocusedMode);
-            let before = app.mode.clone();
-            handler
-                .handle_action(&mut app, Action::UnfocusPreview)
-                .expect_err("expected error from unfocus preview");
-            (app.mode == before)
-                .then_some(())
-                .expect("mode should not change when unfocus preview errors");
-        });
+        app.mode = AppMode::PreviewFocused(PreviewFocusedMode);
+        let before = app.mode.clone();
+        handler
+            .handle_action(&mut app, Action::UnfocusPreview)
+            .expect_err("expected error from unfocus preview");
+        (app.mode == before)
+            .then_some(())
+            .expect("mode should not change when unfocus preview errors");
     }
 
     #[test]

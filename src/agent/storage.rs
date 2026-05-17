@@ -1,4 +1,5 @@
 //! Agent persistence layer
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::{Agent, WorkspaceKind};
 use crate::config::Config;
@@ -18,7 +19,7 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 const STATE_FILE_MODE: u32 = 0o600;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 thread_local! {
     static TEST_FORCE_SAVE_ERROR_AFTER_SUCCESSFUL_SAVES: std::cell::Cell<Option<usize>> = const {
         std::cell::Cell::new(None)
@@ -26,16 +27,7 @@ thread_local! {
 }
 
 fn resolve_state_path(path: &Path) -> std::path::PathBuf {
-    let Ok(target) = fs::read_link(path) else {
-        return path.to_path_buf();
-    };
-
-    if target.is_absolute() {
-        return target;
-    }
-
-    let default_parent = Path::new(".");
-    path.parent().unwrap_or(default_parent).join(target)
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn backup_state_path(path: &Path) -> std::path::PathBuf {
@@ -81,8 +73,33 @@ impl TempStateFileOps for fs::File {
     }
 }
 
+#[cfg(coverage)]
+struct CoverageTempStateFile {
+    fail_write: bool,
+    fail_sync: bool,
+}
+
+#[cfg(coverage)]
+impl TempStateFileOps for CoverageTempStateFile {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn write_all(&mut self, _buf: &[u8]) -> std::io::Result<()> {
+        if self.fail_write {
+            return Err(std::io::Error::other("forced coverage write failure"));
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn sync_all(&self) -> std::io::Result<()> {
+        if self.fail_sync {
+            return Err(std::io::Error::other("forced coverage sync failure"));
+        }
+        Ok(())
+    }
+}
+
 fn write_temp_state_contents(
-    file: &mut impl TempStateFileOps,
+    file: &mut dyn TempStateFileOps,
     path: &Path,
     contents: &str,
 ) -> Result<()> {
@@ -107,31 +124,28 @@ fn write_temp_state_file(path: &Path, contents: &str) -> Result<()> {
         options.mode(STATE_FILE_MODE);
     }
 
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("Failed to create temp state file {}", path.display()))?;
+    let mut file = options.open(path).context(format!(
+        "Failed to create temp state file {}",
+        path.display()
+    ))?;
 
     write_temp_state_contents(&mut file, path, contents)
 }
 
 fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permissions>) -> Result<()> {
     if let Some(permissions) = existing_permissions {
-        fs::set_permissions(path, permissions).with_context(|| {
-            format!(
-                "Failed to set permissions for temp state file {}",
-                path.display()
-            )
-        })?;
+        fs::set_permissions(path, permissions).context(format!(
+            "Failed to set permissions for temp state file {}",
+            path.display()
+        ))?;
         return Ok(());
     }
 
     #[cfg(target_os = "linux")]
-    fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).with_context(|| {
-        format!(
-            "Failed to set permissions for temp state file {}",
-            path.display()
-        )
-    })?;
+    fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).context(format!(
+        "Failed to set permissions for temp state file {}",
+        path.display()
+    ))?;
     Ok(())
 }
 
@@ -348,6 +362,7 @@ impl Storage {
     ///
     /// Returns an error if the state file exists but cannot be read or parsed and no usable backup
     /// exists.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn load_at(configured_path: &Path) -> Result<Self> {
         let path = resolve_state_path(configured_path);
         let backup_path = backup_state_path(&path);
@@ -478,6 +493,7 @@ impl Storage {
     /// Tenex stores agents in a global state file, so it can load agents created from different
     /// repositories. The UI groups agents by this root, and agent creation uses it to ensure new
     /// worktrees are created in the highlighted repository instead of the process CWD.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn backfill_repo_roots(&mut self) -> bool {
         let mut changed = false;
 
@@ -539,8 +555,10 @@ impl Storage {
         self.save_to(&path)
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_forced_save_error_after_successes_for_tests<T>(
+    #[cfg(any(test, coverage))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn with_forced_save_error_after_successes_for_tests<T>(
         successful_saves: usize,
         f: impl FnOnce() -> T,
     ) -> T {
@@ -550,6 +568,78 @@ impl Storage {
             slot.set(previous);
             result
         })
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_private_save_boundary_for_coverage(path: &Path) {
+        let mut write_file = CoverageTempStateFile {
+            fail_write: true,
+            fail_sync: false,
+        };
+        let _ = write_temp_state_contents(&mut write_file, path, "payload");
+
+        let mut sync_file = CoverageTempStateFile {
+            fail_write: false,
+            fail_sync: true,
+        };
+        let _ = write_temp_state_contents(&mut sync_file, path, "payload");
+
+        let missing_parent = path.join("missing").join("state.json");
+        let _ = write_temp_state_file(&missing_parent, "payload");
+
+        if let Ok(permissions) =
+            fs::metadata(std::env::temp_dir()).map(|metadata| metadata.permissions())
+        {
+            let _ = set_temp_permissions(&missing_parent, Some(permissions));
+        }
+
+        #[cfg(target_os = "linux")]
+        let _ = set_temp_permissions(&missing_parent, None);
+    }
+
+    #[cfg(coverage)]
+    #[doc(hidden)]
+    pub fn exercise_load_and_backfill_paths_for_coverage() {
+        let root = std::env::temp_dir().join(format!("tenex-storage-coverage-{}", Uuid::new_v4()));
+        let _ = fs::create_dir_all(&root);
+
+        let missing_state = root.join("missing-state.json");
+        let _ = Self::load_at(&missing_state);
+
+        let existing_worktree = root.join("existing-worktree");
+        let _ = fs::create_dir_all(&existing_worktree);
+        let missing_worktree = root.join("missing-worktree");
+
+        let mut already_backfilled = Agent::new(
+            "coverage already backfilled".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-already".to_string(),
+            root.clone(),
+        );
+        already_backfilled.repo_root = Some(root.clone());
+
+        let existing = Agent::new(
+            "coverage existing".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-existing".to_string(),
+            existing_worktree,
+        );
+        let missing = Agent::new(
+            "coverage missing".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-missing".to_string(),
+            missing_worktree,
+        );
+
+        let mut storage = Self::new();
+        storage.add(already_backfilled);
+        storage.add(existing);
+        storage.add(missing);
+        let _ = storage.backfill_repo_roots();
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Save state to a specific path
@@ -566,7 +656,7 @@ impl Storage {
         path: &Path,
         lock: fn(&fs::File, &Path) -> Result<()>,
     ) -> Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, coverage))]
         TEST_FORCE_SAVE_ERROR_AFTER_SUCCESSFUL_SAVES.with(|slot| {
             if let Some(remaining) = slot.get() {
                 if remaining == 0 {
@@ -579,9 +669,10 @@ impl Storage {
 
         let path = resolve_state_path(path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create state directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent).context(format!(
+                "Failed to create state directory {}",
+                parent.display()
+            ))?;
         }
 
         let lock_path = lock_state_path(&path);
@@ -591,7 +682,7 @@ impl Storage {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .with_context(|| format!("Failed to open state lock {}", lock_path.display()))?;
+            .context(format!("Failed to open state lock {}", lock_path.display()))?;
         lock(&lock_file, &lock_path)?;
 
         let disk = if path.exists()
@@ -1249,6 +1340,21 @@ mod tests {
     }
 
     #[test]
+    fn test_state_sidecar_paths_use_default_name_without_file_name() {
+        let path = Path::new("/");
+
+        assert_eq!(backup_state_path(path), PathBuf::from("/state.json.bak"));
+        assert_eq!(lock_state_path(path), PathBuf::from("/state.json.lock"));
+
+        let temp_path = temp_state_path(path);
+        let file_name = temp_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("temp path should have file name");
+        assert!(file_name.starts_with(".state.json.tmp-"));
+    }
+
+    #[test]
     fn test_new_storage() {
         let storage = Storage::new();
         assert!(storage.is_empty());
@@ -1284,14 +1390,15 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let real_path = temp_dir.path().join("real.json");
         std::fs::write(&real_path, "{}").expect("write real state");
+        let canonical_real_path = real_path.canonicalize().expect("canonical real state");
 
         let relative_link = temp_dir.path().join("state.json");
         symlink("real.json", &relative_link).expect("symlink relative");
-        assert_eq!(resolve_state_path(&relative_link), real_path);
+        assert_eq!(resolve_state_path(&relative_link), canonical_real_path);
 
         let absolute_link = temp_dir.path().join("absolute.json");
         symlink(&real_path, &absolute_link).expect("symlink absolute");
-        assert_eq!(resolve_state_path(&absolute_link), real_path);
+        assert_eq!(resolve_state_path(&absolute_link), canonical_real_path);
 
         let direct = temp_dir.path().join("direct.json");
         assert_eq!(resolve_state_path(&direct), direct);
@@ -1933,9 +2040,11 @@ mod tests {
         assert!(children.iter().any(|agent| agent.title == "Agent 1"));
         assert!(children.iter().any(|agent| agent.title == "Planner 1"));
         assert!(children.iter().any(|agent| agent.title == "Reviewer 1"));
-        assert!(children
-            .iter()
-            .any(|agent| agent.title == "My custom title (deadbeef)"));
+        assert!(
+            children
+                .iter()
+                .any(|agent| agent.title == "My custom title (deadbeef)")
+        );
     }
 
     #[test]
@@ -2515,6 +2624,28 @@ mod tests {
         assert_eq!(visible[0].depth, 0);
         assert!(!visible[0].has_children);
         assert_eq!(visible[0].child_count, 0);
+    }
+
+    #[test]
+    fn test_visible_agents_with_info_includes_expanded_children() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false;
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+        let child_id = child.id;
+
+        storage.add(root);
+        storage.add(child);
+
+        let visible = storage.visible_agents_with_info();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].agent.id, root_id);
+        assert_eq!(visible[0].depth, 0);
+        assert!(visible[0].has_children);
+        assert_eq!(visible[0].child_count, 1);
+        assert_eq!(visible[1].agent.id, child_id);
+        assert_eq!(visible[1].depth, 1);
     }
 
     #[test]

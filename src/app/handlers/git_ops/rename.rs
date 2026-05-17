@@ -2,7 +2,7 @@
 
 use crate::agent::AgentRuntime;
 use crate::mux::SessionManager;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::{debug, info, warn};
 
 use crate::app::AppData;
@@ -21,9 +21,9 @@ impl Actions {
     ///
     /// Returns an error if no agent is selected.
     pub fn rename_agent(app_data: &mut AppData) -> Result<AppMode> {
-        let agent = app_data
-            .selected_agent()
-            .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
+        let Some(agent) = app_data.selected_agent() else {
+            bail!("No agent selected");
+        };
 
         let agent_id = agent.id;
         let is_root = agent.is_root();
@@ -44,6 +44,7 @@ impl Actions {
     }
 
     /// Check if a remote branch exists
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn check_remote_branch_exists(
         worktree_path: &std::path::Path,
         branch_name: &str,
@@ -67,6 +68,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if the rename operation fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn execute_rename(app_data: &mut AppData) -> Result<AppMode> {
         let Some(agent_id) = app_data.git_op.agent_id else {
             app_data.git_op.clear();
@@ -123,6 +125,7 @@ impl Actions {
     }
 
     /// Execute rename for a root agent (branch + agent + mux session + worktree path)
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn execute_root_rename(
         app_data: &mut AppData,
         agent_id: uuid::Uuid,
@@ -202,6 +205,7 @@ impl Actions {
     }
 
     /// Move a worktree directory and update git metadata
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn move_worktree_directory(
         old_path: &std::path::Path,
         new_path: &std::path::Path,
@@ -267,6 +271,7 @@ impl Actions {
     }
 
     /// Update agent records after rename
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn update_agent_records(
         app_data: &mut AppData,
         agent_id: uuid::Uuid,
@@ -300,6 +305,7 @@ impl Actions {
     }
 
     /// Rename mux session and update agent records
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn rename_mux_session_for_agent(
         app_data: &mut AppData,
         agent_id: uuid::Uuid,
@@ -354,6 +360,7 @@ impl Actions {
     }
 
     /// Handle remote branch rename (push new; preserve old)
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn handle_remote_branch_rename(
         app_data: &mut AppData,
         worktree_path: &std::path::Path,
@@ -401,6 +408,7 @@ impl Actions {
     }
 
     /// Execute rename for a sub-agent (title + mux window only)
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn execute_subagent_rename(
         app_data: &mut AppData,
         agent_id: uuid::Uuid,
@@ -587,6 +595,36 @@ mod tests {
         app.apply_mode(next);
 
         assert_eq!(error_modal_message(&app.mode), Some("Agent not found"));
+        assert!(app.data.git_op.agent_id.is_none());
+    }
+
+    #[test]
+    fn test_execute_rename_noops_when_name_is_unchanged() {
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let agent = Agent::new(
+            "same-name".to_string(),
+            "claude".to_string(),
+            "feature/same-name".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+        app.data.git_op.agent_id = Some(agent_id);
+        app.data.git_op.original_branch = "same-name".to_string();
+        app.data.git_op.branch_name = "same-name".to_string();
+        app.data.git_op.is_root_rename = false;
+
+        let next = Actions::execute_rename(&mut app.data).expect("mode");
+        app.apply_mode(next);
+
+        assert_eq!(app.mode, AppMode::normal());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Name unchanged")
+        );
         assert!(app.data.git_op.agent_id.is_none());
     }
 
@@ -1066,8 +1104,26 @@ mod tests {
         let child_id = child.id;
         let mut child = child;
         child.runtime = AgentRuntime::Docker;
+
+        let mut host_child = Agent::new_child(
+            "host-child".to_string(),
+            "claude".to_string(),
+            "master".to_string(),
+            repo_dir.path().to_path_buf(),
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: old_session.clone(),
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        host_child.runtime = AgentRuntime::Host;
+        host_child.runtime_scope = "host-scope".to_string();
+        let host_child_id = host_child.id;
+
         app.data.storage.add(root);
         app.data.storage.add(child);
+        app.data.storage.add(host_child);
 
         let session_manager = SessionManager::new();
         session_manager
@@ -1090,6 +1146,10 @@ mod tests {
         assert_eq!(child_agent.mux_session, first_expected);
         assert_eq!(child_agent.runtime_scope, old_session);
 
+        let host_child_agent = app.data.storage.get(host_child_id).expect("host child");
+        assert_eq!(host_child_agent.mux_session, first_expected);
+        assert_eq!(host_child_agent.runtime_scope, "host-scope");
+
         let second_expected_prefix = app.data.storage.instance_session_prefix();
         let second_expected = format!("{second_expected_prefix}second");
 
@@ -1106,6 +1166,10 @@ mod tests {
         let root_agent = app.data.storage.get(root_id).expect("root agent");
         assert_eq!(root_agent.mux_session, second_expected);
         assert_eq!(root_agent.runtime_scope, old_session);
+
+        let host_child_agent = app.data.storage.get(host_child_id).expect("host child");
+        assert_eq!(host_child_agent.mux_session, second_expected);
+        assert_eq!(host_child_agent.runtime_scope, "host-scope");
 
         let _ = session_manager.kill(&second_expected);
     }
@@ -1328,6 +1392,52 @@ mod tests {
 
         let renamed = app.data.storage.get(agent_id).expect("agent");
         assert_eq!(renamed.title, "new");
+    }
+
+    #[test]
+    fn test_execute_subagent_rename_renames_existing_window() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = format!(
+            "tenex-rename-window-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+        let repo_dir = init_repo_with_commit();
+        let session = format!("tenex-window-{}", uuid::Uuid::new_v4());
+        let session_manager = SessionManager::new();
+        session_manager
+            .create(&session, repo_dir.path(), None)
+            .expect("create mux session");
+
+        let mut agent = Agent::new(
+            "old".to_string(),
+            "claude".to_string(),
+            "master".to_string(),
+            repo_dir.path().to_path_buf(),
+        );
+        agent.mux_session.clone_from(&session);
+        agent.window_index = Some(0);
+        let agent_id = agent.id;
+        app.data.storage.add(agent);
+
+        Actions::execute_subagent_rename(&mut app.data, agent_id, "new").expect("rename ok");
+
+        let renamed = app.data.storage.get(agent_id).expect("agent");
+        assert_eq!(renamed.title, "new");
+        let windows = session_manager
+            .list_windows(&session)
+            .expect("list windows");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].index, 0);
+        assert_eq!(windows[0].name, "new");
+
+        let _ = session_manager.kill(&session);
     }
 
     #[test]

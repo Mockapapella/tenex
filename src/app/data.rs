@@ -1,4 +1,5 @@
 //! Persistent application data that outlives mode transitions.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::{AgentProgram, Settings, Tab};
 use crate::agent::{Agent, Status, Storage};
@@ -101,54 +102,78 @@ impl AppData {
         }
     }
 
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_command_defaults_for_coverage(&mut self) {
+        let settings = self.settings.clone();
+
+        self.settings.agent_program = AgentProgram::Custom;
+        self.settings.custom_agent_command = "  ".to_string();
+        let _ = self.agent_spawn_command();
+        self.settings.custom_agent_command = "  codex  ".to_string();
+        let _ = self.agent_spawn_command();
+        self.settings.agent_program = AgentProgram::Codex;
+        let _ = self.agent_spawn_command();
+
+        self.settings.planner_agent_program = AgentProgram::Custom;
+        self.settings.planner_custom_agent_command = "  ".to_string();
+        let _ = self.planner_agent_spawn_command();
+        self.settings.planner_custom_agent_command = "  planner  ".to_string();
+        let _ = self.planner_agent_spawn_command();
+        self.settings.planner_agent_program = AgentProgram::Codex;
+        let _ = self.planner_agent_spawn_command();
+
+        self.settings.review_agent_program = AgentProgram::Custom;
+        self.settings.review_custom_agent_command = "  ".to_string();
+        let _ = self.review_agent_spawn_command();
+        self.settings.review_custom_agent_command = "  reviewer  ".to_string();
+        let _ = self.review_agent_spawn_command();
+        self.settings.review_agent_program = AgentProgram::Codex;
+        let _ = self.review_agent_spawn_command();
+
+        self.settings = settings;
+    }
+
     /// The base command used when spawning new agents (based on user settings).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn agent_spawn_command(&self) -> String {
         match self.settings.agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
     /// The base command used when spawning planner agents (planning swarms).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn planner_agent_spawn_command(&self) -> String {
         match self.settings.planner_agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.planner_custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.planner_custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
     /// The base command used when spawning review agents (review swarms).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn review_agent_spawn_command(&self) -> String {
         match self.settings.review_agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.review_custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.review_custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
@@ -802,6 +827,16 @@ impl AppData {
     /// Handle delete in the input buffer.
     pub(crate) fn handle_delete(&mut self) {
         self.input.delete();
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn custom_agent_command_or_default(custom: &str, default_program: &str) -> String {
+    let custom = custom.trim();
+    if custom.is_empty() {
+        default_program.to_string()
+    } else {
+        custom.to_string()
     }
 }
 

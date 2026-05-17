@@ -135,9 +135,9 @@ fn remove_file(src: &Path) -> std::io::Result<()> {
 fn move_file_with_ops(
     src: &Path,
     dst: &Path,
-    rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
-    copy: impl FnOnce(&Path, &Path) -> std::io::Result<u64>,
-    remove_file: impl FnOnce(&Path) -> std::io::Result<()>,
+    rename: fn(&Path, &Path) -> std::io::Result<()>,
+    copy: fn(&Path, &Path) -> std::io::Result<u64>,
+    remove_file: fn(&Path) -> std::io::Result<()>,
 ) -> Result<()> {
     match rename(src, dst) {
         Ok(()) => Ok(()),

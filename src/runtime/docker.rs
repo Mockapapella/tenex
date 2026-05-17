@@ -1,5 +1,8 @@
 //! Docker runtime support for agent processes.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use crate::agent::Agent;
 use crate::app::Settings;
 use crate::paths;
@@ -9,7 +12,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::sync::{Mutex, OnceLock, RwLock};
 
 const DEFAULT_DOCKER_IMAGE: &str = "tenex-worker:latest";
@@ -23,7 +26,7 @@ const RUNTIME_PASSWD_FILE_NAME: &str = ".tenex-passwd";
 const RUNTIME_GROUP_FILE_NAME: &str = ".tenex-group";
 const DEFAULT_RUNTIME_USER_NAME: &str = "tenex";
 const DEFAULT_RUNTIME_GROUP_NAME: &str = "tenex";
-#[cfg(any(test, windows))]
+#[cfg(any(test, coverage, windows))]
 const WINDOWS_CONTAINER_ROOT: &str = "/tenex-host";
 
 struct PreparedRuntimeHome {
@@ -32,6 +35,7 @@ struct PreparedRuntimeHome {
     codex_home_target: PathBuf,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn wrap_exec(agent: &Agent, _settings: &Settings, command: &[String]) -> Vec<String> {
     let mut argv = exec_prefix(agent);
     argv.push(container_name(agent));
@@ -64,6 +68,7 @@ pub(super) fn check_available() -> Result<()> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn ensure_image_ready(settings: &Settings, program: &str) -> Result<()> {
     let image = worker_image_tag(settings);
     ensure_default_image_support(program)?;
@@ -74,11 +79,13 @@ pub(super) fn ensure_image_ready(settings: &Settings, program: &str) -> Result<(
     build_default_image(image)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn image_build_required(settings: &Settings, program: &str) -> Result<bool> {
     ensure_default_image_support(program)?;
     Ok(!image_matches_default_template(worker_image_tag(settings))?)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()> {
     let home = paths::home_dir();
     let data_local_dir = paths::data_local_dir();
@@ -92,6 +99,7 @@ pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()>
     )
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_container_with_paths(
     agent: &Agent,
     settings: &Settings,
@@ -249,6 +257,7 @@ fn exec_prefix_with_forwarded_env_and_home(
     argv
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn collect_forwarded_exec_env(
     mut get: impl FnMut(&str) -> Option<String>,
 ) -> Vec<(&'static str, String)> {
@@ -279,12 +288,14 @@ pub(super) fn container_name(agent: &Agent) -> String {
         .collect()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_optional_bind_mount(cmd: &mut Command, source: &Path, target: &Path, readonly: bool) {
     if source.exists() {
         add_bind_mount(cmd, source, target, readonly);
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_bind_mount(cmd: &mut Command, source: &Path, target: &Path, readonly: bool) {
     let mut spec = format!("{}:{}", source.display(), target.display());
     if readonly {
@@ -301,6 +312,7 @@ pub(super) fn session_workdir(agent: &Agent) -> PathBuf {
     container_target_path(&agent.worktree_path)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_target_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
@@ -409,6 +421,7 @@ fn configure_home_mounts_with_data_local_dir(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn configure_runtime_identity_env(cmd: &mut Command, home_target: &Path) {
     let Some(identity) = current_runtime_user_info() else {
         return;
@@ -428,6 +441,7 @@ fn configure_runtime_identity_env(cmd: &mut Command, home_target: &Path) {
     cmd.arg("-e").arg(format!("LOGNAME={}", identity.user_name));
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn configure_ssh_auth_sock_mount_from(cmd: &mut Command, ssh_auth_sock: Option<&Path>) {
     if let Some(ssh_auth_sock) = ssh_auth_sock
         && ssh_auth_sock.exists()
@@ -474,6 +488,7 @@ fn configure_repo_metadata_mounts(cmd: &mut Command, agent: &Agent) {
     configure_top_level_symlink_mounts(cmd, &agent.worktree_path, &mut mounted_targets);
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_optional_bind_mount_once(
     cmd: &mut Command,
     mounted_targets: &mut HashSet<PathBuf>,
@@ -502,6 +517,7 @@ fn configure_top_level_symlink_mounts(
     configure_top_level_symlink_mounts_for_paths(cmd, worktree, mounted_targets, paths);
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn configure_top_level_symlink_mounts_for_paths(
     cmd: &mut Command,
     worktree: &Path,
@@ -536,7 +552,7 @@ fn configure_top_level_symlink_mounts_for_paths(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn resolved_symlink_target(path: &Path, worktree: &Path, link_target: &Path) -> PathBuf {
     let resolved = if link_target.is_absolute() {
         link_target.to_path_buf()
@@ -574,6 +590,7 @@ fn refresh_runtime_home_for_reuse_with_data_local_dir(
     refresh_runtime_home_for_reuse_in(agent, home, &data_local_dir, &codex_home_target)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn prepare_runtime_home_in(
     agent: &Agent,
     home: &Path,
@@ -614,6 +631,7 @@ fn refresh_runtime_home_for_reuse_in(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_runtime_home_directories(home_source: &Path, codex_home_target: &Path) -> Result<()> {
     std::fs::create_dir_all(home_source.join(".cache")).with_context(|| {
         format!(
@@ -655,6 +673,7 @@ fn runtime_root_dir(agent: &Agent, data_local_dir: &Path) -> PathBuf {
         .join(container_name(agent))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_codex_home(target: &Path, host_codex_home: &Path) -> Result<()> {
     std::fs::create_dir_all(target).with_context(|| {
         format!(
@@ -682,6 +701,7 @@ fn sync_codex_home(target: &Path, host_codex_home: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_optional_file(source: &Path, target: &Path) -> Result<()> {
     if source.is_file() {
         if let Some(parent) = target.parent() {
@@ -703,6 +723,7 @@ fn sync_optional_file(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_optional_dir(source: &Path, target: &Path) -> Result<()> {
     if source.is_dir() {
         if target.exists() {
@@ -738,11 +759,13 @@ fn sync_optional_path_following_symlinks(source: &Path, target: &Path) -> Result
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_path_recursive_following_symlinks(source: &Path, target: &Path) -> Result<()> {
     let mut active_sources = HashSet::new();
     copy_path_recursive_following_symlinks_inner(source, target, &mut active_sources)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_path_recursive_following_symlinks_inner(
     source: &Path,
     target: &Path,
@@ -764,11 +787,11 @@ fn copy_path_recursive_following_symlinks_inner(
         for entry in std::fs::read_dir(source)
             .with_context(|| format!("Failed to read {}", source.display()))?
         {
-            #[cfg(test)]
+            #[cfg(any(test, coverage))]
             let entry = run_copy_path_recursive_following_symlinks_dir_entry_hook(entry);
             let entry = entry.context(format!("Failed to read {}", source.display()))?;
             let entry_path = entry.path();
-            #[cfg(test)]
+            #[cfg(any(test, coverage))]
             run_copy_path_recursive_following_symlinks_before_metadata_hook(&entry_path);
             let entry_type = std::fs::symlink_metadata(&entry_path)
                 .with_context(|| format!("Failed to read file type for {}", entry_path.display()))?
@@ -805,6 +828,7 @@ fn copy_path_recursive_following_symlinks_inner(
     result
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -817,7 +841,7 @@ fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
             target.display()
         )
     })?;
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     run_copy_file_with_permissions_after_copy_hook(source);
     let permissions = std::fs::metadata(source)
         .with_context(|| format!("Failed to read {}", source.display()))?
@@ -826,27 +850,27 @@ fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 type RecursiveCopyHook = Option<Box<dyn Fn(&Path)>>;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 type DirEntryResultHook = Option<
     Box<dyn FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry>>,
 >;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static COPY_PATH_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK: std::cell::RefCell<RecursiveCopyHook> =
         std::cell::RefCell::new(None);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static COPY_PATH_RECURSIVE_DIR_ENTRY_HOOK: std::cell::RefCell<DirEntryResultHook> =
         std::cell::RefCell::new(None);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_copy_path_recursive_before_symlink_metadata_hook<T>(
     hook: impl Fn(&Path) + 'static,
     f: impl FnOnce() -> T,
@@ -859,7 +883,7 @@ fn with_copy_path_recursive_before_symlink_metadata_hook<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_copy_path_recursive_following_symlinks_dir_entry_hook<T>(
     hook: impl FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry> + 'static,
     f: impl FnOnce() -> T,
@@ -872,7 +896,7 @@ fn with_copy_path_recursive_following_symlinks_dir_entry_hook<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn run_copy_path_recursive_following_symlinks_dir_entry_hook(
     entry: std::io::Result<std::fs::DirEntry>,
 ) -> std::io::Result<std::fs::DirEntry> {
@@ -885,7 +909,7 @@ fn run_copy_path_recursive_following_symlinks_dir_entry_hook(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn run_copy_path_recursive_following_symlinks_before_metadata_hook(path: &Path) {
     COPY_PATH_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow().as_ref() {
@@ -894,19 +918,19 @@ fn run_copy_path_recursive_following_symlinks_before_metadata_hook(path: &Path) 
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static COPY_DIR_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK: std::cell::RefCell<RecursiveCopyHook> =
         std::cell::RefCell::new(None);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static COPY_DIR_RECURSIVE_DIR_ENTRY_HOOK: std::cell::RefCell<DirEntryResultHook> =
         std::cell::RefCell::new(None);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_copy_dir_recursive_before_symlink_metadata_hook<T>(
     hook: impl Fn(&Path) + 'static,
     f: impl FnOnce() -> T,
@@ -919,7 +943,7 @@ fn with_copy_dir_recursive_before_symlink_metadata_hook<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_copy_dir_recursive_dir_entry_hook<T>(
     hook: impl FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry> + 'static,
     f: impl FnOnce() -> T,
@@ -932,7 +956,7 @@ fn with_copy_dir_recursive_dir_entry_hook<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn run_copy_dir_recursive_dir_entry_hook(
     entry: std::io::Result<std::fs::DirEntry>,
 ) -> std::io::Result<std::fs::DirEntry> {
@@ -945,7 +969,7 @@ fn run_copy_dir_recursive_dir_entry_hook(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn run_copy_dir_recursive_before_symlink_metadata_hook(path: &Path) {
     COPY_DIR_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow().as_ref() {
@@ -954,13 +978,13 @@ fn run_copy_dir_recursive_before_symlink_metadata_hook(path: &Path) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static COPY_FILE_WITH_PERMISSIONS_AFTER_COPY_HOOK: std::cell::RefCell<RecursiveCopyHook> =
         std::cell::RefCell::new(None);
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_copy_file_with_permissions_after_copy_hook<T>(
     hook: impl Fn(&Path) + 'static,
     f: impl FnOnce() -> T,
@@ -973,7 +997,7 @@ fn with_copy_file_with_permissions_after_copy_hook<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn run_copy_file_with_permissions_after_copy_hook(source: &Path) {
     COPY_FILE_WITH_PERMISSIONS_AFTER_COPY_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow().as_ref() {
@@ -1000,6 +1024,7 @@ fn owner_writable_permissions(permissions: std::fs::Permissions) -> std::fs::Per
     permissions
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn remove_path_if_exists(path: &Path) -> Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -1011,6 +1036,7 @@ fn remove_path_if_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)
         .with_context(|| format!("Failed to create {}", target.display()))?;
@@ -1018,11 +1044,11 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     for entry in
         std::fs::read_dir(source).with_context(|| format!("Failed to read {}", source.display()))?
     {
-        #[cfg(test)]
+        #[cfg(any(test, coverage))]
         let entry = run_copy_dir_recursive_dir_entry_hook(entry);
         let entry = entry.context(format!("Failed to read {}", source.display()))?;
         let entry_path = entry.path();
-        #[cfg(test)]
+        #[cfg(any(test, coverage))]
         run_copy_dir_recursive_before_symlink_metadata_hook(&entry_path);
         let entry_type = std::fs::symlink_metadata(&entry_path)
             .with_context(|| format!("Failed to read file type for {}", entry_path.display()))?
@@ -1044,6 +1070,7 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_claude_home(target_home: &Path, host_home: &Path) -> Result<()> {
     let host_claude_dir = host_home.join(".claude");
     let target_claude_dir = target_home.join(".claude");
@@ -1079,6 +1106,7 @@ fn sync_claude_home(target_home: &Path, host_home: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_claude_settings_file(source: &Path, target: &Path) -> Result<()> {
     if source.is_file() {
         let contents = std::fs::read_to_string(source)
@@ -1093,6 +1121,7 @@ fn sync_claude_settings_file(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn write_runtime_identity_files(home_source: &Path, home_target: &Path) -> Result<()> {
     let passwd_path = home_source.join(RUNTIME_PASSWD_FILE_NAME);
     let group_path = home_source.join(RUNTIME_GROUP_FILE_NAME);
@@ -1144,6 +1173,7 @@ struct RuntimeUserIdentity {
     gid: String,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
     #[cfg(unix)]
     {
@@ -1172,6 +1202,7 @@ fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
@@ -1182,6 +1213,7 @@ fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> Strin
         .unwrap_or_else(|| fallback.to_string())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_codex_config(contents: &str) -> String {
     let mut sanitized = String::new();
     let mut skipping_mcp_section = false;
@@ -1205,6 +1237,7 @@ fn sanitize_codex_config(contents: &str) -> String {
     sanitized
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_claude_settings(contents: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(contents) else {
         return contents.to_string();
@@ -1223,7 +1256,7 @@ fn docker_command() -> Command {
 }
 
 fn docker_program() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let override_path = docker_program_override_store()
             .read()
@@ -1237,6 +1270,7 @@ fn docker_program() -> PathBuf {
     PathBuf::from("docker")
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn image_matches_default_template(image: &str) -> Result<bool> {
     let Some(actual_hash) = image_template_hash(image)? else {
         return Ok(false);
@@ -1244,6 +1278,7 @@ fn image_matches_default_template(image: &str) -> Result<bool> {
     Ok(actual_hash == default_worker_dockerfile_hash())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn image_template_hash(image: &str) -> Result<Option<String>> {
     match run_command(
         docker_command().args([
@@ -1272,6 +1307,7 @@ fn image_template_hash(image: &str) -> Result<Option<String>> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_matches_current_layout(name: &str) -> Result<bool> {
     let Some(actual_hash) = container_layout_hash(name)? else {
         return Ok(false);
@@ -1279,6 +1315,7 @@ fn container_matches_current_layout(name: &str) -> Result<bool> {
     Ok(actual_hash == current_container_layout_hash())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_layout_hash(name: &str) -> Result<Option<String>> {
     match run_command(
         docker_command().args([
@@ -1374,13 +1411,13 @@ fn wait_with_output_for_docker_build(
         .map_err(|err| anyhow::anyhow!("Failed to wait for Docker build: {program} {args}: {err}"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 std::thread_local! {
     static DOCKER_BUILD_WAIT_OVERRIDE: std::cell::RefCell<Option<std::io::Result<std::process::Output>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn with_docker_build_wait_override<T>(
     override_result: std::io::Result<std::process::Output>,
     f: impl FnOnce() -> T,
@@ -1393,7 +1430,7 @@ fn with_docker_build_wait_override<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn take_docker_build_wait_override() -> Option<std::io::Result<std::process::Output>> {
     DOCKER_BUILD_WAIT_OVERRIDE.with(|slot| slot.borrow_mut().take())
 }
@@ -1410,6 +1447,7 @@ fn build_default_image(image: &str) -> Result<()> {
     )
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn build_default_image_with_command(
     image: &str,
     dockerfile: &str,
@@ -1451,7 +1489,7 @@ fn build_default_image_with_command(
 
     let output = wait_with_output_for_docker_build(
         || {
-            #[cfg(test)]
+            #[cfg(any(test, coverage))]
             if let Some(override_result) = take_docker_build_wait_override() {
                 drop(child.stdin.take());
                 let _ = child.wait();
@@ -1474,6 +1512,7 @@ fn build_default_image_with_command(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn run_command(cmd: &mut Command, context: &str) -> Result<String> {
     let program = cmd.get_program().to_string_lossy().into_owned();
     let args = cmd
@@ -1495,8 +1534,9 @@ fn run_command(cmd: &mut Command, context: &str) -> Result<String> {
 }
 
 #[cfg(unix)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn docker_user_arg() -> Option<String> {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let override_value = docker_user_override_store()
             .read()
@@ -1513,6 +1553,7 @@ fn docker_user_arg() -> Option<String> {
 }
 
 #[cfg(not(unix))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn docker_user_arg() -> Option<String> {
     None
 }
@@ -1532,35 +1573,35 @@ fn read_trimmed_stdout<const N: usize>(program: &str, args: [&str; N]) -> Option
     Some(trimmed.to_string())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static DOCKER_TEST_SERIAL: Mutex<()> = Mutex::new(());
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static DOCKER_PROGRAM_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 #[derive(Clone)]
 enum DockerUserOverride {
     Unset,
     Value(Option<String>),
 }
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static DOCKER_USER_OVERRIDE: OnceLock<RwLock<DockerUserOverride>> = OnceLock::new();
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn docker_program_override_store() -> &'static RwLock<Option<PathBuf>> {
     DOCKER_PROGRAM_OVERRIDE.get_or_init(|| RwLock::new(None))
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn docker_user_override_store() -> &'static RwLock<DockerUserOverride> {
     DOCKER_USER_OVERRIDE.get_or_init(|| RwLock::new(DockerUserOverride::Unset))
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 struct DockerProgramOverrideGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 impl Drop for DockerProgramOverrideGuard {
     fn drop(&mut self) {
         *docker_program_override_store()
@@ -1569,10 +1610,10 @@ impl Drop for DockerProgramOverrideGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 struct DockerUserOverrideGuard;
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 impl Drop for DockerUserOverrideGuard {
     fn drop(&mut self) {
         *docker_user_override_store()
@@ -1581,7 +1622,7 @@ impl Drop for DockerUserOverrideGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn set_docker_user_override_for_tests(value: Option<String>) -> DockerUserOverrideGuard {
     *docker_user_override_store()
         .write()
@@ -1589,7 +1630,7 @@ fn set_docker_user_override_for_tests(value: Option<String>) -> DockerUserOverri
     DockerUserOverrideGuard
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 pub(super) fn with_docker_program_override_for_tests<T>(
     program: PathBuf,
     f: impl FnOnce() -> T,

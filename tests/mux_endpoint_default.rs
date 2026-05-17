@@ -158,7 +158,10 @@ fn test_mux_endpoint_probe_exits_nonzero_when_namespaced_name_is_too_long()
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_mux_endpoint_probe"))
         .env("TENEX_STATE_PATH", &state_path)
-        .env("TENEX_TEST_MUX_ENDPOINT_PROBE_FORCE_INVALID_SOCKET", "namespaced-too-long")
+        .env(
+            "TENEX_TEST_MUX_ENDPOINT_PROBE_FORCE_INVALID_SOCKET",
+            "namespaced-too-long",
+        )
         .output()?;
     assert!(
         !output.status.success(),

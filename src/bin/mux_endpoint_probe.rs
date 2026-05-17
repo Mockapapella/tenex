@@ -3,6 +3,8 @@
 //! This intentionally prints only the mux socket display string, so integration
 //! tests can validate default endpoint selection without mutating the current
 //! process environment.
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::io::{self, Write as _};
 

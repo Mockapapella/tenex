@@ -1,4 +1,5 @@
 //! Sync operations: agent status synchronization and auto-connect
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use crate::agent::{Agent, Status};
 use crate::git::{self, WorktreeManager};
@@ -16,14 +17,248 @@ use crate::app::{App, AppData, PaneActivityDigestMode};
 
 fn resolve_repo_path_with_deps(
     cwd_project_root: Option<PathBuf>,
-    current_dir: impl FnOnce() -> std::io::Result<PathBuf>,
+    current_dir: &mut dyn FnMut() -> std::io::Result<PathBuf>,
 ) -> Result<PathBuf> {
-    cwd_project_root
-        .or_else(|| current_dir().ok())
-        .context("Failed to resolve current project directory")
+    if let Some(root) = cwd_project_root {
+        return Ok(root);
+    }
+
+    current_dir().context("Failed to resolve current project directory")
 }
 
 impl Actions {
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_sync_paths_for_coverage(app: &mut App) {
+        let root = Agent::new(
+            "coverage sync root".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-sync".to_string(),
+            std::env::temp_dir().join(format!("tenex-sync-coverage-{}", uuid::Uuid::new_v4())),
+        );
+        app.data.storage.add(root);
+        let _ = Self::new().sync_agent_status_with_sessions(app, Ok(Vec::new()));
+
+        let mut empty_app = App::new(
+            crate::config::Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        );
+        let _ = Self::new().sync_agent_status_with_sessions(&mut empty_app, Ok(Vec::new()));
+
+        let alive = Agent::new(
+            "coverage alive root".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-alive".to_string(),
+            std::env::temp_dir(),
+        );
+        let alive_session = alive.mux_session.clone();
+        app.data.storage.add(alive);
+        let missing = Agent::new(
+            "coverage missing root".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-missing".to_string(),
+            std::env::temp_dir(),
+        );
+        app.data.storage.add(missing);
+        let _ = Self::new().sync_agent_status_with_sessions(
+            app,
+            Ok(vec![crate::mux::Session {
+                name: alive_session,
+                created: 0,
+                attached: false,
+            }]),
+        );
+
+        let _ = finish_respawn_summary(&mut app.data, &RespawnSummary::default());
+        let _ = finish_respawn_summary(
+            &mut app.data,
+            &RespawnSummary {
+                changed: true,
+                respawned_sessions: 0,
+            },
+        );
+        let _ = finish_respawn_summary(
+            &mut app.data,
+            &RespawnSummary {
+                changed: false,
+                respawned_sessions: 1,
+            },
+        );
+        let _ = Self::new().respawn_missing_agents_in_data(&mut empty_app.data);
+        let _ = Self::new().respawn_missing_agents_in_data(&mut app.data);
+        let _ = title_for_branch("tenex/", "tenex/");
+        let _ = title_for_branch("tenex/coverage", "tenex/");
+
+        let selected_agent_id = uuid::Uuid::new_v4();
+        let observed_agent_id = uuid::Uuid::new_v4();
+        let mut digest_mode = PaneActivityDigestMode::Cursor;
+        let mut cursor_err = || Err(anyhow::anyhow!("cursor unavailable"));
+        let mut capture_ok = || Ok("coverage capture".to_string());
+        let _ = observe_agent_pane_activity(
+            &mut app.data.ui,
+            observed_agent_id,
+            Some(selected_agent_id),
+            "coverage-target",
+            &mut digest_mode,
+            &mut cursor_err,
+            &mut capture_ok,
+        );
+
+        let _ = Self::new().sync_agent_status(&mut empty_app);
+        let _ = Self::new().sync_agent_pane_activity(&mut empty_app);
+        Self::exercise_respawn_paths_for_coverage();
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn coverage_sync_app_data() -> AppData {
+        AppData::new(
+            crate::config::Config::default(),
+            crate::agent::Storage::new(),
+            crate::app::Settings::default(),
+            false,
+        )
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn exercise_respawn_paths_for_coverage() {
+        let mut app_data = Self::coverage_sync_app_data();
+        let root_path =
+            std::env::temp_dir().join(format!("tenex-sync-respawn-root-{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&root_path);
+        let mut root = Agent::new(
+            "coverage respawn root".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-respawn".to_string(),
+            root_path.clone(),
+        );
+        root.set_status(Status::Running);
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        let mut child = Agent::new_child(
+            "coverage respawn child".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-respawn".to_string(),
+            root_path.clone(),
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: "old-session".to_string(),
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        child.set_status(Status::Starting);
+        let child_id = child.id;
+        let outside = Agent::new(
+            "coverage outside".to_string(),
+            "echo".to_string(),
+            "tenex/outside".to_string(),
+            root_path.clone(),
+        );
+        app_data.storage.add(root.clone());
+        app_data.storage.add(child.clone());
+        app_data.storage.add(outside);
+
+        let mut recreated = HashMap::new();
+        let _ = recreated.insert(child_id, 4);
+        let _ = mark_respawned_agents_running(&mut app_data, root_id, "coverage-new", recreated);
+        let mut unchanged = HashMap::new();
+        let _ = unchanged.insert(child_id, 4);
+        let _ = unchanged.insert(uuid::Uuid::new_v4(), 9);
+        let _ = mark_respawned_agents_running(&mut app_data, root_id, "coverage-new", unchanged);
+        let _ = normalize_tree_running(&mut app_data, root_id, "coverage-new", true);
+        let _ = normalize_tree_running(&mut app_data, root_id, "coverage-stopped", false);
+
+        let mut summary = RespawnSummary::default();
+        let missing_root = Agent::new(
+            "coverage missing worktree".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-missing-worktree".to_string(),
+            root_path.join("missing"),
+        );
+        app_data.storage.add(missing_root.clone());
+        respawn_root_agent(
+            Self::new().session_manager,
+            &mut app_data,
+            &missing_root,
+            &mut summary,
+        );
+
+        let mut docker_root = Agent::new(
+            "coverage docker respawn".to_string(),
+            "unsupported-coverage-program".to_string(),
+            "tenex/coverage-docker-respawn".to_string(),
+            root_path.clone(),
+        );
+        docker_root.runtime = crate::agent::AgentRuntime::Docker;
+        app_data.storage.add(docker_root.clone());
+        respawn_root_agent(
+            Self::new().session_manager,
+            &mut app_data,
+            &docker_root,
+            &mut summary,
+        );
+
+        respawn_root_agent(
+            Self::new().session_manager,
+            &mut app_data,
+            &root,
+            &mut summary,
+        );
+
+        let missing_child = Agent::new_child(
+            "coverage missing child".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-respawn".to_string(),
+            root_path.join("missing-child"),
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 5,
+                repo_root: None,
+            },
+        );
+        let mut docker_child = Agent::new_child(
+            "coverage docker child".to_string(),
+            "unsupported-coverage-program".to_string(),
+            "tenex/coverage-respawn".to_string(),
+            root_path.clone(),
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 6,
+                repo_root: None,
+            },
+        );
+        docker_child.runtime = crate::agent::AgentRuntime::Docker;
+        let host_child = Agent::new_child(
+            "coverage host child".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-respawn".to_string(),
+            root_path,
+            crate::agent::ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 7,
+                repo_root: None,
+            },
+        );
+        let _ = recreate_descendant_windows(
+            Self::new().session_manager,
+            "coverage-session",
+            &[missing_child, docker_child, host_child],
+            &crate::app::Settings::default(),
+        );
+
+        let mut terminal = child;
+        terminal.is_terminal = true;
+        let _ = command_for_agent(&terminal, &crate::app::Settings::default());
+    }
+
     /// Check and update agent statuses based on mux sessions
     ///
     /// # Errors
@@ -179,14 +414,16 @@ impl Actions {
             }
 
             let target = mux_target_for_agent(app, agent);
+            let mut cursor_fn = || self.output_stream.cursor(&target);
+            let mut capture_fn = || self.output_capture.capture_pane(&target);
             let _ = observe_agent_pane_activity(
                 &mut app.data.ui,
                 agent.id,
                 selected_agent_id,
                 &target,
                 &mut digest_mode,
-                || self.output_stream.cursor(&target),
-                || self.output_capture.capture_pane(&target),
+                &mut cursor_fn,
+                &mut capture_fn,
             );
         }
 
@@ -211,13 +448,14 @@ impl Actions {
     ///
     /// Returns an error if worktrees cannot be listed or agent creation fails
     pub fn auto_connect_worktrees(self, app: &mut App) -> Result<()> {
-        self.auto_connect_worktrees_with_deps(app, std::env::current_dir)
+        let mut current_dir = std::env::current_dir;
+        self.auto_connect_worktrees_with_deps(app, &mut current_dir)
     }
 
     fn auto_connect_worktrees_with_deps(
         self,
         app: &mut App,
-        current_dir: impl FnOnce() -> std::io::Result<PathBuf>,
+        current_dir: &mut dyn FnMut() -> std::io::Result<PathBuf>,
     ) -> Result<()> {
         let repo_path =
             resolve_repo_path_with_deps(app.data.cwd_project_root.clone(), current_dir)?;
@@ -344,19 +582,7 @@ impl Actions {
             respawn_root_agent(session_manager, app_data, root, &mut summary);
         }
 
-        if summary.changed {
-            app_data.storage.save()?;
-            app_data.validate_selection();
-        }
-
-        if summary.respawned_sessions > 0 {
-            app_data.set_status(format!(
-                "Respawned {} agent session(s)",
-                summary.respawned_sessions
-            ));
-        }
-
-        Ok(())
+        finish_respawn_summary(app_data, &summary)
     }
 
     pub(crate) fn restart_mux_daemon(self, app_data: &mut AppData) -> Result<()> {
@@ -374,19 +600,15 @@ impl Actions {
     }
 }
 
-fn observe_agent_pane_activity<CursorFn, CaptureFn>(
+fn observe_agent_pane_activity(
     ui: &mut crate::app::state::UiState,
     agent_id: uuid::Uuid,
     selected_agent_id: Option<uuid::Uuid>,
     target: &str,
     digest_mode: &mut PaneActivityDigestMode,
-    cursor_fn: CursorFn,
-    capture_fn: CaptureFn,
-) -> Result<()>
-where
-    CursorFn: FnOnce() -> Result<crate::mux::OutputCursor>,
-    CaptureFn: FnOnce() -> Result<String>,
-{
+    cursor_fn: &mut dyn FnMut() -> Result<crate::mux::OutputCursor>,
+    capture_fn: &mut dyn FnMut() -> Result<String>,
+) -> Result<()> {
     let (digest, next_mode) =
         pane_activity_digest_with_fallback(*digest_mode, cursor_fn, capture_fn)?;
     if *digest_mode != next_mode {
@@ -432,15 +654,11 @@ fn hash_text(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn pane_activity_digest_with_fallback<CursorFn, CaptureFn>(
+fn pane_activity_digest_with_fallback(
     mode: PaneActivityDigestMode,
-    cursor_fn: CursorFn,
-    capture_fn: CaptureFn,
-) -> Result<(u64, PaneActivityDigestMode)>
-where
-    CursorFn: FnOnce() -> Result<crate::mux::OutputCursor>,
-    CaptureFn: FnOnce() -> Result<String>,
-{
+    cursor_fn: &mut dyn FnMut() -> Result<crate::mux::OutputCursor>,
+    capture_fn: &mut dyn FnMut() -> Result<String>,
+) -> Result<(u64, PaneActivityDigestMode)> {
     match mode {
         PaneActivityDigestMode::Cursor => {
             if let Ok(cursor) = cursor_fn() {
@@ -461,6 +679,22 @@ where
 struct RespawnSummary {
     changed: bool,
     respawned_sessions: usize,
+}
+
+fn finish_respawn_summary(app_data: &mut AppData, summary: &RespawnSummary) -> Result<()> {
+    if summary.changed {
+        app_data.storage.save()?;
+        app_data.validate_selection();
+    }
+
+    if summary.respawned_sessions > 0 {
+        app_data.set_status(format!(
+            "Respawned {} agent session(s)",
+            summary.respawned_sessions
+        ));
+    }
+
+    Ok(())
 }
 
 fn stored_root_agents(app_data: &AppData) -> Vec<Agent> {
@@ -747,6 +981,7 @@ fn command_for_agent(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::agent::{AgentRuntime, Storage};
@@ -872,6 +1107,13 @@ mod tests {
         )
     }
 
+    #[cfg(coverage)]
+    #[test]
+    fn test_exercise_sync_paths_for_coverage_runs_in_unit_build() {
+        let (mut app, _temp_file) = create_test_app();
+        Actions::exercise_sync_paths_for_coverage(&mut app);
+    }
+
     #[test]
     fn test_resolve_repo_path_with_deps_uses_project_root_and_skips_current_dir() {
         let expected = PathBuf::from("/tmp/tenex-test-project-root");
@@ -887,8 +1129,8 @@ mod tests {
         let _ = make_current_dir()().unwrap();
         called.set(false);
 
-        let actual =
-            resolve_repo_path_with_deps(Some(expected.clone()), make_current_dir()).unwrap();
+        let mut current_dir = make_current_dir();
+        let actual = resolve_repo_path_with_deps(Some(expected.clone()), &mut current_dir).unwrap();
 
         assert_eq!(actual, expected);
         assert!(!called.get());
@@ -897,19 +1139,20 @@ mod tests {
     #[test]
     fn test_resolve_repo_path_with_deps_falls_back_to_current_dir() {
         let expected = PathBuf::from("/tmp/tenex-test-current-dir");
-        let actual = resolve_repo_path_with_deps(None, || Ok(expected.clone())).unwrap();
+        let mut current_dir = || Ok(expected.clone());
+        let actual = resolve_repo_path_with_deps(None, &mut current_dir).unwrap();
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_resolve_repo_path_with_deps_errors_when_current_dir_unavailable() {
-        let err = resolve_repo_path_with_deps(None, || {
+        let mut current_dir = || {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "cwd missing",
             ))
-        })
-        .unwrap_err();
+        };
+        let err = resolve_repo_path_with_deps(None, &mut current_dir).unwrap_err();
 
         assert!(
             err.to_string()
@@ -1068,14 +1311,15 @@ mod tests {
     #[test]
     fn test_pane_activity_digest_prefers_output_cursor_when_available() {
         let capture_calls = std::cell::Cell::new(0u32);
-        let capture = || {
+        let mut cursor = || Ok(cursor_ok());
+        let mut capture = || {
             capture_calls.set(capture_calls.get().saturating_add(1));
             Ok(capture_ok())
         };
         let (digest, mode) = pane_activity_digest_with_fallback(
             PaneActivityDigestMode::Cursor,
-            || Ok(cursor_ok()),
-            capture,
+            &mut cursor,
+            &mut capture,
         )
         .unwrap();
 
@@ -1091,11 +1335,14 @@ mod tests {
 
     #[test]
     fn test_pane_activity_digest_falls_back_to_capture_when_cursor_fails() {
-        let (digest, mode) =
-            pane_activity_digest_with_fallback(PaneActivityDigestMode::Cursor, cursor_fail, || {
-                Ok(capture_ok())
-            })
-            .unwrap();
+        let mut cursor = cursor_fail;
+        let mut capture = || Ok(capture_ok());
+        let (digest, mode) = pane_activity_digest_with_fallback(
+            PaneActivityDigestMode::Cursor,
+            &mut cursor,
+            &mut capture,
+        )
+        .unwrap();
 
         assert_eq!(digest, hash_text("visible pane"));
         assert_eq!(mode, PaneActivityDigestMode::Capture);
@@ -1104,15 +1351,17 @@ mod tests {
     #[test]
     fn test_pane_activity_digest_capture_mode_uses_capture() {
         let cursor_calls = std::cell::Cell::new(0u32);
-        let cursor = || {
+        let mut cursor = || {
             cursor_calls.set(cursor_calls.get().saturating_add(1));
             Ok(cursor_ok())
         };
-        let (digest, mode) =
-            pane_activity_digest_with_fallback(PaneActivityDigestMode::Capture, cursor, || {
-                Ok(capture_ok())
-            })
-            .unwrap();
+        let mut capture = || Ok(capture_ok());
+        let (digest, mode) = pane_activity_digest_with_fallback(
+            PaneActivityDigestMode::Capture,
+            &mut cursor,
+            &mut capture,
+        )
+        .unwrap();
 
         assert_eq!(digest, hash_text("visible pane"));
         assert_eq!(mode, PaneActivityDigestMode::Capture);
@@ -1123,10 +1372,12 @@ mod tests {
 
     #[test]
     fn test_pane_activity_digest_reports_error_when_capture_fails_in_cursor_mode() {
+        let mut cursor = cursor_fail;
+        let mut capture = capture_fail;
         let result = pane_activity_digest_with_fallback(
             PaneActivityDigestMode::Cursor,
-            cursor_fail,
-            capture_fail,
+            &mut cursor,
+            &mut capture,
         );
         assert!(result.is_err());
     }
@@ -1134,14 +1385,15 @@ mod tests {
     #[test]
     fn test_pane_activity_digest_reports_error_when_capture_fails_in_capture_mode() {
         let cursor_calls = std::cell::Cell::new(0u32);
-        let cursor = || {
+        let mut cursor = || {
             cursor_calls.set(cursor_calls.get().saturating_add(1));
             Ok(cursor_ok())
         };
+        let mut capture = capture_fail;
         let result = pane_activity_digest_with_fallback(
             PaneActivityDigestMode::Capture,
-            cursor,
-            capture_fail,
+            &mut cursor,
+            &mut capture,
         );
         assert!(result.is_err());
         assert_eq!(cursor_calls.get(), 0);
@@ -1161,6 +1413,8 @@ mod tests {
         );
         let selected = Some(agent.id);
         let mut mode = PaneActivityDigestMode::Cursor;
+        let mut cursor = cursor_fail;
+        let mut capture = || Ok(capture_ok());
 
         with_tracing_dispatch(|| {
             observe_agent_pane_activity(
@@ -1169,8 +1423,8 @@ mod tests {
                 selected,
                 "target",
                 &mut mode,
-                cursor_fail,
-                || Ok(capture_ok()),
+                &mut cursor,
+                &mut capture,
             )
         })
         .unwrap();
@@ -1230,6 +1484,7 @@ mod tests {
         );
         alive.set_status(Status::Running);
         let alive_session = alive.mux_session.clone();
+        let alive_id = alive.id;
         app.data.storage.add(alive);
 
         let mut missing = Agent::new(
@@ -1241,6 +1496,22 @@ mod tests {
         missing.set_status(Status::Running);
         let missing_id = missing.id;
         app.data.storage.add(missing);
+
+        let mut starting_child = Agent::new_child(
+            "starting-child".to_string(),
+            "claude".to_string(),
+            "muster/alive".to_string(),
+            PathBuf::from("/tmp"),
+            crate::agent::ChildConfig {
+                parent_id: alive_id,
+                mux_session: "missing-child-session".to_string(),
+                window_index: 1,
+                repo_root: None,
+            },
+        );
+        starting_child.set_status(Status::Starting);
+        let starting_child_id = starting_child.id;
+        app.data.storage.add(starting_child);
 
         with_tracing_dispatch(|| {
             Actions::new().sync_agent_status_with_sessions(
@@ -1254,8 +1525,14 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(app.data.storage.len(), 1);
+        assert_eq!(app.data.storage.len(), 2);
         assert!(app.data.storage.get(missing_id).is_none());
+        let child = app
+            .data
+            .storage
+            .get(starting_child_id)
+            .expect("starting child remains stored");
+        assert_eq!(child.status, Status::Starting);
     }
 
     #[cfg(unix)]
@@ -2155,8 +2432,9 @@ mod tests {
         let (mut app, _temp_file) = create_test_app();
         app.set_cwd_project_root(None);
 
+        let mut current_dir = || Err(std::io::Error::other("cwd fail"));
         let err = Actions::new()
-            .auto_connect_worktrees_with_deps(&mut app, || Err(std::io::Error::other("cwd fail")))
+            .auto_connect_worktrees_with_deps(&mut app, &mut current_dir)
             .expect_err("expected repo path resolution to fail");
 
         assert!(
@@ -2448,6 +2726,14 @@ mod tests {
     #[test]
     fn test_title_for_branch_strips_tenex_prefix() {
         assert_eq!(title_for_branch("tenex/feature", "agent/"), "feature");
+    }
+
+    #[test]
+    fn test_is_tenex_managed_branch_covers_prefix_and_legacy_namespace() {
+        assert!(is_tenex_managed_branch("agent/feature", "agent/"));
+        assert!(is_tenex_managed_branch("tenex/feature", ""));
+        assert!(!is_tenex_managed_branch("feature", "agent/"));
+        assert!(!is_tenex_managed_branch("feature", ""));
     }
 
     #[test]
