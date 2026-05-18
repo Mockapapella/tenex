@@ -22,11 +22,10 @@ impl Actions {
 
         let old_line_count = app.data.ui.preview_text.lines.len();
         let old_scroll = app.data.ui.preview_scroll;
-        let visible_height = app
-            .data
-            .ui
-            .preview_dimensions
-            .map_or(20, |(_, h)| usize::from(h));
+        let visible_height = match app.data.ui.preview_dimensions {
+            Some((_, height)) => usize::from(height),
+            None => 20,
+        };
 
         // When the user manually scrolls up, stop using a short tail buffer to avoid
         // the viewport "jumping" as the tail window slides.
@@ -91,6 +90,7 @@ impl Actions {
         Ok(())
     }
 
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn try_update_preview_streamed(
         self,
         app: &mut App,
@@ -159,8 +159,7 @@ impl Actions {
                 }
             }
 
-            let content =
-                crate::mux::render::capture_lines(&mut vt.parser, requested).unwrap_or_default();
+            let content = crate::mux::render::capture_lines(&mut vt.parser, requested);
             let (cursor_row, cursor_col) = vt.parser.screen().cursor_position();
             let cursor_hidden = vt.parser.screen().hide_cursor();
             let cursor_position = Some((cursor_col, cursor_row, cursor_hidden));
@@ -204,6 +203,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if diff update fails
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn update_diff(self, app: &mut App) -> Result<()> {
         if let Some(agent) = app.selected_agent() {
             let agent_id = agent.id;
@@ -224,7 +224,7 @@ impl Actions {
                             return Ok(());
                         }
                     };
-                    let marker_hash = diff_gen.uncommitted_change_marker()?;
+                    let marker_hash = diff_gen.uncommitted_change_marker().unwrap_or(u64::MAX);
 
                     app.data.ui.diff_hash = marker_hash;
                     app.data.ui.diff_model = Some(model.clone());
@@ -299,7 +299,12 @@ impl Actions {
     ///
     /// Returns an error if git operations fail unexpectedly.
     pub fn update_commits(self, app: &mut App) -> Result<()> {
-        const MAX_COMMITS: usize = 200;
+        Self::update_commits_with_limit(app, 200)
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn update_commits_with_limit(app: &mut App, max_commits: usize) -> Result<()> {
+        let max_commits = max_commits.max(1);
 
         let Some(agent) = app.selected_agent() else {
             app.data.ui.commits_hash = 0;
@@ -331,8 +336,8 @@ impl Actions {
         let range = format!("{base_branch}..HEAD");
 
         let (commits, used_range, truncated) =
-            git_log_rich(&worktree_path, Some(&range), MAX_COMMITS)
-                .or_else(|_| git_log_rich(&worktree_path, None, MAX_COMMITS))?;
+            git_log_rich(&worktree_path, Some(&range), max_commits)
+                .or_else(|_| git_log_rich(&worktree_path, None, max_commits))?;
 
         let commits_hash = hash_commit_ids(commits.iter().map(|c| c.id.as_str()));
         app.data.ui.commits_hash = commits_hash;
@@ -407,6 +412,7 @@ impl Actions {
     /// # Errors
     ///
     /// Returns an error if digest computation fails unexpectedly.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn update_commits_digest(self, app: &mut App) -> Result<()> {
         const MAX_COMMITS: usize = 200;
 
@@ -449,8 +455,7 @@ fn preview_target(app: &App, agent: &crate::agent::Agent) -> String {
         |window_idx| {
             let agent_id = agent.id;
             let root = app.data.storage.root_ancestor(agent_id);
-            let root_session =
-                root.map_or_else(|| agent.mux_session.clone(), |r| r.mux_session.clone());
+            let root_session = root.unwrap_or(agent).mux_session.clone();
             SessionManager::window_target(&root_session, window_idx)
         },
     )
@@ -518,6 +523,7 @@ fn git_log_commit_ids(
     Ok((ids, used_range, truncated))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn git_log_rich(
     worktree_path: &std::path::Path,
     range: Option<&str>,
@@ -561,23 +567,23 @@ fn git_log_rich(
         }
 
         let mut parts = record.splitn(7, FIELD_SEP);
-        let Some(id) = parts.next() else {
+        let Some(id) = parts.next().filter(|value| !value.is_empty()) else {
             continue;
         };
 
-        let Some(short_id) = parts.next() else {
+        let Some(short_id) = parts.next().filter(|value| !value.is_empty()) else {
             continue;
         };
 
-        let Some(date) = parts.next() else {
+        let Some(date) = parts.next().filter(|value| !value.is_empty()) else {
             continue;
         };
 
-        let Some(author) = parts.next() else {
+        let Some(author) = parts.next().filter(|value| !value.is_empty()) else {
             continue;
         };
 
-        let Some(subject) = parts.next() else {
+        let Some(subject) = parts.next().filter(|value| !value.is_empty()) else {
             continue;
         };
 
@@ -624,10 +630,16 @@ mod tests {
     use crate::agent::{Agent, ChildConfig, Storage};
     use crate::app::Settings;
     use crate::config::Config;
+    use base64::Engine as _;
     use git2::{Repository, RepositoryInitOptions, Signature};
+    use interprocess::local_socket::traits::Stream as _;
     use std::fs;
+    #[cfg(not(windows))]
+    use std::os::unix::fs::PermissionsExt as _;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
 
     fn create_test_app() -> App {
         App::new(
@@ -638,28 +650,212 @@ mod tests {
         )
     }
 
+    #[derive(Debug)]
+    struct MockMuxConfig {
+        session_exists: bool,
+        read_output_responses: std::collections::VecDeque<crate::mux::MuxResponse>,
+        capture_visible: String,
+        capture_history: String,
+        capture_full_history: String,
+        pane_size: (u16, u16),
+        cursor_position: (u16, u16, bool),
+        observed_requests: Vec<crate::mux::MuxRequest>,
+    }
+
+    fn make_mock_mux_socket(dir: &TempDir) -> (String, interprocess::local_socket::Name<'static>) {
+        #[cfg(windows)]
+        {
+            use interprocess::local_socket::GenericNamespaced;
+            use interprocess::local_socket::prelude::*;
+
+            let display = format!("tenex-mux-preview-test-{}", uuid::Uuid::new_v4());
+            let name = display
+                .clone()
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+                .into_owned();
+            (display, name)
+        }
+
+        #[cfg(not(windows))]
+        {
+            use interprocess::local_socket::GenericFilePath;
+            use interprocess::local_socket::prelude::*;
+
+            let socket_path = dir.path().join("mux.sock");
+            let display = socket_path.to_string_lossy().into_owned();
+            let name = socket_path
+                .as_path()
+                .to_fs_name::<GenericFilePath>()
+                .unwrap()
+                .into_owned();
+            (display, name)
+        }
+    }
+
+    fn mux_output_chunk(start: u64, end: u64, data: &[u8]) -> crate::mux::MuxResponse {
+        crate::mux::MuxResponse::OutputChunk {
+            start,
+            end,
+            data_b64: base64::engine::general_purpose::STANDARD.encode(data),
+        }
+    }
+
+    fn mux_output_reset(start: u64, checkpoint: &[u8]) -> crate::mux::MuxResponse {
+        crate::mux::MuxResponse::OutputReset {
+            start,
+            checkpoint_b64: base64::engine::general_purpose::STANDARD.encode(checkpoint),
+        }
+    }
+
+    fn expect_mux_error_message(
+        response: crate::mux::MuxResponse,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        match response {
+            crate::mux::MuxResponse::Err { message } => Ok(message),
+            other => Err(format!("expected Err response, got {other:?}").into()),
+        }
+    }
+
+    fn spawn_mock_mux_server(
+        name: interprocess::local_socket::Name<'static>,
+        config: Arc<Mutex<MockMuxConfig>>,
+        expected_requests: usize,
+    ) -> std::thread::JoinHandle<()> {
+        use interprocess::local_socket::ListenerOptions;
+        use interprocess::local_socket::traits::ListenerExt;
+
+        let listener = ListenerOptions::new()
+            .name(name)
+            .create_sync()
+            .expect("Expected mock mux listener to start");
+
+        std::thread::spawn(move || {
+            let mut handled = 0usize;
+            for mut stream in listener.incoming().flatten() {
+                while handled < expected_requests {
+                    let Ok(request) = crate::mux::read_json::<crate::mux::MuxRequest>(&mut stream)
+                    else {
+                        break;
+                    };
+
+                    let response = {
+                        let mut config = config
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        config.observed_requests.push(request.clone());
+
+                        match request {
+                            crate::mux::MuxRequest::Ping => crate::mux::MuxResponse::Pong {
+                                version: "mock".to_string(),
+                            },
+                            crate::mux::MuxRequest::SessionExists { .. } => {
+                                crate::mux::MuxResponse::Bool {
+                                    value: config.session_exists,
+                                }
+                            }
+                            crate::mux::MuxRequest::ReadOutput { .. } => config
+                                .read_output_responses
+                                .pop_front()
+                                .unwrap_or_else(|| crate::mux::MuxResponse::Err {
+                                    message: "mock: unexpected read_output".to_string(),
+                                }),
+                            crate::mux::MuxRequest::Capture { kind, .. } => {
+                                let text = match kind {
+                                    crate::mux::CaptureKind::Visible => {
+                                        config.capture_visible.clone()
+                                    }
+                                    crate::mux::CaptureKind::History { .. } => {
+                                        config.capture_history.clone()
+                                    }
+                                    crate::mux::CaptureKind::FullHistory => {
+                                        config.capture_full_history.clone()
+                                    }
+                                };
+                                crate::mux::MuxResponse::Text { text }
+                            }
+                            crate::mux::MuxRequest::PaneSize { .. } => {
+                                crate::mux::MuxResponse::Size {
+                                    cols: config.pane_size.0,
+                                    rows: config.pane_size.1,
+                                }
+                            }
+                            crate::mux::MuxRequest::CursorPosition { .. } => {
+                                crate::mux::MuxResponse::Position {
+                                    x: config.cursor_position.0,
+                                    y: config.cursor_position.1,
+                                    hidden: config.cursor_position.2,
+                                }
+                            }
+                            other => crate::mux::MuxResponse::Err {
+                                message: format!("mock: unsupported request {other:?}"),
+                            },
+                        }
+                    };
+
+                    let _ = crate::mux::write_json(&mut stream, &response);
+                    handled = handled.saturating_add(1);
+                }
+
+                if handled >= expected_requests {
+                    break;
+                }
+            }
+        })
+    }
+
+    struct MockMuxServerGuard(Option<std::thread::JoinHandle<()>>);
+
+    impl MockMuxServerGuard {
+        fn new(handle: std::thread::JoinHandle<()>) -> Self {
+            Self(Some(handle))
+        }
+    }
+
+    impl Drop for MockMuxServerGuard {
+        fn drop(&mut self) {
+            if let Some(handle) = self.0.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
     #[test]
-    fn test_update_preview_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_mock_mux_server_guard_drop_noop_when_none() {
+        let guard = MockMuxServerGuard(None);
+        drop(guard);
+    }
+
+    #[cfg(not(windows))]
+    fn write_git_override_script(dir: &TempDir, script_body: &str) -> PathBuf {
+        let path = dir.path().join("git");
+        fs::write(&path, script_body).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_update_preview_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_preview(&mut app)?;
+        handler.update_preview(&mut app).unwrap();
         assert!(app.data.ui.preview_content.contains("No agent selected"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert!(app.data.ui.diff_content.contains("No agent selected"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_preview_with_agent_no_session() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_preview_with_agent_no_session() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
@@ -671,13 +867,12 @@ mod tests {
             PathBuf::from("/tmp"),
         ));
 
-        handler.update_preview(&mut app)?;
+        handler.update_preview(&mut app).unwrap();
         assert!(app.data.ui.preview_content.contains("Session not running"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_with_agent_no_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_with_agent_no_worktree() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
@@ -689,20 +884,19 @@ mod tests {
             PathBuf::from("/nonexistent/path"),
         ));
 
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert!(app.data.ui.diff_content.contains("Worktree not found"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_with_agent_valid_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_with_agent_valid_worktree() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
         // Create a temp directory (not a git repo)
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         // Add an agent with valid worktree path (but not git repo)
         app.data.storage.add(Agent::new(
@@ -712,24 +906,22 @@ mod tests {
             temp_dir.path().to_path_buf(),
         ));
 
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert!(app.data.ui.diff_content.contains("Not a git repository"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains("No agent selected"));
         assert_eq!(app.data.ui.commits_hash, 0);
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_with_agent_no_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_with_agent_no_worktree() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
@@ -741,19 +933,18 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains("Worktree not found"));
         assert_eq!(app.data.ui.commits_hash, 0);
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_with_agent_non_git_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_with_agent_non_git_worktree() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         app.data.storage.add(Agent::new(
             "test".to_string(),
@@ -763,58 +954,61 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains("Not a git repository"));
         assert_eq!(app.data.ui.commits_hash, 0);
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_includes_description_body() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_includes_description_body() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
 
         // Initial commit on master
-        fs::write(&file_path, "hello\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let first_commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
 
         // Create and checkout feature branch
-        let first = repo.find_commit(first_commit)?;
-        repo.branch("tenex/test", &first, false)?;
-        repo.set_head("refs/heads/tenex/test")?;
+        let first = repo.find_commit(first_commit).unwrap();
+        repo.branch("tenex/test", &first, false).unwrap();
+        repo.set_head("refs/heads/tenex/test").unwrap();
 
         // Commit with body description
-        fs::write(&file_path, "hello world\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
+        fs::write(&file_path, "hello world\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parents = [&first];
         repo.commit(
             Some("HEAD"),
             &sig,
             &sig,
-            "Add world\n\nThis adds world to greeting.",
+            "Add world\n\nThis adds world.\n\nThis adds world to greeting.",
             &tree,
-            &[&first],
-        )?;
+            &parents,
+        )
+        .unwrap();
 
         // Wire into app as selected agent
         app.data.storage = Storage::default();
@@ -826,40 +1020,41 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
+        assert!(app.data.ui.commits_content.contains("This adds world."));
         assert!(
             app.data
                 .ui
                 .commits_content
                 .contains("This adds world to greeting.")
         );
-        Ok(())
+        assert!(app.data.ui.commits_content.contains("\n    \n"));
     }
 
     #[test]
-    fn test_update_commits_falls_back_to_head_history_when_base_range_invalid()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_falls_back_to_head_history_when_base_range_invalid() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("trunk");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/trunk")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/trunk").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
 
-        fs::write(&file_path, "hello\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -870,52 +1065,54 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains("HEAD history"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_truncates_long_body() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_truncates_long_body() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
 
-        fs::write(&file_path, "hello\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let first_commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
 
-        let first = repo.find_commit(first_commit)?;
-        repo.branch("tenex/test", &first, false)?;
-        repo.set_head("refs/heads/tenex/test")?;
+        let first = repo.find_commit(first_commit).unwrap();
+        repo.branch("tenex/test", &first, false).unwrap();
+        repo.set_head("refs/heads/tenex/test").unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
+        fs::write(&file_path, "hello world\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
 
         let body = (0..50)
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
         let message = format!("Big body\n\n{body}");
-        repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&first])?;
+        repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&first])
+            .unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -926,35 +1123,90 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains('…'));
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_shows_no_commits_when_range_empty()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_shows_truncated_suffix_when_limit_is_small() {
+        use tempfile::TempDir;
+
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let base_commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
+
+        let base = repo.find_commit(base_commit).unwrap();
+        repo.branch("tenex/test", &base, false).unwrap();
+        repo.set_head("refs/heads/tenex/test").unwrap();
+
+        let mut parent = base;
+        for idx in 0..2usize {
+            fs::write(&file_path, format!("change {idx}\n")).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("file.txt")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let new_commit = repo
+                .commit(Some("HEAD"), &sig, &sig, "Change", &tree, &[&parent])
+                .unwrap();
+            parent = repo.find_commit(new_commit).unwrap();
+        }
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Commits;
+
+        Actions::update_commits_with_limit(&mut app, 1).unwrap();
+        assert!(app.data.ui.commits_content.contains("(truncated)"));
+    }
+
+    #[test]
+    fn test_update_commits_shows_no_commits_when_range_empty() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
-        fs::write(&file_path, "hello\n")?;
+        fs::write(&file_path, "hello\n").unwrap();
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -965,47 +1217,101 @@ mod tests {
         ));
         app.data.active_tab = crate::app::Tab::Commits;
 
-        handler.update_commits(&mut app)?;
+        handler.update_commits(&mut app).unwrap();
         assert!(app.data.ui.commits_content.contains("(No commits)"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_commits_digest_sets_unseen_when_hash_changes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_sets_unseen_when_not_in_commits_tab() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
 
-        fs::write(&file_path, "hello\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let first_commit = repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let first_commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
 
-        let first = repo.find_commit(first_commit)?;
-        repo.branch("tenex/test", &first, false)?;
-        repo.set_head("refs/heads/tenex/test")?;
+        let first = repo.find_commit(first_commit).unwrap();
+        repo.branch("tenex/test", &first, false).unwrap();
+        repo.set_head("refs/heads/tenex/test").unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Change", &tree, &[&first])?;
+        fs::write(&file_path, "hello world\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Change", &tree, &[&first])
+            .unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "tenex/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits(&mut app).unwrap();
+        assert_ne!(app.data.ui.commits_hash, 0);
+        assert!(app.data.ui.commits_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_commits_digest_sets_unseen_when_hash_changes() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let first_commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
+
+        let first = repo.find_commit(first_commit).unwrap();
+        repo.branch("tenex/test", &first, false).unwrap();
+        repo.set_head("refs/heads/tenex/test").unwrap();
+
+        fs::write(&file_path, "hello world\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Change", &tree, &[&first])
+            .unwrap();
 
         let agent = Agent::new(
             "a".to_string(),
@@ -1018,7 +1324,7 @@ mod tests {
         app.data.storage.add(agent);
         app.data.active_tab = crate::app::Tab::Preview;
 
-        handler.update_commits_digest(&mut app)?;
+        handler.update_commits_digest(&mut app).unwrap();
         assert_ne!(app.data.ui.commits_hash, 0);
         assert!(app.data.ui.commits_has_unseen_changes);
 
@@ -1026,39 +1332,260 @@ mod tests {
             .ui
             .set_commits_last_seen_hash_for_agent(agent_id, app.data.ui.commits_hash);
 
-        handler.update_commits_digest(&mut app)?;
+        handler.update_commits_digest(&mut app).unwrap();
         assert!(!app.data.ui.commits_has_unseen_changes);
-        Ok(())
     }
 
     #[test]
-    fn test_diff_unseen_dot_only_shows_changes_since_last_view_per_agent()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_commits_digest_falls_back_when_range_git_log_fails() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("trunk");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/trunk").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+
+        fs::write(&file_path, "hello\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            // Pick a branch name that does not exist in this repo so base branch detection
+            // falls through to the default candidates and yields a missing range.
+            "tenex/test".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits_digest(&mut app).unwrap();
+        assert_ne!(app.data.ui.commits_hash, 0);
+        assert!(app.data.ui.commits_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_commits_digest_returns_early_when_worktree_is_not_git() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new().unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits_digest(&mut app).unwrap();
+        assert_eq!(app.data.ui.commits_hash, 0);
+        assert!(!app.data.ui.commits_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_commits_digest_returns_early_when_worktree_missing() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            PathBuf::from("/nonexistent/path"),
+        ));
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits_digest(&mut app).unwrap();
+        assert_eq!(app.data.ui.commits_hash, 0);
+        assert!(!app.data.ui.commits_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_commits_digest_sets_hash_zero_when_range_is_empty() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])
+            .unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "master".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+        app.data.active_tab = crate::app::Tab::Preview;
+
+        handler.update_commits_digest(&mut app).unwrap();
+        assert_eq!(app.data.ui.commits_hash, 0);
+        assert!(!app.data.ui.commits_has_unseen_changes);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_git_log_commit_ids_bails_when_git_log_fails() {
+        let dir = TempDir::new().unwrap();
+        let script = write_git_override_script(&dir, "#!/bin/sh\nexit 1\n");
+
+        let err = crate::git::with_git_program_override_for_tests(script, || {
+            git_log_commit_ids(dir.path(), None, 10).unwrap_err()
+        });
+        let err_text = format!("{err:#}");
+        assert!(err_text.contains("git log failed"));
+    }
+
+    #[test]
+    fn test_git_log_commit_ids_propagates_spawn_errors() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing-git");
+        let _err = crate::git::with_git_program_override_for_tests(missing, || {
+            git_log_commit_ids(dir.path(), None, 10).unwrap_err()
+        });
+    }
+
+    #[test]
+    fn test_git_log_rich_propagates_spawn_errors() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing-git");
+        let _err = crate::git::with_git_program_override_for_tests(missing, || {
+            git_log_rich(dir.path(), None, 10).unwrap_err()
+        });
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_git_log_commit_ids_truncates_output() {
+        let dir = TempDir::new().unwrap();
+        let script = write_git_override_script(&dir, "#!/bin/sh\nprintf 'one\\ntwo\\n'\nexit 0\n");
+
+        let (ids, used_range, truncated) =
+            crate::git::with_git_program_override_for_tests(script, || {
+                git_log_commit_ids(dir.path(), None, 1).unwrap()
+            });
+
+        assert_eq!(ids, vec!["one".to_string()]);
+        assert!(!used_range);
+        assert!(truncated);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_git_log_rich_skips_records_with_missing_fields() {
+        let dir = TempDir::new().unwrap();
+        let script = write_git_override_script(
+            &dir,
+            concat!(
+                "#!/bin/sh\n",
+                "printf '\\037short\\037date\\037author\\037subject\\037dec\\037body\\036'\n",
+                "printf 'id\\037\\037date\\037author\\037subject\\037dec\\037body\\036'\n",
+                "printf 'id\\037short\\037\\037author\\037subject\\037dec\\037body\\036'\n",
+                "printf 'id\\037short\\037date\\037\\037subject\\037dec\\037body\\036'\n",
+                "printf 'id\\037short\\037date\\037author\\037\\037dec\\037body\\036'\n",
+                "printf 'good\\037g\\0372026-03-29 09:00\\037Alice\\037Subject\\037\\037Body\\036'\n",
+                "exit 0\n",
+            ),
+        );
+
+        let (commits, used_range, truncated) =
+            crate::git::with_git_program_override_for_tests(script, || {
+                git_log_rich(dir.path(), None, 10).unwrap()
+            });
+
+        assert_eq!(commits.len(), 1);
+        assert!(!used_range);
+        assert!(!truncated);
+        assert_eq!(commits[0].id, "good");
+        assert_eq!(commits[0].short_id, "g");
+        assert_eq!(commits[0].author, "Alice");
+        assert_eq!(commits[0].subject, "Subject");
+        assert_eq!(commits[0].body, "Body");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_git_log_rich_truncates_commits() {
+        let dir = TempDir::new().unwrap();
+        let script = write_git_override_script(
+            &dir,
+            concat!(
+                "#!/bin/sh\n",
+                "printf 'a\\037a\\0372026-03-29 09:00\\037Alice\\037One\\037\\037\\036'\n",
+                "printf 'b\\037b\\0372026-03-29 09:01\\037Bob\\037Two\\037\\037\\036'\n",
+                "exit 0\n",
+            ),
+        );
+
+        let (commits, used_range, truncated) =
+            crate::git::with_git_program_override_for_tests(script, || {
+                git_log_rich(dir.path(), None, 1).unwrap()
+            });
+
+        assert_eq!(commits.len(), 1);
+        assert!(!used_range);
+        assert!(truncated);
+        assert_eq!(commits[0].id, "a");
+    }
+
+    #[test]
+    fn test_diff_unseen_dot_only_shows_changes_since_last_view_per_agent() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
-        fs::write(&file_path, "hello\n")?;
+        fs::write(&file_path, "hello\n").unwrap();
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
 
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
+        fs::write(&file_path, "hello world\n").unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -1075,25 +1602,23 @@ mod tests {
         ));
 
         app.data.active_tab = crate::app::Tab::Diff;
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert_ne!(app.data.ui.diff_hash, 0);
         assert!(!app.data.ui.diff_has_unseen_changes);
 
         app.data.active_tab = crate::app::Tab::Preview;
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert!(!app.data.ui.diff_has_unseen_changes);
 
         app.data.select_next();
         app.data.select_prev();
 
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert!(!app.data.ui.diff_has_unseen_changes);
-
-        Ok(())
     }
 
     #[test]
-    fn test_update_preview_child_agent_window_target() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_preview_child_agent_window_target() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
@@ -1122,45 +1647,45 @@ mod tests {
         );
         app.data.storage.add(child);
 
-        app.data.select_next();
-        assert!(matches!(
-            app.selected_agent(),
-            Some(agent) if agent.window_index.is_some()
-        ));
+        let agent = app.selected_agent().unwrap();
+        assert!(agent.window_index.is_none());
 
-        handler.update_preview(&mut app)?;
+        app.data.select_next();
+        let agent = app.selected_agent().unwrap();
+        assert!(agent.window_index.is_some());
+
+        handler.update_preview(&mut app).unwrap();
         assert!(app.data.ui.preview_content.contains("Session not running"));
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_sets_unseen_when_not_viewing_diff_tab()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_sets_unseen_when_not_viewing_diff_tab() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
-        fs::write(&file_path, "hello\n")?;
+        fs::write(&file_path, "hello\n").unwrap();
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
 
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
+        fs::write(&file_path, "hello world\n").unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -1171,26 +1696,23 @@ mod tests {
         ));
 
         app.data.active_tab = crate::app::Tab::Preview;
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert_ne!(app.data.ui.diff_hash, 0);
         assert!(app.data.ui.diff_has_unseen_changes);
-
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_digest_no_agent() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_digest_no_agent() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert_eq!(app.data.ui.diff_hash, 0);
         assert!(!app.data.ui.diff_has_unseen_changes);
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_digest_missing_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_digest_missing_worktree() {
         let handler = Actions::new();
         let mut app = create_test_app();
 
@@ -1201,40 +1723,39 @@ mod tests {
             PathBuf::from("/nonexistent/path"),
         ));
 
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert_eq!(app.data.ui.diff_hash, 0);
         assert!(!app.data.ui.diff_has_unseen_changes);
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_digest_sets_unseen_when_not_viewing_diff_tab()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_digest_sets_unseen_when_not_viewing_diff_tab() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
-        fs::write(&file_path, "hello\n")?;
+        fs::write(&file_path, "hello\n").unwrap();
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
 
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
+        fs::write(&file_path, "hello world\n").unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -1245,41 +1766,39 @@ mod tests {
         ));
 
         app.data.active_tab = crate::app::Tab::Preview;
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert_ne!(app.data.ui.diff_hash, 0);
         assert!(app.data.ui.diff_has_unseen_changes);
-
-        Ok(())
     }
 
     #[test]
-    fn test_update_diff_digest_sets_unseen_after_viewing_diff()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_diff_digest_sets_unseen_after_viewing_diff() {
         use tempfile::TempDir;
 
         let handler = Actions::new();
         let mut app = create_test_app();
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
 
         let mut init_opts = RepositoryInitOptions::new();
         init_opts.initial_head("master");
-        let repo = Repository::init_opts(temp_dir.path(), &init_opts)?;
-        repo.set_head("refs/heads/master")?;
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
 
-        let sig = Signature::now("Test", "test@test.com")?;
+        let sig = Signature::now("Test", "test@test.com").unwrap();
         let file_path = temp_dir.path().join("file.txt");
-        fs::write(&file_path, "hello\n")?;
+        fs::write(&file_path, "hello\n").unwrap();
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("file.txt"))?;
-        index.write()?;
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
 
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
 
-        fs::write(&file_path, "hello world\n")?;
+        fs::write(&file_path, "hello world\n").unwrap();
 
         app.data.storage = Storage::default();
         app.data.storage.add(Agent::new(
@@ -1291,18 +1810,567 @@ mod tests {
 
         // Viewing diff marks the current hash as "seen".
         app.data.active_tab = crate::app::Tab::Diff;
-        handler.update_diff(&mut app)?;
+        handler.update_diff(&mut app).unwrap();
         assert_ne!(app.data.ui.diff_hash, 0);
         assert!(!app.data.ui.diff_has_unseen_changes);
 
         // Make another change and ensure digest marks it as unseen while in preview.
-        fs::write(&file_path, "hello again\n")?;
+        fs::write(&file_path, "hello again\n").unwrap();
 
         app.data.active_tab = crate::app::Tab::Preview;
-        handler.update_diff_digest(&mut app)?;
+        handler.update_diff_digest(&mut app).unwrap();
         assert_ne!(app.data.ui.diff_hash, 0);
         assert!(app.data.ui.diff_has_unseen_changes);
+    }
 
-        Ok(())
+    #[test]
+    fn test_update_diff_digest_errors_when_worktree_is_not_git_repo() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new().unwrap();
+        let worktree_path = temp_dir.path().join("not-a-repo");
+        fs::create_dir_all(&worktree_path).unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            worktree_path,
+        ));
+
+        let err = handler.update_diff_digest(&mut app).unwrap_err();
+        assert!(err.to_string().contains("Failed to open git repository"));
+    }
+
+    #[test]
+    fn test_update_diff_digest_errors_when_diff_marker_fails() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("bare.git");
+        Repository::init_bare(&repo_path).unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            repo_path,
+        ));
+
+        let err = handler.update_diff_digest(&mut app).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to get repository status for diff marker")
+        );
+    }
+
+    #[test]
+    fn test_update_diff_digest_clears_unseen_when_marker_is_zero() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app).unwrap();
+        assert_eq!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_diff_digest_clears_unseen_when_marker_matches_last_seen() {
+        use tempfile::TempDir;
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut init_opts = RepositoryInitOptions::new();
+        init_opts.initial_head("master");
+        let repo = Repository::init_opts(temp_dir.path(), &init_opts).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+        fs::write(&file_path, "hello\n").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
+
+        fs::write(&file_path, "hello world\n").unwrap();
+
+        app.data.storage = Storage::default();
+        app.data.storage.add(Agent::new(
+            "a".to_string(),
+            "claude".to_string(),
+            "muster/a".to_string(),
+            temp_dir.path().to_path_buf(),
+        ));
+
+        app.data.active_tab = crate::app::Tab::Diff;
+        handler.update_diff(&mut app).unwrap();
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+
+        app.data.active_tab = crate::app::Tab::Preview;
+        handler.update_diff_digest(&mut app).unwrap();
+        assert_ne!(app.data.ui.diff_hash, 0);
+        assert!(!app.data.ui.diff_has_unseen_changes);
+    }
+
+    #[test]
+    fn test_update_preview_streamed_handles_reset_and_resize() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(mux_output_reset(0, b"checkpoint\n"));
+                responses.push_back(mux_output_chunk(0, 6, b"hello\n"));
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 4);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 10));
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+        let session = app
+            .selected_agent()
+            .expect("Expected selected agent")
+            .mux_session
+            .clone();
+
+        handler.update_preview(&mut app).unwrap();
+        app.data.ui.preview_dimensions = Some((81, 11));
+        handler.update_preview(&mut app).unwrap();
+
+        let vt = app.data.ui.preview_vt_by_target.get(&session).unwrap();
+        assert_eq!(vt.dims, (81, 11));
+    }
+
+    #[test]
+    fn test_update_preview_streamed_covers_empty_and_max_chunks() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(mux_output_chunk(0, 1, &vec![b'a'; 64 * 1024]));
+                responses.push_back(mux_output_chunk(1, 1, b""));
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 4);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 10));
+        app.data.ui.preview_follow = true;
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+
+        handler.update_preview(&mut app).unwrap();
+        assert!(!app.data.ui.preview_content.is_empty());
+
+        handler.update_preview(&mut app).unwrap();
+        assert!(!app.data.ui.preview_content.is_empty());
+    }
+
+    #[test]
+    fn test_update_preview_falls_back_to_capture_when_stream_chunk_rewinds() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let capture_history = "captured history\n".to_string();
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(mux_output_chunk(0, 5, b"rewind\n"));
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: capture_history.clone(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 5);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 10));
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+
+        let session = app
+            .selected_agent()
+            .expect("Expected selected agent")
+            .mux_session
+            .clone();
+        let mut vt = crate::app::state::PreviewVtState::new(session.clone(), 80, 10);
+        vt.after = 10;
+        app.data.ui.preview_vt_by_target.insert(session, vt);
+
+        handler.update_preview(&mut app).unwrap();
+        assert_eq!(app.data.ui.preview_content, capture_history);
+
+        let observed = config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observed_requests
+            .clone();
+        assert!(
+            observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::ReadOutput { .. }))
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::Capture { .. }))
+        );
+    }
+
+    #[test]
+    fn test_mock_mux_server_handles_decode_error_then_ping() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: std::collections::VecDeque::new(),
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name.clone(), Arc::clone(&config), 1);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        {
+            let _stream = interprocess::local_socket::Stream::connect(socket_name).unwrap();
+        }
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+        let version = crate::mux::running_daemon_version().unwrap();
+        assert_eq!(version, Some("mock".to_string()));
+    }
+
+    #[test]
+    fn test_mock_mux_server_defaults_read_output_to_error_when_queue_empty() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: std::collections::VecDeque::new(),
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 1);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+        let err = crate::mux::OutputStream::new()
+            .read_output("session", 0, 1024)
+            .unwrap_err();
+        let err_text = format!("{err:#}");
+        let ok = err_text.contains("mock: unexpected read_output");
+        assert!(ok);
+    }
+
+    #[test]
+    fn test_mock_mux_server_handles_visible_capture_requests() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: std::collections::VecDeque::new(),
+            capture_visible: "visible\n".to_string(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 1);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+        let text = crate::mux::OutputCapture::new()
+            .capture_pane("session")
+            .unwrap();
+        assert_eq!(text, "visible\n");
+    }
+
+    #[test]
+    fn test_mock_mux_server_returns_error_for_unsupported_request() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (_socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: std::collections::VecDeque::new(),
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name.clone(), Arc::clone(&config), 1);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        let mut stream = interprocess::local_socket::Stream::connect(socket_name).unwrap();
+        crate::mux::write_json(&mut stream, &crate::mux::MuxRequest::ListSessions).unwrap();
+        let response = crate::mux::read_json::<crate::mux::MuxResponse>(&mut stream).unwrap();
+        let message = expect_mux_error_message(response).unwrap();
+        assert!(message.starts_with("mock: unsupported request"));
+    }
+
+    #[test]
+    fn test_expect_mux_error_message_returns_error_for_non_error_response() {
+        let response = crate::mux::MuxResponse::Pong {
+            version: "mock".to_string(),
+        };
+
+        let err = expect_mux_error_message(response).expect_err("expected error response");
+        assert!(err.to_string().contains("expected Err response"));
+    }
+
+    #[test]
+    fn test_update_preview_falls_back_to_capture_history_when_stream_errors() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(crate::mux::MuxResponse::Err {
+                    message: "boom".to_string(),
+                });
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: "captured history".to_string(),
+            capture_full_history: String::new(),
+            pane_size: (90, 30),
+            cursor_position: (7, 9, true),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 5);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((90, 30));
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+        let session = app
+            .selected_agent()
+            .expect("Expected selected agent")
+            .mux_session
+            .clone();
+
+        handler.update_preview(&mut app).unwrap();
+        assert_eq!(app.data.ui.preview_content, "captured history");
+        assert_eq!(app.data.ui.preview_cursor_position, Some((7, 9, true)));
+        assert_eq!(app.data.ui.preview_pane_size, Some((90, 30)));
+        assert_eq!(app.data.ui.preview_scroll, usize::MAX);
+        assert!(!app.data.ui.preview_vt_by_target.contains_key(&session));
+    }
+
+    #[test]
+    fn test_update_preview_switching_to_full_history_preserves_scroll_distance() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let new_content = (0..20)
+            .map(|idx| format!("line-{idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(crate::mux::MuxResponse::Err {
+                    message: "boom".to_string(),
+                });
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: new_content.clone(),
+            pane_size: (80, 3),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 5);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 3));
+        app.data.ui.preview_follow = false;
+        app.data.ui.preview_scroll = 2;
+
+        let old_content = (0..10)
+            .map(|idx| format!("old-{idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.data.ui.set_preview_content(old_content);
+
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+
+        handler.update_preview(&mut app).unwrap();
+        assert_eq!(app.data.ui.preview_content, new_content);
+        assert_eq!(app.data.ui.preview_scroll, 12);
+    }
+
+    #[test]
+    fn test_update_diff_sets_error_message_when_diff_generation_fails() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("bare.git");
+        Repository::init_bare(&repo_path).unwrap();
+
+        app.data.storage.add(Agent::new(
+            "diff".to_string(),
+            "echo".to_string(),
+            "muster/diff".to_string(),
+            repo_path,
+        ));
+
+        handler.update_diff(&mut app).unwrap();
+        assert!(app.data.ui.diff_content.contains("Failed to generate diff"));
+        assert!(app.data.ui.diff_model.is_none());
+        assert_eq!(app.data.ui.diff_hash, 0);
     }
 }

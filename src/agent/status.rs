@@ -97,19 +97,17 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_serde_roundtrip() {
         for status in [Status::Starting, Status::Running] {
-            let json = serde_json::to_string(&status)?;
-            let parsed: Status = serde_json::from_str(&json)?;
+            let json = serde_json::to_string(&status).unwrap();
+            let parsed: Status = serde_json::from_str(&json).unwrap();
             assert_eq!(status, parsed);
         }
-        Ok(())
     }
 
     #[test]
-    fn test_serde_format() -> Result<(), Box<dyn std::error::Error>> {
-        let json = serde_json::to_string(&Status::Running)?;
+    fn test_serde_format() {
+        let json = serde_json::to_string(&Status::Running).unwrap();
         assert_eq!(json, "\"running\"");
-        Ok(())
     }
 }

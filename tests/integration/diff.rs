@@ -1,4 +1,8 @@
 //! Integration tests for diff-focused visual selection + multi-line delete.
+#![expect(
+    clippy::expect_used,
+    reason = "integration tests assert fixture setup directly"
+)]
 
 use crate::common::{TestFixture, git_command};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -58,6 +62,15 @@ fn collect_changed_view_indices(app: &tenex::App) -> Vec<usize> {
         .collect()
 }
 
+fn first_hunk_view_index(app: &tenex::App) -> usize {
+    app.data
+        .ui
+        .diff_line_meta
+        .iter()
+        .position(|meta| matches!(meta, DiffLineMeta::Hunk { .. }))
+        .expect("expected hunk header in diff view")
+}
+
 fn setup_app_with_repo(fixture: &TestFixture) -> tenex::App {
     let config = fixture.config();
     let storage = fixture.storage();
@@ -73,6 +86,67 @@ fn setup_app_with_repo(fixture: &TestFixture) -> tenex::App {
     app.data.active_tab = Tab::Diff;
 
     app
+}
+
+#[test]
+fn test_diff_dispatch_covers_inactive_toggle_and_direct_delete_paths()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("diff_direct_delete_paths")?;
+
+    let file_path = fixture.repo_path.join("test.txt");
+    let original = "one\ntwo\n";
+    let modified = "one\ntwo\nthree\n";
+    std::fs::write(&file_path, original)?;
+    git_commit_all(&fixture.repo_path, "add test file")?;
+    std::fs::write(&file_path, modified)?;
+
+    let mut inactive_app = setup_app_with_repo(&fixture);
+    inactive_app.data.active_tab = Tab::Preview;
+    inactive_app.data.ui.diff_visual_anchor = Some(3);
+    inactive_app.enter_mode(DiffFocusedMode.into());
+    tenex::action::dispatch_diff_focused_mode(
+        &mut inactive_app,
+        KeyCode::Char('V'),
+        KeyModifiers::NONE,
+    )?;
+    assert_eq!(inactive_app.data.ui.diff_visual_anchor, Some(3));
+    assert_eq!(inactive_app.data.ui.status_message, None);
+
+    let mut line_app = setup_app_with_repo(&fixture);
+    let handler = Actions::new();
+    handler.update_diff(&mut line_app)?;
+    let changed = collect_changed_view_indices(&line_app);
+    assert!(!changed.is_empty(), "expected a changed line");
+    line_app.enter_mode(DiffFocusedMode.into());
+    line_app.data.ui.diff_cursor = changed[0];
+    tenex::action::dispatch_diff_focused_mode(
+        &mut line_app,
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+    )?;
+    assert_eq!(std::fs::read_to_string(&file_path)?, original);
+    assert_eq!(
+        line_app.data.ui.status_message.as_deref(),
+        Some("Deleted diff line")
+    );
+
+    std::fs::write(&file_path, modified)?;
+    let mut hunk_app = setup_app_with_repo(&fixture);
+    handler.update_diff(&mut hunk_app)?;
+    hunk_app.enter_mode(DiffFocusedMode.into());
+    hunk_app.data.ui.diff_cursor = first_hunk_view_index(&hunk_app);
+    tenex::action::dispatch_diff_focused_mode(
+        &mut hunk_app,
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+    )?;
+    assert_eq!(std::fs::read_to_string(&file_path)?, original);
+    assert_eq!(
+        hunk_app.data.ui.status_message.as_deref(),
+        Some("Deleted diff hunk")
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -158,6 +232,44 @@ fn test_diff_visual_delete_range_single_hunk_undo_redo() -> Result<(), Box<dyn s
     tenex::action::dispatch_diff_focused_mode(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL)?;
     assert_eq!(std::fs::read_to_string(&file_path)?, original);
     assert_eq!(app.data.ui.status_message.as_deref(), Some("Redo"));
+
+    Ok(())
+}
+
+#[test]
+fn test_diff_visual_delete_range_single_line_with_anchor_after_cursor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("diff_visual_delete_single_line_reversed")?;
+
+    let file_path = fixture.repo_path.join("test.txt");
+    let original = "one\ntwo\n";
+    let modified = "one\ntwo\nthree\n";
+    std::fs::write(&file_path, original)?;
+    git_commit_all(&fixture.repo_path, "add test file")?;
+
+    std::fs::write(&file_path, modified)?;
+
+    let mut app = setup_app_with_repo(&fixture);
+    let handler = Actions::new();
+    handler.update_diff(&mut app)?;
+
+    let changed = collect_changed_view_indices(&app);
+    assert!(!changed.is_empty(), "expected a changed line");
+    let changed_idx = changed[0];
+    assert!(changed_idx > 0, "expected a selectable line after a header");
+
+    app.enter_mode(DiffFocusedMode.into());
+    app.data.ui.diff_cursor = changed_idx;
+    tenex::action::dispatch_diff_focused_mode(&mut app, KeyCode::Char('V'), KeyModifiers::NONE)?;
+    app.data.ui.diff_cursor = changed_idx - 1;
+    tenex::action::dispatch_diff_focused_mode(&mut app, KeyCode::Char('x'), KeyModifiers::NONE)?;
+
+    assert_eq!(std::fs::read_to_string(&file_path)?, original);
+    assert_eq!(
+        app.data.ui.status_message.as_deref(),
+        Some("Deleted diff line")
+    );
+    assert!(app.data.ui.diff_visual_anchor.is_none());
 
     Ok(())
 }

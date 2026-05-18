@@ -27,29 +27,22 @@ mod tests {
 
     #[test]
     fn test_parse_command_line_rejects_empty() {
-        let result = parse_command_line("   ");
-        assert!(result.is_err());
-        if let Err(error) = result {
-            let message = format!("{error}");
-            assert!(message.contains("Command line is empty"));
-        }
+        let error = parse_command_line("   ").unwrap_err();
+        let message = format!("{error}");
+        assert!(message.contains("Command line is empty"));
     }
 
     #[test]
-    fn test_parse_command_line_splits_args() -> Result<(), Box<dyn std::error::Error>> {
-        let argv = parse_command_line(r#"echo "hello world""#)?;
+    fn test_parse_command_line_splits_args() {
+        let argv = parse_command_line(r#"echo "hello world""#).unwrap();
         assert_eq!(argv, vec!["echo".to_string(), "hello world".to_string()]);
-        Ok(())
     }
 
     #[test]
     fn test_parse_command_line_comment_is_empty() {
-        let result = parse_command_line("# comment only");
-        assert!(result.is_err());
-        if let Err(error) = result {
-            let message = format!("{error}");
-            assert!(message.contains("Command line produced no argv items"));
-        }
+        let error = parse_command_line("# comment only").unwrap_err();
+        let message = format!("{error}");
+        assert!(message.contains("Command line produced no argv items"));
     }
 
     // `build_spawn_argv` lives in `crate::conversation` and covers Tenex's current spawn needs.

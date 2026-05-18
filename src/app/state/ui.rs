@@ -245,6 +245,44 @@ pub struct UiState {
     pub collapsed_projects: BTreeSet<std::path::PathBuf>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static FORCE_PREVIEW_ANSI_PARSE_ERROR_FOR_TESTS: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
+#[cfg(test)]
+fn with_forced_preview_ansi_parse_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
+    struct Guard {
+        previous: bool,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORCE_PREVIEW_ANSI_PARSE_ERROR_FOR_TESTS.with(|value| {
+                value.set(self.previous);
+            });
+        }
+    }
+
+    FORCE_PREVIEW_ANSI_PARSE_ERROR_FOR_TESTS.with(|value| {
+        let previous = value.replace(true);
+        let _guard = Guard { previous };
+        f()
+    })
+}
+
+fn parse_preview_text(content: &str) -> Result<Text<'static>, ansi_to_tui::Error> {
+    #[cfg(test)]
+    if FORCE_PREVIEW_ANSI_PARSE_ERROR_FOR_TESTS.with(std::cell::Cell::get) {
+        let err = String::from_utf8(vec![0xFF]).unwrap_err();
+        return Err(err.into());
+    }
+
+    ansi_to_tui::IntoText::into_text(&content.as_bytes())
+}
+
 impl UiState {
     /// Create a new UI state with default values
     #[must_use]
@@ -305,8 +343,7 @@ impl UiState {
     pub fn set_preview_content(&mut self, content: impl Into<String>) {
         let content = content.into();
 
-        let parsed = ansi_to_tui::IntoText::into_text(&content)
-            .unwrap_or_else(|_| Text::raw(content.clone()));
+        let parsed = parse_preview_text(&content).unwrap_or_else(|_| Text::raw(content.clone()));
 
         self.preview_content = content;
         self.preview_text = parsed;
@@ -931,7 +968,7 @@ fn compute_line_ranges(s: &str) -> Vec<(usize, usize)> {
 
     if start < bytes.len() {
         let mut end = bytes.len();
-        if end > start && bytes[end - 1] == b'\r' {
+        if bytes[end - 1] == b'\r' {
             end = end.saturating_sub(1);
         }
         ranges.push((start, end));
@@ -943,7 +980,16 @@ fn compute_line_ranges(s: &str) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{DiffModel, DiffSummary};
+    use crate::git::{DiffFile, DiffHunk, DiffHunkLine, DiffModel, DiffSummary, FileStatus};
+
+    fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, f)
+    }
 
     #[test]
     fn test_ui_state_new() {
@@ -964,6 +1010,20 @@ mod tests {
         assert!(ui.preview_dimensions.is_none());
         assert!(ui.last_error.is_none());
         assert!(ui.status_message.is_none());
+    }
+
+    #[test]
+    fn test_set_preview_content_falls_back_to_raw_when_parse_fails() {
+        let mut ui = UiState::new();
+
+        with_forced_preview_ansi_parse_error_for_tests(|| {
+            ui.set_preview_content("hello");
+        });
+
+        assert_eq!(ui.preview_content, "hello");
+        assert_eq!(ui.preview_text.lines.len(), 1);
+        assert_eq!(ui.preview_text.lines[0].spans.len(), 1);
+        assert_eq!(ui.preview_text.lines[0].spans[0].content, "hello");
     }
 
     #[test]
@@ -1157,6 +1217,15 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_line_ranges_leading_newline() {
+        let s = "\nline1";
+        let ranges = compute_line_ranges(s);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "");
+        assert_eq!(&s[ranges[1].0..ranges[1].1], "line1");
+    }
+
+    #[test]
     fn test_compute_line_ranges_trailing_newline() {
         let s = "line1\nline2\n";
         let ranges = compute_line_ranges(s);
@@ -1222,5 +1291,487 @@ mod tests {
         ui.diff_cursor = 0;
         ui.normalize_diff_cursor();
         assert_eq!(ui.diff_cursor, 2);
+    }
+
+    #[test]
+    fn test_preview_vt_state_debug_is_non_exhaustive() {
+        let state = PreviewVtState::new("agent-1".to_string(), 0, 0);
+        let debug = format!("{state:?}");
+        assert!(debug.contains("PreviewVtState"));
+        assert!(debug.contains("agent-1"));
+    }
+
+    #[test]
+    fn test_agent_has_unseen_waiting_output_returns_false_when_digest_missing() {
+        let ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+        assert!(!ui.agent_has_unseen_waiting_output(agent_id));
+    }
+
+    #[test]
+    fn test_agent_has_unseen_waiting_output_returns_false_when_activity_is_active() {
+        let mut ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+
+        ui.observe_agent_pane_digest(agent_id, 42);
+
+        assert!(!ui.agent_has_unseen_waiting_output(agent_id));
+    }
+
+    #[test]
+    fn test_agent_is_waiting_for_input_covers_true_and_false_branches() {
+        let mut ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+
+        assert!(!ui.agent_is_waiting_for_input(agent_id));
+
+        ui.observe_agent_pane_digest(agent_id, 42);
+        assert!(!ui.agent_is_waiting_for_input(agent_id));
+
+        ui.observe_agent_pane_digest(agent_id, 42);
+        assert!(ui.agent_is_waiting_for_input(agent_id));
+    }
+
+    #[test]
+    fn test_diff_cursor_min_accounts_for_header_meta_variants() {
+        let mut ui = UiState::new();
+        ui.diff_line_meta = vec![DiffLineMeta::Info, DiffLineMeta::Info];
+        assert_eq!(ui.diff_cursor_min(), 2);
+
+        ui.diff_line_meta = vec![DiffLineMeta::Info, DiffLineMeta::Unknown];
+        assert_eq!(ui.diff_cursor_min(), 0);
+
+        ui.diff_line_meta = vec![DiffLineMeta::Unknown, DiffLineMeta::Info];
+        assert_eq!(ui.diff_cursor_min(), 0);
+    }
+
+    #[test]
+    fn test_set_diff_view_falls_back_to_unknown_when_meta_len_mismatch() {
+        let mut ui = UiState::new();
+        with_tracing_dispatch(|| ui.set_diff_view("line1\nline2\nline3", vec![DiffLineMeta::Info]));
+        assert_eq!(ui.diff_line_meta.len(), 3);
+        assert_eq!(ui.diff_line_meta[0], DiffLineMeta::Unknown);
+
+        let mut ui = UiState::new();
+        with_tracing_dispatch(|| {
+            ui.set_diff_view("line1\nline2\nline3".to_string(), vec![DiffLineMeta::Info]);
+        });
+        assert_eq!(ui.diff_line_meta.len(), 3);
+        assert_eq!(ui.diff_line_meta[0], DiffLineMeta::Unknown);
+    }
+
+    #[test]
+    fn test_mark_agent_pane_seen_is_noop_when_digest_missing() {
+        let mut ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+
+        ui.mark_agent_pane_seen(agent_id);
+
+        assert!(!ui.pane_last_seen_hash_by_agent.contains_key(&agent_id));
+    }
+
+    #[test]
+    fn test_set_diff_last_seen_hash_for_agent_updates_existing_entry() {
+        let mut ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+
+        ui.set_diff_last_seen_hash_for_agent(agent_id, 1);
+        ui.set_diff_last_seen_hash_for_agent(agent_id, 2);
+
+        assert_eq!(ui.diff_last_seen_hash_for_agent(agent_id), 2);
+        assert_eq!(ui.diff_last_seen_hash_by_agent.len(), 1);
+    }
+
+    #[test]
+    fn test_set_commits_last_seen_hash_for_agent_updates_existing_entry() {
+        let mut ui = UiState::new();
+        let agent_id = Uuid::new_v4();
+
+        ui.set_commits_last_seen_hash_for_agent(agent_id, 1);
+        ui.set_commits_last_seen_hash_for_agent(agent_id, 2);
+
+        assert_eq!(ui.commits_last_seen_hash_for_agent(agent_id), 2);
+        assert_eq!(ui.commits_last_seen_hash_by_agent.len(), 1);
+    }
+
+    #[test]
+    fn test_set_commits_content_normalizes_scroll_to_max() {
+        let mut ui = UiState::new();
+        ui.preview_dimensions = Some((80, 1));
+        ui.commits_scroll = 100;
+
+        ui.set_commits_content("one\ntwo\nthree");
+
+        assert_eq!(ui.commits_scroll, 2);
+    }
+
+    #[test]
+    fn test_set_diff_content_clears_visual_anchor_when_empty() {
+        let mut ui = UiState::new();
+        ui.diff_visual_anchor = Some(0);
+
+        ui.set_diff_content("");
+
+        assert!(ui.diff_visual_anchor.is_none());
+    }
+
+    #[test]
+    fn test_set_diff_content_clamps_visual_anchor_above_max() {
+        let mut ui = UiState::new();
+        ui.diff_visual_anchor = Some(99);
+
+        ui.set_diff_content("a\nb\nc");
+
+        assert_eq!(ui.diff_visual_anchor, Some(2));
+    }
+
+    #[test]
+    fn test_set_diff_view_clamps_visual_anchor_below_min() {
+        let mut ui = UiState::new();
+        ui.diff_visual_anchor = Some(0);
+
+        let content = "l1\nl2\nl3";
+        let meta = vec![
+            DiffLineMeta::Info,
+            DiffLineMeta::Info,
+            DiffLineMeta::Unknown,
+        ];
+        ui.set_diff_view(content, meta);
+
+        assert_eq!(ui.diff_visual_anchor, Some(2));
+    }
+
+    #[test]
+    fn test_diff_cursor_normalization_returns_early_when_preview_height_is_zero() {
+        let mut ui = UiState::new();
+        ui.preview_dimensions = Some((80, 0));
+        ui.diff_scroll = 0;
+        ui.set_diff_content("line1\nline2\nline3");
+
+        ui.diff_cursor = 2;
+        ui.diff_cursor_down(1);
+
+        assert_eq!(ui.diff_scroll, 0);
+    }
+
+    #[test]
+    fn test_build_diff_view_skips_folded_files_and_hunks_and_formats_unusual_origins() {
+        let file1_path = PathBuf::from("folded.txt");
+        let file2_path = PathBuf::from("unfolded.txt");
+
+        let model = DiffModel {
+            files: vec![
+                DiffFile {
+                    path: file1_path.clone(),
+                    status: FileStatus::Modified,
+                    meta: Vec::new(),
+                    hunks: vec![DiffHunk {
+                        header: "@@ -1 +1 @@".to_string(),
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec![DiffHunkLine {
+                            origin: '+',
+                            content: "ignored".to_string(),
+                            old_lineno: None,
+                            new_lineno: Some(1),
+                        }],
+                    }],
+                    additions: 1,
+                    deletions: 0,
+                },
+                DiffFile {
+                    path: file2_path.clone(),
+                    status: FileStatus::Modified,
+                    meta: Vec::new(),
+                    hunks: vec![
+                        DiffHunk {
+                            header: "@@ -1 +1 @@ folded".to_string(),
+                            old_start: 1,
+                            old_lines: 1,
+                            new_start: 1,
+                            new_lines: 1,
+                            lines: vec![DiffHunkLine {
+                                origin: '+',
+                                content: "skipped".to_string(),
+                                old_lineno: None,
+                                new_lineno: Some(1),
+                            }],
+                        },
+                        DiffHunk {
+                            header: "@@ -2 +2 @@".to_string(),
+                            old_start: 2,
+                            old_lines: 1,
+                            new_start: 2,
+                            new_lines: 1,
+                            lines: vec![
+                                DiffHunkLine {
+                                    origin: '\\',
+                                    content: " No newline at end of file".to_string(),
+                                    old_lineno: None,
+                                    new_lineno: None,
+                                },
+                                DiffHunkLine {
+                                    origin: '?',
+                                    content: "mystery".to_string(),
+                                    old_lineno: None,
+                                    new_lineno: None,
+                                },
+                            ],
+                        },
+                    ],
+                    additions: 1,
+                    deletions: 0,
+                },
+            ],
+            summary: DiffSummary {
+                files_changed: 2,
+                additions: 2,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let mut ui = UiState::new();
+        ui.diff_folded_files.push(file1_path);
+        ui.diff_folded_hunks.push(DiffHunkKey {
+            file_path: file2_path,
+            old_start: 1,
+            new_start: 1,
+        });
+
+        let (content, _) = ui.build_diff_view(&model);
+        assert!(content.contains("folded.txt"));
+        assert!(!content.contains("ignored"));
+        assert!(content.contains("unfolded.txt"));
+        assert!(!content.contains("skipped"));
+        assert!(content.contains("\\ No newline at end of file"));
+        assert!(content.contains("mystery"));
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_returns_false_when_meta_missing() {
+        let mut ui = UiState::new();
+        ui.diff_model = Some(DiffModel {
+            files: Vec::new(),
+            summary: DiffSummary {
+                files_changed: 0,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        });
+        ui.diff_cursor = 10;
+
+        assert!(!ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_returns_false_when_cursor_is_not_foldable() {
+        let mut ui = UiState::new();
+        let model = DiffModel {
+            files: Vec::new(),
+            summary: DiffSummary {
+                files_changed: 0,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+        let (content, meta) = ui.build_diff_view(&model);
+        ui.set_diff_view(content, meta);
+        ui.diff_model = Some(model);
+        ui.diff_cursor = 0;
+
+        assert!(!ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_toggles_file_fold() {
+        let mut ui = UiState::new();
+        let model = DiffModel {
+            files: vec![DiffFile {
+                path: PathBuf::from("file.txt"),
+                status: FileStatus::Modified,
+                meta: Vec::new(),
+                hunks: vec![DiffHunk {
+                    header: "@@ -1 +1 @@".to_string(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec![DiffHunkLine {
+                        origin: '+',
+                        content: "line".to_string(),
+                        old_lineno: None,
+                        new_lineno: Some(1),
+                    }],
+                }],
+                additions: 1,
+                deletions: 0,
+            }],
+            summary: DiffSummary {
+                files_changed: 1,
+                additions: 1,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let (content, meta) = ui.build_diff_view(&model);
+        ui.set_diff_view(content, meta);
+        ui.diff_model = Some(model);
+
+        assert!(ui.toggle_diff_fold_at_cursor());
+        assert_eq!(ui.diff_folded_files.len(), 1);
+        assert!(ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_folded_files.is_empty());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_toggles_hunk_fold() {
+        let mut ui = UiState::new();
+        let model = DiffModel {
+            files: vec![DiffFile {
+                path: PathBuf::from("file.txt"),
+                status: FileStatus::Modified,
+                meta: Vec::new(),
+                hunks: vec![DiffHunk {
+                    header: "@@ -1 +1 @@".to_string(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec![DiffHunkLine {
+                        origin: '+',
+                        content: "line".to_string(),
+                        old_lineno: None,
+                        new_lineno: Some(1),
+                    }],
+                }],
+                additions: 1,
+                deletions: 0,
+            }],
+            summary: DiffSummary {
+                files_changed: 1,
+                additions: 1,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let (content, meta) = ui.build_diff_view(&model);
+        ui.set_diff_view(content, meta);
+        ui.diff_model = Some(model);
+
+        ui.diff_cursor = 3;
+        assert!(ui.toggle_diff_fold_at_cursor());
+        assert_eq!(ui.diff_folded_hunks.len(), 1);
+        assert!(ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_folded_hunks.is_empty());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_toggles_hunk_fold_from_line_meta() {
+        let mut ui = UiState::new();
+        let model = DiffModel {
+            files: vec![DiffFile {
+                path: PathBuf::from("file.txt"),
+                status: FileStatus::Modified,
+                meta: Vec::new(),
+                hunks: vec![DiffHunk {
+                    header: "@@ -1 +1 @@".to_string(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec![DiffHunkLine {
+                        origin: '+',
+                        content: "line".to_string(),
+                        old_lineno: None,
+                        new_lineno: Some(1),
+                    }],
+                }],
+                additions: 1,
+                deletions: 0,
+            }],
+            summary: DiffSummary {
+                files_changed: 1,
+                additions: 1,
+                deletions: 0,
+            },
+            hash: 0,
+        };
+
+        let (content, meta) = ui.build_diff_view(&model);
+        ui.set_diff_view(content, meta);
+        ui.diff_model = Some(model);
+
+        ui.diff_cursor = 4;
+        assert!(ui.toggle_diff_fold_at_cursor());
+        assert_eq!(ui.diff_folded_hunks.len(), 1);
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_returns_false_when_file_idx_out_of_range() {
+        let mut ui = UiState::new();
+        ui.diff_line_meta = vec![DiffLineMeta::File { file_idx: 9 }];
+        ui.diff_cursor = 0;
+        ui.diff_model = Some(DiffModel {
+            files: Vec::new(),
+            summary: DiffSummary {
+                files_changed: 0,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        });
+
+        assert!(!ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_folded_files.is_empty());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_toggle_diff_fold_at_cursor_returns_false_when_hunk_idx_out_of_range() {
+        let mut ui = UiState::new();
+        ui.diff_line_meta = vec![DiffLineMeta::Hunk {
+            file_idx: 0,
+            hunk_idx: 9,
+        }];
+        ui.diff_cursor = 0;
+        ui.diff_model = Some(DiffModel {
+            files: vec![DiffFile {
+                path: PathBuf::from("file.txt"),
+                status: FileStatus::Modified,
+                meta: Vec::new(),
+                hunks: Vec::new(),
+                additions: 0,
+                deletions: 0,
+            }],
+            summary: DiffSummary {
+                files_changed: 1,
+                additions: 0,
+                deletions: 0,
+            },
+            hash: 0,
+        });
+
+        assert!(!ui.toggle_diff_fold_at_cursor());
+        assert!(ui.diff_folded_hunks.is_empty());
+        assert!(ui.diff_model.is_some());
+    }
+
+    #[test]
+    fn test_compute_line_ranges_trailing_carriage_return() {
+        let s = "hello\r";
+        let ranges = compute_line_ranges(s);
+        assert_eq!(ranges, vec![(0, 5)]);
+        assert_eq!(&s[ranges[0].0..ranges[0].1], "hello");
     }
 }

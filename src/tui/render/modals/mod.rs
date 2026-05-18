@@ -101,6 +101,13 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
     }
 }
 
+pub(in crate::tui) fn changelog_modal_rect(
+    state: &crate::state::ChangelogMode,
+    frame_area: Rect,
+) -> Rect {
+    changelog_rect(state, frame_area)
+}
+
 fn changelog_rect(state: &crate::state::ChangelogMode, frame_area: Rect) -> Rect {
     let total_lines = state.lines.len();
 
@@ -153,9 +160,10 @@ fn command_palette_rect(app: &App, frame_area: Rect) -> Rect {
 
     let max_visible: usize = 8;
     let visible_count = total_count.min(max_visible).max(1);
+    let visible_count_u16 = u16::try_from(visible_count).unwrap_or(0);
 
     // Header + blank + list + blank + help
-    let content_height = 1u16 + 1u16 + u16::try_from(visible_count).unwrap_or(1) + 1u16 + 1u16;
+    let content_height = 1u16 + 1u16 + visible_count_u16 + 1u16 + 1u16;
     let total_height = content_height.saturating_add(2); // borders
 
     centered_rect_absolute(60, total_height, frame_area)
@@ -307,21 +315,21 @@ mod tests {
         CreatingMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, KeyboardRemapPromptMode,
         MergeBranchSelectorMode, ModelSelectorMode, PreparingDockerMode, PromptingMode,
         RebaseBranchSelectorMode, ReconnectPromptMode, RenameBranchMode, ReviewChildCountMode,
-        ReviewInfoMode, SuccessModalMode, SwitchBranchSelectorMode, TerminalPromptMode,
-        UpdatePromptMode,
+        ReviewInfoMode, SettingsMenuMode, SuccessModalMode, SwitchBranchSelectorMode,
+        TerminalPromptMode, UpdatePromptMode,
     };
     use crate::update::UpdateInfo;
     use semver::Version;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
-        let temp_file = NamedTempFile::new()?;
+    fn create_test_app() -> (App, NamedTempFile) {
+        let temp_file = NamedTempFile::new().unwrap();
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((
+        (
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
-        ))
+        )
     }
 
     fn add_agent(app: &mut App, title: &str) -> uuid::Uuid {
@@ -338,11 +346,10 @@ mod tests {
     }
 
     #[test]
-    fn modal_rect_for_mode_returns_none_in_normal() -> anyhow::Result<()> {
-        let (app, _tmp) = create_test_app()?;
+    fn modal_rect_for_mode_returns_none_in_normal() {
+        let (app, _tmp) = create_test_app();
         let frame = Rect::new(0, 0, 80, 24);
         assert!(modal_rect_for_mode(&app, frame).is_none());
-        Ok(())
     }
 
     #[test]
@@ -350,8 +357,8 @@ mod tests {
         clippy::too_many_lines,
         reason = "Exhaustive coverage exercise for modal rectangle calculation"
     )]
-    fn modal_rect_for_mode_covers_all_modal_variants() -> anyhow::Result<()> {
-        let (mut app, _tmp) = create_test_app()?;
+    fn modal_rect_for_mode_covers_all_modal_variants() {
+        let (mut app, _tmp) = create_test_app();
         let frame = Rect::new(0, 0, 120, 40);
 
         app.apply_mode(HelpMode.into());
@@ -381,6 +388,12 @@ mod tests {
             assert!(modal_rect_for_mode(&app, frame).is_some());
         }
 
+        // Exercise the non-scrollbar path and middle-cursor rendering.
+        app.apply_mode(CreatingMode.into());
+        app.data.input.buffer = "hello".to_string();
+        app.data.input.cursor = 2;
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
         app.apply_mode(ChildCountMode.into());
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
@@ -403,6 +416,9 @@ mod tests {
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
         app.apply_mode(ModelSelectorMode.into());
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
+        app.apply_mode(SettingsMenuMode.into());
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
         // Confirm push: cover both (agent missing) and (agent present) height paths.
@@ -544,6 +560,14 @@ mod tests {
         );
         assert!(modal_rect_for_mode(&app, frame).is_some());
 
+        app.apply_mode(
+            ConfirmingMode {
+                action: ConfirmAction::SwitchBranch,
+            }
+            .into(),
+        );
+        assert!(modal_rect_for_mode(&app, frame).is_some());
+
         app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
             title: "wt".to_string(),
             prompt: None,
@@ -563,7 +587,5 @@ mod tests {
             .into(),
         );
         assert!(modal_rect_for_mode(&app, frame).is_some());
-
-        Ok(())
     }
 }

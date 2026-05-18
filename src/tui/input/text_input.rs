@@ -49,98 +49,88 @@ mod tests {
     use crate::config::Config;
     use crate::state::{
         AppMode, BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode,
-        PromptingMode, ReconnectPromptMode, SynthesisPromptMode, TerminalPromptMode,
+        ErrorModalMode, PromptingMode, ReconnectPromptMode, SynthesisPromptMode,
+        TerminalPromptMode,
     };
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
 
-    fn create_test_app() -> Result<(App, NamedTempFile), std::io::Error> {
-        let temp_file = NamedTempFile::new()?;
+    fn create_test_app() -> (App, NamedTempFile) {
+        let temp_file = NamedTempFile::new().unwrap();
         let storage = Storage::with_path(temp_file.path().to_path_buf());
-        Ok((
+        (
             App::new(Config::default(), storage, Settings::default(), false),
             temp_file,
-        ))
+        )
     }
 
     #[test]
-    fn test_handle_text_input_char() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_text_input_char() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
 
-        handle_text_input_mode(&mut app, KeyCode::Char('a'), KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.buffer, "a");
 
-        handle_text_input_mode(&mut app, KeyCode::Char('b'), KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.buffer, "ab");
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_text_input_backspace() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_text_input_backspace() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = "test".to_string();
         app.data.input.cursor = 4;
 
-        handle_text_input_mode(&mut app, KeyCode::Backspace, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Backspace, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.buffer, "tes");
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_text_input_delete() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_text_input_delete() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = "test".to_string();
         app.data.input.cursor = 0;
 
-        handle_text_input_mode(&mut app, KeyCode::Delete, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Delete, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.buffer, "est");
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_text_input_cursor_movement() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_text_input_cursor_movement() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = "test".to_string();
         app.data.input.cursor = 2;
 
-        handle_text_input_mode(&mut app, KeyCode::Left, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Left, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.cursor, 1);
 
-        handle_text_input_mode(&mut app, KeyCode::Right, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Right, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.cursor, 2);
 
-        handle_text_input_mode(&mut app, KeyCode::Home, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Home, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.cursor, 0);
 
-        handle_text_input_mode(&mut app, KeyCode::End, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::End, KeyModifiers::NONE).unwrap();
         assert_eq!(app.data.input.cursor, 4);
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_text_input_escape() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_text_input_escape() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = "test".to_string();
 
-        handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, AppMode::normal());
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_escape_reconnect_prompt_clears_conflict()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_escape_reconnect_prompt_clears_conflict() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(ReconnectPromptMode.into());
         app.data.spawn.worktree_conflict = Some(crate::app::WorktreeConflictInfo {
             title: "test".to_string(),
@@ -155,76 +145,71 @@ mod tests {
             swarm_child_count: None,
         });
 
-        handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE).unwrap();
 
         assert!(app.data.spawn.worktree_conflict.is_none());
         assert_eq!(app.mode, AppMode::normal());
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_enter_empty_creating_exits() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_enter_empty_creating_exits() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = String::new();
 
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, AppMode::normal());
-
-        Ok(())
     }
 
     #[test]
-    fn test_handle_alt_enter_inserts_newline() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut app, _temp) = create_test_app()?;
+    fn test_handle_alt_enter_inserts_newline() {
+        let (mut app, _temp) = create_test_app();
         app.apply_mode(CreatingMode.into());
         app.data.input.buffer = "test".to_string();
         app.data.input.cursor = 4;
 
-        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::ALT)?;
+        handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::ALT).unwrap();
         assert!(app.data.input.buffer.contains('\n'));
-
-        Ok(())
     }
 
     #[test]
-    fn test_text_input_actions_covered_for_all_modes() -> Result<(), Box<dyn std::error::Error>> {
-        let modes: [AppMode; 8] = [
-            CreatingMode.into(),
-            PromptingMode.into(),
-            ChildPromptMode.into(),
-            BroadcastingMode.into(),
-            ReconnectPromptMode.into(),
-            TerminalPromptMode.into(),
-            CustomAgentCommandMode.into(),
-            SynthesisPromptMode.into(),
+    fn test_text_input_actions_covered_for_all_modes() {
+        let mode_factories: [fn() -> AppMode; 8] = [
+            || CreatingMode.into(),
+            || PromptingMode.into(),
+            || ChildPromptMode.into(),
+            || BroadcastingMode.into(),
+            || ReconnectPromptMode.into(),
+            || TerminalPromptMode.into(),
+            || CustomAgentCommandMode.into(),
+            || SynthesisPromptMode.into(),
         ];
 
-        for mode in modes {
+        for make_mode in mode_factories {
+            let mode = make_mode();
             let is_reconnect_prompt = matches!(mode, AppMode::ReconnectPrompt(_));
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.apply_mode(mode);
             app.data.input.buffer = "hello world".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
 
             // Delete word, then clear line.
-            handle_text_input_mode(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL)?;
-            handle_text_input_mode(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL)?;
+            handle_text_input_mode(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL).unwrap();
             assert!(app.data.input.buffer.is_empty());
 
             // Insert, backspace, delete, and cursor movement.
-            handle_text_input_mode(&mut app, KeyCode::Char('a'), KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Backspace, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Char('b'), KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Delete, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Left, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Right, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Up, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Down, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::Home, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::End, KeyModifiers::NONE)?;
-            handle_text_input_mode(&mut app, KeyCode::F(12), KeyModifiers::NONE)?;
+            handle_text_input_mode(&mut app, KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Delete, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Left, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Right, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Up, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Down, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::Home, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::End, KeyModifiers::NONE).unwrap();
+            handle_text_input_mode(&mut app, KeyCode::F(12), KeyModifiers::NONE).unwrap();
 
             // Cancel (Esc) returns to Normal and clears any ReconnectPrompt conflict.
             if is_reconnect_prompt {
@@ -243,98 +228,153 @@ mod tests {
                 });
             }
 
-            handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE)?;
+            handle_text_input_mode(&mut app, KeyCode::Esc, KeyModifiers::NONE).unwrap();
             assert_eq!(app.mode, AppMode::normal());
             assert!(app.data.spawn.worktree_conflict.is_none());
         }
-
-        Ok(())
     }
 
     #[test]
-    fn test_text_input_submit_error_paths() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_text_input_submit_error_paths() {
         let _guard = crate::test_support::lock_mux_test_environment();
-        let non_git_dir = TempDir::new()?;
+        let non_git_dir = TempDir::new().unwrap();
 
         // CreatingMode should succeed by creating a plain-directory agent.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.set_cwd_project_root(Some(non_git_dir.path().to_path_buf()));
             app.apply_mode(CreatingMode.into());
             app.data.input.buffer = "agent".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
             assert_eq!(app.mode, AppMode::normal());
-            let agent = app.data.storage.iter().next().ok_or("Missing agent")?;
+            let agent = app.data.storage.iter().next().expect("Missing agent");
             assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
             let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
         }
 
         // PromptingMode should also succeed outside git.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.set_cwd_project_root(Some(non_git_dir.path().to_path_buf()));
             app.apply_mode(PromptingMode.into());
             app.data.input.buffer = "prompt".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
             assert_eq!(app.mode, AppMode::normal());
-            let agent = app.data.storage.iter().next().ok_or("Missing agent")?;
+            let agent = app.data.storage.iter().next().expect("Missing agent");
             assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
             let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
         }
 
         // ChildPromptMode: force an error by pointing to a missing parent agent.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.data.spawn.spawning_under = Some(uuid::Uuid::new_v4());
             app.apply_mode(ChildPromptMode.into());
             app.data.input.buffer = "task".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&app.mode),
+                std::mem::discriminant(&AppMode::ErrorModal(ErrorModalMode {
+                    message: String::new(),
+                }))
+            );
         }
 
         // BroadcastingMode: errors without a selected agent.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.apply_mode(BroadcastingMode.into());
             app.data.input.buffer = "msg".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&app.mode),
+                std::mem::discriminant(&AppMode::ErrorModal(ErrorModalMode {
+                    message: String::new(),
+                }))
+            );
         }
 
         // ReconnectPromptMode: errors without conflict info.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.apply_mode(ReconnectPromptMode.into());
             app.data.input.buffer = "new prompt".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&app.mode),
+                std::mem::discriminant(&AppMode::ErrorModal(ErrorModalMode {
+                    message: String::new(),
+                }))
+            );
         }
 
         // TerminalPromptMode: errors without a selected agent.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.apply_mode(TerminalPromptMode.into());
             app.data.input.buffer = "echo hi".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
-            assert!(matches!(app.mode, AppMode::ErrorModal(_)));
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&app.mode),
+                std::mem::discriminant(&AppMode::ErrorModal(ErrorModalMode {
+                    message: String::new(),
+                }))
+            );
         }
 
         // Custom agent command: empty input should stay in mode and set a status message.
         {
-            let (mut app, _temp) = create_test_app()?;
+            let (mut app, _temp) = create_test_app();
             app.apply_mode(CustomAgentCommandMode.into());
             app.data.input.buffer = "   ".to_string();
             app.data.input.cursor = app.data.input.buffer.len();
-            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+            handle_text_input_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
             assert_eq!(app.mode, CustomAgentCommandMode.into());
         }
+    }
 
-        Ok(())
+    #[test]
+    fn test_handle_text_input_mode_propagates_dispatch_errors() {
+        let mode_factories: [fn() -> AppMode; 8] = [
+            || CreatingMode.into(),
+            || PromptingMode.into(),
+            || ChildPromptMode.into(),
+            || BroadcastingMode.into(),
+            || ReconnectPromptMode.into(),
+            || TerminalPromptMode.into(),
+            || CustomAgentCommandMode.into(),
+            || SynthesisPromptMode.into(),
+        ];
+
+        crate::action::with_forced_text_input_dispatch_error_for_tests(|| {
+            for make_mode in mode_factories {
+                let (mut app, _temp) = create_test_app();
+                let mode = make_mode();
+                app.apply_mode(mode);
+
+                let err = handle_text_input_mode(&mut app, KeyCode::Char('x'), KeyModifiers::NONE)
+                    .expect_err("Expected forced dispatch error");
+                assert!(format!("{err}").contains("Forced text input dispatch error"));
+            }
+        });
+    }
+
+    #[test]
+    fn test_handle_text_input_mode_noops_when_not_in_text_input_mode() {
+        let (mut app, _temp) = create_test_app();
+        app.apply_mode(AppMode::normal());
+        app.data.input.buffer = "hello".to_string();
+        app.data.input.cursor = app.data.input.buffer.len();
+
+        handle_text_input_mode(&mut app, KeyCode::Char('x'), KeyModifiers::NONE).unwrap();
+
+        assert_eq!(app.data.input.buffer, "hello");
+        assert_eq!(app.data.input.cursor, 5);
     }
 }

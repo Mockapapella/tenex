@@ -1,10 +1,11 @@
-use crate::agent::{Agent, Storage};
+use crate::agent::{Agent, AgentRuntime, Storage};
 use crate::app::Settings;
 use crate::app::handlers::Actions;
 use crate::app::state::App;
 use crate::config::Config;
+use crate::mux::SessionManager;
 use crate::state::{AppMode, ConfirmPushForPRMode, ConfirmPushMode, RenameBranchMode};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tempfile::{NamedTempFile, TempDir};
 
@@ -78,6 +79,109 @@ exit 1
     Ok(())
 }
 
+fn git_ok(repo: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let output = crate::git::git_command()
+        .args(args)
+        .current_dir(repo)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "git {args:?} failed with {} (stdout: {}, stderr: {})",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(())
+}
+
+fn init_repo_with_commit() -> Result<TempDir, Box<dyn std::error::Error>> {
+    let repo_dir = TempDir::new()?;
+    git_ok(repo_dir.path(), &["init", "-q", "-b", "master"])?;
+    git_ok(
+        repo_dir.path(),
+        &["config", "user.email", "test@example.com"],
+    )?;
+    git_ok(repo_dir.path(), &["config", "user.name", "Test"])?;
+
+    std::fs::write(repo_dir.path().join("README.md"), "test")?;
+    git_ok(repo_dir.path(), &["add", "."])?;
+    git_ok(
+        repo_dir.path(),
+        &["commit", "-q", "--no-verify", "-m", "init"],
+    )?;
+    Ok(repo_dir)
+}
+
+fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::io::sink)
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+    tracing::dispatcher::with_default(&dispatch, f)
+}
+
+fn init_repo_with_remote_main_and_branch(
+    branch: &str,
+) -> Result<(TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let remote_repo = temp_dir.path().join("remote.git");
+    let local_repo = temp_dir.path().join("local");
+
+    std::fs::create_dir_all(&remote_repo)?;
+    std::fs::create_dir_all(&local_repo)?;
+
+    git_ok(&remote_repo, &["init", "--bare", "-q", "-b", "main"])?;
+    git_ok(&local_repo, &["init", "-q", "-b", "main"])?;
+    git_ok(&local_repo, &["config", "user.email", "test@example.com"])?;
+    git_ok(&local_repo, &["config", "user.name", "Test"])?;
+
+    std::fs::write(local_repo.join("README.md"), "test")?;
+    git_ok(&local_repo, &["add", "."])?;
+    git_ok(&local_repo, &["commit", "-q", "--no-verify", "-m", "init"])?;
+
+    git_ok(
+        &local_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ],
+    )?;
+    git_ok(&local_repo, &["push", "-q", "-u", "origin", "main"])?;
+
+    git_ok(&local_repo, &["checkout", "-q", "-b", branch, "main"])?;
+    git_ok(&local_repo, &["push", "-q", "-u", "origin", branch])?;
+
+    git_ok(&local_repo, &["fetch", "-q", "origin"])?;
+    git_ok(
+        &local_repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    )?;
+
+    Ok((temp_dir, local_repo))
+}
+
+#[cfg(unix)]
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+#[test]
+fn test_set_gh_binary_override_for_tests_forwards_to_open_pr() {
+    super::set_gh_binary_override_for_tests(PathBuf::from("/tmp/tenex-gh-test"));
+}
+
 #[test]
 fn test_handle_push_no_agent() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Actions::new();
@@ -124,7 +228,7 @@ fn test_push_branch_sets_confirm_mode() -> Result<(), Box<dyn std::error::Error>
     let agent_id = agent.id;
     app.data.storage.add(agent);
 
-    let next = Actions::push_branch(&mut app.data)?;
+    let next = with_tracing_dispatch(|| Actions::push_branch(&mut app.data))?;
     app.apply_mode(next);
 
     assert_eq!(app.mode, AppMode::ConfirmPush(ConfirmPushMode));
@@ -153,6 +257,478 @@ fn test_execute_push_agent_not_found() -> Result<(), Box<dyn std::error::Error>>
     let next = Actions::execute_push(&mut app.data)?;
     app.apply_mode(next);
     assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+    Ok(())
+}
+
+#[test]
+fn test_push_branch_errors_without_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    let err = Actions::push_branch(&mut app.data).expect_err("Expected push_branch to error");
+    assert!(err.to_string().contains("No agent selected"));
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_succeeds_when_git_push_succeeds() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    let (_repo_temp, repo_path) = init_repo_with_remote_main_and_branch("feature/push-success")?;
+
+    let agent = Agent::new(
+        "push-success".to_string(),
+        "claude".to_string(),
+        "feature/push-success".to_string(),
+        repo_path,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/push-success".to_string();
+
+    let next = with_tracing_dispatch(|| Actions::execute_push(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
+    assert!(app.data.ui.status_message.is_some());
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_returns_error_modal_when_git_push_fails()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    let repo_dir = init_repo_with_commit()?;
+
+    git_ok(
+        repo_dir.path(),
+        &["checkout", "-q", "-b", "feature/push-failure"],
+    )?;
+    let missing_remote = repo_dir.path().join("missing_remote.git");
+    let missing_remote = missing_remote.to_string_lossy().to_string();
+    git_ok(
+        repo_dir.path(),
+        &["remote", "add", "origin", &missing_remote],
+    )?;
+
+    let agent = Agent::new(
+        "push-failure".to_string(),
+        "claude".to_string(),
+        "feature/push-failure".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/push-failure".to_string();
+
+    let next = with_tracing_dispatch(|| Actions::execute_push(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_spawn_conflict_terminal_errors_when_agent_id_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    app.data.git_op.agent_id = None;
+
+    let err = Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+        .expect_err("missing agent id should error");
+    assert!(err.to_string().contains("No agent ID"));
+    Ok(())
+}
+
+#[test]
+fn test_spawn_conflict_terminal_errors_when_agent_missing() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut app, _temp) = create_test_app()?;
+    app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+    let err = Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+        .expect_err("missing agent should error");
+    assert!(err.to_string().contains("Agent not found"));
+    Ok(())
+}
+
+#[test]
+fn test_spawn_conflict_terminal_sends_startup_command_when_host_runtime()
+-> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let socket = crate::test_support::unique_mux_socket_path("git-ops-conflict");
+    crate::mux::set_socket_override(&socket)?;
+
+    let (mut app, _temp) = create_test_app()?;
+
+    let repo_dir = init_repo_with_commit()?;
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Host;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let manager = SessionManager::new();
+    manager.create(&session, repo_dir.path(), None)?;
+
+    app.data.git_op.agent_id = Some(root_id);
+    app.data.ui.preview_dimensions = Some((80, 20));
+
+    let next = tracing::dispatcher::with_default(&dispatch, || {
+        Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+    })?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert_eq!(
+        app.data.ui.status_message.as_deref().unwrap_or_default(),
+        "Opened terminal for conflict resolution: Merge Conflict"
+    );
+    assert!(app.data.git_op.agent_id.is_none());
+    assert_eq!(app.data.storage.children(root_id).len(), 1);
+
+    let _ = manager.kill(&session);
+    Ok(())
+}
+
+#[test]
+fn test_spawn_conflict_terminal_does_not_resize_when_preview_dimensions_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let socket = crate::test_support::unique_mux_socket_path("git-ops-no-resize");
+    crate::mux::set_socket_override(&socket)?;
+
+    let (mut app, _temp) = create_test_app()?;
+
+    let repo_dir = init_repo_with_commit()?;
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Host;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let manager = SessionManager::new();
+    manager.create(&session, repo_dir.path(), None)?;
+
+    app.data.git_op.agent_id = Some(root_id);
+
+    let next = Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.git_op.agent_id.is_none());
+    assert_eq!(app.data.storage.children(root_id).len(), 1);
+
+    let _ = manager.kill(&session);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_spawn_conflict_terminal_propagates_runtime_ready_errors()
+-> Result<(), Box<dyn std::error::Error>> {
+    let _guard = crate::test_support::lock_mux_test_environment();
+
+    let (mut app, _temp) = create_test_app()?;
+
+    let repo_dir = init_repo_with_commit()?;
+    let root = Agent::new(
+        "root".to_string(),
+        "codex".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Docker;
+    let root_id = root.id;
+    app.data.storage.add(root);
+
+    app.data.git_op.agent_id = Some(root_id);
+
+    let missing_docker = repo_dir.path().join("docker-missing");
+    let err = crate::runtime::with_docker_program_override_for_tests(missing_docker, || {
+        Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+    })
+    .expect_err("expected docker runtime to fail without docker program");
+
+    assert!(
+        err.to_string()
+            .contains("Docker is not installed or not on PATH")
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_spawn_conflict_terminal_propagates_send_keys_and_submit_errors()
+-> Result<(), Box<dyn std::error::Error>> {
+    use interprocess::local_socket::traits::ListenerExt as _;
+    use interprocess::local_socket::{GenericFilePath, ListenerOptions, prelude::*};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let socket_dir = TempDir::new()?;
+    let socket_path = socket_dir.path().join("mux.sock");
+    crate::mux::set_socket_override(&socket_path.to_string_lossy())?;
+    let name = socket_path
+        .as_path()
+        .to_fs_name::<GenericFilePath>()?
+        .into_owned();
+
+    let (tx, rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let listener = ListenerOptions::new()
+            .name(name)
+            .create_sync()
+            .expect("Expected mock mux listener to start");
+
+        let mut handled = 0usize;
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            while handled < 2 {
+                let request: crate::mux::MuxRequest =
+                    crate::mux::read_json(&mut stream).expect("Expected mux request");
+                tx.send(request).expect("send request");
+
+                let response = match handled {
+                    0 => crate::mux::MuxResponse::WindowCreated { index: 0 },
+                    _ => crate::mux::MuxResponse::Err {
+                        message: "boom".to_string(),
+                    },
+                };
+                crate::mux::write_json(&mut stream, &response).expect("write response");
+                handled = handled.saturating_add(1);
+            }
+        }
+    });
+
+    let (mut app, _temp) = create_test_app()?;
+    let repo_dir = init_repo_with_commit()?;
+
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Host;
+    let root_id = root.id;
+    app.data.storage.add(root);
+
+    app.data.git_op.agent_id = Some(root_id);
+
+    let err = Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+        .expect_err("expected send_keys to fail");
+    assert!(err.to_string().contains("boom"));
+
+    let first = rx.recv_timeout(Duration::from_secs(1))?;
+    assert!(matches!(first, crate::mux::MuxRequest::CreateWindow { .. }));
+    let second = rx.recv_timeout(Duration::from_secs(1))?;
+    assert!(matches!(second, crate::mux::MuxRequest::SendInput { .. }));
+
+    let _ = server.join();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_spawn_conflict_terminal_propagates_storage_save_errors()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let socket = crate::test_support::unique_mux_socket_path("git-ops-save-fail");
+    crate::mux::set_socket_override(&socket)?;
+
+    let state_dir = TempDir::new()?;
+    let state_path = state_dir.path().join("state.json");
+    let storage = Storage::with_path(state_path);
+    let mut app = App::new(Config::default(), storage, Settings::default(), false);
+
+    let mut perms = std::fs::metadata(state_dir.path())?.permissions();
+    perms.set_mode(0o500);
+    std::fs::set_permissions(state_dir.path(), perms)?;
+
+    let repo_dir = init_repo_with_commit()?;
+    let root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Host;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let manager = SessionManager::new();
+    manager.create(&session, repo_dir.path(), None)?;
+
+    app.data.git_op.agent_id = Some(root_id);
+
+    let err = Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+        .expect_err("expected storage save to fail");
+    assert!(err.to_string().contains("Failed to open state lock"));
+
+    let mut perms = std::fs::metadata(state_dir.path())?.permissions();
+    perms.set_mode(0o700);
+    std::fs::set_permissions(state_dir.path(), perms)?;
+
+    let _ = manager.kill(&session);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_spawn_conflict_terminal_skips_startup_command_when_docker_runtime() {
+    let dockerfile = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docker/worker.Dockerfile"),
+    )
+    .expect("worker Dockerfile should be readable");
+    let template_hash = format!("{:016x}", fnv1a64(dockerfile.as_bytes()));
+
+    let docker_dir = TempDir::new().expect("TempDir should be created");
+    let docker_path = docker_dir.path().join("docker");
+    std::fs::write(
+        &docker_path,
+        format!(
+            "#!/usr/bin/env sh\n\
+set -e\n\
+\n\
+if [ \"$1\" = \"version\" ]; then\n\
+  exit 0\n\
+fi\n\
+\n\
+if [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n\
+  printf '%s\\n' '{template_hash}'\n\
+  exit 0\n\
+fi\n\
+\n\
+if [ \"$1\" = \"inspect\" ]; then\n\
+  echo 'No such object' >&2\n\
+  exit 1\n\
+fi\n\
+\n\
+if [ \"$1\" = \"run\" ]; then\n\
+  printf '%s\\n' 'container-id'\n\
+  exit 0\n\
+fi\n\
+\n\
+if [ \"$1\" = \"exec\" ]; then\n\
+  exit 0\n\
+fi\n\
+\n\
+exit 0\n"
+        ),
+    )
+    .expect("fake docker script should be written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&docker_path)
+            .expect("fake docker metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&docker_path, perms)
+            .expect("fake docker script permissions should be set");
+    }
+
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let socket = crate::test_support::unique_mux_socket_path("git-ops-docker");
+    crate::mux::set_socket_override(&socket).expect("mux socket override should be set");
+
+    let (mut app, _temp) = create_test_app().expect("test app should be created");
+
+    let repo_dir = init_repo_with_commit().expect("test repo should be created");
+    let root = Agent::new(
+        "root".to_string(),
+        "codex".to_string(),
+        "main".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    let mut root = root;
+    root.runtime = AgentRuntime::Docker;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let manager = SessionManager::new();
+    manager
+        .create(&session, repo_dir.path(), None)
+        .expect("mux session should be created");
+
+    app.data.git_op.agent_id = Some(root_id);
+    app.data.ui.preview_dimensions = Some((80, 20));
+
+    let next = crate::runtime::with_docker_program_override_for_tests(docker_path.clone(), || {
+        Actions::spawn_conflict_terminal(&mut app.data, "Merge Conflict", "git status")
+    });
+    app.apply_mode(next.expect("conflict terminal should spawn"));
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.git_op.agent_id.is_none());
+
+    let children = app.data.storage.children(root_id);
+    assert_eq!(children.len(), 1);
+    let terminal = children.first().expect("missing conflict terminal");
+    let window_target = SessionManager::window_target(
+        &terminal.mux_session,
+        terminal.window_index.expect("missing window index"),
+    );
+    let command = crate::mux::OutputCapture::new()
+        .pane_current_command(&window_target)
+        .expect("pane command should be captured");
+    assert_eq!(command, docker_path.to_string_lossy());
+
+    let _ = manager.kill(&session);
+}
+
+#[test]
+fn test_execute_push_errors_when_worktree_path_is_missing() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut app, _temp) = create_test_app()?;
+    let temp_dir = TempDir::new()?;
+
+    let missing_worktree = temp_dir.path().join("missing-worktree");
+    assert!(!missing_worktree.exists());
+
+    let agent = Agent::new(
+        "missing-worktree-agent".to_string(),
+        "claude".to_string(),
+        "feature/missing-worktree".to_string(),
+        missing_worktree,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/missing-worktree".to_string();
+
+    let err = Actions::execute_push(&mut app.data).unwrap_err();
+    assert!(err.to_string().contains("Failed to push to remote"));
     Ok(())
 }
 
@@ -240,7 +816,7 @@ fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::erro
     let agent_id = agent.id;
     app.data.storage.add(agent);
 
-    let next = Actions::open_pr_flow(&mut app.data)?;
+    let next = with_tracing_dispatch(|| Actions::open_pr_flow(&mut app.data))?;
     app.apply_mode(next);
 
     assert_eq!(app.mode, AppMode::ConfirmPushForPR(ConfirmPushForPRMode));
@@ -248,6 +824,72 @@ fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::erro
     assert_eq!(app.data.git_op.branch_name, "feature/pr-agent");
     assert_eq!(app.data.git_op.base_branch, "main");
     assert!(app.data.git_op.has_unpushed);
+    Ok(())
+}
+
+#[test]
+fn test_open_pr_flow_errors_without_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    let err = Actions::open_pr_flow(&mut app.data).expect_err("Expected open_pr_flow to error");
+    assert!(err.to_string().contains("No agent selected"));
+    Ok(())
+}
+
+#[test]
+fn test_open_pr_flow_opens_pr_when_no_unpushed_and_gh_succeeds()
+-> Result<(), Box<dyn std::error::Error>> {
+    ensure_stub_gh_installed()?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let (_repo_temp, repo_path) = init_repo_with_remote_main_and_branch("feature/open-pr")?;
+    let agent = Agent::new(
+        "open-pr-agent".to_string(),
+        "claude".to_string(),
+        "feature/open-pr".to_string(),
+        repo_path,
+    );
+    app.data.storage.add(agent);
+
+    let next = with_tracing_dispatch(|| Actions::open_pr_flow(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
+    assert!(app.data.ui.status_message.is_some());
+    Ok(())
+}
+
+#[test]
+fn test_open_pr_flow_shows_error_modal_when_gh_is_missing() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut app, _temp) = create_test_app()?;
+    let (_repo_temp, repo_path) =
+        init_repo_with_remote_main_and_branch("feature/open-pr-missing-gh")?;
+    let agent = Agent::new(
+        "open-pr-missing-gh".to_string(),
+        "claude".to_string(),
+        "feature/open-pr-missing-gh".to_string(),
+        repo_path,
+    );
+    app.data.storage.add(agent);
+
+    let missing_gh = std::env::temp_dir().join(format!(
+        "tenex-missing-gh-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let next = with_tracing_dispatch(|| {
+        super::open_pr::with_gh_binary_override(missing_gh.into_os_string(), || {
+            Actions::open_pr_flow(&mut app.data)
+        })
+    })?;
+    app.apply_mode(next);
+
+    assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
     Ok(())
 }
 
@@ -270,7 +912,7 @@ fn test_open_pr_in_browser_gh_success_clears_state() -> Result<(), Box<dyn std::
     app.data.git_op.branch_name = "feature/gh-less".to_string();
     app.data.git_op.base_branch = "main".to_string();
 
-    Actions::open_pr_in_browser(&mut app.data)?;
+    with_tracing_dispatch(|| Actions::open_pr_in_browser(&mut app.data))?;
     assert!(app.data.git_op.branch_name.is_empty());
     assert!(app.data.git_op.agent_id.is_none());
     assert!(app.data.ui.status_message.is_some());
@@ -296,10 +938,8 @@ fn test_open_pr_in_browser_gh_failure_clears_state() -> Result<(), Box<dyn std::
     app.data.git_op.branch_name = "feature/gh-fail".to_string();
     app.data.git_op.base_branch = "develop".to_string();
 
-    let err = match Actions::open_pr_in_browser(&mut app.data) {
-        Ok(()) => return Err("Expected open_pr_in_browser to fail".into()),
-        Err(err) => err,
-    };
+    let err = with_tracing_dispatch(|| Actions::open_pr_in_browser(&mut app.data))
+        .expect_err("Expected open_pr_in_browser to fail");
     assert!(!err.to_string().is_empty());
     assert!(app.data.git_op.branch_name.is_empty());
     assert!(app.data.git_op.agent_id.is_none());
@@ -504,12 +1144,74 @@ fn test_execute_push_and_open_pr_handles_failed_push() -> Result<(), Box<dyn std
     app.data.git_op.agent_id = Some(agent_id);
     app.data.git_op.branch_name = "feature/failing-push".to_string();
 
-    let next = Actions::execute_push_and_open_pr(&mut app.data)?;
+    let next = with_tracing_dispatch(|| Actions::execute_push_and_open_pr(&mut app.data))?;
     app.apply_mode(next);
 
     assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
     assert!(app.data.git_op.branch_name.is_empty());
     assert!(app.data.git_op.agent_id.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_and_open_pr_succeeds_when_push_and_gh_succeed()
+-> Result<(), Box<dyn std::error::Error>> {
+    ensure_stub_gh_installed()?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let (_repo_temp, repo_path) = init_repo_with_remote_main_and_branch("feature/push-and-open")?;
+
+    let agent = Agent::new(
+        "push-and-open".to_string(),
+        "claude".to_string(),
+        "feature/push-and-open".to_string(),
+        repo_path,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/push-and-open".to_string();
+    app.data.git_op.base_branch = "main".to_string();
+
+    let next = with_tracing_dispatch(|| Actions::execute_push_and_open_pr(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
+    assert!(app.data.ui.status_message.is_some());
+    Ok(())
+}
+
+#[test]
+fn test_execute_push_and_open_pr_shows_error_modal_when_gh_fails()
+-> Result<(), Box<dyn std::error::Error>> {
+    ensure_stub_gh_installed()?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let (_repo_temp, repo_path) =
+        init_repo_with_remote_main_and_branch("feature/push-and-open-fail-gh")?;
+
+    let agent = Agent::new(
+        "push-and-open-fail-gh".to_string(),
+        "claude".to_string(),
+        "feature/push-and-open-fail-gh".to_string(),
+        repo_path,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/push-and-open-fail-gh".to_string();
+    app.data.git_op.base_branch = "develop".to_string();
+
+    let next = with_tracing_dispatch(|| Actions::execute_push_and_open_pr(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.git_op.branch_name.is_empty());
     Ok(())
 }
 
@@ -523,6 +1225,174 @@ fn test_detect_base_branch_no_git() -> Result<(), Box<dyn std::error::Error>> {
     // Should return default "main" when git commands fail
     let result = Actions::detect_base_branch(temp_dir.path(), "feature/test");
     assert_eq!(result, "main");
+    Ok(())
+}
+
+#[test]
+fn test_detect_base_branch_falls_back_to_origin_head_when_reflog_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_repo_temp, repo_path) = init_repo_with_remote_main_and_branch("feature/detect-base")?;
+    let base = Actions::detect_base_branch(&repo_path, "does-not-exist");
+    assert_eq!(base, "main");
+    Ok(())
+}
+
+#[test]
+fn test_detect_base_branch_handles_empty_origin_head_output()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+
+    #[cfg(windows)]
+    let script_path = {
+        let script = temp.path().join("git.cmd");
+        std::fs::write(
+            &script,
+            r#"@echo off
+set cmd=%1
+if "%cmd%"=="reflog" exit /b 1
+if "%cmd%"=="symbolic-ref" exit /b 0
+if "%cmd%"=="show-ref" (
+  if "%4"=="refs/heads/main" exit /b 0
+  exit /b 1
+)
+exit /b 1
+"#,
+        )?;
+        script
+    };
+
+    #[cfg(not(windows))]
+    let script_path = {
+        let script = temp.path().join("git");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+
+cmd=""
+if [[ $# -gt 0 ]]; then
+  cmd="$1"
+  shift
+fi
+
+if [[ "$cmd" == "reflog" ]]; then
+  exit 1
+fi
+
+if [[ "$cmd" == "symbolic-ref" ]]; then
+  exit 0
+fi
+
+if [[ "$cmd" == "show-ref" ]]; then
+  ref="${@: -1}"
+  if [[ "$ref" == "refs/heads/main" ]]; then
+    exit 0
+  fi
+  exit 1
+fi
+
+exit 1
+"#,
+        )?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = std::fs::metadata(&script)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms)?;
+        }
+
+        script
+    };
+
+    let base = crate::git::with_git_program_override_for_tests(script_path, || {
+        Actions::detect_base_branch(temp.path(), "feature/empty-origin-head")
+    });
+    assert_eq!(base, "main");
+    Ok(())
+}
+
+#[test]
+fn test_detect_base_branch_uses_origin_head_when_origin_head_is_non_default()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_repo_temp, repo_path) = init_repo_with_remote_main_and_branch("feature/detect-base")?;
+
+    git_ok(&repo_path, &["checkout", "-q", "-b", "trunk", "main"])?;
+    git_ok(&repo_path, &["push", "-q", "-u", "origin", "trunk"])?;
+    git_ok(&repo_path, &["fetch", "-q", "origin"])?;
+    git_ok(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ],
+    )?;
+
+    let base = Actions::detect_base_branch(&repo_path, "does-not-exist");
+    assert_eq!(base, "trunk");
+    Ok(())
+}
+
+#[test]
+fn test_detect_base_branch_falls_back_to_remote_default_when_local_defaults_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let remote_repo = temp_dir.path().join("remote.git");
+    let seed_repo = temp_dir.path().join("seed");
+    let local_repo = temp_dir.path().join("local");
+
+    std::fs::create_dir_all(&remote_repo)?;
+    std::fs::create_dir_all(&seed_repo)?;
+    std::fs::create_dir_all(&local_repo)?;
+
+    git_ok(&remote_repo, &["init", "--bare", "-q", "-b", "main"])?;
+
+    git_ok(&seed_repo, &["init", "-q", "-b", "main"])?;
+    git_ok(&seed_repo, &["config", "user.email", "test@example.com"])?;
+    git_ok(&seed_repo, &["config", "user.name", "Test"])?;
+    std::fs::write(seed_repo.join("README.md"), "test")?;
+    git_ok(&seed_repo, &["add", "."])?;
+    git_ok(&seed_repo, &["commit", "-q", "--no-verify", "-m", "init"])?;
+    git_ok(
+        &seed_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ],
+    )?;
+    git_ok(&seed_repo, &["push", "-q", "-u", "origin", "main"])?;
+
+    git_ok(&local_repo, &["init", "-q", "-b", "feature/only"])?;
+    git_ok(&local_repo, &["config", "user.email", "test@example.com"])?;
+    git_ok(&local_repo, &["config", "user.name", "Test"])?;
+    std::fs::write(local_repo.join("README.md"), "local")?;
+    git_ok(&local_repo, &["add", "."])?;
+    git_ok(
+        &local_repo,
+        &["commit", "-q", "--no-verify", "-m", "local init"],
+    )?;
+    git_ok(
+        &local_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ],
+    )?;
+    git_ok(&local_repo, &["fetch", "-q", "origin"])?;
+
+    let _ = crate::git::git_command()
+        .args(["update-ref", "-d", "refs/remotes/origin/HEAD"])
+        .current_dir(&local_repo)
+        .output();
+
+    let base = Actions::detect_base_branch(&local_repo, "does-not-exist");
+    assert_eq!(base, "main");
     Ok(())
 }
 
@@ -881,6 +1751,110 @@ fn test_rebase_branch_no_agent() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_rebase_branch_populates_branch_selector() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let repo_dir = init_repo_with_commit()?;
+    let (mut app, _temp) = create_test_app()?;
+
+    let mut agent = Agent::new(
+        "rebase-agent".to_string(),
+        "claude".to_string(),
+        "feature/rebase-agent".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    agent.repo_root = Some(repo_dir.path().to_path_buf());
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    let next =
+        tracing::dispatcher::with_default(&dispatch, || Actions::rebase_branch(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert!(matches!(
+        app.mode,
+        AppMode::RebaseBranchSelector(crate::state::RebaseBranchSelectorMode)
+    ));
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert!(!app.data.review.branches.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_uses_workspace_root_when_repo_root_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let repo_dir = init_repo_with_commit()?;
+    let nested = repo_dir.path().join("nested");
+    std::fs::create_dir_all(&nested)?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let agent = Agent::new(
+        "rebase-nested-agent".to_string(),
+        "claude".to_string(),
+        "feature/rebase-nested-agent".to_string(),
+        nested,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    let next = Actions::rebase_branch(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert!(matches!(
+        app.mode,
+        AppMode::RebaseBranchSelector(crate::state::RebaseBranchSelectorMode)
+    ));
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert!(!app.data.review.branches.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_errors_when_not_in_git_repo() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let (mut app, _temp) = create_test_app()?;
+    let agent = Agent::new(
+        "rebase-no-repo".to_string(),
+        "claude".to_string(),
+        "feature/rebase-no-repo".to_string(),
+        temp_dir.path().to_path_buf(),
+    );
+    app.data.storage.add(agent);
+
+    let err = Actions::rebase_branch(&mut app.data).unwrap_err();
+    assert!(err.to_string().contains("Failed to open git repository at"));
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_propagates_branch_selector_errors() -> Result<(), Box<dyn std::error::Error>>
+{
+    let repo_dir = init_repo_with_commit()?;
+    let (mut app, _temp) = create_test_app()?;
+
+    let mut agent = Agent::new(
+        "rebase-agent".to_string(),
+        "claude".to_string(),
+        "feature/rebase-agent".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    agent.repo_root = Some(repo_dir.path().to_path_buf());
+    app.data.storage.add(agent);
+
+    let err = crate::git::with_list_for_selector_override_for_tests(
+        |_repo| Err(anyhow::anyhow!("boom")),
+        || Actions::rebase_branch(&mut app.data),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("boom"));
+    Ok(())
+}
+
+#[test]
 fn test_execute_merge_no_agent_id() -> Result<(), Box<dyn std::error::Error>> {
     let (mut app, _temp) = create_test_app()?;
     app.data.git_op.agent_id = None;
@@ -925,6 +1899,121 @@ fn test_execute_rebase_agent_not_found() -> Result<(), Box<dyn std::error::Error
     let next = Actions::execute_rebase(&mut app.data)?;
     app.apply_mode(next);
     assert!(matches!(&app.mode, AppMode::ErrorModal(_)));
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_succeeds_and_emits_tracing_when_enabled()
+-> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let repo_dir = init_repo_with_commit()?;
+    git_ok(repo_dir.path(), &["checkout", "-q", "-b", "feature"])?;
+    std::fs::write(repo_dir.path().join("feature.txt"), "feature")?;
+    git_ok(repo_dir.path(), &["add", "feature.txt"])?;
+    git_ok(
+        repo_dir.path(),
+        &["commit", "-q", "--no-verify", "-m", "feature"],
+    )?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let mut agent = Agent::new(
+        "rebase-exec".to_string(),
+        "claude".to_string(),
+        "feature".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    agent.repo_root = Some(repo_dir.path().to_path_buf());
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature".to_string();
+    app.data.git_op.target_branch = "master".to_string();
+
+    let next =
+        tracing::dispatcher::with_default(&dispatch, || Actions::execute_rebase(&mut app.data))?;
+    app.apply_mode(next);
+    assert!(matches!(app.mode, AppMode::SuccessModal(_)));
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_errors_when_worktree_path_is_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut app, _temp) = create_test_app()?;
+    let temp_dir = TempDir::new()?;
+
+    let missing_worktree = temp_dir.path().join("missing-rebase-worktree");
+    assert!(!missing_worktree.exists());
+
+    let agent = Agent::new(
+        "missing-rebase-worktree-agent".to_string(),
+        "claude".to_string(),
+        "feature/missing-rebase-worktree".to_string(),
+        missing_worktree,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature/missing-rebase-worktree".to_string();
+    app.data.git_op.target_branch = "master".to_string();
+
+    let err = Actions::execute_rebase(&mut app.data).unwrap_err();
+    assert!(err.to_string().contains("Failed to execute rebase"));
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_conflict_emits_tracing_when_enabled()
+-> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let repo_dir = init_repo_with_commit()?;
+    git_ok(repo_dir.path(), &["checkout", "-q", "-b", "feature"])?;
+    std::fs::write(repo_dir.path().join("conflict.txt"), "feature")?;
+    git_ok(repo_dir.path(), &["add", "conflict.txt"])?;
+    git_ok(
+        repo_dir.path(),
+        &["commit", "-q", "--no-verify", "-m", "feature"],
+    )?;
+
+    git_ok(repo_dir.path(), &["checkout", "-q", "master"])?;
+    std::fs::write(repo_dir.path().join("conflict.txt"), "master")?;
+    git_ok(repo_dir.path(), &["add", "conflict.txt"])?;
+    git_ok(
+        repo_dir.path(),
+        &["commit", "-q", "--no-verify", "-m", "master"],
+    )?;
+
+    git_ok(repo_dir.path(), &["checkout", "-q", "feature"])?;
+
+    let (mut app, _temp) = create_test_app()?;
+    let mut agent = Agent::new(
+        "rebase-conflict".to_string(),
+        "claude".to_string(),
+        "feature".to_string(),
+        repo_dir.path().to_path_buf(),
+    );
+    agent.repo_root = Some(repo_dir.path().to_path_buf());
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature".to_string();
+    app.data.git_op.target_branch = "master".to_string();
+
+    let result =
+        tracing::dispatcher::with_default(&dispatch, || Actions::execute_rebase(&mut app.data));
+
+    assert!(result.is_err());
     Ok(())
 }
 

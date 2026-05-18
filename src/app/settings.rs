@@ -6,8 +6,52 @@
 use crate::config::Config;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::OnceLock;
 use tracing::{debug, warn};
+
+#[cfg(test)]
+use parking_lot::Mutex;
+
+#[cfg(test)]
+static TEST_SETTINGS_PATH_OVERRIDES: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+#[cfg(test)]
+static TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+fn new_settings_serialize_error_overrides() -> Mutex<HashMap<String, bool>> {
+    Mutex::new(HashMap::new())
+}
+
+#[cfg(test)]
+fn test_settings_serialize_error_overrides() -> &'static Mutex<HashMap<String, bool>> {
+    TEST_SETTINGS_SERIALIZE_ERROR_OVERRIDES.get_or_init(new_settings_serialize_error_overrides)
+}
+
+#[cfg(test)]
+struct ForcedSerializeErrorGuard {
+    key: String,
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl Drop for ForcedSerializeErrorGuard {
+    fn drop(&mut self) {
+        let mut overrides = test_settings_serialize_error_overrides().lock();
+        match self.previous {
+            Some(value) => {
+                overrides.insert(self.key.clone(), value);
+            }
+            None => {
+                overrides.remove(&self.key);
+            }
+        }
+    }
+}
 
 const fn default_docker_for_new_roots() -> bool {
     false
@@ -140,6 +184,62 @@ impl Default for Settings {
 }
 
 impl Settings {
+    #[cfg(test)]
+    fn test_scope_key() -> String {
+        std::thread::current().name().map_or_else(
+            || format!("{:?}", std::thread::current().id()),
+            std::borrow::ToOwned::to_owned,
+        )
+    }
+
+    #[cfg(test)]
+    fn test_path_override() -> Option<PathBuf> {
+        TEST_SETTINGS_PATH_OVERRIDES
+            .get()
+            .and_then(|overrides| overrides.lock().get(&Self::test_scope_key()).cloned())
+    }
+
+    #[cfg(test)]
+    fn test_force_serialize_error() -> bool {
+        test_settings_serialize_error_overrides()
+            .lock()
+            .get(&Self::test_scope_key())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    fn force_serialize_error_for_tests() -> ForcedSerializeErrorGuard {
+        let key = Self::test_scope_key();
+        let previous = test_settings_serialize_error_overrides()
+            .lock()
+            .insert(key.clone(), true);
+        ForcedSerializeErrorGuard { key, previous }
+    }
+
+    #[cfg(test)]
+    /// Override the settings path for the current test thread.
+    ///
+    /// This lets tests exercise code paths that persist settings without ever touching a user's
+    /// real `~/.tenex/settings.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a test path override is already set for the current thread.
+    pub fn set_test_path_override(path: PathBuf) -> std::io::Result<()> {
+        let key = Self::test_scope_key();
+        let overrides = TEST_SETTINGS_PATH_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut overrides = overrides.lock();
+        if overrides.contains_key(&key) {
+            return Err(std::io::Error::other(
+                "Settings test path override is already set",
+            ));
+        }
+        overrides.insert(key, path);
+        drop(overrides);
+        Ok(())
+    }
+
     fn deserialize_with_upgrade_defaults(content: &str) -> Result<Self, serde_json::Error> {
         let mut value: serde_json::Value = serde_json::from_str(content)?;
 
@@ -179,6 +279,10 @@ impl Settings {
     /// Get the settings file path
     #[must_use]
     pub fn path() -> PathBuf {
+        #[cfg(test)]
+        if let Some(path) = Self::test_path_override() {
+            return path;
+        }
         Config::settings_path()
     }
 
@@ -219,7 +323,8 @@ impl Settings {
         // (typically `~/.tenex/settings.json`). Some tests exercise key handlers that call
         // `Settings::save()` as a side effect; without this guard, running the test suite can
         // clobber a developer's local Tenex settings (including the selected default agent).
-        if cfg!(test) {
+        #[cfg(test)]
+        if Self::test_path_override().is_none() {
             return Err(std::io::Error::other(
                 "Refusing to write Tenex settings during tests",
             ));
@@ -228,11 +333,12 @@ impl Settings {
         let path = Self::path();
 
         // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("Settings path has no parent directory"))?;
+        std::fs::create_dir_all(parent)?;
 
-        let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        let content = serialize_settings_for_save(self).map_err(std::io::Error::other)?;
 
         std::fs::write(&path, content)?;
         debug!("Saved settings to {:?}", path);
@@ -272,15 +378,115 @@ impl Settings {
     }
 }
 
+fn serialize_settings_for_save(settings: &Settings) -> Result<String, serde_json::Error> {
+    #[cfg(test)]
+    if Settings::test_force_serialize_error() {
+        use serde::ser::Error as _;
+        return Err(serde_json::Error::custom(
+            "forced settings serialization error for test",
+        ));
+    }
+
+    serde_json::to_string_pretty(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, f)
+    }
+
+    #[test]
+    fn test_agent_role_label() {
+        assert_eq!(AgentRole::Default.label(), "default");
+        assert_eq!(AgentRole::Planner.label(), "planner");
+        assert_eq!(AgentRole::Review.label(), "review");
+    }
+
     #[test]
     fn test_settings_save_is_disabled_in_tests() {
         let err_kind = Settings::default().save().err().map(|err| err.kind());
         assert_eq!(err_kind, Some(std::io::ErrorKind::Other));
+    }
+
+    #[test]
+    fn test_settings_save_succeeds_with_test_path_override() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path.clone()).expect("set test path override");
+
+        let settings = Settings {
+            merge_key_remapped: true,
+            keyboard_remap_asked: true,
+            ..Settings::default()
+        };
+        settings.save().expect("save settings");
+
+        let loaded: Settings =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read settings file"))
+                .expect("parse settings file");
+        assert!(loaded.merge_key_remapped);
+        assert!(loaded.keyboard_remap_asked);
+    }
+
+    #[test]
+    fn test_settings_save_propagates_serialization_errors() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path).expect("set test path override");
+
+        let settings = Settings {
+            merge_key_remapped: true,
+            keyboard_remap_asked: true,
+            ..Settings::default()
+        };
+
+        let _guard = Settings::force_serialize_error_for_tests();
+        let err = settings
+            .save()
+            .expect_err("expected forced serialization error");
+        assert!(
+            err.to_string()
+                .contains("forced settings serialization error for test")
+        );
+    }
+
+    #[test]
+    fn test_settings_save_reports_error_when_settings_path_has_no_parent() {
+        Settings::set_test_path_override(PathBuf::from("/")).expect("set test path override");
+
+        let err = Settings::default()
+            .save()
+            .expect_err("save should fail for path without parent");
+        assert!(
+            err.to_string()
+                .contains("Settings path has no parent directory")
+        );
+    }
+
+    #[test]
+    fn test_with_forced_serialize_error_restores_previous_override() {
+        {
+            let _outer = Settings::force_serialize_error_for_tests();
+            assert!(Settings::test_force_serialize_error());
+
+            {
+                let _inner = Settings::force_serialize_error_for_tests();
+                assert!(Settings::test_force_serialize_error());
+            }
+
+            assert!(Settings::test_force_serialize_error());
+        }
+
+        assert!(!Settings::test_force_serialize_error());
     }
 
     #[test]
@@ -299,8 +505,8 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_save_load() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_settings_save_load() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
         let path = temp_dir.path().join("settings.json");
 
         let settings = Settings {
@@ -313,15 +519,15 @@ mod tests {
         };
 
         // Save manually to temp location
-        let content = serde_json::to_string_pretty(&settings)?;
-        std::fs::write(&path, content)?;
+        let content = serde_json::to_string_pretty(&settings).expect("serialize settings");
+        std::fs::write(&path, content).expect("write settings");
 
         // Load from temp location
-        let loaded: Settings = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+        let loaded: Settings =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read settings"))
+                .expect("parse settings");
         assert!(loaded.merge_key_remapped);
         assert!(loaded.keyboard_remap_asked);
-
-        Ok(())
     }
 
     #[test]
@@ -335,11 +541,13 @@ mod tests {
 
     #[test]
     fn test_settings_load_nonexistent_returns_default() {
-        // Load() handles nonexistent file gracefully
-        let settings = Settings::load();
-        // Should return defaults without panic - either value is valid
-        // (we just want to ensure load() doesn't panic)
-        let _ = settings.merge_key_remapped;
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let missing_path = temp_dir.path().join("missing-settings.json");
+        Settings::set_test_path_override(missing_path).expect("set settings path override");
+
+        let settings = with_tracing_dispatch(Settings::load);
+        assert!(!settings.merge_key_remapped);
+        assert!(!settings.keyboard_remap_asked);
     }
 
     #[test]
@@ -367,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_settings_serde_roundtrip() {
         let original = Settings {
             merge_key_remapped: true,
             keyboard_remap_asked: true,
@@ -376,21 +584,20 @@ mod tests {
             docker_for_new_roots: true,
             ..Settings::default()
         };
-        let json = serde_json::to_string(&original)?;
-        let parsed: Settings = serde_json::from_str(&json)?;
+        let json = serde_json::to_string(&original).expect("serialize settings");
+        let parsed: Settings = serde_json::from_str(&json).expect("parse settings");
         assert_eq!(original.merge_key_remapped, parsed.merge_key_remapped);
         assert_eq!(original.keyboard_remap_asked, parsed.keyboard_remap_asked);
         assert_eq!(original.agent_program, parsed.agent_program);
         assert_eq!(original.custom_agent_command, parsed.custom_agent_command);
         assert_eq!(original.docker_for_new_roots, parsed.docker_for_new_roots);
-        Ok(())
     }
 
     #[test]
-    fn test_settings_serde_defaults() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_settings_serde_defaults() {
         // Test that missing fields get default values
         let json = "{}";
-        let settings: Settings = serde_json::from_str(json)?;
+        let settings: Settings = serde_json::from_str(json).expect("parse settings");
         assert!(!settings.merge_key_remapped);
         assert!(!settings.keyboard_remap_asked);
         assert_eq!(settings.agent_program, AgentProgram::Claude);
@@ -401,43 +608,160 @@ mod tests {
         assert!(settings.review_custom_agent_command.is_empty());
         assert!(!settings.docker_for_new_roots);
         assert!(settings.last_seen_version.is_none());
-        Ok(())
     }
 
     #[test]
-    fn test_upgrade_defaults_copy_default_program_to_planner_review()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let settings = Settings::deserialize_with_upgrade_defaults(r#"{"agent_program":"codex"}"#)?;
+    fn test_upgrade_defaults_copy_default_program_to_planner_review() {
+        let settings = Settings::deserialize_with_upgrade_defaults(r#"{"agent_program":"codex"}"#)
+            .expect("parse upgraded settings");
         assert_eq!(settings.agent_program, AgentProgram::Codex);
         assert_eq!(settings.planner_agent_program, AgentProgram::Codex);
         assert_eq!(settings.review_agent_program, AgentProgram::Codex);
-        Ok(())
     }
 
     #[test]
-    fn test_upgrade_defaults_copy_custom_program_and_command_to_planner_review()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_upgrade_defaults_copy_custom_program_and_command_to_planner_review() {
         let settings = Settings::deserialize_with_upgrade_defaults(
             r#"{"agent_program":"custom","custom_agent_command":"my-agent --flag"}"#,
-        )?;
+        )
+        .expect("parse upgraded custom settings");
         assert_eq!(settings.agent_program, AgentProgram::Custom);
         assert_eq!(settings.custom_agent_command, "my-agent --flag");
         assert_eq!(settings.planner_agent_program, AgentProgram::Custom);
         assert_eq!(settings.planner_custom_agent_command, "my-agent --flag");
         assert_eq!(settings.review_agent_program, AgentProgram::Custom);
         assert_eq!(settings.review_custom_agent_command, "my-agent --flag");
-        Ok(())
     }
 
     #[test]
-    fn test_upgrade_defaults_do_not_override_existing_planner_review_settings()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_upgrade_defaults_do_not_override_existing_planner_review_settings() {
         let settings = Settings::deserialize_with_upgrade_defaults(
             r#"{"agent_program":"claude","planner_agent_program":"codex","review_agent_program":"codex"}"#,
-        )?;
+        )
+        .expect("parse upgraded settings with planner review overrides");
         assert_eq!(settings.agent_program, AgentProgram::Claude);
         assert_eq!(settings.planner_agent_program, AgentProgram::Codex);
         assert_eq!(settings.review_agent_program, AgentProgram::Codex);
-        Ok(())
+    }
+
+    #[test]
+    fn test_settings_path_override_key_falls_back_for_unnamed_thread() {
+        let handle = std::thread::spawn(|| {
+            let temp_dir = TempDir::new().expect("create settings temp dir");
+            let override_path = temp_dir.path().join("settings.json");
+            Settings::set_test_path_override(override_path.clone())
+                .expect("set settings test path override");
+            assert_eq!(Settings::path(), override_path);
+        });
+        handle.join().expect("settings thread panicked");
+    }
+
+    #[test]
+    fn test_settings_set_test_path_override_errors_when_already_set() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path.clone()).expect("set settings test path override");
+        let err = Settings::set_test_path_override(path).expect_err("expected override error");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            err.to_string(),
+            "Settings test path override is already set"
+        );
+    }
+
+    #[test]
+    fn test_upgrade_defaults_no_agent_program_keeps_defaults() {
+        let settings = Settings::deserialize_with_upgrade_defaults(r"{}")
+            .expect("parse upgraded settings with defaults");
+        assert_eq!(settings.agent_program, AgentProgram::Claude);
+        assert_eq!(settings.planner_agent_program, AgentProgram::Claude);
+        assert_eq!(settings.review_agent_program, AgentProgram::Claude);
+        assert!(settings.planner_custom_agent_command.is_empty());
+        assert!(settings.review_custom_agent_command.is_empty());
+    }
+
+    #[test]
+    fn test_upgrade_defaults_errors_on_non_object_json() {
+        assert!(Settings::deserialize_with_upgrade_defaults(r#""not-an-object""#).is_err());
+    }
+
+    #[test]
+    fn test_settings_load_reads_existing_file() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path.clone()).expect("set settings test path override");
+
+        let settings = Settings {
+            merge_key_remapped: true,
+            keyboard_remap_asked: true,
+            agent_program: AgentProgram::Codex,
+            ..Settings::default()
+        };
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&settings).expect("serialize settings"),
+        )
+        .expect("write settings");
+
+        let loaded = with_tracing_dispatch(Settings::load);
+        assert!(loaded.merge_key_remapped);
+        assert!(loaded.keyboard_remap_asked);
+        assert_eq!(loaded.agent_program, AgentProgram::Codex);
+    }
+
+    #[test]
+    fn test_settings_load_returns_default_on_parse_error() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(path.clone()).expect("set settings test path override");
+        std::fs::write(&path, "{not json").expect("write invalid json");
+
+        let loaded = with_tracing_dispatch(Settings::load);
+        assert_eq!(loaded.agent_program, AgentProgram::Claude);
+        assert!(!loaded.merge_key_remapped);
+        assert!(!loaded.keyboard_remap_asked);
+    }
+
+    #[test]
+    fn test_settings_load_returns_default_on_read_error() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::create_dir(&path).expect("create settings dir");
+        Settings::set_test_path_override(path).expect("set settings test path override");
+
+        let loaded = with_tracing_dispatch(Settings::load);
+        assert_eq!(loaded.agent_program, AgentProgram::Claude);
+        assert!(!loaded.merge_key_remapped);
+        assert!(!loaded.keyboard_remap_asked);
+    }
+
+    #[test]
+    fn test_settings_save_reports_error_when_parent_is_file() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let not_dir = temp_dir.path().join("not-a-dir");
+        std::fs::write(&not_dir, "nope").expect("write not-a-dir file");
+        let path = not_dir.join("settings.json");
+        Settings::set_test_path_override(path).expect("set settings test path override");
+
+        assert!(Settings::default().save().is_err());
+    }
+
+    #[test]
+    fn test_settings_save_reports_error_when_path_has_no_parent_directory() {
+        Settings::set_test_path_override(PathBuf::from("/"))
+            .expect("set settings test path override");
+        let err = Settings::default().save().expect_err("expected save error");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        assert_eq!(err.to_string(), "Settings path has no parent directory");
+    }
+
+    #[test]
+    fn test_settings_save_reports_error_when_write_fails() {
+        let temp_dir = TempDir::new().expect("create settings temp dir");
+        let path = temp_dir.path().join("settings-path");
+        std::fs::create_dir(&path).expect("create settings-path dir");
+        Settings::set_test_path_override(path).expect("set settings test path override");
+
+        assert!(Settings::default().save().is_err());
     }
 }

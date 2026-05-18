@@ -194,7 +194,7 @@ pub fn resolve_window(target: &str) -> Result<Arc<Mutex<MuxWindow>>> {
 
     let window = {
         let session_guard = session.lock();
-        let idx = usize::try_from(parsed.window_index).context("Invalid window index")?;
+        let idx = parsed.window_index as usize;
         session_guard
             .windows
             .get(idx)
@@ -218,15 +218,25 @@ pub fn spawn_window(
     size: PtySize,
 ) -> Result<Arc<Mutex<MuxWindow>>> {
     let pty_system = portable_pty::native_pty_system();
-    let pair = pty_system.openpty(size).context("Failed to open PTY")?;
+    spawn_window_with_system(
+        pty_system.as_ref(),
+        index,
+        window_name,
+        working_dir,
+        command,
+        size,
+    )
+}
 
-    let (cmd_builder, command_vec) = build_command_builder(command)?;
-    let mut cmd_builder = cmd_builder;
-    cmd_builder.cwd(working_dir);
-    let child = pair
-        .slave
-        .spawn_command(cmd_builder)
-        .context("Failed to spawn PTY command")?;
+fn spawn_window_with_system(
+    pty_system: &dyn portable_pty::PtySystem,
+    index: u32,
+    window_name: &str,
+    working_dir: &Path,
+    command: Option<&[String]>,
+    size: PtySize,
+) -> Result<Arc<Mutex<MuxWindow>>> {
+    let pair = pty_system.openpty(size).context("Failed to open PTY")?;
 
     let reader = pair
         .master
@@ -236,6 +246,14 @@ pub fn spawn_window(
         .master
         .take_writer()
         .context("Failed to open PTY writer")?;
+
+    let (cmd_builder, command_vec) = build_command_builder(command)?;
+    let mut cmd_builder = cmd_builder;
+    cmd_builder.cwd(working_dir);
+    let child = pair
+        .slave
+        .spawn_command(cmd_builder)
+        .context("Failed to spawn PTY command")?;
 
     let parser = vt100::Parser::new(size.rows, size.cols, DEFAULT_SCROLLBACK);
 
@@ -257,74 +275,110 @@ pub fn spawn_window(
     Ok(window)
 }
 
-fn spawn_reader_thread(window: Arc<Mutex<MuxWindow>>, mut reader: Box<dyn Read + Send>) {
+fn spawn_reader_thread(window: Arc<Mutex<MuxWindow>>, reader: Box<dyn Read + Send>) {
+    if let Err(err) = spawn_reader_thread_inner(window, reader) {
+        warn!(error = %err, "Failed to spawn mux reader thread");
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_READER_THREAD_SPAWN_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+struct ForceReaderThreadSpawnErrorGuard;
+
+#[cfg(test)]
+impl Drop for ForceReaderThreadSpawnErrorGuard {
+    fn drop(&mut self) {
+        FORCE_READER_THREAD_SPAWN_ERROR.with(|flag| flag.set(false));
+    }
+}
+
+#[cfg(test)]
+fn force_reader_thread_spawn_error() -> ForceReaderThreadSpawnErrorGuard {
+    FORCE_READER_THREAD_SPAWN_ERROR.with(|flag| flag.set(true));
+    ForceReaderThreadSpawnErrorGuard
+}
+
+fn spawn_reader_thread_inner(
+    window: Arc<Mutex<MuxWindow>>,
+    mut reader: Box<dyn Read + Send>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    #[cfg(test)]
+    if FORCE_READER_THREAD_SPAWN_ERROR.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("forced reader thread spawn failure"));
+    }
+
     let (window_name, window_index) = {
         let guard = window.lock();
         (guard.name.clone(), guard.index)
     };
     let thread_name = format!("tenex-mux-{window_name}-{window_index}");
 
+    let dispatch = tracing::dispatcher::get_default(Clone::clone);
     let builder = std::thread::Builder::new().name(thread_name);
-    if let Err(err) = builder.spawn(move || {
-        let mut buffer = [0u8; 4096];
-        let mut query_tail = Vec::new();
-        let mut scan_buf = Vec::new();
-        loop {
-            let read = match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(err) => {
-                    debug!(error = %err, "Mux reader exiting");
+    builder.spawn(move || {
+        tracing::dispatcher::with_default(&dispatch, move || {
+            let mut buffer = [0u8; 4096];
+            let mut query_tail = Vec::new();
+            let mut scan_buf = Vec::new();
+            loop {
+                let read = match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(err) => {
+                        debug!(error = %err, "Mux reader exiting");
+                        break;
+                    }
+                };
+
+                let chunk = &buffer[..read];
+                let (cpr_queries, da_queries, osc10_queries, osc11_queries) =
+                    scan_terminal_queries(&mut scan_buf, &query_tail, chunk);
+                update_terminal_query_tail(&mut query_tail, &scan_buf);
+
+                if cpr_queries == 0 && da_queries == 0 && osc10_queries == 0 && osc11_queries == 0 {
+                    let mut guard = window.lock();
+                    guard.parser.process(chunk);
+                    let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
+                        Some(guard.parser.screen().state_formatted())
+                    } else {
+                        None
+                    };
+                    guard.output_history.record(chunk, checkpoint_bytes);
+                    drop(guard);
+                    continue;
+                }
+
+                let response_result = {
+                    let mut guard = window.lock();
+                    guard.parser.process(chunk);
+                    let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
+                        Some(guard.parser.screen().state_formatted())
+                    } else {
+                        None
+                    };
+                    guard.output_history.record(chunk, checkpoint_bytes);
+                    let result = respond_to_terminal_queries(
+                        &mut guard,
+                        cpr_queries,
+                        da_queries,
+                        osc10_queries,
+                        osc11_queries,
+                    );
+                    drop(guard);
+                    result
+                };
+
+                if let Err(err) = response_result {
+                    debug!(error = %err, "Failed to respond to terminal query");
                     break;
                 }
-            };
-
-            let chunk = &buffer[..read];
-            let (cpr_queries, da_queries, osc10_queries, osc11_queries) =
-                scan_terminal_queries(&mut scan_buf, &query_tail, chunk);
-            update_terminal_query_tail(&mut query_tail, &scan_buf);
-
-            if cpr_queries == 0 && da_queries == 0 && osc10_queries == 0 && osc11_queries == 0 {
-                let mut guard = window.lock();
-                guard.parser.process(chunk);
-                let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
-                    Some(guard.parser.screen().state_formatted())
-                } else {
-                    None
-                };
-                guard.output_history.record(chunk, checkpoint_bytes);
-                drop(guard);
-                continue;
             }
-
-            let response_result = {
-                let mut guard = window.lock();
-                guard.parser.process(chunk);
-                let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
-                    Some(guard.parser.screen().state_formatted())
-                } else {
-                    None
-                };
-                guard.output_history.record(chunk, checkpoint_bytes);
-                let result = respond_to_terminal_queries(
-                    &mut guard,
-                    cpr_queries,
-                    da_queries,
-                    osc10_queries,
-                    osc11_queries,
-                );
-                drop(guard);
-                result
-            };
-
-            if let Err(err) = response_result {
-                debug!(error = %err, "Failed to respond to terminal query");
-                break;
-            }
-        }
-    }) {
-        warn!(error = %err, "Failed to spawn mux reader thread");
-    }
+        });
+    })
 }
 
 fn scan_terminal_queries(
@@ -447,21 +501,9 @@ fn build_command_builder(command: Option<&[String]>) -> Result<(CommandBuilder, 
         }
 
         // Some call sites persist custom commands as a single shell string
-        // (e.g. "sh -c 'sleep 3600'"). On Windows, CreateProcessW treats that as
-        // a literal executable path unless we split it first.
-        let normalized = if cfg!(windows) && argv.len() == 1 {
-            let candidate = argv[0].trim();
-            if candidate.contains(char::is_whitespace) {
-                match shell_words::split(candidate) {
-                    Ok(split) if !split.is_empty() => split,
-                    _ => argv.iter().map(String::from).collect(),
-                }
-            } else {
-                argv.iter().map(String::from).collect()
-            }
-        } else {
-            argv.iter().map(String::from).collect()
-        };
+        // (for example "sh -c 'sleep 3600'"). On Windows, CreateProcessW treats
+        // that as a literal executable path unless we split it first.
+        let normalized = normalize_command_argv(argv);
 
         let args = normalized.iter().map(OsString::from).collect::<Vec<_>>();
         let builder = CommandBuilder::from_argv(args);
@@ -470,6 +512,28 @@ fn build_command_builder(command: Option<&[String]>) -> Result<(CommandBuilder, 
 
     let builder = CommandBuilder::new_default_prog();
     Ok((builder, Vec::new()))
+}
+
+#[cfg(windows)]
+fn normalize_command_argv(argv: &[String]) -> Vec<String> {
+    if argv.len() != 1 {
+        return argv.iter().map(String::from).collect();
+    }
+
+    let candidate = argv[0].trim();
+    if candidate.contains(char::is_whitespace) {
+        match shell_words::split(candidate) {
+            Ok(split) if !split.is_empty() => split,
+            _ => argv.iter().map(String::from).collect(),
+        }
+    } else {
+        argv.iter().map(String::from).collect()
+    }
+}
+
+#[cfg(not(windows))]
+fn normalize_command_argv(argv: &[String]) -> Vec<String> {
+    argv.iter().map(String::from).collect()
 }
 
 /// Return current Unix timestamp in seconds.
@@ -485,6 +549,254 @@ pub fn unix_timestamp() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portable_pty::{Child, ChildKiller, MasterPty, PtyPair, PtySystem, SlavePty};
+    use std::io;
+
+    fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, f)
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct StubMasterPty;
+
+    impl MasterPty for StubMasterPty {
+        fn resize(&self, _size: PtySize) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(default_pty_size())
+        }
+
+        fn try_clone_reader(&self) -> Result<Box<dyn io::Read + Send>, anyhow::Error> {
+            Ok(Box::new(io::empty()))
+        }
+
+        fn take_writer(&self) -> Result<Box<dyn io::Write + Send>, anyhow::Error> {
+            Ok(Box::new(io::sink()))
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::prelude::RawFd> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct NeverSpawnSlavePty;
+
+    impl SlavePty for NeverSpawnSlavePty {
+        fn spawn_command(
+            &self,
+            _cmd: portable_pty::CommandBuilder,
+        ) -> Result<Box<dyn Child + Send + Sync>, anyhow::Error> {
+            unreachable!("spawn_command should not be called")
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct CloneReaderFailMasterPty;
+
+    impl MasterPty for CloneReaderFailMasterPty {
+        fn resize(&self, _size: PtySize) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(default_pty_size())
+        }
+
+        fn try_clone_reader(&self) -> Result<Box<dyn io::Read + Send>, anyhow::Error> {
+            Err(anyhow::anyhow!("forced clone reader failure for test"))
+        }
+
+        fn take_writer(&self) -> Result<Box<dyn io::Write + Send>, anyhow::Error> {
+            Ok(Box::new(io::sink()))
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::prelude::RawFd> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct TakeWriterFailMasterPty;
+
+    impl MasterPty for TakeWriterFailMasterPty {
+        fn resize(&self, _size: PtySize) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(default_pty_size())
+        }
+
+        fn try_clone_reader(&self) -> Result<Box<dyn io::Read + Send>, anyhow::Error> {
+            Ok(Box::new(io::empty()))
+        }
+
+        fn take_writer(&self) -> Result<Box<dyn io::Write + Send>, anyhow::Error> {
+            Err(anyhow::anyhow!("forced take writer failure for test"))
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::prelude::RawFd> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct OpenptyFailSystem;
+
+    impl PtySystem for OpenptyFailSystem {
+        fn openpty(&self, _size: PtySize) -> anyhow::Result<PtyPair> {
+            Err(anyhow::anyhow!("forced openpty failure for test"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct CloneReaderFailSystem;
+
+    impl PtySystem for CloneReaderFailSystem {
+        fn openpty(&self, _size: PtySize) -> anyhow::Result<PtyPair> {
+            Ok(PtyPair {
+                slave: Box::new(NeverSpawnSlavePty),
+                master: Box::new(CloneReaderFailMasterPty),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct TakeWriterFailSystem;
+
+    impl PtySystem for TakeWriterFailSystem {
+        fn openpty(&self, _size: PtySize) -> anyhow::Result<PtyPair> {
+            Ok(PtyPair {
+                slave: Box::new(NeverSpawnSlavePty),
+                master: Box::new(TakeWriterFailMasterPty),
+            })
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct StubChild;
+
+    impl ChildKiller for StubChild {
+        fn kill(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(*self)
+        }
+    }
+
+    impl Child for StubChild {
+        fn try_wait(&mut self) -> io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(None)
+        }
+
+        fn wait(&mut self) -> io::Result<portable_pty::ExitStatus> {
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct ErrorReader;
+
+    impl io::Read for ErrorReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("read failed"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingWriter;
+
+    impl io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("write failed"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("flush failed"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct FlushFailWriter;
+
+    impl io::Write for FlushFailWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("flush failed"))
+        }
+    }
+
+    fn stub_window(name: &str, writer: Box<dyn io::Write + Send>) -> Arc<Mutex<MuxWindow>> {
+        let size = default_pty_size();
+        let parser = vt100::Parser::new(size.rows, size.cols, DEFAULT_SCROLLBACK);
+        Arc::new(Mutex::new(MuxWindow {
+            index: 0,
+            name: name.to_string(),
+            working_dir: std::env::temp_dir(),
+            command: Vec::new(),
+            master: Box::new(StubMasterPty),
+            writer,
+            child: Box::new(StubChild),
+            parser,
+            output_history: OutputHistory::default(),
+            size,
+        }))
+    }
 
     #[test]
     fn test_default_pty_size_has_nonzero_dims() {
@@ -494,8 +806,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_target_root_and_indexed() -> Result<()> {
-        let root = parse_target("session")?;
+    fn test_parse_target_root_and_indexed() {
+        let root = parse_target("session").expect("parse root target");
         assert_eq!(
             root,
             WindowTarget {
@@ -504,7 +816,7 @@ mod tests {
             }
         );
 
-        let indexed = parse_target("session:3")?;
+        let indexed = parse_target("session:3").expect("parse indexed target");
         assert_eq!(
             indexed,
             WindowTarget {
@@ -514,14 +826,51 @@ mod tests {
         );
 
         assert!(parse_target("session:not-a-number").is_err());
+    }
 
-        Ok(())
+    #[test]
+    fn test_resolve_window_reports_index_parse_error() {
+        let err = resolve_window("session:not-a-number")
+            .expect_err("expected invalid window index error");
+        err.to_string()
+            .contains("Invalid window index")
+            .then_some(())
+            .expect("expected invalid window index context");
+    }
+
+    #[test]
+    fn test_resolve_window_errors_when_window_missing() {
+        let session_name = format!("tenex-test-resolve-window-{}", uuid::Uuid::new_v4());
+        let session = Arc::new(Mutex::new(MuxSession {
+            name: session_name.clone(),
+            created: 0,
+            root_restart_attempts: 0,
+            last_root_restart: 0,
+            windows: vec![stub_window("root", Box::new(io::sink()))],
+        }));
+
+        {
+            let mut state = global_state().lock();
+            state.sessions.insert(session_name.clone(), session);
+        }
+
+        let err =
+            resolve_window(&format!("{session_name}:1")).expect_err("expected missing window");
+        assert!(err.to_string().contains("Window '1' not found"));
+
+        {
+            let mut state = global_state().lock();
+            state.sessions.remove(&session_name);
+        }
     }
 
     #[test]
     fn test_count_pattern_respects_tail_boundary() {
         let haystack = b"abcd\x1b[c----\x1b[c";
         let needle = b"\x1b[c";
+
+        assert_eq!(count_pattern(haystack, b"", 0), 0);
+        assert_eq!(count_pattern(b"ab", needle, 0), 0);
 
         // Tail boundary after first match should only count second match.
         let count = count_pattern(haystack, needle, 10);
@@ -557,13 +906,295 @@ mod tests {
     }
 
     #[test]
+    fn test_build_command_builder_returns_builder_for_nonempty_argv() {
+        let argv = vec!["sh".to_string(), "-c".to_string(), "echo hi".to_string()];
+        let (_builder, normalized) =
+            build_command_builder(Some(&argv)).expect("Expected command builder for argv");
+        assert_eq!(normalized, argv);
+    }
+
+    #[test]
+    fn test_output_history_record_checkpoint_resets_buffer() {
+        let mut history = OutputHistory::default();
+        history.record(b"abc", Some(vec![1, 2, 3]));
+
+        assert_eq!(history.seq_end, 3);
+        assert_eq!(history.seq_start, 3);
+        assert!(history.buf.is_empty());
+
+        let checkpoint = history.checkpoint.expect("Expected checkpoint");
+        assert_eq!(checkpoint.seq, 3);
+        assert_eq!(checkpoint.bytes, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_update_terminal_query_tail_returns_early_for_empty_buffer() {
+        let mut tail = vec![1, 2, 3];
+        update_terminal_query_tail(&mut tail, &[]);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn test_respond_to_terminal_queries_noops_without_queries() {
+        let window = stub_window("no-queries", Box::new(io::sink()));
+        let mut guard = window.lock();
+        respond_to_terminal_queries(&mut guard, 0, 0, 0, 0)
+            .expect("Expected terminal query response to succeed");
+    }
+
+    #[test]
+    fn test_respond_to_terminal_queries_succeeds_with_queries() {
+        let window = stub_window("queries-ok", Box::new(io::sink()));
+        let mut guard = window.lock();
+        respond_to_terminal_queries(&mut guard, 1, 0, 0, 0)
+            .expect("Expected terminal query response to succeed");
+    }
+
+    #[test]
+    fn test_respond_to_terminal_queries_propagates_flush_errors() {
+        let window = stub_window("flush-fail", Box::new(FlushFailWriter));
+        let mut guard = window.lock();
+        let err = respond_to_terminal_queries(&mut guard, 1, 0, 0, 0)
+            .expect_err("expected flush failure");
+        err.to_string()
+            .contains("Failed to flush terminal query response")
+            .then_some(())
+            .expect("expected flush context");
+    }
+
+    #[test]
+    fn test_spawn_window_propagates_openpty_errors() {
+        let size = default_pty_size();
+        let err = spawn_window_with_system(
+            &OpenptyFailSystem,
+            1,
+            "forced-openpty",
+            &std::env::temp_dir(),
+            None,
+            size,
+        )
+        .expect_err("expected openpty error");
+        assert!(err.to_string().contains("Failed to open PTY"));
+    }
+
+    #[test]
+    fn test_spawn_window_propagates_clone_reader_errors() {
+        let size = default_pty_size();
+        let err = spawn_window_with_system(
+            &CloneReaderFailSystem,
+            1,
+            "forced-clone-reader",
+            &std::env::temp_dir(),
+            None,
+            size,
+        )
+        .expect_err("expected clone reader error");
+        assert!(err.to_string().contains("Failed to clone PTY reader"));
+    }
+
+    #[test]
+    fn test_spawn_window_propagates_take_writer_errors() {
+        let size = default_pty_size();
+        let err = spawn_window_with_system(
+            &TakeWriterFailSystem,
+            1,
+            "forced-take-writer",
+            &std::env::temp_dir(),
+            None,
+            size,
+        )
+        .expect_err("expected take writer error");
+        assert!(err.to_string().contains("Failed to open PTY writer"));
+    }
+
+    #[test]
+    fn test_spawn_reader_thread_inner_exits_when_reader_errors() {
+        let window_disabled = stub_window("reader-error-disabled", Box::new(io::sink()));
+        let handle = spawn_reader_thread_inner(window_disabled, Box::new(ErrorReader))
+            .expect("Spawn reader thread");
+        handle.join().expect("Reader thread panicked");
+
+        with_tracing_dispatch(|| {
+            let window_enabled = stub_window("reader-error-enabled", Box::new(io::sink()));
+            let handle = spawn_reader_thread_inner(window_enabled, Box::new(ErrorReader))
+                .expect("Spawn reader thread");
+            handle.join().expect("Reader thread panicked");
+        });
+    }
+
+    #[test]
+    fn test_spawn_reader_thread_inner_checkpoints_without_queries() {
+        let window = stub_window("checkpoint", Box::new(io::sink()));
+        {
+            let mut guard = window.lock();
+            guard.output_history.buf.resize(OUTPUT_MAX_BYTES, 0);
+        }
+
+        let reader = io::Cursor::new(vec![b'x']);
+        let handle = spawn_reader_thread_inner(window.clone(), Box::new(reader))
+            .expect("Spawn reader thread");
+        handle.join().expect("Reader thread panicked");
+
+        let guard = window.lock();
+        assert!(guard.output_history.checkpoint.is_some());
+        assert!(guard.output_history.buf.is_empty());
+        drop(guard);
+    }
+
+    #[test]
+    fn test_spawn_reader_thread_inner_breaks_on_terminal_query_response_error() {
+        with_tracing_dispatch(|| {
+            let window = stub_window("query-error", Box::new(FailingWriter));
+            {
+                let mut guard = window.lock();
+                guard.output_history.buf.resize(OUTPUT_MAX_BYTES, 0);
+            }
+
+            let reader = io::Cursor::new(b"\x1b[6n".to_vec());
+            let handle = spawn_reader_thread_inner(window.clone(), Box::new(reader))
+                .expect("Spawn reader thread");
+            handle.join().expect("Reader thread panicked");
+
+            let guard = window.lock();
+            assert!(guard.output_history.checkpoint.is_some());
+            drop(guard);
+        });
+    }
+
+    #[test]
+    fn test_spawn_reader_thread_warns_on_spawn_failure() {
+        let window = stub_window("spawn-failure", Box::new(io::sink()));
+        let _guard = force_reader_thread_spawn_error();
+
+        spawn_reader_thread_inner(window.clone(), Box::new(io::empty()))
+            .expect_err("Expected forced thread spawn failure");
+        spawn_reader_thread(window.clone(), Box::new(io::empty()));
+        with_tracing_dispatch(|| spawn_reader_thread(window, Box::new(io::empty())));
+    }
+
+    #[test]
+    fn test_stub_types_cover_required_trait_methods() {
+        let master = StubMasterPty;
+        master
+            .resize(default_pty_size())
+            .expect("Expected resize to succeed");
+        assert_eq!(
+            master.get_size().expect("Expected get_size to succeed"),
+            default_pty_size()
+        );
+
+        let mut reader = master
+            .try_clone_reader()
+            .expect("Expected clone reader to succeed");
+        let mut buf = [0u8; 1];
+        let _ = reader.read(&mut buf).expect("Expected reader to succeed");
+
+        let mut writer = master.take_writer().expect("Expected writer to succeed");
+        writer
+            .write_all(b"hi")
+            .expect("Expected writer to accept bytes");
+
+        #[cfg(unix)]
+        {
+            assert_eq!(master.process_group_leader(), None);
+            assert_eq!(master.as_raw_fd(), None);
+            assert_eq!(master.tty_name(), None);
+        }
+
+        let slave = NeverSpawnSlavePty;
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = slave.spawn_command(CommandBuilder::new("sh"));
+        }));
+        assert!(panicked.is_err());
+
+        let clone_reader_fail_master = CloneReaderFailMasterPty;
+        clone_reader_fail_master
+            .resize(default_pty_size())
+            .expect("Expected resize to succeed");
+        assert_eq!(
+            clone_reader_fail_master
+                .get_size()
+                .expect("Expected get_size to succeed"),
+            default_pty_size()
+        );
+        let mut writer = clone_reader_fail_master
+            .take_writer()
+            .expect("Expected writer to succeed");
+        writer
+            .write_all(b"hi")
+            .expect("Expected writer to accept bytes");
+        assert!(clone_reader_fail_master.try_clone_reader().is_err());
+
+        #[cfg(unix)]
+        {
+            assert_eq!(clone_reader_fail_master.process_group_leader(), None);
+            assert_eq!(clone_reader_fail_master.as_raw_fd(), None);
+            assert_eq!(clone_reader_fail_master.tty_name(), None);
+        }
+
+        let take_writer_fail_master = TakeWriterFailMasterPty;
+        take_writer_fail_master
+            .resize(default_pty_size())
+            .expect("Expected resize to succeed");
+        assert_eq!(
+            take_writer_fail_master
+                .get_size()
+                .expect("Expected get_size to succeed"),
+            default_pty_size()
+        );
+        let mut reader = take_writer_fail_master
+            .try_clone_reader()
+            .expect("Expected clone reader to succeed");
+        let mut buf = [0u8; 1];
+        let _ = reader.read(&mut buf).expect("Expected reader to succeed");
+        assert!(take_writer_fail_master.take_writer().is_err());
+
+        #[cfg(unix)]
+        {
+            assert_eq!(take_writer_fail_master.process_group_leader(), None);
+            assert_eq!(take_writer_fail_master.as_raw_fd(), None);
+            assert_eq!(take_writer_fail_master.tty_name(), None);
+        }
+
+        let mut child = StubChild;
+        child.kill().expect("Expected kill to succeed");
+        let mut killer = child.clone_killer();
+        killer.kill().expect("Expected cloned killer to succeed");
+
+        assert!(
+            child
+                .try_wait()
+                .expect("Expected try_wait to succeed")
+                .is_none()
+        );
+        assert!(child.wait().expect("Expected wait to succeed").success());
+        assert_eq!(child.process_id(), None);
+
+        let mut reader = ErrorReader;
+        assert!(reader.read(&mut buf).is_err());
+
+        let mut writer = FailingWriter;
+        assert!(writer.write(b"hi").is_err());
+        assert!(writer.flush().is_err());
+    }
+
+    #[test]
+    fn test_mux_window_debug_includes_fields() {
+        let window = stub_window("debug-window", Box::new(io::sink()));
+        let guard = window.lock();
+        let rendered = format!("{guard:?}");
+        assert!(rendered.contains("MuxWindow"));
+        assert!(rendered.contains("debug-window"));
+    }
+
+    #[test]
     fn test_unix_timestamp_non_negative() {
         assert!(unix_timestamp() >= 0);
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_terminal_query_responses_end_to_end() -> Result<()> {
+    fn test_terminal_query_responses_end_to_end() {
         let session_name = format!("tenex-test-backend-{}", uuid::Uuid::new_v4());
         let tmp = std::env::temp_dir();
 
@@ -579,17 +1210,31 @@ mod tests {
         let command = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
 
         let _ = super::super::server::SessionManager::kill(&session_name);
-        super::super::server::SessionManager::create(&session_name, &tmp, Some(&command))?;
+        super::super::server::SessionManager::create(&session_name, &tmp, Some(&command))
+            .expect("create PTY session");
 
         std::thread::sleep(std::time::Duration::from_secs(4));
 
-        let output = super::super::server::OutputCapture::capture_full_history(&session_name)?;
+        let output = super::super::server::OutputCapture::capture_full_history(&session_name)
+            .expect("capture full history");
         let _ = super::super::server::SessionManager::kill(&session_name);
 
-        assert!(output.contains("DA:"), "full output: {output:?}");
-        assert!(output.contains("CPR:"), "full output: {output:?}");
-        assert!(output.contains("OSC10:"), "full output: {output:?}");
-        assert!(output.contains("OSC11:"), "full output: {output:?}");
+        output
+            .contains("DA:")
+            .then_some(())
+            .expect("expected DA marker");
+        output
+            .contains("CPR:")
+            .then_some(())
+            .expect("expected CPR marker");
+        output
+            .contains("OSC10:")
+            .then_some(())
+            .expect("expected OSC10 marker");
+        output
+            .contains("OSC11:")
+            .then_some(())
+            .expect("expected OSC11 marker");
 
         let compact: String = output
             .to_ascii_lowercase()
@@ -598,13 +1243,20 @@ mod tests {
             .collect();
 
         // Primary device attributes response starts with ESC [ ?.
-        assert!(compact.contains("1b5b3f"), "full output: {output:?}");
+        compact
+            .contains("1b5b3f")
+            .then_some(())
+            .expect("expected DA hex output");
 
         // Text color and background color responses are OSC 10/11.
-        assert!(compact.contains("1b5d3130"), "full output: {output:?}");
-        assert!(compact.contains("1b5d3131"), "full output: {output:?}");
-
-        Ok(())
+        compact
+            .contains("1b5d3130")
+            .then_some(())
+            .expect("expected OSC10 hex output");
+        compact
+            .contains("1b5d3131")
+            .then_some(())
+            .expect("expected OSC11 hex output");
     }
 
     #[test]

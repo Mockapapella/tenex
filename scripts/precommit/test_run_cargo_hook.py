@@ -42,7 +42,11 @@ class RunCargoHookTests(unittest.TestCase):
             (not_muxd / "cmdline").write_bytes(b"/repo/target/debug/tenex\0test\0")
             (not_muxd / "environ").write_bytes(b"TENEX_MUX_SOCKET=/tmp/live.sock\0")
 
-            pids = run_cargo_hook.muxd_pids_from_proc(proc_root, "/tmp/live.sock")
+            pids = run_cargo_hook.muxd_pids_from_proc(
+                proc_root,
+                "/tmp/live.sock",
+                Path("/tmp/state.json"),
+            )
             self.assertEqual(pids, {100})
 
     def test_muxd_pids_from_pidfile_matches_exact_socket(self) -> None:
@@ -62,6 +66,29 @@ class RunCargoHookTests(unittest.TestCase):
                 run_cargo_hook.muxd_pids_from_pidfile(state_dir, "/tmp/other.sock"),
                 set(),
             )
+
+    def test_configure_rustc_ice_defaults_to_xdg_cache_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_home = Path(tmp) / "cache"
+            env = {"XDG_CACHE_HOME": str(cache_home)}
+
+            run_cargo_hook.configure_rustc_ice(env)
+
+            expected = cache_home / "tenex" / "rustc-ice"
+            self.assertEqual(env["RUSTC_ICE"], str(expected))
+            self.assertTrue(expected.is_dir())
+
+    def test_configure_rustc_ice_keeps_explicit_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "HOME": tmp,
+                "RUSTC_ICE": "0",
+            }
+
+            run_cargo_hook.configure_rustc_ice(env)
+
+            self.assertEqual(env["RUSTC_ICE"], "0")
+            self.assertFalse((Path(tmp) / ".cache" / "tenex" / "rustc-ice").exists())
 
 
 if __name__ == "__main__":

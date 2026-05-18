@@ -512,6 +512,7 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
 mod tests {
     use super::*;
     use crate::app::Settings;
+    use crate::app::WorktreeConflictInfo;
     use crate::config::Config;
     use crate::update::UpdateInfo;
     use crate::{Agent, App, agent::Storage};
@@ -540,22 +541,23 @@ mod tests {
     }
 
     #[test]
-    fn test_render_confirm_overlay_renders_content() -> Result<(), std::io::Error> {
+    fn test_render_confirm_overlay_renders_content() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
 
-        terminal.draw(|frame| {
-            render_confirm_overlay(frame, vec![Line::from("Testing confirm overlay")]);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_confirm_overlay(frame, vec![Line::from("Testing confirm overlay")]);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirm_push_overlay_without_agent() -> Result<(), std::io::Error> {
+    fn test_render_confirm_push_overlay_without_agent() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
         let app = App::new(
             Config::default(),
             Storage::new(),
@@ -563,71 +565,110 @@ mod tests {
             false,
         );
 
-        terminal.draw(|frame| {
-            render_confirm_push_overlay(frame, &app);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_confirm_push_overlay(frame, &app);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirm_push_overlay_with_agent() -> Result<(), std::io::Error> {
+    fn test_render_confirm_push_overlay_with_agent() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
         let app = app_with_agent();
 
-        terminal.draw(|frame| {
-            render_confirm_push_overlay(frame, &app);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_confirm_push_overlay(frame, &app);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_confirm_push_for_pr_overlay() -> Result<(), std::io::Error> {
+    fn test_render_confirm_push_for_pr_overlay() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = app_with_agent();
         app.data.git_op.base_branch = "main".to_string();
 
-        terminal.draw(|frame| {
-            render_confirm_push_for_pr_overlay(frame, &app);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_confirm_push_for_pr_overlay(frame, &app);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_keyboard_remap_overlay() -> Result<(), std::io::Error> {
+    fn test_render_keyboard_remap_overlay() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
 
-        terminal.draw(|frame| {
-            render_keyboard_remap_overlay(frame);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_keyboard_remap_overlay(frame);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
     }
 
     #[test]
-    fn test_render_update_prompt_overlay() -> Result<(), std::io::Error> {
+    fn test_render_update_prompt_overlay() {
         let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend).expect("terminal");
 
         let info = UpdateInfo {
             current_version: Version::new(1, 0, 0),
             latest_version: Version::new(2, 0, 0),
         };
 
-        terminal.draw(|frame| {
-            render_update_prompt_overlay(frame, &info);
-        })?;
+        terminal
+            .draw(|frame| {
+                render_update_prompt_overlay(frame, &info);
+            })
+            .expect("draw");
 
         assert!(!terminal.backend().buffer().content.is_empty());
-        Ok(())
+    }
+
+    #[test]
+    fn test_render_worktree_conflict_overlay_omits_optional_existing_branch_and_commit() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        let mut app = App::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+
+        app.data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
+            title: "wt".to_string(),
+            prompt: None,
+            branch: "wt-branch".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            repo_root: PathBuf::from("/tmp"),
+            existing_branch: None,
+            existing_commit: None,
+            current_branch: "main".to_string(),
+            current_commit: "def5678".to_string(),
+            swarm_child_count: None,
+        });
+
+        terminal
+            .draw(|frame| {
+                render_worktree_conflict_overlay(frame, &app);
+            })
+            .expect("draw");
+
+        assert!(!terminal.backend().buffer().content.is_empty());
     }
 }

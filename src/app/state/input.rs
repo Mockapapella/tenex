@@ -252,6 +252,30 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_word_noops_when_cursor_zero() {
+        let mut input = InputState::new();
+        input.buffer = "hello".to_string();
+        input.cursor = 0;
+
+        input.delete_word();
+
+        assert_eq!(input.buffer, "hello");
+        assert_eq!(input.cursor, 0);
+    }
+
+    #[test]
+    fn test_delete_word_removes_trailing_whitespace_and_word() {
+        let mut input = InputState::new();
+        input.buffer = "hello world   ".to_string();
+        input.cursor = input.buffer.len();
+
+        input.delete_word();
+
+        assert_eq!(input.buffer, "hello ");
+        assert_eq!(input.cursor, 6);
+    }
+
+    #[test]
     fn test_backspace() {
         let mut input = InputState::new();
         input.buffer = "hello".to_string();
@@ -363,6 +387,17 @@ mod tests {
         input.cursor_up();
 
         assert_eq!(input.cursor, 2); // Stays on first line
+    }
+
+    #[test]
+    fn test_cursor_up_from_third_line_uses_previous_newline() {
+        let mut input = InputState::new();
+        input.buffer = "one\ntwo\nthree".to_string();
+        input.cursor = 10; // Column 2 on "three"
+
+        input.cursor_up();
+
+        assert_eq!(input.cursor, 6); // Column 2 on "two"
     }
 
     #[test]

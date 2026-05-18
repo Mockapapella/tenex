@@ -775,6 +775,8 @@ mod tests {
     fn test_action_description() {
         assert_eq!(Action::NewAgent.description(), "[a]dd agent");
         assert_eq!(Action::SpawnChildren.description(), "[S]pawn swarm");
+        assert_eq!(Action::NextAgent.description(), "[↓] next item");
+        assert_eq!(Action::PrevAgent.description(), "[↑] prev item");
         assert_eq!(
             Action::PlanSwarm.description(),
             "[P] spawn planners for selected agent"
@@ -782,6 +784,74 @@ mod tests {
         assert_eq!(
             Action::DiffToggleVisual.description(),
             "[shift+v] block select/unselect"
+        );
+    }
+
+    #[test]
+    fn test_action_group_titles_cover_hidden_group() {
+        assert_eq!(ActionGroup::Agents.title(), "Agents");
+        assert_eq!(ActionGroup::Hidden.title(), "");
+    }
+
+    #[test]
+    fn test_action_description_covers_hidden_actions() {
+        assert_eq!(Action::DiffCursorUp.description(), "[↑] diff cursor up");
+        assert_eq!(Action::DiffCursorDown.description(), "[↓] diff cursor down");
+        assert_eq!(
+            Action::DiffDeleteLine.description(),
+            "[x] delete diff line/hunk"
+        );
+        assert_eq!(Action::DiffUndo.description(), "[Ctrl+z] undo diff edit");
+        assert_eq!(Action::DiffRedo.description(), "[Ctrl+y] redo diff edit");
+        assert_eq!(Action::Cancel.description(), "Cancel");
+        assert_eq!(Action::Confirm.description(), "Confirm");
+        assert_eq!(Action::Quit.description(), "[Ctrl+q]uit");
+        assert_eq!(
+            Action::ScrollUp.description(),
+            "[Ctrl+u] scroll preview/diff/commits up"
+        );
+        assert_eq!(
+            Action::ScrollDown.description(),
+            "[Ctrl+d] scroll preview/diff/commits down"
+        );
+        assert_eq!(Action::ScrollTop.description(), "[g]o to top");
+        assert_eq!(Action::ScrollBottom.description(), "[G]o to bottom");
+    }
+
+    #[test]
+    fn test_action_keys_cover_hidden_actions() {
+        assert_eq!(Action::DiffCursorUp.keys(), "↑");
+        assert_eq!(Action::DiffCursorDown.keys(), "↓");
+        assert_eq!(Action::DiffDeleteLine.keys(), "x");
+        assert_eq!(Action::DiffUndo.keys(), "Ctrl+z");
+        assert_eq!(Action::DiffRedo.keys(), "Ctrl+y");
+        assert_eq!(Action::Cancel.keys(), "Esc");
+        assert_eq!(Action::Confirm.keys(), "y");
+        assert_eq!(Action::ScrollUp.keys(), "Ctrl+u");
+        assert_eq!(Action::ScrollDown.keys(), "Ctrl+d");
+        assert_eq!(Action::ScrollTop.keys(), "g");
+        assert_eq!(Action::ScrollBottom.keys(), "G");
+    }
+
+    #[test]
+    fn test_action_group_classifies_hidden_actions() {
+        assert_eq!(Action::DiffCursorUp.group(), ActionGroup::Hidden);
+        assert_eq!(Action::DiffUndo.group(), ActionGroup::Hidden);
+        assert_eq!(Action::DiffRedo.group(), ActionGroup::Hidden);
+    }
+
+    #[test]
+    fn test_display_helpers_apply_merge_remap() {
+        assert_eq!(get_display_keys(Action::Merge, true), "Ctrl+n");
+        assert_eq!(
+            get_display_description(Action::Merge, true),
+            "[Ctrl+n] merge branch"
+        );
+
+        assert_eq!(get_display_keys(Action::Merge, false), "Ctrl+m");
+        assert_eq!(
+            get_display_description(Action::Merge, false),
+            "[Ctrl+m]erge branch"
         );
     }
 

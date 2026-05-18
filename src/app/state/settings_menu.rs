@@ -24,21 +24,12 @@ impl SettingsMenuState {
     /// Select the next menu item.
     pub const fn select_next(&mut self) {
         let count = AgentRole::ALL.len();
-        if count > 0 {
-            self.selected = (self.selected + 1) % count;
-        } else {
-            self.selected = 0;
-        }
+        self.selected = (self.selected + 1) % count;
     }
 
     /// Select the previous menu item.
     pub const fn select_prev(&mut self) {
         let count = AgentRole::ALL.len();
-        if count == 0 {
-            self.selected = 0;
-            return;
-        }
-
         if self.selected == 0 {
             self.selected = count - 1;
         } else {
@@ -95,5 +86,17 @@ mod tests {
     fn test_selected_role_defaults() {
         let state = SettingsMenuState { selected: 99 };
         assert_eq!(state.selected_role(), AgentRole::Default);
+    }
+
+    #[test]
+    fn test_selected_role_resolves_planner_and_review() {
+        assert_eq!(
+            SettingsMenuState { selected: 1 }.selected_role(),
+            AgentRole::Planner
+        );
+        assert_eq!(
+            SettingsMenuState { selected: 2 }.selected_role(),
+            AgentRole::Review
+        );
     }
 }

@@ -23,7 +23,7 @@ pub struct WindowInfo {
 }
 
 /// Which capture to perform.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CaptureKind {
     /// Only the visible screen.
     Visible,

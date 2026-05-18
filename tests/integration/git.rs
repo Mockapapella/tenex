@@ -1,6 +1,6 @@
 //! Tests for git worktree operations
 
-use crate::common::{TestFixture, git_command};
+use crate::common::{TestFixture, git_command, skip_if_no_mux};
 use tenex::agent::{Agent, Storage};
 use tenex::app::{Actions, Settings};
 use tenex::config::Action;
@@ -153,7 +153,78 @@ fn test_execute_push_with_valid_agent() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn test_execute_push_succeeds_with_local_remote() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let fixture = TestFixture::new("push_success")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let remote_dir = tempfile::TempDir::new()?;
+    let output = git_command()
+        .args(["init", "--bare"])
+        .current_dir(remote_dir.path())
+        .output()?;
+    assert_git_success(&output, "git init --bare failed");
+    let remote_path = remote_dir
+        .path()
+        .to_str()
+        .ok_or("remote path is not utf-8")?;
+    let output = git_command()
+        .args(["remote", "add", "origin", remote_path])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert_git_success(&output, "git remote add origin failed");
+
+    // Create a worktree for the agent.
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-push-success-branch";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree.
+    let agent = Agent::new(
+        "push-success-test".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    // Set up push state.
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+
+    let next =
+        tracing::dispatcher::with_default(&dispatch, || Actions::execute_push(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, tenex::AppMode::normal());
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_ref()
+            .is_some_and(|message| message.contains("Pushed branch")),
+        "Expected push to set a status message"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
     let fixture = TestFixture::new("rebase_valid")?;
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
@@ -196,7 +267,8 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
     app.data.git_op.target_branch = "master".to_string();
 
     // Execute rebase - should succeed since there are no conflicts
-    let result = Actions::execute_rebase(&mut app.data);
+    let result =
+        tracing::dispatcher::with_default(&dispatch, || Actions::execute_rebase(&mut app.data));
     assert!(result.is_ok(), "Rebase should succeed: {result:?}");
     app.apply_mode(result?);
 
@@ -207,6 +279,312 @@ fn test_execute_rebase_with_valid_agent() -> Result<(), Box<dyn std::error::Erro
     assert!(
         is_success || has_error,
         "Should be in SuccessModal mode or have an error after rebase"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_propagates_spawn_errors_when_worktree_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_spawn_error")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    let missing_worktree = fixture.worktree_path().join("missing-worktree");
+    assert!(
+        !missing_worktree.exists(),
+        "expected missing worktree path to not exist"
+    );
+
+    let agent = Agent::new(
+        "rebase-spawn-error-test".to_string(),
+        "echo".to_string(),
+        "feature".to_string(),
+        missing_worktree,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = "feature".to_string();
+    app.data.git_op.target_branch = "master".to_string();
+
+    let Err(err) = Actions::execute_rebase(&mut app.data) else {
+        return Err("execute_rebase unexpectedly succeeded for missing worktree".into());
+    };
+    assert!(
+        err.to_string().contains("Failed to execute rebase"),
+        "expected spawn error context, got {err:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_no_agent_selected_shows_error() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_branch_no_agent")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    let next = Actions::rebase_branch(&mut app.data)?;
+    app.apply_mode(next);
+
+    let message = app
+        .data
+        .ui
+        .last_error
+        .as_ref()
+        .ok_or("expected error modal message")?;
+    assert!(
+        message.contains("No agent selected"),
+        "expected missing agent message, got {message:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_uses_workspace_root_when_repo_root_missing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_branch_workspace_root")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let nested = fixture.repo_path.join("nested");
+    std::fs::create_dir_all(&nested)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    let agent = Agent::new(
+        "rebase-branch-workspace-root".to_string(),
+        "echo".to_string(),
+        "master".to_string(),
+        nested,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    let next = Actions::rebase_branch(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::RebaseBranchSelector(tenex::state::RebaseBranchSelectorMode)
+    );
+    assert!(!app.data.review.branches.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_errors_when_not_in_git_repo() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_branch_non_git")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    let non_repo_dir = tempfile::TempDir::new()?;
+    let agent = Agent::new(
+        "rebase-branch-non-git".to_string(),
+        "echo".to_string(),
+        "master".to_string(),
+        non_repo_dir.path().to_path_buf(),
+    );
+    app.data.storage.add(agent);
+
+    let Err(err) = Actions::rebase_branch(&mut app.data) else {
+        return Err("rebase_branch unexpectedly succeeded outside git repo".into());
+    };
+    assert!(
+        err.to_string().contains("Failed to open git repository at"),
+        "expected repo open error, got {err:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_errors_when_agent_id_is_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_no_agent_id")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+    app.data.git_op.branch_name = "branch".to_string();
+    app.data.review.start(vec![tenex::git::BranchInfo {
+        name: "master".to_string(),
+        full_name: "refs/heads/master".to_string(),
+        is_remote: false,
+        remote: None,
+        last_commit_time: None,
+    }]);
+
+    let next = Actions::execute_rebase(&mut app.data)?;
+    app.apply_mode(next);
+
+    let message = app
+        .data
+        .ui
+        .last_error
+        .as_ref()
+        .ok_or("expected error modal message")?;
+    assert_eq!(message, "No agent ID for rebase");
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.review.branches.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_errors_when_agent_is_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_agent_missing")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+    app.data.git_op.agent_id = Some(uuid::Uuid::new_v4());
+    app.data.review.start(vec![tenex::git::BranchInfo {
+        name: "master".to_string(),
+        full_name: "refs/heads/master".to_string(),
+        is_remote: false,
+        remote: None,
+        last_commit_time: None,
+    }]);
+
+    let next = Actions::execute_rebase(&mut app.data)?;
+    app.apply_mode(next);
+
+    let message = app
+        .data
+        .ui
+        .last_error
+        .as_ref()
+        .ok_or("expected error modal message")?;
+    assert_eq!(message, "Agent not found");
+    assert!(app.data.git_op.agent_id.is_none());
+    assert!(app.data.review.branches.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_reports_error_when_upstream_is_invalid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TestFixture::new("rebase_invalid_upstream")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create a branch worktree for the agent.
+    let repo = tenex::git::open_repository(&fixture.repo_path)?;
+    let worktree_mgr = tenex::git::WorktreeManager::new(&repo);
+    let branch_name = "tenex-test-rebase-invalid-upstream";
+    let worktree_path = fixture.worktree_path().join(branch_name);
+    worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    // Add an agent pointing to the worktree.
+    let agent = Agent::new(
+        "rebase-invalid-upstream".to_string(),
+        "echo".to_string(),
+        branch_name.to_string(),
+        worktree_path,
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = branch_name.to_string();
+    app.data.git_op.target_branch = "branch-does-not-exist".to_string();
+
+    let next = Actions::execute_rebase(&mut app.data)?;
+    app.apply_mode(next);
+
+    let message = app
+        .data
+        .ui
+        .last_error
+        .as_ref()
+        .ok_or("expected error modal message")?;
+    assert!(
+        message.contains("Rebase failed"),
+        "expected upstream failure, got {message:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_execute_rebase_conflict_spawns_terminal() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("rebase_conflict")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    // Create the agent worktree on a new branch.
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = tenex::app::Actions::new();
+
+    let next = handler.create_agent(&mut app.data, "rebase-conflict", None)?;
+    app.apply_mode(next);
+
+    let root = app
+        .selected_agent()
+        .ok_or("expected root agent to be selected")?
+        .clone();
+
+    // Create a conflicting change on master.
+    std::fs::write(fixture.repo_path.join("conflict.txt"), "master\n")?;
+    let output = git_command()
+        .args(["add", "conflict.txt"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert_git_success(&output, "git add conflict.txt on master failed");
+    let output = git_command()
+        .args(["commit", "-m", "master conflict"])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert_git_success(&output, "git commit on master failed");
+
+    // Create a conflicting change on the feature branch.
+    std::fs::write(root.worktree_path.join("conflict.txt"), "feature\n")?;
+    let output = git_command()
+        .args(["add", "conflict.txt"])
+        .current_dir(&root.worktree_path)
+        .output()?;
+    assert_git_success(&output, "git add conflict.txt on feature failed");
+    let output = git_command()
+        .args(["commit", "-m", "feature conflict"])
+        .current_dir(&root.worktree_path)
+        .output()?;
+    assert_git_success(&output, "git commit on feature failed");
+
+    app.data.git_op.agent_id = Some(root.id);
+    app.data.git_op.branch_name = root.branch;
+    app.data.git_op.target_branch = "master".to_string();
+
+    let next = Actions::execute_rebase(&mut app.data)?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, tenex::AppMode::normal());
+    assert!(
+        app.data.storage.len() > 1,
+        "expected conflict terminal to be added to storage"
+    );
+    assert!(
+        app.data.storage.iter().any(tenex::Agent::is_terminal_agent),
+        "expected a terminal agent for conflict resolution"
     );
 
     Ok(())
@@ -357,6 +735,43 @@ fn test_rebase_action_handler() -> Result<(), Box<dyn std::error::Error>> {
         app.mode,
         tenex::AppMode::RebaseBranchSelector(tenex::state::RebaseBranchSelectorMode)
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_rebase_branch_starts_selector_state() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    let fixture = TestFixture::new("rebase_branch")?;
+    let config = fixture.config();
+    let storage = Storage::with_path(fixture.storage_path());
+
+    let mut app = tenex::App::new(config, storage, Settings::default(), false);
+
+    let mut agent = Agent::new(
+        "rebase-branch-test".to_string(),
+        "echo".to_string(),
+        "master".to_string(),
+        fixture.repo_path.clone(),
+    );
+    agent.repo_root = Some(fixture.repo_path.clone());
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+
+    let next =
+        tracing::dispatcher::with_default(&dispatch, || Actions::rebase_branch(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.data.git_op.agent_id, Some(agent_id));
+    assert_eq!(
+        app.mode,
+        tenex::AppMode::RebaseBranchSelector(tenex::state::RebaseBranchSelectorMode)
+    );
+    assert!(!app.data.review.branches.is_empty());
 
     Ok(())
 }
@@ -548,6 +963,11 @@ fn test_execute_subagent_rename() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
     let fixture = TestFixture::new("rebase_conflict")?;
     let config = fixture.config();
     let storage = Storage::with_path(fixture.storage_path());
@@ -607,7 +1027,8 @@ fn test_execute_rebase_with_conflict() -> Result<(), Box<dyn std::error::Error>>
 
     // Execute rebase - in a real environment, this spawns a conflict terminal
     // In test environment (no active session), it may error when trying to create a window
-    let result = Actions::execute_rebase(&mut app.data);
+    let result =
+        tracing::dispatcher::with_default(&dispatch, || Actions::execute_rebase(&mut app.data));
     let result_is_err = result.is_err();
 
     // The rebase should handle the situation gracefully.

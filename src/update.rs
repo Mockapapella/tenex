@@ -6,6 +6,8 @@
 use anyhow::{Context, Result, anyhow};
 use semver::Version;
 use serde::Deserialize;
+use std::borrow::Cow;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use ureq::Agent;
@@ -19,6 +21,16 @@ pub struct UpdateInfo {
     pub latest_version: Version,
 }
 
+/// Parse the version of the running Tenex binary from Cargo metadata.
+///
+/// # Errors
+///
+/// Returns an error if Cargo metadata contains an invalid semver string.
+pub fn current_version() -> Result<Version> {
+    Version::parse(cargo_pkg_version().as_ref())
+        .context("Tenex version in Cargo metadata must be valid semver")
+}
+
 #[derive(Debug, Deserialize)]
 struct CratesIoResponse {
     #[serde(rename = "crate")]
@@ -30,6 +42,141 @@ struct CratesIoCrate {
     max_version: String,
 }
 
+#[cfg(test)]
+fn crates_io_base_url_override_store() -> &'static std::sync::RwLock<Option<String>> {
+    use std::sync::{OnceLock, RwLock};
+    static STORE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+    STORE.get_or_init(|| RwLock::new(None))
+}
+
+fn crates_io_base_url() -> String {
+    #[cfg(test)]
+    {
+        let override_value = crates_io_base_url_override_store()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(value) = override_value {
+            return value;
+        }
+    }
+
+    "https://crates.io".to_string()
+}
+
+#[cfg(test)]
+fn cargo_pkg_version_override_store() -> &'static std::sync::RwLock<Option<String>> {
+    use std::sync::{OnceLock, RwLock};
+    static STORE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+    STORE.get_or_init(|| RwLock::new(None))
+}
+
+#[cfg(not(test))]
+const fn cargo_pkg_version() -> Cow<'static, str> {
+    Cow::Borrowed(env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+fn cargo_pkg_version() -> Cow<'static, str> {
+    let override_value = cargo_pkg_version_override_store()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(value) = override_value {
+        return Cow::Owned(value);
+    }
+
+    Cow::Borrowed(env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+fn with_cargo_pkg_version_override_for_tests<T>(version: String, f: impl FnOnce() -> T) -> T {
+    let store = cargo_pkg_version_override_store();
+    let previous = {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.replace(version)
+    };
+
+    let result = f();
+
+    {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = previous;
+    }
+
+    result
+}
+
+#[cfg(test)]
+fn with_crates_io_base_url_override_for_tests<T>(base_url: String, f: impl FnOnce() -> T) -> T {
+    let store = crates_io_base_url_override_store();
+    let previous = {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.replace(base_url)
+    };
+
+    let result = f();
+
+    {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = previous;
+    }
+
+    result
+}
+
+#[cfg(test)]
+fn cargo_program_override_store() -> &'static std::sync::RwLock<Option<PathBuf>> {
+    use std::sync::{OnceLock, RwLock};
+    static STORE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+    STORE.get_or_init(|| RwLock::new(None))
+}
+
+fn cargo_program() -> PathBuf {
+    #[cfg(test)]
+    {
+        let override_value = cargo_program_override_store()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(value) = override_value {
+            return value;
+        }
+    }
+
+    PathBuf::from("cargo")
+}
+
+#[cfg(test)]
+fn with_cargo_program_override_for_tests<T>(program: PathBuf, f: impl FnOnce() -> T) -> T {
+    let store = cargo_program_override_store();
+    let previous = {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.replace(program)
+    };
+
+    let result = f();
+
+    {
+        let mut guard = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = previous;
+    }
+
+    result
+}
+
 /// Check crates.io to see if a newer version is available.
 ///
 /// Returns `Ok(Some(UpdateInfo))` if an update exists, or `Ok(None)` if not.
@@ -38,9 +185,10 @@ struct CratesIoCrate {
 ///
 /// Returns an error if the HTTP request fails or the response cannot be parsed.
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
-    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .context("Failed to parse current Tenex version")?;
-    let url = format!("https://crates.io/api/v1/crates/{}", env!("CARGO_PKG_NAME"));
+    let current_version = current_version()?;
+    let base = crates_io_base_url();
+    let base = base.trim_end_matches('/');
+    let url = format!("{base}/api/v1/crates/{}", env!("CARGO_PKG_NAME"));
     check_for_update_impl(&url, &current_version)
 }
 
@@ -90,7 +238,7 @@ fn check_for_update_impl(url: &str, current_version: &Version) -> Result<Option<
 ///
 /// Returns an error if `cargo` is not available or the install command fails.
 pub fn install_latest() -> Result<()> {
-    let status = Command::new("cargo")
+    let status = Command::new(cargo_program())
         .args(["install", env!("CARGO_PKG_NAME"), "--locked", "--force"])
         .status()
         .context("Failed to run cargo install")?;
@@ -105,9 +253,56 @@ pub fn install_latest() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_crates_io_base_url_defaults_to_crates_io() {
+        assert_eq!(crates_io_base_url(), "https://crates.io");
+    }
+
+    #[test]
+    fn test_cargo_program_defaults_to_cargo() {
+        assert_eq!(cargo_program(), PathBuf::from("cargo"));
+    }
 
     fn mock_crates_response(version: &str) -> String {
         format!(r#"{{"crate":{{"max_version":"{version}"}}}}"#)
+    }
+
+    #[test]
+    fn test_check_for_update_uses_base_url_override() {
+        let mut server = mockito::Server::new();
+        let base = server.url();
+
+        let mock = server
+            .mock("GET", "/api/v1/crates/tenex")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_crates_response("99.0.0"))
+            .create();
+
+        let result = with_crates_io_base_url_override_for_tests(base, check_for_update);
+        mock.assert();
+        drop(server);
+
+        let info = result
+            .expect("update check failed")
+            .expect("expected update");
+        assert!(info.latest_version > info.current_version);
+    }
+
+    #[test]
+    fn test_check_for_update_errors_when_cargo_pkg_version_is_not_semver() {
+        let err = with_cargo_pkg_version_override_for_tests("not-a-version".to_string(), || {
+            check_for_update().expect_err("expected update check to error")
+        });
+        assert!(
+            err.to_string()
+                .contains("Tenex version in Cargo metadata must be valid semver")
+        );
     }
 
     #[test]
@@ -126,12 +321,11 @@ mod tests {
         mock.assert();
         drop(server);
 
-        let info = result.ok().flatten();
-        assert!(info.is_some());
-        if let Some(info) = info {
-            assert_eq!(info.current_version, Version::new(1, 0, 0));
-            assert_eq!(info.latest_version, Version::new(99, 0, 0));
-        }
+        let info = result
+            .expect("update check failed")
+            .expect("expected update");
+        assert_eq!(info.current_version, Version::new(1, 0, 0));
+        assert_eq!(info.latest_version, Version::new(99, 0, 0));
     }
 
     #[test]
@@ -188,10 +382,8 @@ mod tests {
         mock.assert();
         drop(server);
 
-        assert!(result.is_err());
-        if let Err(err) = result {
-            assert!(err.to_string().contains("500"));
-        }
+        let err = result.expect_err("expected status error");
+        assert!(err.to_string().contains("500"));
     }
 
     #[test]
@@ -230,6 +422,75 @@ mod tests {
         drop(server);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_for_update_impl_returns_transport_errors_with_context() {
+        let current = Version::new(1, 0, 0);
+        let result = check_for_update_impl("http://127.0.0.1:1/api/v1/crates/tenex", &current);
+        let err = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("Failed to query crates.io for Tenex updates"));
+    }
+
+    #[cfg(unix)]
+    fn write_fake_cargo_script(temp: &TempDir, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = temp.path().join("cargo");
+        fs::write(&script, body).expect("write fake cargo script");
+        let mut perms = fs::metadata(&script)
+            .expect("metadata fake cargo script")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).expect("set fake cargo script permissions");
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_install_latest_succeeds_when_cargo_exits_zero() {
+        let temp = TempDir::new().expect("temp dir");
+        let script = write_fake_cargo_script(&temp, "#!/bin/sh\nexit 0\n");
+        with_cargo_program_override_for_tests(script, || {
+            install_latest().expect("install latest");
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_install_latest_errors_when_cargo_exit_is_nonzero() {
+        let temp = TempDir::new().expect("temp dir");
+        let script = write_fake_cargo_script(&temp, "#!/bin/sh\nexit 1\n");
+
+        let err = with_cargo_program_override_for_tests(script, install_latest)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("cargo install exited unsuccessfully"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_install_latest_errors_when_cargo_cannot_run() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().expect("temp dir");
+        let script = temp.path().join("cargo");
+        fs::write(&script, "#!/bin/sh\nexit 0\n").expect("write fake cargo script");
+        let mut perms = fs::metadata(&script)
+            .expect("metadata fake cargo script")
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&script, perms).expect("set fake cargo script permissions");
+
+        let err = with_cargo_program_override_for_tests(script, install_latest)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("Failed to run cargo install"));
     }
 
     #[test]

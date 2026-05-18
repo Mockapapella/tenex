@@ -20,8 +20,9 @@ def repo_root() -> Path:
     return Path(output.strip())
 
 
-def muxd_pids_from_proc(proc_dir: Path, socket: str) -> set[int]:
+def muxd_pids_from_proc(proc_dir: Path, socket: str, state_path: Path) -> set[int]:
     wanted_socket = f"TENEX_MUX_SOCKET={socket}"
+    wanted_state_path = f"TENEX_STATE_PATH={state_path}"
     pids: set[int] = set()
     for entry in proc_dir.iterdir():
         if not entry.name.isdigit():
@@ -51,7 +52,7 @@ def muxd_pids_from_proc(proc_dir: Path, socket: str) -> set[int]:
             continue
 
         env_parts = [part.decode("utf-8", "replace") for part in environ.split(b"\0") if part]
-        if wanted_socket not in env_parts:
+        if wanted_socket not in env_parts and wanted_state_path not in env_parts:
             continue
 
         pids.add(int(entry.name))
@@ -87,12 +88,31 @@ def muxd_pids_from_pidfile(state_dir: Path, socket: str) -> set[int]:
     return {pid}
 
 
+def muxd_pids_from_pidfiles(state_dir: Path) -> set[int]:
+    pids: set[int] = set()
+    for entry in state_dir.iterdir():
+        name = entry.name
+        if not name.startswith("tenex-muxd-") or not name.endswith(".pid"):
+            continue
+        if not entry.is_file():
+            continue
+        try:
+            payload = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        pid = payload.get("pid")
+        if isinstance(pid, int) and pid > 0:
+            pids.add(pid)
+    return pids
+
+
 def cleanup_hook_muxd(state_dir: Path, socket: str) -> None:
     proc_dir = Path("/proc")
+    state_path = state_dir / "state.json"
     pids = (
-        muxd_pids_from_proc(proc_dir, socket)
+        muxd_pids_from_proc(proc_dir, socket, state_path)
         if proc_dir.is_dir()
-        else muxd_pids_from_pidfile(state_dir, socket)
+        else muxd_pids_from_pidfiles(state_dir)
     )
 
     if not pids:
@@ -189,6 +209,39 @@ def build_command(mode: str, *, root: Path) -> list[str]:
     return command
 
 
+def configure_rustc_ice(env: dict[str, str]) -> None:
+    rustc_ice = env.get("RUSTC_ICE", "").strip()
+    if not rustc_ice:
+        cache_home = env.get("XDG_CACHE_HOME", "").strip()
+        home = env.get("HOME", "").strip()
+        if cache_home:
+            rustc_ice_path = Path(cache_home) / "tenex" / "rustc-ice"
+        elif home:
+            rustc_ice_path = Path(home) / ".cache" / "tenex" / "rustc-ice"
+        else:
+            return
+        rustc_ice_path.mkdir(parents=True, exist_ok=True)
+        env["RUSTC_ICE"] = str(rustc_ice_path)
+        return
+
+    if rustc_ice != "0":
+        Path(rustc_ice).mkdir(parents=True, exist_ok=True)
+
+
+def hook_tmp_root(env: dict[str, str]) -> str | None:
+    override = env.get("TENEX_HOOK_TMPDIR", "").strip()
+    if override and os.path.isdir(override) and os.access(override, os.W_OK):
+        return override
+
+    # Prefer /tmp on macOS where the default system temp dir can be long enough
+    # to exceed Unix socket path limits (SUN_LEN) once we append mux.sock.
+    for candidate in ("/tmp",):
+        if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+            return candidate
+
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("test", "coverage"))
@@ -202,11 +255,18 @@ def main() -> int:
     if args.mode == "coverage":
         shutil.rmtree(root / "target" / "llvm-cov-target", ignore_errors=True)
 
-    state_dir = Path(tempfile.mkdtemp(prefix="tenex-pre-commit-"))
-    mux_socket = str(state_dir / "mux.sock")
     env = os.environ.copy()
+    tmp_root = hook_tmp_root(env)
+    if tmp_root:
+        env["TMPDIR"] = tmp_root
+
+    state_dir = Path(
+        tempfile.mkdtemp(prefix="tenex-pre-commit-", dir=tmp_root) if tmp_root else tempfile.mkdtemp(prefix="tenex-pre-commit-")
+    )
+    mux_socket = str(state_dir / "mux.sock")
     env["TENEX_STATE_PATH"] = str(state_dir / "state.json")
     env["TENEX_MUX_SOCKET"] = mux_socket
+    configure_rustc_ice(env)
 
     cleanup_hook_muxd(state_dir, mux_socket)
     try:

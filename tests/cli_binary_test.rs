@@ -31,6 +31,12 @@ fn write_state_with_one_agent(
     Ok(())
 }
 
+fn write_empty_state(state_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut storage = tenex::agent::Storage::with_path(state_path.to_path_buf());
+    storage.save()?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn write_fake_docker_script(
     dir: &std::path::Path,
@@ -63,6 +69,20 @@ fn test_cli_version() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_cli_version_with_debug_logging_enabled() -> Result<(), Box<dyn std::error::Error>> {
+    for level in ["1", "2", "3"] {
+        let output = tenex_bin().arg("--version").env("DEBUG", level).output()?;
+        assert!(
+            output.status.success(),
+            "tenex --version failed with DEBUG={level}:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Error>> {
     let output = tenex_bin().arg("--invalid-flag").output()?;
 
@@ -76,6 +96,24 @@ fn test_cli_invalid_argument_shows_help() -> Result<(), Box<dyn std::error::Erro
     // Should show help text on stdout
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage:"));
+    Ok(())
+}
+
+#[test]
+fn test_cli_invalid_argument_warns_when_print_help_fails() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut cmd = tenex_bin();
+    cmd.arg("--invalid-flag");
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    drop(child.stdout.take());
+    let output = child.wait_with_output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning: Failed to print help"));
     Ok(())
 }
 
@@ -115,6 +153,160 @@ fn test_cli_reset_force() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = tenex::agent::Storage::load_from(temp_state.path())?;
     assert!(storage.mux_socket.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_cli_reset_scope_accepts_all_instances_numeric() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    let temp_state = NamedTempFile::new()?;
+    write_empty_state(temp_state.path())?;
+
+    let mut child = tenex_bin()
+        .args(["reset"])
+        .env("TENEX_STATE_PATH", temp_state.path())
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-reset-scope-numeric-{}", std::process::id()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    child
+        .stdin
+        .take()
+        .ok_or("Expected child stdin")?
+        .write_all(b"2\n")?;
+
+    let output = child.wait_with_output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reset scope"));
+    assert!(stdout.contains("No agents"));
+    Ok(())
+}
+
+#[test]
+fn test_cli_reset_scope_accepts_all_instances_alias() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    let temp_state = NamedTempFile::new()?;
+    write_empty_state(temp_state.path())?;
+
+    let mut child = tenex_bin()
+        .args(["reset"])
+        .env("TENEX_STATE_PATH", temp_state.path())
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-reset-scope-alias-{}", std::process::id()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    child
+        .stdin
+        .take()
+        .ok_or("Expected child stdin")?
+        .write_all(b"all\n")?;
+
+    let output = child.wait_with_output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reset scope"));
+    assert!(stdout.contains("No agents"));
+    Ok(())
+}
+
+#[test]
+fn test_cli_reset_aborts_when_confirmation_declined() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    let temp_state = NamedTempFile::new()?;
+    write_state_with_one_agent(temp_state.path())?;
+
+    let mut child = tenex_bin()
+        .args(["reset"])
+        .env("TENEX_STATE_PATH", temp_state.path())
+        .env(
+            "TENEX_MUX_SOCKET",
+            format!("tenex-mux-test-reset-abort-{}", std::process::id()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    child
+        .stdin
+        .take()
+        .ok_or("Expected child stdin")?
+        .write_all(b"\n\n")?;
+
+    let output = child.wait_with_output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Aborted."));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_cli_muxd_exits_when_endpoint_is_already_in_use() -> Result<(), Box<dyn std::error::Error>> {
+    use interprocess::local_socket::traits::ListenerExt as _;
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Name, prelude::*};
+
+    if !GenericNamespaced::is_supported() {
+        eprintln!("Skipping test: namespaced local sockets not supported");
+        return Ok(());
+    }
+
+    let pid = std::process::id();
+    let suffix = uuid::Uuid::new_v4();
+    let socket_name = format!("tenex-muxd-test-{pid}-{suffix}");
+    let endpoint: Name<'static> = socket_name
+        .clone()
+        .to_ns_name::<GenericNamespaced>()?
+        .into_owned();
+
+    let listener = ListenerOptions::new().name(endpoint).create_sync()?;
+    let accept_handle = std::thread::spawn(move || {
+        // Accept one connection from the Tenex muxd ping attempt and drop it so the ping fails.
+        for stream in listener.incoming().take(1).flatten() {
+            use std::io::Read as _;
+
+            let mut stream = stream;
+            let mut len_bytes = [0u8; 4];
+            if stream.read_exact(&mut len_bytes).is_ok() {
+                let len = u32::from_le_bytes(len_bytes) as usize;
+                if len <= 1024 * 1024 {
+                    let mut buf = vec![0u8; len];
+                    let _ = stream.read_exact(&mut buf);
+                }
+            }
+        }
+    });
+
+    let output = tenex_bin()
+        .args(["muxd"])
+        .env("TENEX_MUX_SOCKET", &socket_name)
+        .output()?;
+    let _ = accept_handle.join();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Mux endpoint is already in use")
+            || stderr.contains("already in use")
+            || stdout.contains("Mux endpoint is already in use")
+            || stdout.contains("already in use"),
+        "unexpected muxd output\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     Ok(())
 }
 

@@ -188,20 +188,18 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     if total_count > max_visible_branches {
         let hidden_above = scroll_offset;
         let hidden_below = total_count.saturating_sub(scroll_offset + max_visible_branches);
-        if hidden_above > 0 || hidden_below > 0 {
-            let indicator = match (hidden_above > 0, hidden_below > 0) {
-                (true, true) => format!("  ↑{hidden_above} more above, ↓{hidden_below} more below"),
-                (true, false) => format!("  ↑{hidden_above} more above"),
-                (false, true) => format!("  ↓{hidden_below} more below"),
-                (false, false) => String::new(),
-            };
-            if !indicator.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    indicator,
-                    Style::default().fg(colors::TEXT_MUTED),
-                )));
-            }
-        }
+        let indicator = if hidden_above > 0 && hidden_below > 0 {
+            format!("  ↑{hidden_above} more above, ↓{hidden_below} more below")
+        } else if hidden_above > 0 {
+            format!("  ↑{hidden_above} more above")
+        } else {
+            format!("  ↓{hidden_below} more below")
+        };
+
+        lines.push(Line::from(Span::styled(
+            indicator,
+            Style::default().fg(colors::TEXT_MUTED),
+        )));
     }
 
     // Empty state

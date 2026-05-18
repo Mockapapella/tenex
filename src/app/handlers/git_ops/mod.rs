@@ -6,6 +6,11 @@ mod push;
 mod rebase;
 mod rename;
 
+#[cfg(test)]
+pub(super) fn set_gh_binary_override_for_tests(path: std::path::PathBuf) {
+    open_pr::set_gh_binary_override(path);
+}
+
 use crate::agent::{Agent, ChildConfig};
 use crate::mux::SessionManager;
 use anyhow::Result;
@@ -28,16 +33,11 @@ impl Actions {
             .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID"))?;
 
-        // Verify agent exists
-        if app_data.storage.get(agent_id).is_none() {
-            anyhow::bail!("Agent not found");
-        }
-
         // Get the root ancestor to use its mux session
         let root = app_data
             .storage
             .root_ancestor(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Could not find root agent"))?;
+            .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
 
         let root_session = root.mux_session.clone();
         let worktree_path = root.worktree_path.clone();
@@ -98,8 +98,10 @@ impl Actions {
         app_data.storage.add(terminal);
 
         // Expand the parent to show the new terminal
-        if let Some(parent) = app_data.storage.get_mut(root_id) {
-            parent.collapsed = false;
+        for agent in app_data.storage.iter_mut() {
+            if agent.id == root_id {
+                agent.collapsed = false;
+            }
         }
 
         app_data.storage.save()?;

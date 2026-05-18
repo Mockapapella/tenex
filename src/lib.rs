@@ -3,11 +3,35 @@
 //! Tenex allows you to run multiple AI agents in parallel, each in isolated
 //! git worktrees, with a TUI for managing and monitoring them.
 
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(
+    test,
+    expect(clippy::unwrap_used, reason = "unit tests use unwrap for assertions")
+)]
+#![cfg_attr(
+    test,
+    expect(clippy::expect_used, reason = "unit tests use expect for assertions")
+)]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::large_stack_arrays,
+        reason = "Unit tests may allocate large scratch buffers; production builds forbid them."
+    )
+)]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::significant_drop_tightening,
+        reason = "Work around a clippy ICE in nightly-2025-11-07."
+    )
+)]
+
 #[cfg(not(any(unix, windows)))]
 compile_error!("Tenex supports Linux, macOS, and Windows.");
 
 mod command;
-pub(crate) mod conversation;
+pub mod conversation;
 
 pub mod action;
 pub mod agent;

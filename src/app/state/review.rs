@@ -170,6 +170,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
 
     fn make_branch(name: &str) -> BranchInfo {
         BranchInfo {
@@ -264,11 +265,8 @@ mod tests {
         state.branches = vec![make_branch("main"), make_branch("develop")];
         state.selected = 1;
 
-        let selected = state.selected_branch();
-        assert!(selected.is_some());
-        if let Some(branch) = selected {
-            assert_eq!(branch.name, "develop");
-        }
+        let branch = state.selected_branch().unwrap();
+        assert_eq!(branch.name, "develop");
     }
 
     #[test]
@@ -329,5 +327,57 @@ mod tests {
         assert!(state.filter.is_empty());
         assert_eq!(state.selected, 0);
         assert!(state.base_branch.is_none());
+    }
+
+    #[test]
+    fn test_select_next_and_prev_are_noops_without_branches() {
+        let mut state = ReviewState::new();
+        state.selected = 2;
+
+        state.select_next();
+        assert_eq!(state.selected, 2);
+
+        state.select_prev();
+        assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn test_app_review_flow_wrapper_methods() {
+        fn is_review_child_count(mode: &crate::state::AppMode) -> bool {
+            matches!(mode, crate::state::AppMode::ReviewChildCount(_))
+        }
+
+        fn is_branch_selector(mode: &crate::state::AppMode) -> bool {
+            matches!(mode, crate::state::AppMode::BranchSelector(_))
+        }
+
+        let mut app = App::default();
+        let branches = vec![make_branch("main"), make_branch("develop")];
+
+        app.start_review(branches);
+        assert!(is_review_child_count(&app.mode));
+        assert!(!is_branch_selector(&app.mode));
+
+        app.proceed_to_branch_selector();
+        assert!(!is_review_child_count(&app.mode));
+        assert!(is_branch_selector(&app.mode));
+
+        assert_eq!(app.filtered_review_branches().len(), 2);
+        assert!(app.selected_branch().is_some());
+
+        app.select_next_branch();
+        app.select_prev_branch();
+
+        app.handle_branch_filter_char('m');
+        assert!(!app.filtered_review_branches().is_empty());
+
+        app.handle_branch_filter_backspace();
+        assert_eq!(app.filtered_review_branches().len(), 2);
+
+        assert!(app.confirm_branch_selection());
+        assert!(app.data.review.base_branch.is_some());
+
+        app.clear_review_state();
+        assert!(app.data.review.branches.is_empty());
     }
 }

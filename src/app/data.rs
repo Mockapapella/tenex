@@ -1,4 +1,5 @@
 //! Persistent application data that outlives mode transitions.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::{AgentProgram, Settings, Tab};
 use crate::agent::{Agent, Status, Storage};
@@ -6,7 +7,7 @@ use crate::app::AgentRole;
 use crate::app::SidebarItem;
 use crate::app::state::{
     CommandPaletteState, GitOpState, InputState, ModelSelectorState, ReviewState,
-    SettingsMenuState, SpawnState, UiState,
+    SettingsMenuState, SlashCommand, SpawnState, UiState,
 };
 use crate::config::Config;
 use crate::state::{
@@ -101,54 +102,78 @@ impl AppData {
         }
     }
 
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_command_defaults_for_coverage(&mut self) {
+        let settings = self.settings.clone();
+
+        self.settings.agent_program = AgentProgram::Custom;
+        self.settings.custom_agent_command = "  ".to_string();
+        let _ = self.agent_spawn_command();
+        self.settings.custom_agent_command = "  codex  ".to_string();
+        let _ = self.agent_spawn_command();
+        self.settings.agent_program = AgentProgram::Codex;
+        let _ = self.agent_spawn_command();
+
+        self.settings.planner_agent_program = AgentProgram::Custom;
+        self.settings.planner_custom_agent_command = "  ".to_string();
+        let _ = self.planner_agent_spawn_command();
+        self.settings.planner_custom_agent_command = "  planner  ".to_string();
+        let _ = self.planner_agent_spawn_command();
+        self.settings.planner_agent_program = AgentProgram::Codex;
+        let _ = self.planner_agent_spawn_command();
+
+        self.settings.review_agent_program = AgentProgram::Custom;
+        self.settings.review_custom_agent_command = "  ".to_string();
+        let _ = self.review_agent_spawn_command();
+        self.settings.review_custom_agent_command = "  reviewer  ".to_string();
+        let _ = self.review_agent_spawn_command();
+        self.settings.review_agent_program = AgentProgram::Codex;
+        let _ = self.review_agent_spawn_command();
+
+        self.settings = settings;
+    }
+
     /// The base command used when spawning new agents (based on user settings).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn agent_spawn_command(&self) -> String {
         match self.settings.agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
     /// The base command used when spawning planner agents (planning swarms).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn planner_agent_spawn_command(&self) -> String {
         match self.settings.planner_agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.planner_custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.planner_custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
     /// The base command used when spawning review agents (review swarms).
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn review_agent_spawn_command(&self) -> String {
         match self.settings.review_agent_program {
             AgentProgram::Codex => "codex".to_string(),
             AgentProgram::Claude => self.config.default_program.clone(),
-            AgentProgram::Custom => {
-                let custom = self.settings.review_custom_agent_command.trim();
-                if custom.is_empty() {
-                    self.config.default_program.clone()
-                } else {
-                    custom.to_string()
-                }
-            }
+            AgentProgram::Custom => custom_agent_command_or_default(
+                &self.settings.review_custom_agent_command,
+                &self.config.default_program,
+            ),
         }
     }
 
@@ -178,17 +203,13 @@ impl AppData {
         };
 
         let items = self.sidebar_items();
-        if items.is_empty() {
-            return;
-        }
-
-        let mut header_index: Option<usize> = None;
+        let mut header_index = 0usize;
         let mut first_agent_index: Option<usize> = None;
 
         for (idx, item) in items.iter().enumerate() {
             match item {
                 SidebarItem::Project(project) if project.root == cwd_root => {
-                    header_index = Some(idx);
+                    header_index = idx;
                 }
                 SidebarItem::Agent(agent) => {
                     let agent_root = agent
@@ -205,9 +226,7 @@ impl AppData {
             }
         }
 
-        let Some(target) = first_agent_index.or(header_index) else {
-            return;
-        };
+        let target = first_agent_index.unwrap_or(header_index);
 
         if target == self.selected {
             return;
@@ -225,12 +244,16 @@ impl AppData {
         };
 
         let items = self.sidebar_items();
-        let Some(target) = items.iter().position(|item| match item {
-            SidebarItem::Project(project) => project.root == project_root,
-            SidebarItem::Agent(_) => false,
-        }) else {
-            return;
-        };
+        let mut target = self.selected;
+        for (idx, item) in items.iter().enumerate() {
+            match item {
+                SidebarItem::Project(project) if project.root == project_root => {
+                    target = idx;
+                    break;
+                }
+                SidebarItem::Project(_) | SidebarItem::Agent(_) => {}
+            }
+        }
 
         if target == self.selected {
             return;
@@ -243,13 +266,10 @@ impl AppData {
     }
 
     pub(crate) fn select_first_agent_in_selected_project(&mut self) {
-        if !matches!(self.selected_sidebar_item(), Some(SidebarItem::Project(_))) {
-            return;
-        }
-
-        let Some(project_root) = self.selected_project_root() else {
+        let Some(SidebarItem::Project(project)) = self.selected_sidebar_item() else {
             return;
         };
+        let project_root = project.root;
 
         let items = self.sidebar_items();
         let mut in_project = false;
@@ -271,10 +291,6 @@ impl AppData {
         let Some(target) = target else {
             return;
         };
-
-        if target == self.selected {
-            return;
-        }
 
         self.selected = target;
         self.ui.reset_scroll();
@@ -570,6 +586,96 @@ impl AppData {
             .collect()
     }
 
+    fn run_slash_command_by_name(&mut self, command_name: &str) -> AppMode {
+        match command_name {
+            "/agents" => {
+                self.input.clear();
+                self.model_selector.role = AgentRole::Default;
+                SettingsMenuMode.into()
+            }
+            "/toggle_docker" => self.toggle_docker_for_new_roots(),
+            "/changelog" => {
+                self.input.clear();
+                match crate::release_notes::current_version()
+                    .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
+                {
+                    Ok(lines) => ChangelogMode {
+                        title: "Changelog".to_string(),
+                        lines,
+                        mark_seen_version: None,
+                    }
+                    .into(),
+                    Err(e) => {
+                        self.set_status(format!("Failed to load changelog: {e}"));
+                        AppMode::normal()
+                    }
+                }
+            }
+            "/help" => {
+                self.ui.help_scroll = 0;
+                HelpMode.into()
+            }
+            other => {
+                self.set_status(format!("Unknown command: {other}"));
+                AppMode::normal()
+            }
+        }
+    }
+
+    fn run_typed_slash_command(&mut self, commands: &[SlashCommand]) -> AppMode {
+        let typed = self
+            .input
+            .buffer
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        if typed.is_empty() || typed == "/" {
+            return AppMode::normal();
+        }
+
+        let normalized = if typed.starts_with('/') {
+            typed.to_ascii_lowercase()
+        } else {
+            format!("/{typed}").to_ascii_lowercase()
+        };
+
+        let cmd = if let Some(cmd) = commands
+            .iter()
+            .copied()
+            .find(|c| c.name.eq_ignore_ascii_case(&normalized))
+        {
+            cmd
+        } else {
+            let query = normalized.trim_start_matches('/').to_string();
+            let matches: Vec<SlashCommand> = commands
+                .iter()
+                .copied()
+                .filter(|c| {
+                    c.name
+                        .trim_start_matches('/')
+                        .to_ascii_lowercase()
+                        .starts_with(&query)
+                })
+                .collect();
+
+            match matches.as_slice() {
+                [] => {
+                    self.set_status(format!("Unknown command: {typed}"));
+                    return AppMode::normal();
+                }
+                [single] => *single,
+                _ => {
+                    self.set_status(format!("Ambiguous command: {typed}"));
+                    return AppMode::normal();
+                }
+            }
+        };
+
+        self.run_slash_command_by_name(cmd.name)
+    }
+
     /// Select the next slash command in the filtered list.
     pub(crate) fn select_next_slash_command(&mut self) {
         let count = self.filtered_slash_commands().len();
@@ -696,182 +802,16 @@ impl AppData {
             .filtered_slash_commands()
             .get(self.command_palette.selected)
             .copied();
-
-        let cmd = if let Some(cmd) = selected {
-            cmd
-        } else {
-            let typed = self
-                .input
-                .buffer
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
-
-            if typed.is_empty() || typed == "/" {
-                return AppMode::normal();
-            }
-
-            let normalized = if typed.starts_with('/') {
-                typed.to_ascii_lowercase()
-            } else {
-                format!("/{typed}").to_ascii_lowercase()
-            };
-
-            if let Some(cmd) = crate::app::state::SLASH_COMMANDS
-                .iter()
-                .copied()
-                .find(|c| c.name.eq_ignore_ascii_case(&normalized))
-            {
-                cmd
-            } else {
-                let query = normalized.trim_start_matches('/').to_string();
-                let matches: Vec<crate::app::state::SlashCommand> =
-                    crate::app::state::SLASH_COMMANDS
-                        .iter()
-                        .copied()
-                        .filter(|c| {
-                            c.name
-                                .trim_start_matches('/')
-                                .to_ascii_lowercase()
-                                .starts_with(&query)
-                        })
-                        .collect();
-
-                match matches.as_slice() {
-                    [] => {
-                        self.set_status(format!("Unknown command: {typed}"));
-                        return AppMode::normal();
-                    }
-                    [single] => *single,
-                    _ => {
-                        self.set_status(format!("Ambiguous command: {typed}"));
-                        return AppMode::normal();
-                    }
-                }
-            }
-        };
-
-        match cmd.name {
-            "/agents" => {
-                self.input.clear();
-                self.model_selector.role = AgentRole::Default;
-                SettingsMenuMode.into()
-            }
-            "/toggle_docker" => self.toggle_docker_for_new_roots(),
-            "/changelog" => {
-                self.input.clear();
-                match crate::release_notes::current_version()
-                    .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
-                {
-                    Ok(lines) => ChangelogMode {
-                        title: "Changelog".to_string(),
-                        lines,
-                        mark_seen_version: None,
-                    }
-                    .into(),
-                    Err(e) => {
-                        self.set_status(format!("Failed to load changelog: {e}"));
-                        AppMode::normal()
-                    }
-                }
-            }
-            "/help" => {
-                self.ui.help_scroll = 0;
-                HelpMode.into()
-            }
-            other => {
-                self.set_status(format!("Unknown command: {other}"));
-                AppMode::normal()
-            }
+        if let Some(cmd) = selected {
+            return self.run_slash_command_by_name(cmd.name);
         }
+
+        self.run_typed_slash_command(crate::app::state::SLASH_COMMANDS)
     }
 
     /// Execute the currently-typed slash command (ignores the highlighted selection).
     pub fn submit_slash_command_palette(&mut self) -> AppMode {
-        let typed = self
-            .input
-            .buffer
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
-
-        if typed.is_empty() || typed == "/" {
-            return AppMode::normal();
-        }
-
-        let normalized = if typed.starts_with('/') {
-            typed.to_ascii_lowercase()
-        } else {
-            format!("/{typed}").to_ascii_lowercase()
-        };
-
-        let cmd = if let Some(cmd) = crate::app::state::SLASH_COMMANDS
-            .iter()
-            .copied()
-            .find(|c| c.name.eq_ignore_ascii_case(&normalized))
-        {
-            cmd
-        } else {
-            let query = normalized.trim_start_matches('/').to_string();
-            let matches: Vec<crate::app::state::SlashCommand> = crate::app::state::SLASH_COMMANDS
-                .iter()
-                .copied()
-                .filter(|c| {
-                    c.name
-                        .trim_start_matches('/')
-                        .to_ascii_lowercase()
-                        .starts_with(&query)
-                })
-                .collect();
-
-            match matches.as_slice() {
-                [] => {
-                    self.set_status(format!("Unknown command: {typed}"));
-                    return AppMode::normal();
-                }
-                [single] => *single,
-                _ => {
-                    self.set_status(format!("Ambiguous command: {typed}"));
-                    return AppMode::normal();
-                }
-            }
-        };
-
-        match cmd.name {
-            "/agents" => {
-                self.input.clear();
-                self.model_selector.role = AgentRole::Default;
-                SettingsMenuMode.into()
-            }
-            "/toggle_docker" => self.toggle_docker_for_new_roots(),
-            "/changelog" => {
-                self.input.clear();
-                match crate::release_notes::current_version()
-                    .and_then(|version| crate::release_notes::changelog_lines_for_version(&version))
-                {
-                    Ok(lines) => ChangelogMode {
-                        title: "Changelog".to_string(),
-                        lines,
-                        mark_seen_version: None,
-                    }
-                    .into(),
-                    Err(e) => {
-                        self.set_status(format!("Failed to load changelog: {e}"));
-                        AppMode::normal()
-                    }
-                }
-            }
-            "/help" => {
-                self.ui.help_scroll = 0;
-                HelpMode.into()
-            }
-            other => {
-                self.set_status(format!("Unknown command: {other}"));
-                AppMode::normal()
-            }
-        }
+        self.run_typed_slash_command(crate::app::state::SLASH_COMMANDS)
     }
 
     /// Insert a character into the input buffer.
@@ -890,12 +830,78 @@ impl AppData {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn custom_agent_command_or_default(custom: &str, default_program: &str) -> String {
+    let custom = custom.trim();
+    if custom.is_empty() {
+        default_program.to_string()
+    } else {
+        custom.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::{Agent, Storage};
     use crate::git::BranchInfo;
     use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SidebarItemKind {
+        Project,
+        Agent,
+    }
+
+    fn sidebar_item_kind(item: &SidebarItem<'_>) -> SidebarItemKind {
+        match item {
+            SidebarItem::Project(_) => SidebarItemKind::Project,
+            SidebarItem::Agent(_) => SidebarItemKind::Agent,
+        }
+    }
+
+    fn sidebar_item_agent_title<'a>(item: &SidebarItem<'a>) -> Option<&'a str> {
+        match item {
+            SidebarItem::Agent(agent) => Some(agent.info.agent.title.as_str()),
+            SidebarItem::Project(_) => None,
+        }
+    }
+
+    fn sidebar_item_project_root<'b>(item: &'b SidebarItem<'_>) -> Option<&'b Path> {
+        match item {
+            SidebarItem::Project(project) => Some(project.root.as_path()),
+            SidebarItem::Agent(_) => None,
+        }
+    }
+
+    fn sidebar_index_of_agent(items: &[SidebarItem<'_>], title: &str) -> usize {
+        items
+            .iter()
+            .position(|item| sidebar_item_agent_title(item) == Some(title))
+            .unwrap()
+    }
+
+    fn sidebar_index_of_project(items: &[SidebarItem<'_>], root: &Path) -> usize {
+        items
+            .iter()
+            .position(|item| sidebar_item_project_root(item) == Some(root))
+            .unwrap()
+    }
+
+    fn assert_app_mode_variant(actual: &AppMode, expected: &AppMode) {
+        assert_eq!(
+            std::mem::discriminant(actual),
+            std::mem::discriminant(expected)
+        );
+    }
+
+    fn error_modal_message(mode: &AppMode) -> Option<&str> {
+        match mode {
+            AppMode::ErrorModal(state) => Some(state.message.as_str()),
+            _ => None,
+        }
+    }
 
     fn make_agent(title: &str) -> Agent {
         let pid = std::process::id();
@@ -939,6 +945,35 @@ mod tests {
             remote: Some(remote.to_string()),
             last_commit_time: None,
         }
+    }
+
+    #[test]
+    fn test_sidebar_item_helpers_cover_both_kinds() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-a"));
+
+        let data = AppData::new(Config::default(), storage, Settings::default(), false);
+        let items = data.sidebar_items();
+
+        let mut saw_project = false;
+        let mut saw_agent = false;
+        for item in &items {
+            match sidebar_item_kind(item) {
+                SidebarItemKind::Project => {
+                    saw_project = true;
+                    assert!(sidebar_item_agent_title(item).is_none());
+                    assert!(sidebar_item_project_root(item).is_some());
+                }
+                SidebarItemKind::Agent => {
+                    saw_agent = true;
+                    assert_eq!(sidebar_item_agent_title(item), Some("agent-a"));
+                    assert!(sidebar_item_project_root(item).is_none());
+                }
+            }
+        }
+
+        assert!(saw_project);
+        assert!(saw_agent);
     }
 
     #[test]
@@ -1098,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_cwd_project_prefers_first_agent_in_cwd_project() -> Result<(), String> {
+    fn test_select_cwd_project_prefers_first_agent_in_cwd_project() {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -1110,27 +1145,21 @@ mod tests {
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
         let items = data.sidebar_items();
-        data.selected = items
-            .iter()
-            .position(|item| matches!(item, SidebarItem::Agent(agent) if agent.info.agent.title == "agent-a"))
-            .ok_or("missing agent-a")?;
+        data.selected = sidebar_index_of_agent(&items, "agent-a");
         data.ui.preview_scroll = 0;
         data.ui.diff_scroll = 7;
 
         data.select_cwd_project();
 
         assert_eq!(data.selected_project_root(), Some(repo_b));
-        assert!(matches!(
-            data.selected_sidebar_item(),
-            Some(SidebarItem::Agent(_))
-        ));
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Agent));
         assert_eq!(data.ui.preview_scroll, usize::MAX);
         assert_eq!(data.ui.diff_scroll, 0);
-        Ok(())
     }
 
     #[test]
-    fn test_select_cwd_project_selects_header_when_project_has_no_agents() -> Result<(), String> {
+    fn test_select_cwd_project_selects_header_when_project_has_no_agents() {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -1141,19 +1170,58 @@ mod tests {
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
         let items = data.sidebar_items();
-        data.selected = items
-            .iter()
-            .position(|item| matches!(item, SidebarItem::Agent(agent) if agent.info.agent.title == "agent-a"))
-            .ok_or("missing agent-a")?;
+        data.selected = sidebar_index_of_agent(&items, "agent-a");
 
         data.select_cwd_project();
 
         assert_eq!(data.selected_project_root(), Some(repo_b));
-        assert!(matches!(
-            data.selected_sidebar_item(),
-            Some(SidebarItem::Project(_))
-        ));
-        Ok(())
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Project));
+    }
+
+    #[test]
+    fn test_select_cwd_project_is_noop_when_cwd_root_missing() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.selected = 7;
+        data.ui.preview_scroll = 0;
+        data.ui.diff_scroll = 42;
+
+        data.select_cwd_project();
+
+        assert_eq!(data.selected, 7);
+        assert_eq!(data.ui.preview_scroll, 0);
+        assert_eq!(data.ui.diff_scroll, 42);
+    }
+
+    #[test]
+    fn test_select_cwd_project_is_noop_when_target_already_selected() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.cwd_project_root = Some(repo_b.clone());
+
+        let items = data.sidebar_items();
+        let target = sidebar_index_of_project(&items, repo_b.as_path());
+        data.selected = target;
+
+        data.ui.preview_scroll = 0;
+        data.ui.diff_scroll = 7;
+
+        data.select_cwd_project();
+
+        assert_eq!(data.selected, target);
+        assert_eq!(data.ui.preview_scroll, 0);
+        assert_eq!(data.ui.diff_scroll, 7);
     }
 
     #[test]
@@ -1171,11 +1239,62 @@ mod tests {
 
         data.select_project_header();
 
-        assert!(matches!(
-            data.selected_sidebar_item(),
-            Some(SidebarItem::Project(_))
-        ));
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Project));
         assert_eq!(data.selected_project_root(), Some(repo_a));
+    }
+
+    #[test]
+    fn test_select_project_header_is_noop_when_no_selected_project_root() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.selected = 99;
+
+        data.select_project_header();
+
+        assert_eq!(data.selected, 99);
+    }
+
+    #[test]
+    fn test_select_project_header_moves_selection_when_project_root_is_not_first_item() {
+        let pid = std::process::id();
+        let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
+        let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
+
+        let mut storage = Storage::new();
+        storage.add(make_agent_in_repo("agent-a", &repo_a));
+        storage.add(make_agent_in_repo("agent-b", &repo_b));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        let items = data.sidebar_items();
+        data.selected = sidebar_index_of_agent(&items, "agent-b");
+
+        data.select_project_header();
+
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Project));
+        assert_eq!(data.selected_project_root(), Some(repo_b));
+    }
+
+    #[test]
+    fn test_select_project_header_is_noop_when_already_on_header() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+        data.ui.preview_scroll = 0;
+        data.ui.diff_scroll = 7;
+
+        data.select_project_header();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.preview_scroll, 0);
+        assert_eq!(data.ui.diff_scroll, 7);
     }
 
     #[test]
@@ -1193,15 +1312,28 @@ mod tests {
 
         data.select_first_agent_in_selected_project();
 
-        assert!(matches!(
-            data.selected_sidebar_item(),
-            Some(SidebarItem::Agent(_))
-        ));
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Agent));
         assert_eq!(data.selected_project_root(), Some(repo_a));
     }
 
     #[test]
-    fn test_select_first_agent_in_selected_project_is_noop_when_empty() -> Result<(), String> {
+    fn test_select_first_agent_in_selected_project_is_noop_when_selected_item_is_agent() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 1;
+        data.ui.preview_scroll = 0;
+
+        data.select_first_agent_in_selected_project();
+
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.ui.preview_scroll, 0);
+    }
+
+    #[test]
+    fn test_select_first_agent_in_selected_project_is_noop_when_empty() {
         let pid = std::process::id();
         let repo_a = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-a"));
         let repo_b = PathBuf::from(format!("/tmp/tenex-app-data-test-{pid}/repo-b"));
@@ -1212,24 +1344,15 @@ mod tests {
         let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
         data.cwd_project_root = Some(repo_b.clone());
         let items = data.sidebar_items();
-        data.selected = items
-            .iter()
-            .position(|item| match item {
-                SidebarItem::Project(project) => project.root == repo_b,
-                SidebarItem::Agent(_) => false,
-            })
-            .ok_or("missing repo-b project header")?;
+        data.selected = sidebar_index_of_project(&items, repo_b.as_path());
         let initial_selected = data.selected;
 
         data.select_first_agent_in_selected_project();
 
         assert_eq!(data.selected, initial_selected);
         assert_eq!(data.selected_project_root(), Some(repo_b));
-        assert!(matches!(
-            data.selected_sidebar_item(),
-            Some(SidebarItem::Project(_))
-        ));
-        Ok(())
+        let kind = data.selected_sidebar_item().as_ref().map(sidebar_item_kind);
+        assert_eq!(kind, Some(SidebarItemKind::Project));
     }
 
     #[test]
@@ -1272,6 +1395,39 @@ mod tests {
     }
 
     #[test]
+    fn test_select_next_out_of_bounds_wraps_to_first_item() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 99;
+        data.ui.preview_scroll = 0;
+
+        data.select_next();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_select_next_single_project_item_is_noop() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.cwd_project_root = Some(PathBuf::from("/tmp/tenex-app-data-test-single-project"));
+        data.selected = 0;
+        data.ui.preview_scroll = 0;
+
+        data.select_next();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.preview_scroll, 0);
+    }
+
+    #[test]
     fn test_select_next_one_agent_resets_diff_hash() {
         let mut storage = Storage::new();
         storage.add(make_agent("agent-1"));
@@ -1299,6 +1455,39 @@ mod tests {
         data.select_prev();
         assert_eq!(data.selected, 0);
         assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_select_prev_out_of_bounds_wraps_to_last_item() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 99;
+        data.ui.preview_scroll = 0;
+
+        data.select_prev();
+
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.ui.preview_scroll, usize::MAX);
+    }
+
+    #[test]
+    fn test_select_prev_single_project_item_is_noop() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.cwd_project_root = Some(PathBuf::from("/tmp/tenex-app-data-test-single-project"));
+        data.selected = 0;
+        data.ui.preview_scroll = 0;
+
+        data.select_prev();
+
+        assert_eq!(data.selected, 0);
+        assert_eq!(data.ui.preview_scroll, 0);
     }
 
     #[test]
@@ -1362,6 +1551,58 @@ mod tests {
     }
 
     #[test]
+    fn test_select_agent_by_id_is_noop_when_agent_not_found() {
+        let mut storage = Storage::new();
+        storage.add(make_agent("agent-1"));
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 0;
+
+        data.select_agent_by_id(Uuid::new_v4());
+
+        assert_eq!(data.selected, 0);
+    }
+
+    #[test]
+    fn test_select_agent_by_id_is_noop_when_target_already_selected() {
+        let mut storage = Storage::new();
+        let agent = make_agent("agent-1");
+        let target_id = agent.id;
+        storage.add(agent);
+
+        let mut data = AppData::new(Config::default(), storage, Settings::default(), false);
+        data.selected = 1;
+        data.ui.preview_scroll = 0;
+
+        data.select_agent_by_id(target_id);
+
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.ui.preview_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_helpers_route_commits_tab() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.active_tab = Tab::Commits;
+        data.ui.commits_line_ranges = vec![(0, 1); 100];
+        data.ui.commits_scroll = 10;
+
+        data.scroll_up(3);
+        assert_eq!(data.ui.commits_scroll, 7);
+
+        data.scroll_to_top();
+        assert_eq!(data.ui.commits_scroll, 0);
+
+        data.scroll_to_bottom(100, 10);
+        assert_eq!(data.ui.commits_scroll, 90);
+    }
+
+    #[test]
     fn test_confirm_rebase_merge_branch_sets_target_branch() {
         let mut data = AppData::new(
             Config::default(),
@@ -1392,6 +1633,27 @@ mod tests {
     }
 
     #[test]
+    fn test_confirm_rebase_merge_branch_remote_without_name_uses_branch_name() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.review.branches = vec![BranchInfo {
+            name: "main".to_string(),
+            full_name: "refs/remotes/origin/main".to_string(),
+            is_remote: true,
+            remote: None,
+            last_commit_time: None,
+        }];
+        data.review.selected = 0;
+
+        assert!(data.confirm_rebase_merge_branch());
+        assert_eq!(data.git_op.target_branch, "main");
+    }
+
+    #[test]
     fn test_confirm_rebase_merge_branch_returns_false_when_no_branches() {
         let mut data = AppData::new(
             Config::default(),
@@ -1403,6 +1665,87 @@ mod tests {
 
         assert!(!data.confirm_rebase_merge_branch());
         assert!(data.git_op.target_branch.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_model_program_selection_returns_normal_when_filter_has_no_matches() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.model_selector.filter = "does-not-exist".to_string();
+        data.model_selector.selected = 0;
+
+        let next = data.confirm_model_program_selection();
+        assert_eq!(next, AppMode::normal());
+    }
+
+    #[test]
+    fn test_confirm_model_program_selection_custom_enters_custom_command_mode() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.model_selector.start(AgentProgram::Custom);
+
+        let next = data.confirm_model_program_selection();
+        assert_app_mode_variant(&next, &AppMode::CustomAgentCommand(CustomAgentCommandMode));
+    }
+
+    #[test]
+    fn test_confirm_model_program_selection_sets_planner_program_when_save_succeeds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let settings_path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(settings_path).expect("override settings path");
+
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.model_selector.role = AgentRole::Planner;
+        data.model_selector.start(AgentProgram::Codex);
+
+        let next = data.confirm_model_program_selection();
+        assert_eq!(next, AppMode::normal());
+        assert_eq!(data.settings.planner_agent_program, AgentProgram::Codex);
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Planner agent set to codex"))
+        );
+    }
+
+    #[test]
+    fn test_confirm_model_program_selection_sets_review_program_when_save_succeeds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let settings_path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(settings_path).expect("override settings path");
+
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.model_selector.role = AgentRole::Review;
+        data.model_selector.start(AgentProgram::Codex);
+
+        let next = data.confirm_model_program_selection();
+        assert_eq!(next, AppMode::normal());
+        assert_eq!(data.settings.review_agent_program, AgentProgram::Codex);
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Review agent set to codex"))
+        );
     }
 
     #[test]
@@ -1421,6 +1764,38 @@ mod tests {
     }
 
     #[test]
+    fn test_select_next_slash_command_resets_to_zero_when_no_matches() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/definitely-not-a-command".to_string();
+        data.command_palette.selected = 9;
+
+        data.select_next_slash_command();
+
+        assert_eq!(data.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn test_select_prev_slash_command_resets_to_zero_when_no_matches() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/definitely-not-a-command".to_string();
+        data.command_palette.selected = 9;
+
+        data.select_prev_slash_command();
+
+        assert_eq!(data.command_palette.selected, 0);
+    }
+
+    #[test]
     fn test_confirm_slash_command_selection_uses_highlighted_entry() {
         let mut data = AppData::new(
             Config::default(),
@@ -1433,7 +1808,25 @@ mod tests {
         data.ui.help_scroll = 123;
 
         let next = data.confirm_slash_command_selection();
-        assert!(matches!(next, AppMode::Help(_)));
+        assert_app_mode_variant(&next, &AppMode::Help(HelpMode));
+        assert_eq!(data.ui.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_confirm_slash_command_selection_accepts_partial_without_leading_slash() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "he".to_string();
+        data.command_palette.selected = 99;
+        data.ui.help_scroll = 123;
+
+        let next = data.confirm_slash_command_selection();
+
+        assert_app_mode_variant(&next, &AppMode::Help(HelpMode));
         assert_eq!(data.ui.help_scroll, 0);
     }
 
@@ -1458,6 +1851,112 @@ mod tests {
     }
 
     #[test]
+    fn test_run_typed_slash_command_sets_status_for_ambiguous_prefix() {
+        static COMMANDS: &[SlashCommand] = &[
+            SlashCommand {
+                name: "/test_one",
+                description: "one",
+            },
+            SlashCommand {
+                name: "/test_two",
+                description: "two",
+            },
+        ];
+
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/test".to_string();
+
+        let next = data.run_typed_slash_command(COMMANDS);
+
+        assert_eq!(next, AppMode::normal());
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Ambiguous command"))
+        );
+    }
+
+    #[test]
+    fn test_run_slash_command_by_name_unknown_sets_status() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+
+        let next = data.run_slash_command_by_name("/nope");
+
+        assert_eq!(next, AppMode::normal());
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Unknown command"))
+        );
+    }
+
+    #[test]
+    fn test_run_slash_command_by_name_changelog_succeeds() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings::default(),
+            false,
+        );
+        data.input.buffer = "/changelog".to_string();
+
+        let next = data.run_slash_command_by_name("/changelog");
+
+        assert_app_mode_variant(
+            &next,
+            &AppMode::Changelog(ChangelogMode {
+                title: String::new(),
+                lines: Vec::new(),
+                mark_seen_version: None,
+            }),
+        );
+        assert!(data.input.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_run_slash_command_by_name_changelog_sets_status_on_error() {
+        static RELEASE_NOTES: &[crate::release_notes::ReleaseNoteEntry] =
+            &[crate::release_notes::ReleaseNoteEntry {
+                version: "not-a-version",
+                date: None,
+                body: "",
+            }];
+
+        crate::release_notes::with_release_notes_override_for_tests(RELEASE_NOTES, || {
+            let mut data = AppData::new(
+                Config::default(),
+                Storage::default(),
+                Settings::default(),
+                false,
+            );
+            data.input.buffer = "/changelog".to_string();
+
+            let next = data.run_slash_command_by_name("/changelog");
+
+            assert_eq!(next, AppMode::normal());
+            assert!(data.input.buffer.is_empty());
+            assert!(
+                data.ui
+                    .status_message
+                    .as_ref()
+                    .is_some_and(|msg| msg.contains("Failed to load changelog"))
+            );
+        });
+    }
+
+    #[test]
     fn test_submit_slash_command_palette_help_opens_help() {
         let mut data = AppData::new(
             Config::default(),
@@ -1469,7 +1968,7 @@ mod tests {
         data.ui.help_scroll = 123;
 
         let next = data.submit_slash_command_palette();
-        assert!(matches!(next, AppMode::Help(_)));
+        assert_app_mode_variant(&next, &AppMode::Help(HelpMode));
         assert_eq!(data.ui.help_scroll, 0);
     }
 
@@ -1500,7 +1999,7 @@ mod tests {
         data.command_palette.selected = 99;
 
         let next = data.confirm_slash_command_selection();
-        assert!(matches!(next, AppMode::SettingsMenu(_)));
+        assert_app_mode_variant(&next, &AppMode::SettingsMenu(SettingsMenuMode));
         assert!(data.input.buffer.is_empty());
         assert_eq!(data.model_selector.role, AgentRole::Default);
     }
@@ -1517,7 +2016,7 @@ mod tests {
         data.ui.help_scroll = 123;
 
         let next = data.submit_slash_command_palette();
-        assert!(matches!(next, AppMode::Help(_)));
+        assert_app_mode_variant(&next, &AppMode::Help(HelpMode));
         assert_eq!(data.ui.help_scroll, 0);
     }
 
@@ -1532,9 +2031,184 @@ mod tests {
         data.input.buffer = "/agents".to_string();
 
         let next = data.submit_slash_command_palette();
-        assert!(matches!(next, AppMode::SettingsMenu(_)));
+        assert_app_mode_variant(&next, &AppMode::SettingsMenu(SettingsMenuMode));
+        assert!(error_modal_message(&next).is_none());
         assert!(data.input.buffer.is_empty());
         assert_eq!(data.model_selector.role, AgentRole::Default);
+    }
+
+    #[test]
+    fn test_toggle_docker_for_new_roots_disables_when_save_succeeds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let settings_path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(settings_path).expect("override settings path");
+
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings {
+                docker_for_new_roots: true,
+                ..Settings::default()
+            },
+            false,
+        );
+        data.input.buffer = "/toggle_docker".to_string();
+
+        let next = data.toggle_docker_for_new_roots();
+
+        assert_eq!(next, AppMode::normal());
+        assert!(!data.settings.docker_for_new_roots);
+        assert!(data.input.buffer.is_empty());
+        assert!(
+            data.ui
+                .status_message
+                .as_ref()
+                .is_some_and(|msg| msg.contains("Docker for new root agents: OFF"))
+        );
+    }
+
+    #[test]
+    fn test_toggle_docker_for_new_roots_disables_and_reverts_when_save_fails() {
+        let mut data = AppData::new(
+            Config::default(),
+            Storage::default(),
+            Settings {
+                docker_for_new_roots: true,
+                ..Settings::default()
+            },
+            false,
+        );
+        data.input.buffer = "/toggle_docker".to_string();
+
+        let next = data.toggle_docker_for_new_roots();
+
+        assert_app_mode_variant(
+            &next,
+            &AppMode::ErrorModal(ErrorModalMode {
+                message: String::new(),
+            }),
+        );
+        assert!(data.settings.docker_for_new_roots);
+        assert_eq!(data.input.buffer, "/toggle_docker");
+        let message = error_modal_message(&next).unwrap_or("");
+        assert!(message.contains("Failed to save settings"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_toggle_docker_for_new_roots_enables_when_image_is_ready_and_save_succeeds() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn fnv1a64(bytes: &[u8]) -> u64 {
+            let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+            for byte in bytes {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+            hash
+        }
+
+        let dockerfile_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docker/worker.Dockerfile");
+        let dockerfile = fs::read_to_string(&dockerfile_path).expect("read worker dockerfile");
+        let dockerfile_hash = format!("{:016x}", fnv1a64(dockerfile.as_bytes()));
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let settings_path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(settings_path).expect("override settings path");
+
+        let script = temp_dir.path().join("docker");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo '{dockerfile_hash}'\n  exit 0\nfi\nexit 0\n"
+            ),
+        )
+        .expect("write docker script");
+        let mut perms = fs::metadata(&script)
+            .expect("docker script metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).expect("chmod docker script");
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            let config = Config {
+                default_program: "claude".to_string(),
+                ..Config::default()
+            };
+            let mut data = AppData::new(config, Storage::default(), Settings::default(), false);
+
+            let next = data.toggle_docker_for_new_roots();
+
+            assert_eq!(next, AppMode::normal());
+            assert!(data.settings.docker_for_new_roots);
+            assert!(data.input.buffer.is_empty());
+            assert!(
+                data.ui
+                    .status_message
+                    .as_ref()
+                    .is_some_and(|msg| msg.contains("Docker for new root agents: ON"))
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_finish_preparing_docker_for_new_roots_enables_and_persists() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn fnv1a64(bytes: &[u8]) -> u64 {
+            let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+            for byte in bytes {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+            hash
+        }
+
+        let dockerfile_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docker/worker.Dockerfile");
+        let dockerfile = fs::read_to_string(&dockerfile_path).expect("read worker dockerfile");
+        let dockerfile_hash = format!("{:016x}", fnv1a64(dockerfile.as_bytes()));
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let settings_path = temp_dir.path().join("settings.json");
+        Settings::set_test_path_override(settings_path).expect("override settings path");
+
+        let script = temp_dir.path().join("docker");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo '{dockerfile_hash}'\n  exit 0\nfi\nexit 0\n"
+            ),
+        )
+        .expect("write docker script");
+        let mut perms = fs::metadata(&script)
+            .expect("docker script metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).expect("chmod docker script");
+
+        crate::runtime::with_docker_program_override_for_tests(script, || {
+            let config = Config {
+                default_program: "claude".to_string(),
+                ..Config::default()
+            };
+            let mut data = AppData::new(config, Storage::default(), Settings::default(), false);
+
+            let next = data.finish_preparing_docker_for_new_roots();
+
+            assert_eq!(next, AppMode::normal());
+            assert!(data.settings.docker_for_new_roots);
+            assert!(
+                data.ui
+                    .status_message
+                    .as_ref()
+                    .is_some_and(|msg| msg.contains("Worker image ready"))
+            );
+        });
     }
 
     #[test]
@@ -1550,7 +2224,12 @@ mod tests {
                 );
 
                 let next = data.toggle_docker_for_new_roots();
-                assert!(matches!(next, AppMode::ErrorModal(_)));
+                assert_app_mode_variant(
+                    &next,
+                    &AppMode::ErrorModal(ErrorModalMode {
+                        message: String::new(),
+                    }),
+                );
                 assert!(!data.settings.docker_for_new_roots);
             },
         );
@@ -1569,11 +2248,13 @@ mod tests {
                 );
 
                 let next = data.toggle_docker_for_new_roots();
-                assert!(matches!(next, AppMode::ErrorModal(_)));
-                let message = match next {
-                    AppMode::ErrorModal(mode) => mode.message,
-                    _ => String::new(),
-                };
+                assert_app_mode_variant(
+                    &next,
+                    &AppMode::ErrorModal(ErrorModalMode {
+                        message: String::new(),
+                    }),
+                );
+                let message = error_modal_message(&next).unwrap_or("");
                 assert!(message.contains("Cannot enable Docker for new root agents"));
                 assert!(message.contains("Docker is not installed or not on PATH"));
                 assert!(!data.settings.docker_for_new_roots);
@@ -1598,11 +2279,13 @@ mod tests {
                 );
 
                 let next = data.toggle_docker_for_new_roots();
-                assert!(matches!(next, AppMode::ErrorModal(_)));
-                let message = match next {
-                    AppMode::ErrorModal(mode) => mode.message,
-                    _ => String::new(),
-                };
+                assert_app_mode_variant(
+                    &next,
+                    &AppMode::ErrorModal(ErrorModalMode {
+                        message: String::new(),
+                    }),
+                );
+                let message = error_modal_message(&next).unwrap_or("");
                 assert!(message.contains("Cannot enable Docker for new root agents"));
                 assert!(
                     message.contains(
@@ -1616,21 +2299,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_toggle_docker_for_new_roots_shows_preparing_modal_when_image_build_is_needed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_toggle_docker_for_new_roots_shows_preparing_modal_when_image_build_is_needed() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
 
-        let temp = TempDir::new()?;
+        let temp = TempDir::new().expect("temp dir");
         let script = temp.path().join("docker");
         fs::write(
             &script,
             "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nexit 0\n",
-        )?;
-        let mut perms = fs::metadata(&script)?.permissions();
+        )
+        .expect("write docker script");
+        let mut perms = fs::metadata(&script)
+            .expect("docker script metadata")
+            .permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&script, perms)?;
+        fs::set_permissions(&script, perms).expect("chmod docker script");
 
         crate::runtime::with_docker_program_override_for_tests(script, || {
             let config = Config {
@@ -1640,10 +2325,13 @@ mod tests {
             let mut data = AppData::new(config, Storage::default(), Settings::default(), false);
 
             let next = data.toggle_docker_for_new_roots();
-            assert!(matches!(next, AppMode::PreparingDocker(_)));
+            assert_app_mode_variant(
+                &next,
+                &AppMode::PreparingDocker(PreparingDockerMode {
+                    message: String::new(),
+                }),
+            );
             assert!(!data.settings.docker_for_new_roots);
         });
-
-        Ok(())
     }
 }

@@ -1,8 +1,10 @@
 use super::*;
-use crate::agent::Agent;
+use crate::agent::{Agent, Status};
 use crate::app::AgentProgram;
+use crate::app::{AgentRole, Settings};
 use crate::state::*;
 use std::path::PathBuf;
+use tempfile::TempDir;
 
 fn create_test_agent(title: &str) -> Agent {
     Agent::new(
@@ -57,6 +59,50 @@ fn test_select_prev() {
 }
 
 #[test]
+fn test_ensure_agent_list_scroll_adjusts_for_selection_below_viewport() {
+    let mut app = App::default();
+    for idx in 0..30 {
+        app.data
+            .storage
+            .add(create_test_agent(&format!("agent-{idx}")));
+    }
+
+    app.data.ui.agent_list_scroll = 0;
+    app.data.selected = app.data.sidebar_len().saturating_sub(1);
+    app.ensure_agent_list_scroll();
+
+    assert!(app.data.ui.agent_list_scroll > 0);
+}
+
+#[test]
+fn test_ensure_agent_list_scroll_adjusts_for_selection_above_viewport() {
+    let mut app = App::default();
+    for idx in 0..30 {
+        app.data
+            .storage
+            .add(create_test_agent(&format!("agent-{idx}")));
+    }
+
+    app.data.ui.agent_list_scroll = 5;
+    app.data.selected = 0;
+    app.ensure_agent_list_scroll();
+
+    assert_eq!(app.data.ui.agent_list_scroll, 0);
+}
+
+#[test]
+fn test_has_running_agents_detects_running_status() {
+    let mut app = App::default();
+    assert!(!app.has_running_agents());
+
+    let mut running = create_test_agent("running");
+    running.status = Status::Running;
+    app.data.storage.add(running);
+
+    assert!(app.has_running_agents());
+}
+
+#[test]
 fn test_select_empty_storage() {
     let mut app = App::default();
     app.select_next();
@@ -92,6 +138,132 @@ fn test_enter_exit_mode() {
     app.exit_mode();
     assert_eq!(app.mode, AppMode::normal());
     assert!(app.data.input.buffer.is_empty());
+}
+
+#[test]
+fn test_apply_mode_normal_consumes_pending_changelog() {
+    let mut app = App::default();
+    app.enter_mode(CreatingMode.into());
+
+    app.data.ui.changelog_scroll = 42;
+    app.data.pending_changelog = Some(ChangelogMode {
+        title: "What's New".to_string(),
+        lines: vec!["line".to_string()],
+        mark_seen_version: None,
+    });
+
+    app.apply_mode(AppMode::normal());
+
+    assert!(matches!(app.mode, AppMode::Changelog(_)));
+    assert_eq!(app.data.ui.changelog_scroll, 0);
+    assert!(app.data.pending_changelog.is_none());
+}
+
+#[test]
+fn test_apply_mode_model_selector_uses_planner_settings() {
+    let mut app = App::default();
+    app.data.model_selector.role = AgentRole::Planner;
+    app.data.settings.planner_agent_program = AgentProgram::Codex;
+
+    app.apply_mode(ModelSelectorMode.into());
+
+    assert!(matches!(app.mode, AppMode::ModelSelector(_)));
+    assert_eq!(app.data.model_selector.selected, 0);
+}
+
+#[test]
+fn test_apply_mode_model_selector_uses_review_settings() {
+    let mut app = App::default();
+    app.data.model_selector.role = AgentRole::Review;
+    app.data.settings.review_agent_program = AgentProgram::Custom;
+
+    app.apply_mode(ModelSelectorMode.into());
+
+    assert!(matches!(app.mode, AppMode::ModelSelector(_)));
+    assert_eq!(app.data.model_selector.selected, 2);
+}
+
+#[test]
+fn test_apply_mode_custom_agent_command_uses_planner_settings() {
+    let mut app = App::default();
+    app.data.model_selector.role = AgentRole::Planner;
+    app.data.settings.planner_custom_agent_command = "planner --flag".to_string();
+
+    app.apply_mode(CustomAgentCommandMode.into());
+
+    assert!(matches!(app.mode, AppMode::CustomAgentCommand(_)));
+    assert_eq!(app.data.input.buffer, "planner --flag");
+}
+
+#[test]
+fn test_apply_mode_custom_agent_command_uses_review_settings() {
+    let mut app = App::default();
+    app.data.model_selector.role = AgentRole::Review;
+    app.data.settings.review_custom_agent_command = "review --flag".to_string();
+
+    app.apply_mode(CustomAgentCommandMode.into());
+
+    assert!(matches!(app.mode, AppMode::CustomAgentCommand(_)));
+    assert_eq!(app.data.input.buffer, "review --flag");
+}
+
+#[test]
+fn test_dismiss_success_returns_to_normal() {
+    let mut app = App::default();
+    app.show_success("Ok");
+    assert!(matches!(app.mode, AppMode::SuccessModal(_)));
+
+    app.dismiss_success();
+    assert_eq!(app.mode, AppMode::normal());
+}
+
+#[test]
+fn test_keyboard_remap_actions_warn_when_settings_save_fails() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::io::sink)
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+
+    tracing::dispatcher::with_default(&dispatch, || {
+        let mut app = App::default();
+        app.enter_mode(KeyboardRemapPromptMode.into());
+
+        app.accept_keyboard_remap();
+        assert!(app.data.settings.merge_key_remapped);
+        assert!(app.data.settings.keyboard_remap_asked);
+        assert_eq!(app.mode, AppMode::normal());
+
+        app.enter_mode(KeyboardRemapPromptMode.into());
+        app.decline_keyboard_remap();
+        assert!(!app.data.settings.merge_key_remapped);
+        assert!(app.data.settings.keyboard_remap_asked);
+        assert_eq!(app.mode, AppMode::normal());
+    });
+}
+
+#[test]
+fn test_keyboard_remap_actions_succeed_when_settings_writable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path().join("settings.json");
+    Settings::set_test_path_override(path)?;
+
+    let mut app = App::default();
+    app.enter_mode(KeyboardRemapPromptMode.into());
+
+    app.accept_keyboard_remap();
+    assert!(app.data.settings.merge_key_remapped);
+    assert!(app.data.settings.keyboard_remap_asked);
+    assert_eq!(app.mode, AppMode::normal());
+
+    app.enter_mode(KeyboardRemapPromptMode.into());
+    app.decline_keyboard_remap();
+    assert!(!app.data.settings.merge_key_remapped);
+    assert!(app.data.settings.keyboard_remap_asked);
+    assert_eq!(app.mode, AppMode::normal());
+
+    Ok(())
 }
 
 #[test]
@@ -149,6 +321,13 @@ fn test_handle_char() {
 #[test]
 fn test_handle_backspace() {
     let mut app = App::default();
+
+    app.data.input.buffer = "test".to_string();
+    app.data.input.cursor = 4;
+    app.handle_backspace();
+    assert_eq!(app.data.input.buffer, "test");
+    assert_eq!(app.data.input.cursor, 4);
+
     app.enter_mode(CreatingMode.into());
     app.data.input.buffer = "test".to_string();
     app.data.input.cursor = 4; // Cursor at end
@@ -272,6 +451,13 @@ fn test_selected_agent_mut() {
 #[test]
 fn test_handle_delete() {
     let mut app = App::default();
+
+    app.data.input.buffer = "test".to_string();
+    app.data.input.cursor = 2;
+    app.handle_delete();
+    assert_eq!(app.data.input.buffer, "test");
+    assert_eq!(app.data.input.cursor, 2);
+
     app.enter_mode(CreatingMode.into());
     app.data.input.buffer = "test".to_string();
     app.data.input.cursor = 2; // Cursor at 'st'
@@ -363,6 +549,7 @@ fn test_scroll_methods() {
         .ui
         .set_preview_content("line1\nline2\nline3\nline4\nline5");
     app.data.ui.set_diff_content("diff1\ndiff2\ndiff3");
+    app.data.ui.set_commits_content("c1\nc2\nc3\nc4\nc5");
     app.data.ui.preview_dimensions = Some((80, 2));
 
     // Test scroll_up in Preview mode
@@ -401,6 +588,22 @@ fn test_scroll_methods() {
 
     app.scroll_to_bottom(3, 2);
     assert_eq!(app.data.ui.diff_scroll, 1);
+
+    // Switch to Commits tab and test
+    app.data.active_tab = Tab::Commits;
+    app.data.ui.commits_scroll = 2;
+    app.scroll_up(1);
+    assert_eq!(app.data.ui.commits_scroll, 1);
+
+    app.data.ui.commits_scroll = 0;
+    app.scroll_down(1);
+    assert_eq!(app.data.ui.commits_scroll, 1);
+
+    app.scroll_to_top();
+    assert_eq!(app.data.ui.commits_scroll, 0);
+
+    app.scroll_to_bottom(5, 2);
+    assert_eq!(app.data.ui.commits_scroll, 3);
 }
 
 #[test]
@@ -445,6 +648,10 @@ fn test_start_planning_swarm_no_agent() {
 #[test]
 fn test_toggle_selected_collapse() {
     let mut app = App::default();
+
+    app.toggle_selected_collapse();
+    assert!(app.selected_agent().is_none());
+
     app.data.storage.add(create_test_agent("test"));
 
     // Initially collapsed (default is true)
@@ -682,6 +889,28 @@ fn test_run_slash_command_changelog() {
 }
 
 #[test]
+fn test_run_slash_command_changelog_sets_status_on_release_notes_failure() {
+    use crate::release_notes::ReleaseNoteEntry;
+
+    static OVERRIDE: &[ReleaseNoteEntry] = &[ReleaseNoteEntry {
+        version: "not-a-version",
+        date: None,
+        body: "",
+    }];
+
+    crate::release_notes::with_release_notes_override_for_tests(OVERRIDE, || {
+        let mut app = App::default();
+        app.run_slash_command(SlashCommand {
+            name: "/changelog",
+            description: "test",
+        });
+        assert_eq!(app.mode, AppMode::normal());
+        let status = app.data.ui.status_message.clone().unwrap_or_default();
+        assert!(status.contains("Failed to load changelog"));
+    });
+}
+
+#[test]
 fn test_run_slash_command_unknown() {
     let mut app = App::default();
     app.enter_mode(CommandPaletteMode.into());
@@ -855,6 +1084,13 @@ fn test_start_custom_agent_command_prompt() {
         AppMode::CustomAgentCommand(CustomAgentCommandMode)
     );
     assert_eq!(app.data.input.buffer, "my-agent");
+}
+
+#[test]
+fn test_start_terminal_prompt_enters_terminal_prompt_mode() {
+    let mut app = App::default();
+    app.start_terminal_prompt();
+    assert_eq!(app.mode, AppMode::TerminalPrompt(TerminalPromptMode));
 }
 
 #[test]

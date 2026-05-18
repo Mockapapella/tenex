@@ -53,7 +53,7 @@ mod tests {
     fn test_data_local_dir_returns_when_env_present() {
         let has_xdg_data_home = std::env::var_os("XDG_DATA_HOME").is_some();
         let has_home = std::env::var_os("HOME").is_some();
-        let has_env = has_xdg_data_home || has_home;
+        let has_env = has_xdg_data_home | has_home;
         let resolved = data_local_dir();
         assert_eq!(resolved.is_some(), has_env);
     }

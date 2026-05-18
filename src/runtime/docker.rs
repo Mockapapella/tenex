@@ -1,16 +1,18 @@
 //! Docker runtime support for agent processes.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
+
 use crate::agent::Agent;
 use crate::app::Settings;
 use crate::paths;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 use std::sync::{Mutex, OnceLock, RwLock};
 
 const DEFAULT_DOCKER_IMAGE: &str = "tenex-worker:latest";
@@ -24,7 +26,7 @@ const RUNTIME_PASSWD_FILE_NAME: &str = ".tenex-passwd";
 const RUNTIME_GROUP_FILE_NAME: &str = ".tenex-group";
 const DEFAULT_RUNTIME_USER_NAME: &str = "tenex";
 const DEFAULT_RUNTIME_GROUP_NAME: &str = "tenex";
-#[cfg(any(test, windows))]
+#[cfg(any(test, coverage, windows))]
 const WINDOWS_CONTAINER_ROOT: &str = "/tenex-host";
 
 struct PreparedRuntimeHome {
@@ -33,6 +35,7 @@ struct PreparedRuntimeHome {
     codex_home_target: PathBuf,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn wrap_exec(agent: &Agent, _settings: &Settings, command: &[String]) -> Vec<String> {
     let mut argv = exec_prefix(agent);
     argv.push(container_name(agent));
@@ -65,6 +68,7 @@ pub(super) fn check_available() -> Result<()> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn ensure_image_ready(settings: &Settings, program: &str) -> Result<()> {
     let image = worker_image_tag(settings);
     ensure_default_image_support(program)?;
@@ -75,11 +79,13 @@ pub(super) fn ensure_image_ready(settings: &Settings, program: &str) -> Result<(
     build_default_image(image)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn image_build_required(settings: &Settings, program: &str) -> Result<bool> {
     ensure_default_image_support(program)?;
     Ok(!image_matches_default_template(worker_image_tag(settings))?)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()> {
     let home = paths::home_dir();
     let data_local_dir = paths::data_local_dir();
@@ -93,6 +99,7 @@ pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()>
     )
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_container_with_paths(
     agent: &Agent,
     settings: &Settings,
@@ -204,18 +211,28 @@ fn exec_prefix(agent: &Agent) -> Vec<String> {
 }
 
 fn exec_prefix_with_forwarded_env(agent: &Agent, forwarded_env: &[(&str, String)]) -> Vec<String> {
+    let home = paths::home_dir();
+    exec_prefix_with_forwarded_env_and_home(agent, forwarded_env, home.as_deref())
+}
+
+fn exec_prefix_with_forwarded_env_and_home(
+    agent: &Agent,
+    forwarded_env: &[(&str, String)],
+    home: Option<&Path>,
+) -> Vec<String> {
     let worktree_target = container_target_path(&agent.worktree_path);
     let mut argv = vec![
-        "docker".to_string(),
+        docker_program().to_string_lossy().into_owned(),
         "exec".to_string(),
         "-it".to_string(),
         "-w".to_string(),
         display_path(&worktree_target),
     ];
 
-    if let Some(home) = paths::home_dir() {
-        let home_target = container_target_path(&home);
-        let codex_home_target = container_target_path(&codex_home_dir(&home));
+    if let Some(home) = home {
+        let home_target = container_target_path(home);
+        let codex_home = codex_home_dir(home);
+        let codex_home_target = container_target_path(&codex_home);
         argv.push("-e".to_string());
         argv.push(format!("HOME={}", home_target.display()));
         argv.push("-e".to_string());
@@ -240,6 +257,7 @@ fn exec_prefix_with_forwarded_env(agent: &Agent, forwarded_env: &[(&str, String)
     argv
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn collect_forwarded_exec_env(
     mut get: impl FnMut(&str) -> Option<String>,
 ) -> Vec<(&'static str, String)> {
@@ -270,12 +288,14 @@ pub(super) fn container_name(agent: &Agent) -> String {
         .collect()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_optional_bind_mount(cmd: &mut Command, source: &Path, target: &Path, readonly: bool) {
     if source.exists() {
         add_bind_mount(cmd, source, target, readonly);
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_bind_mount(cmd: &mut Command, source: &Path, target: &Path, readonly: bool) {
     let mut spec = format!("{}:{}", source.display(), target.display());
     if readonly {
@@ -292,6 +312,7 @@ pub(super) fn session_workdir(agent: &Agent) -> PathBuf {
     container_target_path(&agent.worktree_path)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_target_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
@@ -311,7 +332,7 @@ fn windows_container_target_from_str(path: &str) -> PathBuf {
 
     if bytes.len() >= 3
         && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\')
+        && bytes[2] == b'/'
         && (bytes[0] as char).is_ascii_alphabetic()
     {
         let mut target = PathBuf::from(WINDOWS_CONTAINER_ROOT);
@@ -400,10 +421,11 @@ fn configure_home_mounts_with_data_local_dir(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn configure_runtime_identity_env(cmd: &mut Command, home_target: &Path) {
-    if docker_user_arg().is_none() {
+    let Some(identity) = current_runtime_user_info() else {
         return;
-    }
+    };
 
     let passwd_target = home_target.join(RUNTIME_PASSWD_FILE_NAME);
     let group_target = home_target.join(RUNTIME_GROUP_FILE_NAME);
@@ -415,12 +437,11 @@ fn configure_runtime_identity_env(cmd: &mut Command, home_target: &Path) {
     cmd.arg("-e")
         .arg(format!("NSS_WRAPPER_GROUP={}", group_target.display()));
 
-    if let Some(identity) = current_runtime_user_info() {
-        cmd.arg("-e").arg(format!("USER={}", identity.user_name));
-        cmd.arg("-e").arg(format!("LOGNAME={}", identity.user_name));
-    }
+    cmd.arg("-e").arg(format!("USER={}", identity.user_name));
+    cmd.arg("-e").arg(format!("LOGNAME={}", identity.user_name));
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn configure_ssh_auth_sock_mount_from(cmd: &mut Command, ssh_auth_sock: Option<&Path>) {
     if let Some(ssh_auth_sock) = ssh_auth_sock
         && ssh_auth_sock.exists()
@@ -467,6 +488,7 @@ fn configure_repo_metadata_mounts(cmd: &mut Command, agent: &Agent) {
     configure_top_level_symlink_mounts(cmd, &agent.worktree_path, &mut mounted_targets);
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn add_optional_bind_mount_once(
     cmd: &mut Command,
     mounted_targets: &mut HashSet<PathBuf>,
@@ -488,20 +510,35 @@ fn configure_top_level_symlink_mounts(
         return;
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+    let paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    configure_top_level_symlink_mounts_for_paths(cmd, worktree, mounted_targets, paths);
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn configure_top_level_symlink_mounts_for_paths(
+    cmd: &mut Command,
+    worktree: &Path,
+    mounted_targets: &mut HashSet<PathBuf>,
+    paths: Vec<PathBuf>,
+) {
+    let worktree = worktree
+        .canonicalize()
+        .unwrap_or_else(|_| worktree.to_path_buf());
+    for path in paths {
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
             continue;
         };
-        if !file_type.is_symlink() {
+        if !metadata.file_type().is_symlink() {
             continue;
         }
 
-        let Ok(link_target) = std::fs::read_link(&path) else {
+        let Ok(resolved) = path.canonicalize() else {
             continue;
         };
-        let resolved = resolved_symlink_target(&path, worktree, &link_target);
-        if resolved.starts_with(worktree) {
+        if resolved.starts_with(&worktree) {
             continue;
         }
 
@@ -515,6 +552,7 @@ fn configure_top_level_symlink_mounts(
     }
 }
 
+#[cfg(any(test, coverage))]
 fn resolved_symlink_target(path: &Path, worktree: &Path, link_target: &Path) -> PathBuf {
     let resolved = if link_target.is_absolute() {
         link_target.to_path_buf()
@@ -552,6 +590,7 @@ fn refresh_runtime_home_for_reuse_with_data_local_dir(
     refresh_runtime_home_for_reuse_in(agent, home, &data_local_dir, &codex_home_target)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn prepare_runtime_home_in(
     agent: &Agent,
     home: &Path,
@@ -592,6 +631,7 @@ fn refresh_runtime_home_for_reuse_in(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_runtime_home_directories(home_source: &Path, codex_home_target: &Path) -> Result<()> {
     std::fs::create_dir_all(home_source.join(".cache")).with_context(|| {
         format!(
@@ -633,6 +673,7 @@ fn runtime_root_dir(agent: &Agent, data_local_dir: &Path) -> PathBuf {
         .join(container_name(agent))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_codex_home(target: &Path, host_codex_home: &Path) -> Result<()> {
     std::fs::create_dir_all(target).with_context(|| {
         format!(
@@ -660,6 +701,7 @@ fn sync_codex_home(target: &Path, host_codex_home: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_optional_file(source: &Path, target: &Path) -> Result<()> {
     if source.is_file() {
         if let Some(parent) = target.parent() {
@@ -681,6 +723,7 @@ fn sync_optional_file(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_optional_dir(source: &Path, target: &Path) -> Result<()> {
     if source.is_dir() {
         if target.exists() {
@@ -697,11 +740,13 @@ fn sync_optional_dir(source: &Path, target: &Path) -> Result<()> {
 }
 
 fn sync_ssh_home(target_home: &Path, host_home: &Path) -> Result<()> {
-    sync_optional_path_following_symlinks(&host_home.join(".ssh"), &target_home.join(".ssh"))?;
-    sync_optional_path_following_symlinks(
-        &host_home.join(".config").join("ssh"),
-        &target_home.join(".config").join("ssh"),
-    )?;
+    let host_ssh = host_home.join(".ssh");
+    let target_ssh = target_home.join(".ssh");
+    sync_optional_path_following_symlinks(&host_ssh, &target_ssh)?;
+
+    let host_xdg_ssh = host_home.join(".config").join("ssh");
+    let target_xdg_ssh = target_home.join(".config").join("ssh");
+    sync_optional_path_following_symlinks(&host_xdg_ssh, &target_xdg_ssh)?;
     Ok(())
 }
 
@@ -714,11 +759,13 @@ fn sync_optional_path_following_symlinks(source: &Path, target: &Path) -> Result
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_path_recursive_following_symlinks(source: &Path, target: &Path) -> Result<()> {
     let mut active_sources = HashSet::new();
     copy_path_recursive_following_symlinks_inner(source, target, &mut active_sources)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_path_recursive_following_symlinks_inner(
     source: &Path,
     target: &Path,
@@ -740,11 +787,15 @@ fn copy_path_recursive_following_symlinks_inner(
         for entry in std::fs::read_dir(source)
             .with_context(|| format!("Failed to read {}", source.display()))?
         {
-            let entry = entry.with_context(|| format!("Failed to read {}", source.display()))?;
+            #[cfg(any(test, coverage))]
+            let entry = run_copy_path_recursive_following_symlinks_dir_entry_hook(entry);
+            let entry = entry.context(format!("Failed to read {}", source.display()))?;
             let entry_path = entry.path();
-            let entry_type = entry.file_type().with_context(|| {
-                format!("Failed to read file type for {}", entry_path.display())
-            })?;
+            #[cfg(any(test, coverage))]
+            run_copy_path_recursive_following_symlinks_before_metadata_hook(&entry_path);
+            let entry_type = std::fs::symlink_metadata(&entry_path)
+                .with_context(|| format!("Failed to read file type for {}", entry_path.display()))?
+                .file_type();
             let target_path = target.join(entry.file_name());
             if entry_type.is_symlink() {
                 let Ok(resolved) = entry_path.canonicalize() else {
@@ -777,6 +828,7 @@ fn copy_path_recursive_following_symlinks_inner(
     result
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -789,11 +841,169 @@ fn copy_file_with_permissions(source: &Path, target: &Path) -> Result<()> {
             target.display()
         )
     })?;
+    #[cfg(any(test, coverage))]
+    run_copy_file_with_permissions_after_copy_hook(source);
     let permissions = std::fs::metadata(source)
         .with_context(|| format!("Failed to read {}", source.display()))?
         .permissions();
     set_staged_permissions(target, permissions)?;
     Ok(())
+}
+
+#[cfg(any(test, coverage))]
+type RecursiveCopyHook = Option<Box<dyn Fn(&Path)>>;
+
+#[cfg(any(test, coverage))]
+type DirEntryResultHook = Option<
+    Box<dyn FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry>>,
+>;
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static COPY_PATH_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK: std::cell::RefCell<RecursiveCopyHook> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static COPY_PATH_RECURSIVE_DIR_ENTRY_HOOK: std::cell::RefCell<DirEntryResultHook> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, coverage))]
+fn with_copy_path_recursive_before_symlink_metadata_hook<T>(
+    hook: impl Fn(&Path) + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    COPY_PATH_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn with_copy_path_recursive_following_symlinks_dir_entry_hook<T>(
+    hook: impl FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    COPY_PATH_RECURSIVE_DIR_ENTRY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn run_copy_path_recursive_following_symlinks_dir_entry_hook(
+    entry: std::io::Result<std::fs::DirEntry>,
+) -> std::io::Result<std::fs::DirEntry> {
+    COPY_PATH_RECURSIVE_DIR_ENTRY_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(entry)
+        } else {
+            entry
+        }
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn run_copy_path_recursive_following_symlinks_before_metadata_hook(path: &Path) {
+    COPY_PATH_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static COPY_DIR_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK: std::cell::RefCell<RecursiveCopyHook> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static COPY_DIR_RECURSIVE_DIR_ENTRY_HOOK: std::cell::RefCell<DirEntryResultHook> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, coverage))]
+fn with_copy_dir_recursive_before_symlink_metadata_hook<T>(
+    hook: impl Fn(&Path) + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    COPY_DIR_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn with_copy_dir_recursive_dir_entry_hook<T>(
+    hook: impl FnMut(std::io::Result<std::fs::DirEntry>) -> std::io::Result<std::fs::DirEntry> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    COPY_DIR_RECURSIVE_DIR_ENTRY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn run_copy_dir_recursive_dir_entry_hook(
+    entry: std::io::Result<std::fs::DirEntry>,
+) -> std::io::Result<std::fs::DirEntry> {
+    COPY_DIR_RECURSIVE_DIR_ENTRY_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(entry)
+        } else {
+            entry
+        }
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn run_copy_dir_recursive_before_symlink_metadata_hook(path: &Path) {
+    COPY_DIR_RECURSIVE_BEFORE_SYMLINK_METADATA_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static COPY_FILE_WITH_PERMISSIONS_AFTER_COPY_HOOK: std::cell::RefCell<RecursiveCopyHook> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, coverage))]
+fn with_copy_file_with_permissions_after_copy_hook<T>(
+    hook: impl Fn(&Path) + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    COPY_FILE_WITH_PERMISSIONS_AFTER_COPY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn run_copy_file_with_permissions_after_copy_hook(source: &Path) {
+    COPY_FILE_WITH_PERMISSIONS_AFTER_COPY_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(source);
+        }
+    });
 }
 
 fn set_staged_permissions(path: &Path, permissions: std::fs::Permissions) -> Result<()> {
@@ -814,6 +1024,7 @@ fn owner_writable_permissions(permissions: std::fs::Permissions) -> std::fs::Per
     permissions
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn remove_path_if_exists(path: &Path) -> Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -825,6 +1036,7 @@ fn remove_path_if_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)
         .with_context(|| format!("Failed to create {}", target.display()))?;
@@ -832,22 +1044,23 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     for entry in
         std::fs::read_dir(source).with_context(|| format!("Failed to read {}", source.display()))?
     {
-        let entry = entry.with_context(|| format!("Failed to read {}", source.display()))?;
-        let entry_type = entry
-            .file_type()
-            .with_context(|| format!("Failed to read file type for {}", entry.path().display()))?;
+        #[cfg(any(test, coverage))]
+        let entry = run_copy_dir_recursive_dir_entry_hook(entry);
+        let entry = entry.context(format!("Failed to read {}", source.display()))?;
+        let entry_path = entry.path();
+        #[cfg(any(test, coverage))]
+        run_copy_dir_recursive_before_symlink_metadata_hook(&entry_path);
+        let entry_type = std::fs::symlink_metadata(&entry_path)
+            .with_context(|| format!("Failed to read file type for {}", entry_path.display()))?
+            .file_type();
         let target_path = target.join(entry.file_name());
         if entry_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &target_path)?;
+            copy_dir_recursive(&entry_path, &target_path)?;
         } else if entry_type.is_file() {
-            if let Some(parent) = target_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("Failed to create {}", parent.display()))?;
-            }
-            std::fs::copy(entry.path(), &target_path).with_context(|| {
+            std::fs::copy(&entry_path, &target_path).with_context(|| {
                 format!(
                     "Failed to copy {} to {}",
-                    entry.path().display(),
+                    entry_path.display(),
                     target_path.display()
                 )
             })?;
@@ -857,43 +1070,43 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_claude_home(target_home: &Path, host_home: &Path) -> Result<()> {
     let host_claude_dir = host_home.join(".claude");
     let target_claude_dir = target_home.join(".claude");
     std::fs::create_dir_all(&target_claude_dir)
         .with_context(|| format!("Failed to create {}", target_claude_dir.display()))?;
 
-    sync_optional_file(
-        &host_home.join(".claude.json"),
-        &target_home.join(".claude.json"),
-    )?;
-    sync_optional_file(
-        &host_claude_dir.join(".credentials.json"),
-        &target_claude_dir.join(".credentials.json"),
-    )?;
-    sync_optional_file(
-        &host_claude_dir.join("mcp-needs-auth-cache.json"),
-        &target_claude_dir.join("mcp-needs-auth-cache.json"),
-    )?;
-    sync_claude_settings_file(
-        &host_claude_dir.join("settings.json"),
-        &target_claude_dir.join("settings.json"),
-    )?;
-    sync_claude_settings_file(
-        &host_claude_dir.join("settings.local.json"),
-        &target_claude_dir.join("settings.local.json"),
-    )?;
+    let host_claude_json = host_home.join(".claude.json");
+    let target_claude_json = target_home.join(".claude.json");
+    sync_optional_file(&host_claude_json, &target_claude_json)?;
+
+    let host_credentials = host_claude_dir.join(".credentials.json");
+    let target_credentials = target_claude_dir.join(".credentials.json");
+    sync_optional_file(&host_credentials, &target_credentials)?;
+
+    let host_mcp_needs_auth_cache = host_claude_dir.join("mcp-needs-auth-cache.json");
+    let target_mcp_needs_auth_cache = target_claude_dir.join("mcp-needs-auth-cache.json");
+    sync_optional_file(&host_mcp_needs_auth_cache, &target_mcp_needs_auth_cache)?;
+
+    let host_settings = host_claude_dir.join("settings.json");
+    let target_settings = target_claude_dir.join("settings.json");
+    sync_claude_settings_file(&host_settings, &target_settings)?;
+
+    let host_settings_local = host_claude_dir.join("settings.local.json");
+    let target_settings_local = target_claude_dir.join("settings.local.json");
+    sync_claude_settings_file(&host_settings_local, &target_settings_local)?;
 
     for dir_name in ["agents", "commands", "output-styles", "skills"] {
-        sync_optional_dir(
-            &host_claude_dir.join(dir_name),
-            &target_claude_dir.join(dir_name),
-        )?;
+        let source = host_claude_dir.join(dir_name);
+        let target = target_claude_dir.join(dir_name);
+        sync_optional_dir(&source, &target)?;
     }
 
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sync_claude_settings_file(source: &Path, target: &Path) -> Result<()> {
     if source.is_file() {
         let contents = std::fs::read_to_string(source)
@@ -908,6 +1121,7 @@ fn sync_claude_settings_file(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn write_runtime_identity_files(home_source: &Path, home_target: &Path) -> Result<()> {
     let passwd_path = home_source.join(RUNTIME_PASSWD_FILE_NAME);
     let group_path = home_source.join(RUNTIME_GROUP_FILE_NAME);
@@ -917,31 +1131,32 @@ fn write_runtime_identity_files(home_source: &Path, home_target: &Path) -> Resul
     };
 
     let shell = "/bin/bash";
-    let mut passwd = String::from("root:x:0:0:root:/root:/bin/bash\n");
-    if identity.uid == "0" {
-        passwd.clear();
-    }
-    passwd
-        .write_fmt(format_args!(
-            "{}:x:{}:{}:Tenex runtime user:{}:{}\n",
-            identity.user_name,
-            identity.uid,
-            identity.gid,
-            home_target.display(),
-            shell
-        ))
-        .map_err(|_| anyhow::anyhow!("Failed to format runtime passwd entry"))?;
+    let home_target_display = home_target.display().to_string();
+    let mut passwd = if identity.uid == "0" {
+        String::new()
+    } else {
+        String::from("root:x:0:0:root:/root:/bin/bash\n")
+    };
+    passwd.push_str(&identity.user_name);
+    passwd.push_str(":x:");
+    passwd.push_str(&identity.uid);
+    passwd.push(':');
+    passwd.push_str(&identity.gid);
+    passwd.push_str(":Tenex runtime user:");
+    passwd.push_str(&home_target_display);
+    passwd.push(':');
+    passwd.push_str(shell);
+    passwd.push('\n');
 
-    let mut group = String::from("root:x:0:\n");
-    if identity.gid == "0" {
-        group.clear();
-    }
-    group
-        .write_fmt(format_args!(
-            "{}:x:{}:\n",
-            identity.group_name, identity.gid
-        ))
-        .map_err(|_| anyhow::anyhow!("Failed to format runtime group entry"))?;
+    let mut group = if identity.gid == "0" {
+        String::new()
+    } else {
+        String::from("root:x:0:\n")
+    };
+    group.push_str(&identity.group_name);
+    group.push_str(":x:");
+    group.push_str(&identity.gid);
+    group.push_str(":\n");
 
     std::fs::write(&passwd_path, passwd)
         .with_context(|| format!("Failed to write {}", passwd_path.display()))?;
@@ -958,6 +1173,7 @@ struct RuntimeUserIdentity {
     gid: String,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
     #[cfg(unix)]
     {
@@ -986,6 +1202,7 @@ fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
@@ -996,6 +1213,7 @@ fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> Strin
         .unwrap_or_else(|| fallback.to_string())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_codex_config(contents: &str) -> String {
     let mut sanitized = String::new();
     let mut skipping_mcp_section = false;
@@ -1019,6 +1237,7 @@ fn sanitize_codex_config(contents: &str) -> String {
     sanitized
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn sanitize_claude_settings(contents: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(contents) else {
         return contents.to_string();
@@ -1028,7 +1247,8 @@ fn sanitize_claude_settings(contents: &str) -> String {
         object.remove("hooks");
     }
 
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| contents.to_string())
+    let fallback = contents.to_string();
+    serde_json::to_string_pretty(&value).unwrap_or(fallback)
 }
 
 fn docker_command() -> Command {
@@ -1036,7 +1256,7 @@ fn docker_command() -> Command {
 }
 
 fn docker_program() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, coverage))]
     {
         let override_path = docker_program_override_store()
             .read()
@@ -1050,6 +1270,7 @@ fn docker_program() -> PathBuf {
     PathBuf::from("docker")
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn image_matches_default_template(image: &str) -> Result<bool> {
     let Some(actual_hash) = image_template_hash(image)? else {
         return Ok(false);
@@ -1057,6 +1278,7 @@ fn image_matches_default_template(image: &str) -> Result<bool> {
     Ok(actual_hash == default_worker_dockerfile_hash())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn image_template_hash(image: &str) -> Result<Option<String>> {
     match run_command(
         docker_command().args([
@@ -1085,6 +1307,7 @@ fn image_template_hash(image: &str) -> Result<Option<String>> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_matches_current_layout(name: &str) -> Result<bool> {
     let Some(actual_hash) = container_layout_hash(name)? else {
         return Ok(false);
@@ -1092,6 +1315,7 @@ fn container_matches_current_layout(name: &str) -> Result<bool> {
     Ok(actual_hash == current_container_layout_hash())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn container_layout_hash(name: &str) -> Result<Option<String>> {
     match run_command(
         docker_command().args([
@@ -1120,6 +1344,10 @@ fn container_layout_hash(name: &str) -> Result<Option<String>> {
 }
 
 fn ensure_default_image_support(program: &str) -> Result<()> {
+    if program == "terminal" {
+        return Ok(());
+    }
+
     match crate::conversation::detect_agent_cli(program) {
         crate::conversation::AgentCli::Claude | crate::conversation::AgentCli::Codex => Ok(()),
         crate::conversation::AgentCli::Other => bail!(
@@ -1163,10 +1391,70 @@ fn default_worker_build_context_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+fn write_dockerfile_to_docker_build_stdin(
+    stdin: Option<&mut dyn Write>,
+    dockerfile: &str,
+) -> Result<()> {
+    let stdin = stdin.context("docker build stdin missing")?;
+    stdin
+        .write_all(dockerfile.as_bytes())
+        .context("Failed to write built-in Dockerfile to docker build")?;
+    Ok(())
+}
+
+fn wait_with_output_for_docker_build(
+    wait: impl FnOnce() -> std::io::Result<std::process::Output>,
+    program: &str,
+    args: &str,
+) -> Result<std::process::Output> {
+    wait()
+        .map_err(|err| anyhow::anyhow!("Failed to wait for Docker build: {program} {args}: {err}"))
+}
+
+#[cfg(any(test, coverage))]
+std::thread_local! {
+    static DOCKER_BUILD_WAIT_OVERRIDE: std::cell::RefCell<Option<std::io::Result<std::process::Output>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(any(test, coverage))]
+fn with_docker_build_wait_override<T>(
+    override_result: std::io::Result<std::process::Output>,
+    f: impl FnOnce() -> T,
+) -> T {
+    DOCKER_BUILD_WAIT_OVERRIDE.with(|slot| {
+        *slot.borrow_mut() = Some(override_result);
+        let result = f();
+        *slot.borrow_mut() = None;
+        result
+    })
+}
+
+#[cfg(any(test, coverage))]
+fn take_docker_build_wait_override() -> Option<std::io::Result<std::process::Output>> {
+    DOCKER_BUILD_WAIT_OVERRIDE.with(|slot| slot.borrow_mut().take())
+}
+
 fn build_default_image(image: &str) -> Result<()> {
     let dockerfile = default_worker_dockerfile();
     let context_dir = default_worker_build_context_dir()?;
-    let mut cmd = docker_command();
+    build_default_image_with_command(
+        image,
+        &dockerfile,
+        &context_dir,
+        Stdio::piped(),
+        docker_command(),
+    )
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn build_default_image_with_command(
+    image: &str,
+    dockerfile: &str,
+    context_dir: &Path,
+    stdin: Stdio,
+    mut cmd: Command,
+) -> Result<()> {
     cmd.args([
         "build",
         "--tag",
@@ -1178,9 +1466,9 @@ fn build_default_image(image: &str) -> Result<()> {
         ),
         "--file",
         "-",
-        &display_path(&context_dir),
+        &display_path(context_dir),
     ])
-    .stdin(Stdio::piped())
+    .stdin(stdin)
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
 
@@ -1194,15 +1482,24 @@ fn build_default_image(image: &str) -> Result<()> {
         .spawn()
         .with_context(|| format!("Failed to spawn Docker build: {program} {args}"))?;
 
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(dockerfile.as_bytes())
-            .context("Failed to write built-in Dockerfile to docker build")?;
-    }
+    write_dockerfile_to_docker_build_stdin(
+        child.stdin.as_mut().map(|stdin| stdin as &mut dyn Write),
+        dockerfile,
+    )?;
 
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("Failed to wait for Docker build: {program} {args}"))?;
+    let output = wait_with_output_for_docker_build(
+        || {
+            #[cfg(any(test, coverage))]
+            if let Some(override_result) = take_docker_build_wait_override() {
+                drop(child.stdin.take());
+                let _ = child.wait();
+                return override_result;
+            }
+            child.wait_with_output()
+        },
+        &program,
+        &args,
+    )?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1215,6 +1512,7 @@ fn build_default_image(image: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn run_command(cmd: &mut Command, context: &str) -> Result<String> {
     let program = cmd.get_program().to_string_lossy().into_owned();
     let args = cmd
@@ -1236,13 +1534,26 @@ fn run_command(cmd: &mut Command, context: &str) -> Result<String> {
 }
 
 #[cfg(unix)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn docker_user_arg() -> Option<String> {
+    #[cfg(any(test, coverage))]
+    {
+        let override_value = docker_user_override_store()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let DockerUserOverride::Value(value) = override_value {
+            return value;
+        }
+    }
+
     let uid = read_trimmed_stdout("id", ["-u"])?;
     let gid = read_trimmed_stdout("id", ["-g"])?;
     Some(format!("{uid}:{gid}"))
 }
 
 #[cfg(not(unix))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn docker_user_arg() -> Option<String> {
     None
 }
@@ -1262,22 +1573,35 @@ fn read_trimmed_stdout<const N: usize>(program: &str, args: [&str; N]) -> Option
     Some(trimmed.to_string())
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static DOCKER_TEST_SERIAL: Mutex<()> = Mutex::new(());
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 static DOCKER_PROGRAM_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+#[cfg(any(test, coverage))]
+#[derive(Clone)]
+enum DockerUserOverride {
+    Unset,
+    Value(Option<String>),
+}
+#[cfg(any(test, coverage))]
+static DOCKER_USER_OVERRIDE: OnceLock<RwLock<DockerUserOverride>> = OnceLock::new();
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 fn docker_program_override_store() -> &'static RwLock<Option<PathBuf>> {
     DOCKER_PROGRAM_OVERRIDE.get_or_init(|| RwLock::new(None))
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
+fn docker_user_override_store() -> &'static RwLock<DockerUserOverride> {
+    DOCKER_USER_OVERRIDE.get_or_init(|| RwLock::new(DockerUserOverride::Unset))
+}
+
+#[cfg(any(test, coverage))]
 struct DockerProgramOverrideGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
 impl Drop for DockerProgramOverrideGuard {
     fn drop(&mut self) {
         *docker_program_override_store()
@@ -1286,7 +1610,27 @@ impl Drop for DockerProgramOverrideGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, coverage))]
+struct DockerUserOverrideGuard;
+
+#[cfg(any(test, coverage))]
+impl Drop for DockerUserOverrideGuard {
+    fn drop(&mut self) {
+        *docker_user_override_store()
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = DockerUserOverride::Unset;
+    }
+}
+
+#[cfg(any(test, coverage))]
+fn set_docker_user_override_for_tests(value: Option<String>) -> DockerUserOverrideGuard {
+    *docker_user_override_store()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = DockerUserOverride::Value(value);
+    DockerUserOverrideGuard
+}
+
+#[cfg(any(test, coverage))]
 pub(super) fn with_docker_program_override_for_tests<T>(
     program: PathBuf,
     f: impl FnOnce() -> T,
@@ -1310,6 +1654,8 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixListener;
     use std::process::Command;
     use tempfile::TempDir;
 
@@ -1321,6 +1667,21 @@ mod tests {
     const RUNTIME_IDENTITY_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_IDENTITY_CHILD";
     #[cfg(unix)]
     const RUNTIME_IDENTITY_HOME_SOURCE_VAR: &str = "TENEX_DOCKER_RUNTIME_IDENTITY_HOME_SOURCE";
+    #[cfg(unix)]
+    const RUNTIME_IDENTITY_ENV_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_IDENTITY_ENV_CHILD";
+    #[cfg(unix)]
+    const MOUNT_LOG_IDENTITY_CHILD_FLAG: &str = "TENEX_DOCKER_MOUNT_LOG_IDENTITY_CHILD";
+    #[cfg(unix)]
+    const BUILD_CONTEXT_FAILURE_CHILD_FLAG: &str = "TENEX_DOCKER_BUILD_CONTEXT_FAILURE_CHILD";
+    #[cfg(unix)]
+    const CANONICALIZE_FAILURE_CHILD_FLAG: &str = "TENEX_DOCKER_CANONICALIZE_FAILURE_CHILD";
+    #[cfg(unix)]
+    const RUNTIME_USER_FALLBACK_CHILD_FLAG: &str = "TENEX_DOCKER_RUNTIME_USER_FALLBACK_CHILD";
+    #[cfg(unix)]
+    const RUNTIME_IDENTITY_GID_FAILURE_CHILD_FLAG: &str =
+        "TENEX_DOCKER_RUNTIME_IDENTITY_GID_FAILURE_CHILD";
+    #[cfg(unix)]
+    const DOCKER_USER_GID_FAILURE_CHILD_FLAG: &str = "TENEX_DOCKER_USER_GID_FAILURE_CHILD";
 
     fn docker_agent() -> Agent {
         let mut agent = Agent::new(
@@ -1350,6 +1711,13 @@ mod tests {
     }
 
     #[test]
+    fn test_container_name_replaces_invalid_characters() {
+        let mut agent = docker_agent();
+        agent.runtime_scope = "root:bad scope".to_string();
+        assert_eq!(container_name(&agent), "tenex-runtime-root-bad-scope");
+    }
+
+    #[test]
     fn test_windows_container_target_from_str_maps_drive_paths() {
         let target = windows_container_target_from_str(r"C:\tenex\worktrees\repo");
         assert_eq!(target, PathBuf::from("/tenex-host/c/tenex/worktrees/repo"));
@@ -1359,6 +1727,24 @@ mod tests {
     fn test_windows_container_target_from_str_falls_back_for_unc_like_paths() {
         let target = windows_container_target_from_str("//server/share/tenex");
         assert_eq!(target, PathBuf::from("/tenex-host/misc/server/share/tenex"));
+    }
+
+    #[test]
+    fn test_windows_container_target_from_str_falls_back_for_empty_paths() {
+        let target = windows_container_target_from_str("");
+        assert_eq!(target, PathBuf::from("/tenex-host/misc"));
+    }
+
+    #[test]
+    fn test_windows_container_target_from_str_falls_back_for_drive_paths_without_root_separator() {
+        let target = windows_container_target_from_str("C:tenex");
+        assert_eq!(target, PathBuf::from("/tenex-host/misc/C:tenex"));
+    }
+
+    #[test]
+    fn test_windows_container_target_from_str_falls_back_for_non_alphabetic_drive_prefixes() {
+        let target = windows_container_target_from_str("1:/tenex");
+        assert_eq!(target, PathBuf::from("/tenex-host/misc/1/tenex"));
     }
 
     #[test]
@@ -1397,13 +1783,47 @@ mod tests {
     }
 
     #[test]
+    fn test_exec_prefix_with_forwarded_env_sets_home_when_available() {
+        let home = PathBuf::from("/tmp/tenex-test-home");
+        let argv =
+            exec_prefix_with_forwarded_env_and_home(&docker_agent(), &[], Some(home.as_path()));
+        let home_target = container_target_path(&home);
+        let codex_home_target = container_target_path(&codex_home_dir(&home));
+
+        assert!(
+            argv.iter()
+                .any(|arg| arg == &format!("HOME={}", home_target.display()))
+        );
+        assert!(argv.iter().any(|arg| {
+            arg == &format!("XDG_CACHE_HOME={}", home_target.join(".cache").display())
+        }));
+        assert!(
+            argv.iter()
+                .any(|arg| arg == &format!("CARGO_HOME={}", home_target.join(".cargo").display()))
+        );
+        assert!(
+            argv.iter()
+                .any(|arg| arg == &format!("CODEX_HOME={}", codex_home_target.display()))
+        );
+    }
+
+    #[test]
+    fn test_exec_prefix_with_forwarded_env_omits_home_when_home_is_missing() {
+        let argv = exec_prefix_with_forwarded_env_and_home(&docker_agent(), &[], None);
+        assert!(!argv.iter().any(|arg| arg.starts_with("HOME=")));
+        assert!(!argv.iter().any(|arg| arg.starts_with("XDG_CACHE_HOME=")));
+        assert!(!argv.iter().any(|arg| arg.starts_with("CARGO_HOME=")));
+        assert!(!argv.iter().any(|arg| arg.starts_with("CODEX_HOME=")));
+    }
+
+    #[test]
     fn test_collect_forwarded_exec_env_filters_empty_values() {
-        let values = collect_forwarded_exec_env(|key| match key {
-            "TERM" => Some("xterm-256color".to_string()),
-            "COLORTERM" => Some(String::new()),
-            "SSH_AUTH_SOCK" => Some("/tmp/ssh-agent.sock".to_string()),
-            _ => None,
-        });
+        let by_key = std::collections::HashMap::from([
+            ("TERM", "xterm-256color".to_string()),
+            ("COLORTERM", String::new()),
+            ("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock".to_string()),
+        ]);
+        let values = collect_forwarded_exec_env(|key| by_key.get(key).cloned());
 
         assert_eq!(
             values,
@@ -1415,11 +1835,18 @@ mod tests {
     }
 
     #[test]
-    fn test_configure_ssh_auth_sock_mount_from_uses_container_target()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_collect_forwarded_exec_env_skips_missing_values() {
+        let by_key = std::collections::HashMap::from([("TERM", "xterm-256color".to_string())]);
+        let values = collect_forwarded_exec_env(|key| by_key.get(key).cloned());
+
+        assert_eq!(values, vec![("TERM", "xterm-256color".to_string())]);
+    }
+
+    #[test]
+    fn test_configure_ssh_auth_sock_mount_from_uses_container_target() {
+        let temp = TempDir::new().unwrap();
         let ssh_auth_sock = temp.path().join("ssh-agent.sock");
-        fs::write(&ssh_auth_sock, [])?;
+        fs::write(&ssh_auth_sock, []).unwrap();
         let mut cmd = Command::new("docker");
 
         configure_ssh_auth_sock_mount_from(&mut cmd, Some(&ssh_auth_sock));
@@ -1437,38 +1864,74 @@ mod tests {
                 .any(|arg| arg
                     == &format!("{}:{}", ssh_auth_sock.display(), ssh_auth_sock.display()))
         );
-        Ok(())
+    }
+
+    #[test]
+    fn test_configure_ssh_auth_sock_mount_from_is_noop_when_socket_missing() {
+        let temp = TempDir::new().unwrap();
+        let ssh_auth_sock = temp.path().join("missing.sock");
+        let mut cmd = Command::new("docker");
+
+        configure_ssh_auth_sock_mount_from(&mut cmd, Some(&ssh_auth_sock));
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[test]
+    fn test_add_optional_bind_mount_once_skips_duplicate_targets() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        fs::write(&source, "payload").unwrap();
+
+        let target = temp.path().join("target.txt");
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = HashSet::new();
+
+        add_optional_bind_mount_once(&mut cmd, &mut mounted_targets, &source, &target, false);
+        add_optional_bind_mount_once(&mut cmd, &mut mounted_targets, &source, &target, false);
+        add_optional_bind_mount_once(
+            &mut cmd,
+            &mut mounted_targets,
+            &temp.path().join("missing.txt"),
+            &temp.path().join("missing-target"),
+            false,
+        );
+
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let mount_args = args.iter().filter(|arg| *arg == "-v").count();
+        assert_eq!(mount_args, 1);
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_resolved_symlink_target_resolves_relative_target_outside_worktree()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_resolved_symlink_target_resolves_relative_target_outside_worktree() {
+        let temp = TempDir::new().unwrap();
         let worktree = temp.path().join("worktree");
         let external = temp.path().join("external");
         let path = worktree.join("PLAN.md");
         let target = external.join("PLAN.md");
-        fs::create_dir_all(&worktree)?;
-        fs::create_dir_all(&external)?;
-        fs::write(&target, "# plan\n")?;
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(&target, "# plan\n").unwrap();
 
         let resolved = resolved_symlink_target(&path, &worktree, Path::new("../external/PLAN.md"));
 
-        assert_eq!(resolved, target.canonicalize()?);
-        Ok(())
+        assert_eq!(resolved, target.canonicalize().unwrap());
     }
 
     #[cfg(unix)]
-    fn write_fake_docker_script(temp: &TempDir, body: &str) -> Result<PathBuf> {
+    fn write_fake_docker_script(temp: &TempDir, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
         let script = temp.path().join("docker");
-        fs::write(&script, body)?;
-        let mut perms = fs::metadata(&script)?.permissions();
+        fs::write(&script, body).unwrap();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&script, perms)?;
-        Ok(script)
+        fs::set_permissions(&script, perms).unwrap();
+        script
     }
 
     #[test]
@@ -1487,12 +1950,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_check_available_reports_docker_version_failure_clearly() -> Result<()> {
-        let temp = TempDir::new()?;
-        let script = write_fake_docker_script(
-            &temp,
-            "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  echo 'Cannot connect to the Docker daemon' >&2\n  exit 1\nfi\nexit 0\n",
-        )?;
+    fn test_check_available_reports_spawn_errors_clearly() {
+        let temp = TempDir::new().unwrap();
+        let script = temp.path().join("docker");
+        fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&script, perms).unwrap();
+
+        with_docker_program_override_for_tests(script, || {
+            let result = check_available();
+            assert!(result.is_err());
+            let err = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(err.contains("Failed to run `docker version`"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_available_reports_docker_version_failure_clearly() {
+        let temp = TempDir::new().unwrap();
+        let script_body = "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  echo 'Cannot connect to the Docker daemon' >&2\n  exit 1\nfi\nexit 0\n";
+        let script = write_fake_docker_script(&temp, script_body);
 
         with_docker_program_override_for_tests(script, || {
             let result = check_available();
@@ -1504,31 +1986,65 @@ mod tests {
             assert!(err.contains("Docker is unavailable: `docker version` failed"));
             assert!(err.contains("Cannot connect to the Docker daemon"));
         });
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_image_ready_builds_shipped_image_when_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_check_available_prefers_stdout_when_stderr_is_empty() {
+        let temp = TempDir::new().unwrap();
+        let script_body = "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  printf '%s\\n' 'stdout failure'\n  exit 1\nfi\nexit 0\n";
+        let script = write_fake_docker_script(&temp, script_body);
+
+        with_docker_program_override_for_tests(script, || {
+            let result = check_available();
+            assert!(result.is_err());
+            let err = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(err.contains("Docker is unavailable: `docker version` failed"));
+            assert!(err.contains("stdout failure"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_available_reports_generic_detail_when_output_is_empty() {
+        let temp = TempDir::new().unwrap();
+        let script_body = "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  exit 1\nfi\nexit 0\n";
+        let script = write_fake_docker_script(&temp, script_body);
+
+        with_docker_program_override_for_tests(script, || {
+            let result = check_available();
+            assert!(result.is_err());
+            let err = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(err.contains("Docker is unavailable: `docker version` failed"));
+            assert!(err.contains("the Docker daemon may be unavailable"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_image_ready_builds_shipped_image_when_missing() {
+        let temp = TempDir::new().unwrap();
         let log = temp.path().join("docker.log");
         let dockerfile = temp.path().join("Dockerfile");
-        let script = write_fake_docker_script(
-            &temp,
-            &format!(
-                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nif [ \"$1\" = \"build\" ]; then\n  cat > \"{}\"\n  exit 0\nfi\nexit 0\n",
-                log.display(),
-                dockerfile.display(),
-            ),
-        )?;
+        let script_body = format!(
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nif [ \"$1\" = \"build\" ]; then\n  cat > \"{}\"\n  exit 0\nfi\nexit 0\n",
+            log.display(),
+            dockerfile.display(),
+        );
+        let script = write_fake_docker_script(&temp, &script_body);
 
         with_docker_program_override_for_tests(script, || {
             let result = ensure_image_ready(&Settings::default(), "codex");
             assert!(result.is_ok());
         });
 
-        let log_contents = std::fs::read_to_string(&log)?;
+        let log_contents = std::fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains("image inspect --format"));
         assert!(log_contents.contains(WORKER_IMAGE_TEMPLATE_HASH_LABEL));
         assert!(log_contents.contains("build --tag tenex-worker:latest --label"));
@@ -1536,7 +2052,7 @@ mod tests {
         assert!(log_contents.contains(&default_worker_dockerfile_hash()));
         assert!(log_contents.contains("--file -"));
 
-        let dockerfile_contents = std::fs::read_to_string(&dockerfile)?;
+        let dockerfile_contents = std::fs::read_to_string(&dockerfile).unwrap();
         assert!(dockerfile_contents.contains("@openai/codex"));
         assert!(dockerfile_contents.contains("@anthropic-ai/claude-code"));
         assert!(dockerfile_contents.contains("rustup component add clippy llvm-tools rustfmt"));
@@ -1548,32 +2064,114 @@ mod tests {
         assert!(dockerfile_contents.contains("/usr/local/lib/libnss_wrapper.so"));
         assert!(dockerfile_contents.contains("/etc/profile.d/tenex-rust-path.sh"));
         assert!(dockerfile_contents.contains("/usr/local/cargo/bin/*"));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_image_ready_rebuilds_stale_shipped_image()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_ensure_image_ready_rebuilds_stale_shipped_image() {
+        let temp = TempDir::new().unwrap();
         let log = temp.path().join("docker.log");
-        let script = write_fake_docker_script(
-            &temp,
-            &format!(
-                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' 'stale-hash'\n  exit 0\nfi\nif [ \"$1\" = \"build\" ]; then\n  cat >/dev/null\n  exit 0\nfi\nexit 0\n",
-                log.display(),
-            ),
-        )?;
+        let script_body = format!(
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' 'stale-hash'\n  exit 0\nfi\nif [ \"$1\" = \"build\" ]; then\n  cat >/dev/null\n  exit 0\nfi\nexit 0\n",
+            log.display(),
+        );
+        let script = write_fake_docker_script(&temp, &script_body);
 
         with_docker_program_override_for_tests(script, || {
             let result = ensure_image_ready(&Settings::default(), "codex");
             assert!(result.is_ok());
         });
 
-        let log_contents = std::fs::read_to_string(&log)?;
+        let log_contents = std::fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains("image inspect --format"));
         assert!(log_contents.contains("build --tag tenex-worker:latest --label"));
-        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_image_ready_noops_when_image_is_up_to_date() {
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("docker.log");
+        let script_body = format!(
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"build\" ]; then\n  printf '%s\\n' 'unexpected build' >&2\n  exit 1\nfi\nexit 0\n",
+            log.display(),
+            default_worker_dockerfile_hash(),
+        );
+        let script = write_fake_docker_script(&temp, &script_body);
+
+        with_docker_program_override_for_tests(script, || {
+            let result = ensure_image_ready(&Settings::default(), "codex");
+            assert!(result.is_ok());
+        });
+
+        let log_contents = std::fs::read_to_string(&log).unwrap();
+        assert!(log_contents.contains("image inspect --format"));
+        assert!(!log_contents.contains("build --tag"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_image_ready_propagates_unexpected_image_inspect_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'boom' >&2\n  exit 1\nfi\nif [ \"$1\" = \"build\" ]; then\n  echo 'unexpected build' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_image_ready(&Settings::default(), "codex").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker image"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_build_required_returns_false_when_image_is_up_to_date() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert!(!image_build_required(&Settings::default(), "codex").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_build_required_returns_true_when_image_missing() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert!(image_build_required(&Settings::default(), "codex").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_build_required_propagates_unexpected_image_inspect_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'boom' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            image_build_required(&Settings::default(), "codex").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker image"));
+        assert!(message.contains("boom"));
     }
 
     #[test]
@@ -1614,6 +2212,22 @@ hide_rate_limit_model_nudge = true
     }
 
     #[test]
+    fn test_sanitize_codex_config_strips_root_mcp_servers_table() {
+        let config = r#"
+[mcp_servers]
+command = "docker"
+
+[notice]
+hide_rate_limit_model_nudge = true
+"#;
+
+        let sanitized = sanitize_codex_config(config);
+        assert!(sanitized.contains("[notice]"));
+        assert!(!sanitized.contains("[mcp_servers]"));
+        assert!(!sanitized.contains("command = \"docker\""));
+    }
+
+    #[test]
     fn test_sanitize_claude_settings_strips_hooks() {
         let settings = r#"{
   "permissions": {
@@ -1640,6 +2254,14 @@ hide_rate_limit_model_nudge = true
     }
 
     #[test]
+    fn test_sanitize_claude_settings_keeps_non_object_values() {
+        let settings = "[1, 2, 3]";
+        let sanitized = sanitize_claude_settings(settings);
+        let parsed: serde_json::Value = serde_json::from_str(&sanitized).expect("valid json");
+        assert_eq!(parsed, serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
     fn test_sanitize_claude_settings_returns_original_when_invalid_json() {
         let invalid = "{ invalid";
         assert_eq!(sanitize_claude_settings(invalid), invalid);
@@ -1647,89 +2269,237 @@ hide_rate_limit_model_nudge = true
 
     #[cfg(unix)]
     #[test]
-    fn test_container_matches_current_layout_uses_runtime_label()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_container_matches_current_layout_uses_runtime_label() {
+        let temp = TempDir::new().unwrap();
         let script = write_fake_docker_script(
             &temp,
             &format!(
                 "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nexit 0\n",
                 current_container_layout_hash(),
             ),
-        )?;
+        );
 
-        with_docker_program_override_for_tests(script, || -> Result<()> {
+        with_docker_program_override_for_tests(script, || {
             assert_eq!(
-                container_layout_hash("tenex-runtime-test")?,
+                container_layout_hash("tenex-runtime-test").unwrap(),
                 Some(current_container_layout_hash())
             );
-            assert!(container_matches_current_layout("tenex-runtime-test")?);
-            Ok(())
-        })?;
-        Ok(())
+            assert!(container_matches_current_layout("tenex-runtime-test").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_template_hash_returns_none_when_label_missing() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '<no value>'\n  exit 0\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(image_template_hash("tenex-worker:latest").unwrap(), None);
+            assert!(!image_matches_default_template("tenex-worker:latest").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_template_hash_returns_none_when_output_is_empty() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' ''\n  exit 0\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(image_template_hash("tenex-worker:latest").unwrap(), None);
+            assert!(!image_matches_default_template("tenex-worker:latest").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_template_hash_returns_none_when_image_missing_reports_no_such_object() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' 'No such object' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(image_template_hash("tenex-worker:latest").unwrap(), None);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_image_template_hash_propagates_unexpected_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'boom' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            image_template_hash("tenex-worker:latest").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker image"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_layout_hash_returns_none_when_label_missing() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' '<no value>'\n  exit 0\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(container_layout_hash("tenex-runtime-test").unwrap(), None);
+            assert!(!container_matches_current_layout("tenex-runtime-test").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_layout_hash_returns_none_when_output_is_empty() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' ''\n  exit 0\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(container_layout_hash("tenex-runtime-test").unwrap(), None);
+            assert!(!container_matches_current_layout("tenex-runtime-test").unwrap());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_layout_hash_returns_none_when_container_missing() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such container' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(container_layout_hash("tenex-runtime-test").unwrap(), None);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_layout_hash_returns_none_when_container_missing_reports_no_such_object() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            assert_eq!(container_layout_hash("tenex-runtime-test").unwrap(), None);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_container_layout_hash_propagates_unexpected_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'boom' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            container_layout_hash("tenex-runtime-test").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker container"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_image_ready_reports_build_failure() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'No such image' >&2\n  exit 1\nfi\nif [ \"$1\" = \"build\" ]; then\n  cat >/dev/null\n  echo 'build failed' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_image_ready(&Settings::default(), "codex").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to build built-in Tenex worker image"));
+        assert!(message.contains("build failed"));
     }
 
     #[test]
-    fn test_prepare_runtime_home_in_stages_sanitized_codex_config()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_prepare_runtime_home_in_stages_sanitized_codex_config() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_codex_home = host_home.join(".codex");
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::write(
-            host_codex_home.join("config.toml"),
-            r#"
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        let config_contents = r#"
 model = "gpt-5.4"
 notify = ["bash", "-lc", "beep"]
 
 [mcp_servers.slack]
 command = "docker"
-"#,
-        )?;
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#)?;
+"#;
+        fs::write(host_codex_home.join("config.toml"), config_contents).unwrap();
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#).unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
         assert!(prepared.home_source.join(".cache").is_dir());
         assert!(prepared.home_source.join(".config").is_dir());
         assert!(host_codex_home.join("sessions").is_dir());
 
-        let managed_config = fs::read_to_string(prepared.codex_home_source.join("config.toml"))?;
+        let managed_config =
+            fs::read_to_string(prepared.codex_home_source.join("config.toml")).unwrap();
         assert!(managed_config.contains("model = \"gpt-5.4\""));
         assert!(!managed_config.contains("notify ="));
         assert!(!managed_config.contains("[mcp_servers.slack]"));
 
-        let managed_auth = fs::read_to_string(prepared.codex_home_source.join("auth.json"))?;
+        let managed_auth =
+            fs::read_to_string(prepared.codex_home_source.join("auth.json")).unwrap();
         assert_eq!(managed_auth, r#"{"token":"abc"}"#);
-        Ok(())
     }
 
     #[test]
-    fn test_prepare_runtime_home_in_stages_claude_config() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let temp = TempDir::new()?;
+    fn test_prepare_runtime_home_in_stages_claude_config() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_claude_dir = host_home.join(".claude");
-        fs::create_dir_all(host_claude_dir.join("commands"))?;
-        fs::create_dir_all(host_home.join(".codex").join("sessions"))?;
+        fs::create_dir_all(host_claude_dir.join("commands")).unwrap();
+        fs::create_dir_all(host_home.join(".codex").join("sessions")).unwrap();
         fs::write(
             host_home.join(".claude.json"),
             r#"{"oauthAccount":{"email":"q@example.com"}}"#,
-        )?;
+        )
+        .unwrap();
         fs::write(
             host_claude_dir.join(".credentials.json"),
             r#"{"claudeAiOauth":{"accessToken":"abc"}}"#,
-        )?;
-        fs::write(
-            host_claude_dir.join("settings.json"),
-            r#"{
+        )
+        .unwrap();
+        let settings_contents = r#"{
   "permissions": {
     "defaultMode": "plan"
   },
@@ -1745,191 +2515,364 @@ command = "docker"
       }
     ]
   }
-}"#,
-        )?;
+}"#;
+        fs::write(host_claude_dir.join("settings.json"), settings_contents).unwrap();
         fs::write(
             host_claude_dir.join("commands").join("review.md"),
             "# review\n",
-        )?;
+        )
+        .unwrap();
         fs::write(
             host_home.join(".codex").join("config.toml"),
             "model = \"gpt-5.4\"\n",
-        )?;
+        )
+        .unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_home.join(".codex"),
-        )?;
+        )
+        .unwrap();
 
         let managed_settings =
-            fs::read_to_string(prepared.home_source.join(".claude").join("settings.json"))?;
+            fs::read_to_string(prepared.home_source.join(".claude").join("settings.json")).unwrap();
         assert!(managed_settings.contains("\"defaultMode\": \"plan\""));
         assert!(!managed_settings.contains("\"hooks\""));
         assert!(!managed_settings.contains("ai-waiting-beep"));
 
-        let managed_credentials = fs::read_to_string(
-            prepared
-                .home_source
-                .join(".claude")
-                .join(".credentials.json"),
-        )?;
+        let credentials_path = prepared
+            .home_source
+            .join(".claude")
+            .join(".credentials.json");
+        let managed_credentials = fs::read_to_string(credentials_path).unwrap();
         assert!(managed_credentials.contains("accessToken"));
 
-        let managed_claude_json = fs::read_to_string(prepared.home_source.join(".claude.json"))?;
+        let managed_claude_json =
+            fs::read_to_string(prepared.home_source.join(".claude.json")).unwrap();
         assert!(managed_claude_json.contains("oauthAccount"));
 
-        let managed_command = fs::read_to_string(
-            prepared
-                .home_source
-                .join(".claude")
-                .join("commands/review.md"),
-        )?;
+        let command_path = prepared
+            .home_source
+            .join(".claude")
+            .join("commands/review.md");
+        let managed_command = fs::read_to_string(command_path).unwrap();
         assert_eq!(managed_command, "# review\n");
-        Ok(())
     }
 
     #[test]
-    fn test_sync_optional_dir_removes_target_when_source_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_sync_optional_dir_removes_target_when_source_missing() {
+        let temp = TempDir::new().unwrap();
         let source = temp.path().join("missing-source");
         let target = temp.path().join("target");
-        fs::create_dir_all(&target)?;
-        fs::write(target.join("stale.txt"), "stale")?;
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("stale.txt"), "stale").unwrap();
 
-        sync_optional_dir(&source, &target)?;
+        sync_optional_dir(&source, &target).unwrap();
 
         assert!(!target.exists());
-        Ok(())
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_sync_optional_path_following_symlinks_replaces_stale_target_file()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_sync_optional_dir_replaces_existing_target_when_source_present() {
+        let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
         let target = temp.path().join("target");
-        let external_key = temp.path().join("external-key");
-        fs::create_dir_all(&source)?;
-        fs::write(&target, "stale-target")?;
-        fs::write(source.join("config"), "Host staged\n")?;
-        fs::write(&external_key, "private-key\n")?;
-        std::os::unix::fs::symlink(&external_key, source.join("id_test"))?;
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("fresh.txt"), "fresh").unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("stale.txt"), "stale").unwrap();
 
-        sync_optional_path_following_symlinks(&source, &target)?;
+        sync_optional_dir(&source, &target).unwrap();
 
-        assert_eq!(fs::read_to_string(target.join("config"))?, "Host staged\n");
-        assert_eq!(fs::read_to_string(target.join("id_test"))?, "private-key\n");
-        Ok(())
+        assert!(!target.join("stale.txt").exists());
+        assert_eq!(
+            fs::read_to_string(target.join("fresh.txt")).unwrap(),
+            "fresh"
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_sync_optional_path_following_symlinks_skips_broken_symlinks()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
-        let source = temp.path().join("source");
-        let target = temp.path().join("target");
-        fs::create_dir_all(&source)?;
-        std::os::unix::fs::symlink(temp.path().join("missing"), source.join("broken"))?;
+    fn test_sync_codex_home_reports_target_creation_failure() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex-home");
+        fs::create_dir_all(&host_codex_home).unwrap();
 
-        sync_optional_path_following_symlinks(&source, &target)?;
+        let target = temp.path().join("managed-codex-home");
+        fs::write(&target, "not-a-directory").unwrap();
 
-        assert!(target.is_dir());
-        assert!(!target.join("broken").exists());
-        Ok(())
+        let err = sync_codex_home(&target, &host_codex_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to create managed Codex home directory"));
+        assert!(message.contains(&target.display().to_string()));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_sync_optional_path_following_symlinks_removes_target_when_source_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
-        let source = temp.path().join("missing-source");
-        let target = temp.path().join("target");
-        fs::create_dir_all(&target)?;
-        fs::write(target.join("stale.txt"), "stale")?;
+    fn test_sync_codex_home_removes_stale_config_when_source_missing() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex-home");
+        fs::create_dir_all(&host_codex_home).unwrap();
 
-        sync_optional_path_following_symlinks(&source, &target)?;
+        let target = temp.path().join("managed-codex-home");
+        fs::create_dir_all(&target).unwrap();
 
-        assert!(!target.exists());
-        Ok(())
+        let config_target = target.join("config.toml");
+        fs::write(&config_target, "stale").unwrap();
+        assert!(config_target.exists());
+
+        sync_codex_home(&target, &host_codex_home).unwrap();
+
+        assert!(!config_target.exists());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn test_copy_file_with_permissions_reports_missing_source()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
-        let source = temp.path().join("missing-source");
-        let target = temp.path().join("target").join("copied");
+    fn test_sync_codex_home_reports_remove_stale_config_failure() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex-home");
+        fs::create_dir_all(&host_codex_home).unwrap();
 
-        let err = match copy_file_with_permissions(&source, &target) {
-            Ok(()) => return Err("expected missing source error".into()),
-            Err(err) => err,
-        };
+        let target = temp.path().join("managed-codex-home");
+        fs::create_dir_all(&target).unwrap();
+
+        let config_target = target.join("config.toml");
+        fs::create_dir_all(&config_target).unwrap();
+
+        let err = sync_codex_home(&target, &host_codex_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to remove"));
+        assert!(message.contains("config.toml"));
+    }
+
+    #[test]
+    fn test_sync_optional_file_copies_file_and_creates_parent() {
+        let temp = TempDir::new().unwrap();
+        let source_dir = temp.path().join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+
+        let source = source_dir.join("auth.json");
+        fs::write(&source, "payload").unwrap();
+
+        let target = temp.path().join("target").join("nested").join("auth.json");
+        sync_optional_file(&source, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "payload");
+    }
+
+    #[test]
+    fn test_sync_optional_file_reports_copy_failure() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.json");
+        fs::write(&source, "payload").unwrap();
+
+        let target = temp.path().join("target.json");
+        fs::create_dir_all(&target).unwrap();
+
+        let err = sync_optional_file(&source, &target).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("Failed to copy"));
         assert!(message.contains(&source.display().to_string()));
         assert!(message.contains(&target.display().to_string()));
-        Ok(())
+    }
+
+    #[test]
+    fn test_sync_optional_file_removes_target_when_source_missing() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source.json");
+        let target = temp.path().join("target.json");
+        fs::write(&target, "stale").unwrap();
+        assert!(target.exists());
+
+        sync_optional_file(&source, &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn test_sync_optional_file_reports_remove_failure() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source.json");
+        let target = temp.path().join("target.json");
+        fs::create_dir_all(&target).unwrap();
+
+        let err = sync_optional_file(&source, &target).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to remove"));
+        assert!(message.contains(&target.display().to_string()));
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_copy_path_recursive_following_symlinks_reports_missing_source()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_sync_optional_path_following_symlinks_replaces_stale_target_file() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let external_key = temp.path().join("external-key");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(&target, "stale-target").unwrap();
+        fs::write(source.join("config"), "Host staged\n").unwrap();
+        fs::write(&external_key, "private-key\n").unwrap();
+        std::os::unix::fs::symlink(&external_key, source.join("id_test")).unwrap();
+
+        sync_optional_path_following_symlinks(&source, &target).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join("config")).unwrap(),
+            "Host staged\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("id_test")).unwrap(),
+            "private-key\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_skips_broken_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing"), source.join("broken")).unwrap();
+
+        sync_optional_path_following_symlinks(&source, &target).unwrap();
+
+        assert!(target.is_dir());
+        assert!(!target.join("broken").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_removes_target_when_source_missing() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("stale.txt"), "stale").unwrap();
+
+        sync_optional_path_following_symlinks(&source, &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_reports_missing_source() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target").join("copied");
+
+        let err = copy_file_with_permissions(&source, &target)
+            .expect_err("expected missing source error");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains(&source.display().to_string()));
+        assert!(message.contains(&target.display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_reports_missing_source() {
+        let temp = TempDir::new().unwrap();
         let source = temp.path().join("missing-source");
         let target = temp.path().join("target");
 
-        let err = match copy_path_recursive_following_symlinks(&source, &target) {
-            Ok(()) => return Err("expected missing source error".into()),
-            Err(err) => err,
-        };
+        let err = copy_path_recursive_following_symlinks(&source, &target)
+            .expect_err("expected missing source error");
         let message = err.to_string();
         assert!(message.contains("Failed to read"));
         assert!(message.contains(&source.display().to_string()));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_set_staged_permissions_reports_missing_path() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let temp = TempDir::new()?;
+    fn test_set_staged_permissions_reports_missing_path() {
+        let temp = TempDir::new().unwrap();
         let path = temp.path().join("missing-path");
 
-        let err = match set_staged_permissions(&path, fs::Permissions::from_mode(0o644)) {
-            Ok(()) => return Err("expected missing path error".into()),
-            Err(err) => err,
-        };
+        let err = set_staged_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect_err("expected missing path error");
         let message = err.to_string();
         assert!(message.contains("Failed to set permissions on"));
         assert!(message.contains(&path.display().to_string()));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_runtime_home_directories_reports_create_failure()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
-        let home_source = temp.path().join("runtime-home");
-        let codex_home_target = temp.path().join("codex-home");
-        fs::write(&home_source, "not-a-directory")?;
+    fn test_ensure_runtime_home_directories_reports_create_failure() {
+        let temp = TempDir::new().unwrap();
+        let cache_home_source = temp.path().join("runtime-home-cache");
+        let cache_codex_home_target = temp.path().join("codex-home-cache");
+        fs::write(&cache_home_source, "not-a-directory").unwrap();
 
-        let err = match ensure_runtime_home_directories(&home_source, &codex_home_target) {
-            Ok(()) => return Err("expected directory creation failure".into()),
-            Err(err) => err,
-        };
+        let err = ensure_runtime_home_directories(&cache_home_source, &cache_codex_home_target)
+            .expect_err("expected directory creation failure");
         let message = err.to_string();
         assert!(message.contains("Failed to create Docker runtime cache directory"));
-        assert!(message.contains(&home_source.join(".cache").display().to_string()));
-        Ok(())
+        assert!(message.contains(&cache_home_source.join(".cache").display().to_string()));
+
+        let cargo_home_source = temp.path().join("runtime-home-cargo");
+        let cargo_codex_home_target = temp.path().join("codex-home-cargo");
+        fs::create_dir_all(&cargo_home_source).unwrap();
+        fs::write(cargo_home_source.join(".cargo"), "not-a-directory").unwrap();
+
+        let err = ensure_runtime_home_directories(&cargo_home_source, &cargo_codex_home_target)
+            .expect_err("expected Cargo directory creation failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker runtime Cargo directory"));
+        assert!(message.contains(&cargo_home_source.join(".cargo").display().to_string()));
+
+        let config_home_source = temp.path().join("runtime-home-config");
+        let config_codex_home_target = temp.path().join("codex-home-config");
+        fs::create_dir_all(&config_home_source).unwrap();
+        fs::write(config_home_source.join(".config"), "not-a-directory").unwrap();
+
+        let err = ensure_runtime_home_directories(&config_home_source, &config_codex_home_target)
+            .expect_err("expected config directory creation failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker runtime config directory"));
+        assert!(message.contains(&config_home_source.join(".config").display().to_string()));
+
+        let local_share_home_source = temp.path().join("runtime-home-local-share");
+        let local_share_codex_home_target = temp.path().join("codex-home-local-share");
+        fs::create_dir_all(&local_share_home_source).unwrap();
+        fs::write(local_share_home_source.join(".local"), "not-a-directory").unwrap();
+
+        let err = ensure_runtime_home_directories(
+            &local_share_home_source,
+            &local_share_codex_home_target,
+        )
+        .expect_err("expected local share directory creation failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker runtime local share directory"));
+        assert!(
+            message.contains(
+                &local_share_home_source
+                    .join(".local")
+                    .join("share")
+                    .display()
+                    .to_string()
+            )
+        );
+
+        let sessions_home_source = temp.path().join("runtime-home-sessions");
+        let sessions_codex_home_target = temp.path().join("codex-home-sessions");
+        fs::create_dir_all(&sessions_home_source).unwrap();
+        fs::write(&sessions_codex_home_target, "not-a-directory").unwrap();
+
+        let err =
+            ensure_runtime_home_directories(&sessions_home_source, &sessions_codex_home_target)
+                .expect_err("expected sessions directory creation failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create host Codex sessions directory"));
+        assert!(
+            message.contains(
+                &sessions_codex_home_target
+                    .join("sessions")
+                    .display()
+                    .to_string()
+            )
+        );
     }
 
     #[test]
@@ -1965,12 +2908,26 @@ command = "docker"
 
     #[cfg(unix)]
     #[test]
+    fn test_read_trimmed_stdout_returns_none_when_command_fails() {
+        assert_eq!(read_trimmed_stdout("sh", ["-c", "exit 1"]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_trimmed_stdout_returns_none_when_output_is_invalid_utf8() {
+        assert_eq!(read_trimmed_stdout("sh", ["-c", "printf '\\377'"]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_configure_runtime_identity_env_sets_expected_variables() {
         let mut cmd = Command::new("docker");
         let home_target = PathBuf::from("/tmp/runtime-home");
 
         configure_runtime_identity_env(&mut cmd, &home_target);
 
+        let identity =
+            current_runtime_user_info().expect("expected runtime user info on unix test host");
         let args = cmd
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1985,36 +2942,96 @@ command = "docker"
             "NSS_WRAPPER_GROUP={}",
             home_target.join(RUNTIME_GROUP_FILE_NAME).display()
         )));
-        if let Some(identity) = current_runtime_user_info() {
-            assert!(args.contains(&format!("USER={}", identity.user_name)));
-            assert!(args.contains(&format!("LOGNAME={}", identity.user_name)));
+        assert!(args.contains(&format!("USER={}", identity.user_name)));
+        assert!(args.contains(&format!("LOGNAME={}", identity.user_name)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_runtime_identity_env_is_noop_when_user_info_unavailable() {
+        if std::env::var_os(RUNTIME_IDENTITY_ENV_CHILD_FLAG).is_some() {
+            let mut cmd = Command::new("docker");
+            configure_runtime_identity_env(&mut cmd, Path::new("/tmp/runtime-home"));
+            assert!(cmd.get_args().next().is_none());
+            return;
         }
+
+        let current_exe = std::env::current_exe().unwrap();
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_configure_runtime_identity_env_is_noop_when_user_info_unavailable")
+            .arg("--nocapture")
+            .env(RUNTIME_IDENTITY_ENV_CHILD_FLAG, "1")
+            .env("PATH", "")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_current_runtime_user_info_falls_back_to_env_user_for_missing_name_queries() {
+        if std::env::var_os(RUNTIME_USER_FALLBACK_CHILD_FLAG).is_some() {
+            let identity = current_runtime_user_info().expect("expected runtime user info");
+            assert_eq!(identity.uid, "1234");
+            assert_eq!(identity.gid, "5678");
+            assert_eq!(identity.user_name, "tenex-test-user");
+            assert_eq!(identity.group_name, "tenex-test-user");
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let id_script = bin_dir.join("id");
+        fs::write(
+            &id_script,
+            "#!/bin/sh\ncase \"$1\" in\n  -u) echo 1234 ;;\n  -g) echo 5678 ;;\n  -un) exit 1 ;;\n  -gn) exit 1 ;;\n  *) exit 1 ;;\nesac\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&id_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&id_script, perms).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", bin_dir.display());
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_current_runtime_user_info_falls_back_to_env_user_for_missing_name_queries")
+            .arg("--nocapture")
+            .env(RUNTIME_USER_FALLBACK_CHILD_FLAG, "1")
+            .env("PATH", prefixed_path)
+            .env("USER", "tenex-test-user")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
     }
 
     #[test]
-    fn test_prepare_runtime_home_in_creates_managed_cargo_home()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_prepare_runtime_home_in_creates_managed_cargo_home() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_codex_home = host_home.join(".codex");
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
         assert!(prepared.home_source.join(".cargo").is_dir());
-        Ok(())
     }
 
     #[test]
-    fn test_sync_codex_and_claude_home_helpers_copy_expected_files()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_sync_codex_and_claude_home_helpers_copy_expected_files() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("host-home");
         let target_home = temp.path().join("target-home");
         let host_codex_home = host_home.join(".codex");
@@ -2022,108 +3039,965 @@ command = "docker"
         let host_claude_dir = host_home.join(".claude");
         let target_claude_dir = target_home.join(".claude");
 
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::create_dir_all(host_claude_dir.join("commands"))?;
-        fs::create_dir_all(&target_codex_home)?;
-        fs::create_dir_all(&target_claude_dir)?;
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(host_claude_dir.join("commands")).unwrap();
+        fs::create_dir_all(&target_codex_home).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
 
         fs::write(
             host_codex_home.join("config.toml"),
             "model = \"gpt-5.4\"\nnotify = [\"beep\"]\n",
-        )?;
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#)?;
+        )
+        .unwrap();
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#).unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
-        )?;
+        )
+        .unwrap();
         fs::write(
             host_claude_dir.join("commands").join("review.md"),
             "# review\n",
-        )?;
-        fs::write(host_home.join(".claude.json"), r#"{"oauthAccount":{}}"#)?;
+        )
+        .unwrap();
+        fs::write(host_home.join(".claude.json"), r#"{"oauthAccount":{}}"#).unwrap();
 
-        sync_codex_home(&target_codex_home, &host_codex_home)?;
-        sync_claude_home(&target_home, &host_home)?;
+        sync_codex_home(&target_codex_home, &host_codex_home).unwrap();
+        sync_claude_home(&target_home, &host_home).unwrap();
 
-        let managed_codex_config = fs::read_to_string(target_codex_home.join("config.toml"))?;
+        let managed_codex_config =
+            fs::read_to_string(target_codex_home.join("config.toml")).unwrap();
         assert!(managed_codex_config.contains("model = \"gpt-5.4\""));
         assert!(!managed_codex_config.contains("notify ="));
         assert_eq!(
-            fs::read_to_string(target_codex_home.join("auth.json"))?,
+            fs::read_to_string(target_codex_home.join("auth.json")).unwrap(),
             r#"{"token":"abc"}"#
         );
 
-        let managed_claude_settings = fs::read_to_string(target_claude_dir.join("settings.json"))?;
+        let managed_claude_settings =
+            fs::read_to_string(target_claude_dir.join("settings.json")).unwrap();
         assert!(managed_claude_settings.contains("\"defaultMode\": \"plan\""));
         assert!(!managed_claude_settings.contains("\"hooks\""));
         assert_eq!(
-            fs::read_to_string(target_claude_dir.join("commands").join("review.md"))?,
+            fs::read_to_string(target_claude_dir.join("commands").join("review.md")).unwrap(),
             "# review\n"
         );
         assert_eq!(
-            fs::read_to_string(target_home.join(".claude.json"))?,
+            fs::read_to_string(target_home.join(".claude.json")).unwrap(),
             r#"{"oauthAccount":{}}"#
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_command_and_build_context_helpers() -> Result<(), Box<dyn std::error::Error>> {
-        let mut command = Command::new("sh");
-        command.args(["-c", "printf helper-output"]);
-        assert_eq!(
-            run_command(&mut command, "Failed to run helper command")?,
-            "helper-output"
-        );
-
-        let build_context = default_worker_build_context_dir()?;
-        assert!(build_context.is_dir());
-        assert!(build_context.ends_with("tenex/docker-build-context"));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_write_runtime_identity_files_preserve_existing_files_when_lookup_fails()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_sync_codex_home_reports_config_read_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex");
+        let target_codex_home = temp.path().join("target-codex");
+        fs::create_dir_all(&host_codex_home).unwrap();
+        fs::create_dir_all(&target_codex_home).unwrap();
+
+        let config_source = host_codex_home.join("config.toml");
+        fs::write(&config_source, "model = \"gpt-5.4\"\n").unwrap();
+        let mut perms = fs::metadata(&config_source).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&config_source, perms).unwrap();
+
+        let err = sync_codex_home(&target_codex_home, &host_codex_home).unwrap_err();
+        assert!(err.to_string().contains("Failed to read"));
+
+        let mut reset = fs::metadata(&config_source).unwrap().permissions();
+        reset.set_mode(0o644);
+        fs::set_permissions(&config_source, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_codex_home_reports_config_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex");
+        let target_codex_home = temp.path().join("target-codex");
+        fs::create_dir_all(&host_codex_home).unwrap();
+        fs::create_dir_all(&target_codex_home).unwrap();
+
+        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
+        let mut target_perms = fs::metadata(&target_codex_home).unwrap().permissions();
+        target_perms.set_mode(0o555);
+        fs::set_permissions(&target_codex_home, target_perms).unwrap();
+
+        let err = sync_codex_home(&target_codex_home, &host_codex_home).unwrap_err();
+        assert!(err.to_string().contains("Failed to write"));
+
+        let mut reset = fs::metadata(&target_codex_home).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&target_codex_home, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_codex_home_propagates_optional_file_copy_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_codex_home = temp.path().join("host-codex");
+        let target_codex_home = temp.path().join("target-codex");
+        fs::create_dir_all(&host_codex_home).unwrap();
+        fs::create_dir_all(&target_codex_home).unwrap();
+
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"abc"}"#).unwrap();
+
+        let mut perms = fs::metadata(&target_codex_home).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&target_codex_home, perms).unwrap();
+
+        let err = sync_codex_home(&target_codex_home, &host_codex_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains("auth.json"));
+
+        let mut reset = fs::metadata(&target_codex_home).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&target_codex_home, reset).unwrap();
+    }
+
+    #[test]
+    fn test_sync_optional_dir_reports_remove_errors_when_target_is_file() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("file.txt"), "hello").unwrap();
+        fs::write(&target, "block").unwrap();
+
+        let err = sync_optional_dir(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+    }
+
+    #[test]
+    fn test_sync_optional_dir_reports_remove_errors_when_source_missing() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target");
+        fs::write(&target, "block").unwrap();
+
+        let err = sync_optional_dir(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_dir_propagates_copy_dir_recursive_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let err = with_copy_dir_recursive_before_symlink_metadata_hook(
+            |path| {
+                let _ = fs::remove_file(path);
+            },
+            || sync_optional_dir(&source, &target).unwrap_err(),
+        );
+
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_reports_create_errors_when_target_home_is_file() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::write(&target_home, "not-a-dir").unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        assert!(err.to_string().contains("Failed to create"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_claude_json_copy() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::create_dir_all(&target_home).unwrap();
+        fs::write(host_home.join(".claude.json"), r#"{"oauthAccount":{}}"#).unwrap();
+        fs::create_dir_all(target_home.join(".claude.json")).unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains(".claude.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_credentials_copy() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+        fs::create_dir_all(&host_claude_dir).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
+        fs::write(host_claude_dir.join(".credentials.json"), "{}").unwrap();
+        fs::create_dir_all(target_claude_dir.join(".credentials.json")).unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains(".credentials.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_mcp_needs_auth_cache_copy() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+        fs::create_dir_all(&host_claude_dir).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
+        fs::write(host_claude_dir.join("mcp-needs-auth-cache.json"), "{}").unwrap();
+        fs::create_dir_all(target_claude_dir.join("mcp-needs-auth-cache.json")).unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+        assert!(message.contains("mcp-needs-auth-cache.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_settings_copy() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+        fs::create_dir_all(&host_claude_dir).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
+        fs::write(
+            host_claude_dir.join("settings.json"),
+            r#"{"permissions":{"defaultMode":"plan"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(target_claude_dir.join("settings.json")).unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to write"));
+        assert!(message.contains("settings.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_settings_local_copy() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+        fs::create_dir_all(&host_claude_dir).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
+        fs::write(
+            host_claude_dir.join("settings.local.json"),
+            r#"{"permissions":{"defaultMode":"plan"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(target_claude_dir.join("settings.local.json")).unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to write"));
+        assert!(message.contains("settings.local.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_home_propagates_failures_from_optional_dir_sync() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        let host_claude_dir = host_home.join(".claude");
+        let target_claude_dir = target_home.join(".claude");
+        fs::create_dir_all(host_claude_dir.join("agents")).unwrap();
+        fs::create_dir_all(&target_claude_dir).unwrap();
+        fs::write(target_claude_dir.join("agents"), "blocker").unwrap();
+
+        let err = sync_claude_home(&target_home, &host_home).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to remove"));
+        assert!(message.contains("agents"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_settings_file_reports_read_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("settings.json");
+        let target = temp.path().join("target.json");
+        fs::write(&source, "{\"permissions\":{}}").unwrap();
+        let mut perms = fs::metadata(&source).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&source, perms).unwrap();
+
+        let err = sync_claude_settings_file(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to read"));
+
+        let mut reset = fs::metadata(&source).unwrap().permissions();
+        reset.set_mode(0o644);
+        fs::set_permissions(&source, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_settings_file_reports_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("settings.json");
+        let target = temp.path().join("target.json");
+        fs::write(&source, "{\"permissions\":{}}").unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        let err = sync_claude_settings_file(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to write"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_settings_file_reports_remove_errors_for_directory_target() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("target.json");
+        fs::create_dir_all(&target).unwrap();
+
+        let err = sync_claude_settings_file(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+    }
+
+    #[test]
+    fn test_run_command_and_build_context_helpers() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf helper-output"]);
+        assert_eq!(
+            run_command(&mut command, "Failed to run helper command").unwrap(),
+            "helper-output"
+        );
+
+        let build_context = default_worker_build_context_dir().unwrap();
+        assert!(build_context.is_dir());
+        assert!(build_context.ends_with("tenex/docker-build-context"));
+    }
+
+    #[test]
+    fn test_run_command_reports_output_errors() {
+        let mut command = Command::new("/definitely/missing/tenex-run-command");
+        let err = run_command(&mut command, "Failed to run missing command").unwrap_err();
+        assert!(err.to_string().contains("Failed to run missing command"));
+        assert!(err.to_string().contains("tenex-run-command"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_default_worker_build_context_dir_reports_create_errors() {
+        if std::env::var_os(BUILD_CONTEXT_FAILURE_CHILD_FLAG).is_some() {
+            let base = paths::data_local_dir().expect("expected data local dir in child");
+            fs::create_dir_all(&base).unwrap();
+            fs::write(base.join("tenex"), "blocker").unwrap();
+            let err = default_worker_build_context_dir().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to create Docker build context")
+            );
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let xdg = temp.path().join("xdg-data");
+        fs::create_dir_all(&xdg).unwrap();
+        let current_exe = std::env::current_exe().unwrap();
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_default_worker_build_context_dir_reports_create_errors")
+            .arg("--nocapture")
+            .env(BUILD_CONTEXT_FAILURE_CHILD_FLAG, "1")
+            .env("XDG_DATA_HOME", &xdg)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_default_image_reports_build_context_create_errors() {
+        if std::env::var_os(BUILD_CONTEXT_FAILURE_CHILD_FLAG).is_some() {
+            let base = paths::data_local_dir().expect("expected data local dir in child");
+            fs::create_dir_all(&base).unwrap();
+            fs::write(base.join("tenex"), "blocker").unwrap();
+            let err = build_default_image("tenex-worker:latest").unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to create Docker build context")
+            );
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let xdg = temp.path().join("xdg-data");
+        fs::create_dir_all(&xdg).unwrap();
+        let current_exe = std::env::current_exe().unwrap();
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_build_default_image_reports_build_context_create_errors")
+            .arg("--nocapture")
+            .env(BUILD_CONTEXT_FAILURE_CHILD_FLAG, "1")
+            .env("XDG_DATA_HOME", &xdg)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_inner_handles_canonicalize_failure() {
+        if std::env::var_os(CANONICALIZE_FAILURE_CHILD_FLAG).is_some() {
+            let temp = TempDir::new().unwrap();
+            let parent = temp.path().join("parent");
+            let source = parent.join("source");
+            let target = parent.join("target");
+            let cwd = parent.join("cwd");
+            fs::create_dir_all(&source).unwrap();
+            fs::create_dir_all(&target).unwrap();
+            fs::create_dir_all(&cwd).unwrap();
+            fs::write(source.join("file.txt"), "hello").unwrap();
+
+            std::env::set_current_dir(&cwd).unwrap();
+            fs::remove_dir(&cwd).unwrap();
+
+            let mut active_sources = HashSet::new();
+            copy_path_recursive_following_symlinks_inner(
+                Path::new("../source"),
+                Path::new("../target"),
+                &mut active_sources,
+            )
+            .unwrap();
+
+            std::env::set_current_dir(&parent).unwrap();
+            assert_eq!(
+                fs::read_to_string(target.join("file.txt")).unwrap(),
+                "hello"
+            );
+            return;
+        }
+
+        let current_exe = std::env::current_exe().unwrap();
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg(
+                "runtime::docker::tests::test_copy_path_recursive_following_symlinks_inner_handles_canonicalize_failure",
+            )
+            .arg("--nocapture")
+            .env(CANONICALIZE_FAILURE_CHILD_FLAG, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_inner_reports_target_create_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+
+        let blocker = temp.path().join("blocker");
+        fs::write(&blocker, "blocker").unwrap();
+        let target = blocker.join("target");
+        let mut active_sources = HashSet::new();
+        let err =
+            copy_path_recursive_following_symlinks_inner(&source, &target, &mut active_sources)
+                .unwrap_err();
+        assert!(err.to_string().contains("Failed to create"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_inner_reports_read_dir_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        let mut perms = fs::metadata(&source).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&source, perms).unwrap();
+
+        let mut active_sources = HashSet::new();
+        let err =
+            copy_path_recursive_following_symlinks_inner(&source, &target, &mut active_sources)
+                .unwrap_err();
+        assert!(err.to_string().contains("Failed to read"));
+
+        let mut reset = fs::metadata(&source).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&source, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_inner_reports_symlink_metadata_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let err = with_copy_path_recursive_before_symlink_metadata_hook(
+            move |path| {
+                let _ = fs::remove_file(path);
+            },
+            || {
+                let mut active_sources = HashSet::new();
+                copy_path_recursive_following_symlinks_inner(&source, &target, &mut active_sources)
+                    .unwrap_err()
+            },
+        );
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_reports_parent_create_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        fs::write(&source, "hello").unwrap();
+        let blocker = temp.path().join("blocker");
+        fs::write(&blocker, "blocker").unwrap();
+        let target = blocker.join("nested").join("target.txt");
+
+        let err = copy_file_with_permissions(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to create"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_reports_metadata_errors_after_copy() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target.txt");
+        fs::write(&source, "hello").unwrap();
+
+        let err = with_copy_file_with_permissions_after_copy_hook(
+            |source_path| {
+                let _ = fs::remove_file(source_path);
+            },
+            || copy_file_with_permissions(&source, &target).unwrap_err(),
+        );
+
+        assert!(err.to_string().contains("Failed to read"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_reports_permissions_set_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target.txt");
+        fs::write(&source, "hello").unwrap();
+
+        let hook_target = target.clone();
+        let err = with_copy_file_with_permissions_after_copy_hook(
+            move |_| {
+                let _ = fs::remove_file(&hook_target);
+            },
+            || copy_file_with_permissions(&source, &target).unwrap_err(),
+        );
+
+        assert!(err.to_string().contains("Failed to set permissions on"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_path_if_exists_reports_remove_dir_errors() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("unremovable");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("file.txt"), "hello").unwrap();
+
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let err = remove_path_if_exists(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+
+        let mut reset = fs::metadata(&path).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&path, reset).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_path_if_exists_reports_remove_file_errors() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("parent");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut perms = fs::metadata(&dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&dir, perms).unwrap();
+
+        let err = remove_path_if_exists(&file).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+
+        let mut reset = fs::metadata(&dir).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&dir, reset).unwrap();
+        fs::remove_file(&file).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_target_create_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let blocker = temp.path().join("blocker");
+        fs::write(&blocker, "blocker").unwrap();
+        let target = blocker.join("nested");
+        let err = copy_dir_recursive(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to create"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_read_dir_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let mut perms = fs::metadata(&source).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&source, perms).unwrap();
+
+        let err = copy_dir_recursive(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to read"));
+
+        let mut reset = fs::metadata(&source).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&source, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_symlink_metadata_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let err = with_copy_dir_recursive_before_symlink_metadata_hook(
+            |path| {
+                let _ = fs::remove_file(path);
+            },
+            || copy_dir_recursive(&source, &target).unwrap_err(),
+        );
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_dir_entry_read_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("file.txt"), "hello").unwrap();
+
+        let err = with_copy_dir_recursive_dir_entry_hook(
+            |_| Err(std::io::Error::other("boom")),
+            || copy_dir_recursive(&source, &target).unwrap_err(),
+        );
+        let message = err.to_string();
+        let message_with_causes = format!("{err:#}");
+        assert!(message.contains("Failed to read"));
+        assert!(message_with_causes.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_recursive_call_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let nested = source.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("file.txt"), "hello").unwrap();
+        fs::create_dir_all(target.join("nested").join("file.txt")).unwrap();
+
+        let err = copy_dir_recursive(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_runtime_identity_files_reports_passwd_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let home_source = temp.path().join("home-source");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(home_source.join(RUNTIME_PASSWD_FILE_NAME)).unwrap();
+
+        let err =
+            write_runtime_identity_files(&home_source, Path::new("/tmp/runtime-home")).unwrap_err();
+        assert!(err.to_string().contains("Failed to write"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_runtime_identity_files_reports_group_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let home_source = temp.path().join("home-source");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(home_source.join(RUNTIME_GROUP_FILE_NAME)).unwrap();
+
+        let err =
+            write_runtime_identity_files(&home_source, Path::new("/tmp/runtime-home")).unwrap_err();
+        assert!(err.to_string().contains("Failed to write"));
+    }
+
+    #[test]
+    fn test_write_dockerfile_to_docker_build_stdin_reports_missing_stdin() {
+        let err = write_dockerfile_to_docker_build_stdin(None, "FROM scratch").unwrap_err();
+        assert!(err.to_string().contains("docker build stdin missing"));
+    }
+
+    #[test]
+    fn test_write_dockerfile_to_docker_build_stdin_reports_write_failures() {
+        struct FailingWriter;
+
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = FailingWriter;
+        writer.flush().unwrap();
+        let err = write_dockerfile_to_docker_build_stdin(
+            Some(&mut writer),
+            "FROM scratch\nRUN echo hello\n",
+        )
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("Failed to write built-in Dockerfile to docker build"));
+        assert!(message.contains("boom"));
+    }
+
+    #[test]
+    fn test_wait_with_output_for_docker_build_reports_wait_failures() {
+        let err = wait_with_output_for_docker_build(
+            || Err(std::io::Error::other("boom")),
+            "docker",
+            "build --tag tenex-worker:latest",
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to wait for Docker build"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_default_image_with_command_reports_wait_failures() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(&temp, "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+        let err = with_docker_program_override_for_tests(script, || {
+            with_docker_build_wait_override(Err(std::io::Error::other("boom")), || {
+                build_default_image_with_command(
+                    "tenex-worker:latest",
+                    "FROM scratch\n",
+                    temp.path(),
+                    Stdio::piped(),
+                    docker_command(),
+                )
+                .unwrap_err()
+            })
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to wait for Docker build"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_default_image_reports_docker_build_stdin_missing() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(&temp, "#!/bin/sh\nexit 0\n");
+        let err = with_docker_program_override_for_tests(script, || {
+            build_default_image_with_command(
+                "tenex-worker:latest",
+                "FROM scratch\n",
+                temp.path(),
+                Stdio::null(),
+                docker_command(),
+            )
+            .unwrap_err()
+        });
+        assert!(err.to_string().contains("docker build stdin missing"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_default_image_reports_spawn_failures() {
+        let missing = PathBuf::from("/definitely/missing/tenex-docker-build");
+        let err = with_docker_program_override_for_tests(missing, || {
+            build_default_image("tenex-worker:latest").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to spawn Docker build"));
+        assert!(message.contains("tenex-worker:latest"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_current_runtime_user_info_returns_none_when_gid_lookup_fails() {
+        if std::env::var_os(RUNTIME_IDENTITY_GID_FAILURE_CHILD_FLAG).is_some() {
+            assert!(current_runtime_user_info().is_none());
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let id_script = bin_dir.join("id");
+        fs::write(
+            &id_script,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"-u\" ]; then\n  printf '%s\\n' 1000\n  exit 0\nfi\nif [ \"$1\" = \"-g\" ]; then\n  exit 1\nfi\nexit 1\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&id_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&id_script, perms).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", bin_dir.display());
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_current_runtime_user_info_returns_none_when_gid_lookup_fails")
+            .arg("--nocapture")
+            .env(RUNTIME_IDENTITY_GID_FAILURE_CHILD_FLAG, "1")
+            .env("PATH", prefixed_path)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_docker_user_arg_returns_none_when_gid_lookup_fails() {
+        if std::env::var_os(DOCKER_USER_GID_FAILURE_CHILD_FLAG).is_some() {
+            assert!(docker_user_arg().is_none());
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let id_script = bin_dir.join("id");
+        fs::write(
+            &id_script,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"-u\" ]; then\n  printf '%s\\n' 1000\n  exit 0\nfi\nif [ \"$1\" = \"-g\" ]; then\n  exit 1\nfi\nexit 1\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&id_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&id_script, perms).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", bin_dir.display());
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_docker_user_arg_returns_none_when_gid_lookup_fails")
+            .arg("--nocapture")
+            .env(DOCKER_USER_GID_FAILURE_CHILD_FLAG, "1")
+            .env("PATH", prefixed_path)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_runtime_identity_files_preserve_existing_files_when_lookup_fails() {
         if std::env::var_os(RUNTIME_IDENTITY_CHILD_FLAG).is_some() {
             let home_source = PathBuf::from(
                 std::env::var_os(RUNTIME_IDENTITY_HOME_SOURCE_VAR)
-                    .ok_or_else(|| std::io::Error::other("missing runtime identity home source"))?,
+                    .expect("missing runtime identity home source"),
             );
             let passwd_path = home_source.join(RUNTIME_PASSWD_FILE_NAME);
             let group_path = home_source.join(RUNTIME_GROUP_FILE_NAME);
-            let existing_passwd = fs::read_to_string(&passwd_path)?;
-            let existing_group = fs::read_to_string(&group_path)?;
+            let existing_passwd = fs::read_to_string(&passwd_path).unwrap();
+            let existing_group = fs::read_to_string(&group_path).unwrap();
 
-            write_runtime_identity_files(&home_source, Path::new("/tmp/runtime-home"))?;
+            write_runtime_identity_files(&home_source, Path::new("/tmp/runtime-home")).unwrap();
 
-            assert_eq!(fs::read_to_string(passwd_path)?, existing_passwd);
-            assert_eq!(fs::read_to_string(group_path)?, existing_group);
-            return Ok(());
+            assert_eq!(fs::read_to_string(passwd_path).unwrap(), existing_passwd);
+            assert_eq!(fs::read_to_string(group_path).unwrap(), existing_group);
+            return;
         }
 
-        let temp = TempDir::new()?;
+        let temp = TempDir::new().unwrap();
         let home_source = temp.path().join("runtime-home");
         let bin_dir = temp.path().join("bin");
-        fs::create_dir_all(&home_source)?;
-        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
         fs::write(
             home_source.join(RUNTIME_PASSWD_FILE_NAME),
             "existing-passwd\n",
-        )?;
+        )
+        .unwrap();
         fs::write(
             home_source.join(RUNTIME_GROUP_FILE_NAME),
             "existing-group\n",
-        )?;
+        )
+        .unwrap();
 
         let id_script = bin_dir.join("id");
-        fs::write(&id_script, "#!/bin/sh\nexit 1\n")?;
-        let mut perms = fs::metadata(&id_script)?.permissions();
+        fs::write(&id_script, "#!/bin/sh\nexit 1\n").unwrap();
+        let mut perms = fs::metadata(&id_script).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&id_script, perms)?;
+        fs::set_permissions(&id_script, perms).unwrap();
 
-        let current_exe = std::env::current_exe()?;
+        let current_exe = std::env::current_exe().unwrap();
         let path = std::env::var("PATH").unwrap_or_default();
         let prefixed_path = format!("{}:{path}", bin_dir.display());
         let output = Command::new(current_exe)
@@ -2135,149 +4009,318 @@ command = "docker"
             .env(RUNTIME_IDENTITY_CHILD_FLAG, "1")
             .env(RUNTIME_IDENTITY_HOME_SOURCE_VAR, &home_source)
             .env("PATH", prefixed_path)
-            .output()?;
+            .output()
+            .unwrap();
 
-        assert!(
-            output.status.success(),
-            "child test failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok(())
+        assert!(output.status.success());
     }
 
     #[test]
-    fn test_prepare_runtime_home_in_writes_runtime_identity_files()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_prepare_runtime_home_in_writes_runtime_identity_files() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_codex_home = host_home.join(".codex");
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
-        let passwd = fs::read_to_string(prepared.home_source.join(RUNTIME_PASSWD_FILE_NAME))?;
-        let group = fs::read_to_string(prepared.home_source.join(RUNTIME_GROUP_FILE_NAME))?;
+        let passwd =
+            fs::read_to_string(prepared.home_source.join(RUNTIME_PASSWD_FILE_NAME)).unwrap();
+        let group = fs::read_to_string(prepared.home_source.join(RUNTIME_GROUP_FILE_NAME)).unwrap();
         assert!(passwd.contains("Tenex runtime user"));
         assert!(passwd.contains(&container_target_path(&host_home).display().to_string()));
         assert!(group.contains(':'));
-        Ok(())
     }
 
     #[test]
-    fn test_prepare_runtime_home_in_refreshes_staged_auth_and_settings()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_prepare_runtime_home_in_propagates_runtime_identity_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        let home_source = runtime_root.join("home");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(home_source.join(RUNTIME_PASSWD_FILE_NAME)).unwrap();
+
+        let err = prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)
+            .err()
+            .expect("expected prepare_runtime_home_in to fail");
+        assert!(err.to_string().contains("Failed to write"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_runtime_home_in_propagates_sync_ssh_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let host_ssh = host_home.join(".ssh");
+        fs::create_dir_all(&host_ssh).unwrap();
+        fs::write(host_ssh.join("config"), "Host test\n").unwrap();
+
+        let agent = docker_agent();
+        let err = with_copy_path_recursive_before_symlink_metadata_hook(
+            |path| {
+                let _ = fs::remove_file(path);
+            },
+            || {
+                prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)
+                    .err()
+                    .expect("expected prepare_runtime_home_in to fail")
+            },
+        );
+
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_runtime_home_in_propagates_sync_claude_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        let home_source = runtime_root.join("home");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::write(home_source.join(".claude"), "blocker").unwrap();
+
+        let err = prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)
+            .err()
+            .expect("expected prepare_runtime_home_in to fail");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create"));
+        assert!(message.contains(".claude"));
+    }
+
+    #[test]
+    fn test_prepare_runtime_home_in_propagates_sync_codex_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::write(runtime_root.join("codex-home"), "blocker").unwrap();
+
+        let err = prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)
+            .err()
+            .expect("expected prepare_runtime_home_in to fail");
+        assert!(
+            err.to_string()
+                .contains("Failed to create managed Codex home directory")
+        );
+    }
+
+    #[test]
+    fn test_refresh_runtime_home_for_reuse_in_propagates_runtime_identity_write_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        let home_source = runtime_root.join("home");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(home_source.join(RUNTIME_PASSWD_FILE_NAME)).unwrap();
+
+        let err = refresh_runtime_home_for_reuse_in(
+            &agent,
+            &host_home,
+            &data_local_dir,
+            &host_codex_home,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Failed to write"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_refresh_runtime_home_for_reuse_in_propagates_sync_claude_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        let home_source = runtime_root.join("home");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::write(home_source.join(".claude"), "blocker").unwrap();
+
+        let err = refresh_runtime_home_for_reuse_in(
+            &agent,
+            &host_home,
+            &data_local_dir,
+            &host_codex_home,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Failed to create"));
+        assert!(message.contains(".claude"));
+    }
+
+    #[test]
+    fn test_refresh_runtime_home_for_reuse_in_propagates_sync_codex_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("home");
+        let data_local_dir = temp.path().join("data");
+        let host_codex_home = host_home.join(".codex");
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+
+        let agent = docker_agent();
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::write(runtime_root.join("codex-home"), "blocker").unwrap();
+
+        let err = refresh_runtime_home_for_reuse_in(
+            &agent,
+            &host_home,
+            &data_local_dir,
+            &host_codex_home,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to create managed Codex home directory")
+        );
+    }
+
+    #[test]
+    fn test_prepare_runtime_home_in_refreshes_staged_auth_and_settings() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_codex_home = host_home.join(".codex");
         let host_claude_dir = host_home.join(".claude");
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::create_dir_all(&host_claude_dir)?;
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&host_claude_dir).unwrap();
 
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#)?;
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#).unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
-        )?;
+        )
+        .unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
         assert_eq!(
-            fs::read_to_string(prepared.codex_home_source.join("auth.json"))?,
+            fs::read_to_string(prepared.codex_home_source.join("auth.json")).unwrap(),
             r#"{"token":"old"}"#
         );
 
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#)?;
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#).unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"acceptEdits"}}"#,
-        )?;
+        )
+        .unwrap();
 
         let refreshed = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
         assert_eq!(
-            fs::read_to_string(refreshed.codex_home_source.join("auth.json"))?,
+            fs::read_to_string(refreshed.codex_home_source.join("auth.json")).unwrap(),
             r#"{"token":"new"}"#
         );
         assert!(
-            fs::read_to_string(refreshed.home_source.join(".claude").join("settings.json"))?
+            fs::read_to_string(refreshed.home_source.join(".claude").join("settings.json"))
+                .unwrap()
                 .contains("\"defaultMode\": \"acceptEdits\"")
         );
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_container_with_paths_refreshes_staged_auth_without_resetting_ssh_state()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_ensure_container_with_paths_refreshes_staged_auth_without_resetting_ssh_state() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
         let host_codex_home = host_home.join(".codex");
         let host_claude_dir = host_home.join(".claude");
         let log = temp.path().join("docker.log");
-        fs::create_dir_all(&worktree)?;
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::create_dir_all(&host_claude_dir)?;
-        fs::create_dir_all(host_home.join(".ssh"))?;
-        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
-        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n")?;
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#)?;
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&host_claude_dir).unwrap();
+        fs::create_dir_all(host_home.join(".ssh")).unwrap();
+        fs::create_dir_all(host_home.join(".config").join("ssh")).unwrap();
+        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#).unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
-        )?;
-        fs::write(host_home.join(".ssh").join("config"), "Host test\n")?;
-        fs::write(host_home.join(".ssh").join("known_hosts"), "host-key\n")?;
+        )
+        .unwrap();
+        fs::write(host_home.join(".ssh").join("config"), "Host test\n").unwrap();
+        fs::write(host_home.join(".ssh").join("known_hosts"), "host-key\n").unwrap();
         fs::write(
             host_home.join(".config").join("ssh").join("config"),
             "Host xdg-test\n",
-        )?;
+        )
+        .unwrap();
 
         let mut agent = docker_agent();
         agent.worktree_path = worktree;
 
         let prepared =
-            prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home)?;
+            prepare_runtime_home_in(&agent, &host_home, &data_local_dir, &host_codex_home).unwrap();
         fs::write(
             prepared.home_source.join(".ssh").join("known_hosts"),
             "updated-host-key\n",
-        )?;
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#)?;
+        )
+        .unwrap();
+        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#).unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"acceptEdits"}}"#,
-        )?;
+        )
+        .unwrap();
 
-        let script = write_fake_docker_script(
-            &temp,
-            &format!(
-                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
-                log.display(),
-                default_worker_dockerfile_hash(),
-                current_container_layout_hash(),
-            ),
-        )?;
+        let script_body = format!(
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
+            log.display(),
+            default_worker_dockerfile_hash(),
+            current_container_layout_hash(),
+        );
+        let script = write_fake_docker_script(&temp, &script_body);
 
-        with_docker_program_override_for_tests(script, || -> Result<()> {
+        with_docker_program_override_for_tests(script, || {
             ensure_container_with_paths(
                 &agent,
                 &Settings::default(),
@@ -2285,134 +4328,650 @@ command = "docker"
                 Some(&data_local_dir),
                 None,
             )
-        })?;
+            .unwrap();
+        });
 
         assert_eq!(
-            fs::read_to_string(prepared.codex_home_source.join("auth.json"))?,
+            fs::read_to_string(prepared.codex_home_source.join("auth.json")).unwrap(),
             r#"{"token":"new"}"#
         );
         assert!(
-            fs::read_to_string(prepared.home_source.join(".claude").join("settings.json"))?
+            fs::read_to_string(prepared.home_source.join(".claude").join("settings.json"))
+                .unwrap()
                 .contains("\"defaultMode\": \"acceptEdits\"")
         );
         assert_eq!(
-            fs::read_to_string(prepared.home_source.join(".ssh").join("known_hosts"))?,
+            fs::read_to_string(prepared.home_source.join(".ssh").join("known_hosts")).unwrap(),
             "updated-host-key\n"
         );
 
-        let log_contents = fs::read_to_string(&log)?;
+        let log_contents = fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains(&format!("start {}", container_name(&agent))));
         assert!(!log_contents.contains("run -d --init"));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_prepare_runtime_home_in_stages_writable_ssh_home()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ensure_container_with_paths_reuses_running_container_when_home_is_available() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+        let name = container_name(&agent);
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'true'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            )
+            .unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(!log_contents.contains(&format!("start {name}")));
+        assert!(!log_contents.contains(&format!("rm -f {name}")));
+        assert!(!log_contents.contains("run -d --init"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_reports_start_failure_when_home_is_available() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ]; then\n  echo 'start failed' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            )
+            .unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to start Docker container"));
+        assert!(message.contains("start failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_noops_when_running_without_home() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+        let name = container_name(&agent);
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'true'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(!log_contents.contains(&format!("start {name}")));
+        assert!(!log_contents.contains(&format!("rm -f {name}")));
+        assert!(!log_contents.contains("run -d --init"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_starts_container_when_not_running_without_home() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(log_contents.contains(&format!("start {}", container_name(&agent))));
+        assert!(!log_contents.contains("run -d --init"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_reports_start_failure_without_home() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"start\" ]; then\n  echo 'start failed' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to start Docker container"));
+        assert!(message.contains("start failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_recreates_stale_container_when_not_running() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+        let name = container_name(&agent);
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' 'stale-layout'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"rm\" ] || [ \"$1\" = \"run\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(log_contents.contains(&format!("rm -f {name}")));
+        assert!(log_contents.contains("run -d --init"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_skips_user_flag_when_unavailable() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' 'No such object' >&2\n  exit 1\nfi\nif [ \"$1\" = \"run\" ]; then\n  exit 0\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            let _user_guard = set_docker_user_override_for_tests(None);
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(log_contents.contains("run -d --init"));
+        assert!(!log_contents.contains("--user"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_remove_container_errors() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'false'\n  else\n    printf '%s\\n' 'stale-layout'\n  fi\n  exit 0\nfi\nif [ \"$1\" = \"rm\" ]; then\n  printf '%s\\n' 'permission denied' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+
+        let message = err.to_string();
+        assert!(message.contains("Failed to remove Docker container"));
+        assert!(message.contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_refresh_runtime_home_errors() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let data_local_dir = temp.path().join("xdg-data");
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::create_dir_all(&data_local_dir).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let runtime_root = runtime_root_dir(&agent, &data_local_dir);
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::write(runtime_root.join("home"), "not a directory").unwrap();
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  if printf '%s' \"$3\" | grep -q '.State.Running'; then\n    printf '%s\\n' 'true'\n  else\n    printf '%s\\n' '{}'\n  fi\n  exit 0\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+                current_container_layout_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_dir),
+                None,
+            )
+            .unwrap_err()
+        });
+
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker runtime cache directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_unexpected_inspect_errors() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  printf '%s\\n' 'boom' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker container"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_treats_no_such_container_as_missing() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let log = temp.path().join("docker.log");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such container' >&2\n  exit 1\nfi\nexit 0\n",
+                log.display(),
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+        });
+
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(log_contents.contains("run -d --init"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_prepare_runtime_home_errors_when_creating_container()
+     {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let data_local_file = temp.path().join("data-local");
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&host_home).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(&data_local_file, "not-a-directory").unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(
+                &agent,
+                &Settings::default(),
+                Some(&host_home),
+                Some(&data_local_file),
+                None,
+            )
+            .unwrap_err()
+        });
+        assert!(
+            err.to_string()
+                .contains("Failed to create Docker runtime cache directory")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_reports_container_create_failures() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nif [ \"$1\" = \"run\" ]; then\n  echo 'run failed' >&2\n  exit 1\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to create Docker container"));
+        assert!(message.contains("run failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_image_ready_errors() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo 'boom' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker image"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_with_paths_propagates_layout_hash_errors() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+
+        let mut agent = docker_agent();
+        agent.worktree_path = worktree;
+
+        let script = write_fake_docker_script(
+            &temp,
+            &format!(
+                "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  case \"$3\" in\n    *State.Running*)\n      printf '%s\\n' 'true'\n      exit 0\n      ;;\n    *)\n      echo 'boom' >&2\n      exit 1\n      ;;\n  esac\nfi\nexit 0\n",
+                default_worker_dockerfile_hash(),
+            ),
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to inspect Docker container"));
+        assert!(message.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_container_by_name_ignores_missing_container_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"rm\" ]; then\n  printf '%s\\n' 'No such container' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let result = with_docker_program_override_for_tests(script, || {
+            remove_container_by_name("tenex-missing")
+        });
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_container_by_name_ignores_missing_object_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"rm\" ]; then\n  printf '%s\\n' 'No such object' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let result = with_docker_program_override_for_tests(script, || {
+            remove_container_by_name("tenex-missing")
+        });
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_container_by_name_propagates_unexpected_errors() {
+        let temp = TempDir::new().unwrap();
+        let script = write_fake_docker_script(
+            &temp,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = \"rm\" ]; then\n  printf '%s\\n' 'permission denied' >&2\n  exit 1\nfi\nexit 0\n",
+        );
+
+        let err = with_docker_program_override_for_tests(script, || {
+            remove_container_by_name("tenex-missing").unwrap_err()
+        });
+        let message = err.to_string();
+        assert!(message.contains("Failed to remove Docker container"));
+        assert!(message.contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_runtime_home_in_stages_writable_ssh_home() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp = TempDir::new()?;
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("home");
         let data_local_dir = temp.path().join("data");
         let host_codex_home = host_home.join(".codex");
         let host_ssh_dir = host_home.join(".ssh");
         let host_xdg_ssh_dir = host_home.join(".config").join("ssh");
         let external_key = temp.path().join("id_test");
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::create_dir_all(&host_ssh_dir)?;
-        fs::create_dir_all(&host_xdg_ssh_dir)?;
-        fs::write(host_ssh_dir.join("config"), "Host test\n")?;
-        fs::write(host_ssh_dir.join("known_hosts"), "host-key\n")?;
-        fs::write(&external_key, "private-key\n")?;
-        std::os::unix::fs::symlink(&external_key, host_ssh_dir.join("id_test"))?;
-        fs::write(host_xdg_ssh_dir.join("config"), "Host xdg-test\n")?;
-        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o555))?;
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&host_ssh_dir).unwrap();
+        fs::create_dir_all(&host_xdg_ssh_dir).unwrap();
+        fs::write(host_ssh_dir.join("config"), "Host test\n").unwrap();
+        fs::write(host_ssh_dir.join("known_hosts"), "host-key\n").unwrap();
+        fs::write(&external_key, "private-key\n").unwrap();
+        std::os::unix::fs::symlink(&external_key, host_ssh_dir.join("id_test")).unwrap();
+        fs::write(host_xdg_ssh_dir.join("config"), "Host xdg-test\n").unwrap();
+        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         fs::set_permissions(
             host_ssh_dir.join("config"),
             std::fs::Permissions::from_mode(0o444),
-        )?;
+        )
+        .unwrap();
         fs::set_permissions(
             host_ssh_dir.join("known_hosts"),
             std::fs::Permissions::from_mode(0o444),
-        )?;
-        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o555))?;
+        )
+        .unwrap();
+        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         fs::set_permissions(
             host_xdg_ssh_dir.join("config"),
             std::fs::Permissions::from_mode(0o444),
-        )?;
-        fs::set_permissions(&external_key, std::fs::Permissions::from_mode(0o400))?;
+        )
+        .unwrap();
+        fs::set_permissions(&external_key, std::fs::Permissions::from_mode(0o400)).unwrap();
 
         let prepared = prepare_runtime_home_in(
             &docker_agent(),
             &host_home,
             &data_local_dir,
             &host_codex_home,
-        )?;
+        )
+        .unwrap();
 
         let staged_ssh_dir = prepared.home_source.join(".ssh");
         let staged_xdg_ssh_dir = prepared.home_source.join(".config").join("ssh");
         assert_eq!(
-            fs::read_to_string(staged_ssh_dir.join("config"))?,
+            fs::read_to_string(staged_ssh_dir.join("config")).unwrap(),
             "Host test\n"
         );
         assert_eq!(
-            fs::read_to_string(staged_ssh_dir.join("id_test"))?,
+            fs::read_to_string(staged_ssh_dir.join("id_test")).unwrap(),
             "private-key\n"
         );
         assert_eq!(
-            fs::read_to_string(staged_xdg_ssh_dir.join("config"))?,
+            fs::read_to_string(staged_xdg_ssh_dir.join("config")).unwrap(),
             "Host xdg-test\n"
         );
 
-        fs::write(staged_ssh_dir.join("known_hosts"), "updated-host-key\n")?;
-        fs::write(staged_ssh_dir.join("control-socket"), "socket\n")?;
-        fs::write(staged_xdg_ssh_dir.join("control-socket"), "socket\n")?;
+        fs::write(staged_ssh_dir.join("known_hosts"), "updated-host-key\n").unwrap();
+        fs::write(staged_ssh_dir.join("control-socket"), "socket\n").unwrap();
+        fs::write(staged_xdg_ssh_dir.join("control-socket"), "socket\n").unwrap();
         assert_ne!(
-            fs::metadata(&staged_ssh_dir)?.permissions().mode() & 0o200,
+            fs::metadata(&staged_ssh_dir).unwrap().permissions().mode() & 0o200,
             0
         );
         assert_ne!(
-            fs::metadata(staged_ssh_dir.join("config"))?
+            fs::metadata(staged_ssh_dir.join("config"))
+                .unwrap()
                 .permissions()
                 .mode()
                 & 0o200,
             0
         );
         assert_eq!(
-            fs::read_to_string(host_ssh_dir.join("known_hosts"))?,
+            fs::read_to_string(host_ssh_dir.join("known_hosts")).unwrap(),
             "host-key\n"
         );
-        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o755))?;
-        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o755))?;
-        Ok(())
+        fs::set_permissions(&host_ssh_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&host_xdg_ssh_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_container_with_paths_mounts_optional_host_config()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
+    fn test_ensure_container_with_paths_mounts_optional_host_config() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
         let host_codex_home = host_home.join(".codex");
         let host_gh_dir = host_home.join(".config").join("gh");
         let log = temp.path().join("docker.log");
-        fs::create_dir_all(&worktree)?;
-        fs::create_dir_all(host_codex_home.join("sessions"))?;
-        fs::create_dir_all(host_codex_home.join("skills"))?;
-        fs::create_dir_all(host_home.join(".ssh"))?;
-        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
-        fs::create_dir_all(&host_gh_dir)?;
-        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n")?;
-        fs::write(host_home.join(".ssh").join("config"), "Host test\n")?;
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(host_codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(host_codex_home.join("skills")).unwrap();
+        fs::create_dir_all(host_home.join(".ssh")).unwrap();
+        fs::create_dir_all(host_home.join(".config").join("ssh")).unwrap();
+        fs::create_dir_all(&host_gh_dir).unwrap();
+        fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
+        fs::write(host_home.join(".ssh").join("config"), "Host test\n").unwrap();
         fs::write(
             host_home.join(".config").join("ssh").join("config"),
             "Host xdg-test\n",
-        )?;
-        fs::write(host_home.join(".gitconfig"), "[user]\n\tname = Test User\n")?;
-        fs::write(host_gh_dir.join("hosts.yml"), "github.com:\n")?;
+        )
+        .unwrap();
+        fs::write(host_home.join(".gitconfig"), "[user]\n\tname = Test User\n").unwrap();
+        fs::write(host_gh_dir.join("hosts.yml"), "github.com:\n").unwrap();
 
         let mut agent = docker_agent();
         agent.worktree_path = worktree;
@@ -2423,9 +4982,9 @@ command = "docker"
                 log.display(),
                 default_worker_dockerfile_hash(),
             ),
-        )?;
+        );
 
-        with_docker_program_override_for_tests(script, || -> Result<()> {
+        with_docker_program_override_for_tests(script, || {
             ensure_container_with_paths(
                 &agent,
                 &Settings::default(),
@@ -2433,9 +4992,10 @@ command = "docker"
                 Some(&data_local_dir),
                 None,
             )
-        })?;
+            .unwrap();
+        });
 
-        let log_contents = fs::read_to_string(&log)?;
+        let log_contents = fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains("run -d --init"));
         assert!(log_contents.contains(&format!(
             "-v {}:{}",
@@ -2452,53 +5012,52 @@ command = "docker"
             host_codex_home.join("skills").display(),
             host_codex_home.join("skills").display()
         )));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_container_uses_process_environment() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ensure_container_uses_process_environment() {
         if std::env::var_os(ENSURE_CONTAINER_CHILD_FLAG).is_some() {
             let mut agent = docker_agent();
             agent.worktree_path =
-                PathBuf::from(std::env::var_os(ENSURE_CONTAINER_WORKTREE_VAR).ok_or_else(
-                    || std::io::Error::other("missing ensure-container worktree path"),
-                )?);
-            ensure_container(&agent, &Settings::default())?;
-            remove_container(&agent)?;
-            return Ok(());
+                PathBuf::from(std::env::var_os(ENSURE_CONTAINER_WORKTREE_VAR).unwrap());
+            ensure_container(&agent, &Settings::default()).unwrap();
+            remove_container(&agent).unwrap();
+            return;
         }
 
-        let temp = TempDir::new()?;
+        let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
         let log = temp.path().join("docker.log");
         let path = std::env::var("PATH").unwrap_or_default();
         let prefixed_path = format!("{}:{path}", temp.path().display());
-        fs::create_dir_all(home.join(".codex").join("sessions"))?;
-        fs::create_dir_all(home.join(".ssh"))?;
-        fs::create_dir_all(home.join(".config").join("ssh"))?;
-        fs::create_dir_all(&worktree)?;
+        fs::create_dir_all(home.join(".codex").join("sessions")).unwrap();
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        fs::create_dir_all(home.join(".config").join("ssh")).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
         fs::write(
             home.join(".codex").join("config.toml"),
             "model = \"gpt-5.4\"\n",
-        )?;
-        fs::write(home.join(".ssh").join("config"), "Host test\n")?;
+        )
+        .unwrap();
+        fs::write(home.join(".ssh").join("config"), "Host test\n").unwrap();
         fs::write(
             home.join(".config").join("ssh").join("config"),
             "Host xdg-test\n",
-        )?;
-        write_fake_docker_script(
+        )
+        .unwrap();
+        let _ = write_fake_docker_script(
             &temp,
             &format!(
                 "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nif [ \"$1\" = \"run\" ] || [ \"$1\" = \"rm\" ]; then\n  exit 0\nfi\nexit 0\n",
                 log.display(),
                 default_worker_dockerfile_hash(),
             ),
-        )?;
+        );
 
-        let current_exe = std::env::current_exe()?;
+        let current_exe = std::env::current_exe().unwrap();
         let output = Command::new(current_exe)
             .arg("--exact")
             .arg("runtime::docker::tests::test_ensure_container_uses_process_environment")
@@ -2508,23 +5067,13 @@ command = "docker"
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_local_dir)
             .env("PATH", prefixed_path)
-            .output()?;
+            .output()
+            .unwrap();
 
-        assert!(
-            output.status.success(),
-            "child test failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            log.exists(),
-            "expected docker log at {}\nstdout:\n{}\nstderr:\n{}",
-            log.display(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success());
+        assert!(log.exists());
 
-        let log_contents = fs::read_to_string(&log)?;
+        let log_contents = fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains("run -d --init"));
         assert!(log_contents.contains(&format!("HOME={}", home.display())));
         assert!(log_contents.contains(&format!(
@@ -2532,17 +5081,15 @@ command = "docker"
             worktree.display(),
             worktree.display()
         )));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_container_mounts_runtime_env_and_symlink_targets()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp = TempDir::new()?;
-        let (log_contents, prepared, repo_root, host_home) = docker_mount_log_for_test(&temp)?;
-        let expected_target_mount = repo_root.join("target").canonicalize()?;
-        let expected_plan_mount = repo_root.join("PLAN.md").canonicalize()?;
+    fn test_ensure_container_mounts_runtime_env_and_symlink_targets() {
+        let temp = TempDir::new().unwrap();
+        let (log_contents, prepared, repo_root, host_home) = docker_mount_log_for_test(&temp);
+        let expected_target_mount = repo_root.join("target").canonicalize().unwrap();
+        let expected_plan_mount = repo_root.join("PLAN.md").canonicalize().unwrap();
         assert!(log_contents.contains(&format!(
             "-v {}:{}",
             repo_root.join(".git").display(),
@@ -2571,18 +5118,14 @@ command = "docker"
             "NSS_WRAPPER_GROUP={}",
             host_home.join(RUNTIME_GROUP_FILE_NAME).display()
         )));
-        assert!(
-            prepared.home_source.join(".ssh").join("config").is_file(),
-            "expected staged ssh config in managed runtime home"
-        );
+        assert!(prepared.home_source.join(".ssh").join("config").is_file());
         assert!(
             prepared
                 .home_source
                 .join(".config")
                 .join("ssh")
                 .join("config")
-                .is_file(),
-            "expected staged XDG ssh config in managed runtime home"
+                .is_file()
         );
         assert!(log_contents.contains(&format!(
             "-v {}:{}",
@@ -2609,26 +5152,62 @@ command = "docker"
             host_home.join(".config").join("ssh").display(),
             host_home.join(".config").join("ssh").display()
         )));
-        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_ensure_container_rejects_running_stale_layout() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let temp = TempDir::new()?;
+    fn test_ensure_container_mount_log_omits_user_arg_when_user_unavailable() {
+        let temp = TempDir::new().unwrap();
+        let _guard = set_docker_user_override_for_tests(None);
+
+        let (log_contents, ..) = docker_mount_log_for_test(&temp);
+
+        assert!(!log_contents.contains("--user"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_mount_log_omits_identity_env_when_user_info_unavailable() {
+        if std::env::var_os(MOUNT_LOG_IDENTITY_CHILD_FLAG).is_some() {
+            let temp = TempDir::new().unwrap();
+            let (log_contents, ..) = docker_mount_log_for_test(&temp);
+
+            assert!(!log_contents.contains("USER="));
+            assert!(!log_contents.contains("LOGNAME="));
+            return;
+        }
+
+        let current_exe = std::env::current_exe().unwrap();
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_ensure_container_mount_log_omits_identity_env_when_user_info_unavailable")
+            .arg("--nocapture")
+            .env(MOUNT_LOG_IDENTITY_CHILD_FLAG, "1")
+            .env("PATH", "")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_container_rejects_running_stale_layout() {
+        let temp = TempDir::new().unwrap();
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
-        fs::create_dir_all(host_home.join(".codex").join("sessions"))?;
-        fs::create_dir_all(host_home.join(".claude"))?;
+        fs::create_dir_all(host_home.join(".codex").join("sessions")).unwrap();
+        fs::create_dir_all(host_home.join(".claude")).unwrap();
         fs::write(
             host_home.join(".codex").join("config.toml"),
             "model = \"gpt-5.4\"\n",
-        )?;
+        )
+        .unwrap();
         fs::write(
             host_home.join(".claude").join("settings.json"),
             "{\"permissions\":{\"defaultMode\":\"plan\"}}",
-        )?;
+        )
+        .unwrap();
         let inspect_count = temp.path().join("inspect-count");
         let script = write_fake_docker_script(
             &temp,
@@ -2639,7 +5218,7 @@ command = "docker"
                 inspect_count.display(),
                 inspect_count.display()
             ),
-        )?;
+        );
 
         with_docker_program_override_for_tests(script, || {
             let result = ensure_container_with_paths(
@@ -2656,7 +5235,6 @@ command = "docker"
                 .unwrap_or_default();
             assert!(err.contains("older Tenex worker layout"));
         });
-        Ok(())
     }
 
     #[cfg(unix)]
@@ -2669,41 +5247,43 @@ command = "docker"
     }
 
     #[cfg(unix)]
-    fn prepare_docker_mount_test_fixture(
-        temp: &TempDir,
-    ) -> Result<DockerMountTestFixture, Box<dyn std::error::Error>> {
+    fn prepare_docker_mount_test_fixture(temp: &TempDir) -> DockerMountTestFixture {
         let repo_root = temp.path().join("repo");
         let worktree = temp.path().join("worktree");
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
-        fs::create_dir_all(repo_root.join("target"))?;
+        fs::create_dir_all(repo_root.join("target")).unwrap();
         fs::create_dir_all(
             repo_root
                 .join(".git")
                 .join("worktrees")
                 .join("agent-docker"),
-        )?;
-        fs::create_dir_all(&worktree)?;
-        fs::create_dir_all(host_home.join(".codex").join("sessions"))?;
-        fs::create_dir_all(host_home.join(".claude"))?;
-        fs::create_dir_all(host_home.join(".ssh"))?;
-        fs::create_dir_all(host_home.join(".config").join("ssh"))?;
-        fs::write(repo_root.join("PLAN.md"), "# plan\n")?;
-        fs::write(host_home.join(".ssh").join("config"), "# test ssh config\n")?;
+        )
+        .unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(host_home.join(".codex").join("sessions")).unwrap();
+        fs::create_dir_all(host_home.join(".claude")).unwrap();
+        fs::create_dir_all(host_home.join(".ssh")).unwrap();
+        fs::create_dir_all(host_home.join(".config").join("ssh")).unwrap();
+        fs::write(repo_root.join("PLAN.md"), "# plan\n").unwrap();
+        fs::write(host_home.join(".ssh").join("config"), "# test ssh config\n").unwrap();
         fs::write(
             host_home.join(".config").join("ssh").join("config"),
             "# test xdg ssh config\n",
-        )?;
-        std::os::unix::fs::symlink(repo_root.join("target"), worktree.join("target"))?;
-        std::os::unix::fs::symlink(repo_root.join("PLAN.md"), worktree.join("PLAN.md"))?;
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(repo_root.join("target"), worktree.join("target")).unwrap();
+        std::os::unix::fs::symlink(repo_root.join("PLAN.md"), worktree.join("PLAN.md")).unwrap();
         fs::write(
             host_home.join(".codex").join("config.toml"),
             "model = \"gpt-5.4\"\n",
-        )?;
+        )
+        .unwrap();
         fs::write(
             host_home.join(".claude").join("settings.json"),
             "{\"hooks\":{\"Stop\":[]}}",
-        )?;
+        )
+        .unwrap();
 
         let mut agent = docker_agent();
         agent.repo_root = Some(repo_root.clone());
@@ -2713,22 +5293,20 @@ command = "docker"
             &host_home,
             &data_local_dir,
             &host_home.join(".codex"),
-        )?;
+        )
+        .unwrap();
 
-        Ok(DockerMountTestFixture {
+        DockerMountTestFixture {
             prepared,
             repo_root,
             worktree,
             host_home,
             agent,
-        })
+        }
     }
 
     #[cfg(unix)]
-    fn create_test_container_mount_log(
-        script: PathBuf,
-        fixture: &DockerMountTestFixture,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn create_test_container_mount_log(script: PathBuf, fixture: &DockerMountTestFixture) {
         with_docker_program_override_for_tests(script, || {
             let settings = Settings::default();
             let image = worker_image_tag(&settings);
@@ -2802,15 +5380,484 @@ command = "docker"
             cmd.arg("sleep");
             cmd.arg("infinity");
             run_command(&mut cmd, "Failed to create Docker container")
-        })?;
+        })
+        .unwrap();
+    }
 
-        Ok(())
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_returns_early_when_read_dir_fails() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::write(&worktree, "not-a-dir").unwrap();
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts(&mut cmd, &worktree, &mut mounted_targets);
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_for_paths_falls_back_when_worktree_canonicalize_fails()
+     {
+        let temp = TempDir::new().unwrap();
+        let missing_worktree = temp.path().join("missing-worktree");
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts_for_paths(
+            &mut cmd,
+            &missing_worktree,
+            &mut mounted_targets,
+            Vec::new(),
+        );
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_for_paths_skips_missing_metadata() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let missing = worktree.join("missing");
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts_for_paths(
+            &mut cmd,
+            &worktree,
+            &mut mounted_targets,
+            vec![missing],
+        );
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_for_paths_skips_broken_symlink() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let broken = worktree.join("broken");
+        std::os::unix::fs::symlink(temp.path().join("missing-target"), &broken).unwrap();
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts_for_paths(
+            &mut cmd,
+            &worktree,
+            &mut mounted_targets,
+            vec![broken],
+        );
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_for_paths_skips_symlinks_resolving_inside_worktree()
+    {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let target = worktree.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let link = worktree.join("target-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts_for_paths(
+            &mut cmd,
+            &worktree,
+            &mut mounted_targets,
+            vec![link],
+        );
+
+        assert!(cmd.get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_top_level_symlink_mounts_for_paths_mounts_symlink_targets_outside_worktree() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let external = temp.path().join("external");
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        let external_target = external.canonicalize().unwrap();
+        let link = worktree.join("external-link");
+        std::os::unix::fs::symlink(&external_target, &link).unwrap();
+        let mut cmd = Command::new("docker");
+        let mut mounted_targets = std::collections::HashSet::new();
+
+        configure_top_level_symlink_mounts_for_paths(
+            &mut cmd,
+            &worktree,
+            &mut mounted_targets,
+            vec![link],
+        );
+
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"-v".to_string()));
+        assert!(args.iter().any(|arg| {
+            arg == &format!(
+                "{}:{}",
+                external_target.display(),
+                external_target.display()
+            )
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolved_symlink_target_accepts_absolute_targets() {
+        let temp = TempDir::new().unwrap();
+        let worktree = temp.path().join("worktree");
+        let external = temp.path().join("external");
+        let link_path = worktree.join("PLAN.md");
+        let target = external.join("PLAN.md");
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(&target, "# plan\n").unwrap();
+
+        let resolved = resolved_symlink_target(&link_path, &worktree, &target);
+
+        assert_eq!(resolved, target.canonicalize().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_file_reports_parent_creation_failures() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        fs::write(&source, "data").unwrap();
+        let parent = temp.path().join("parent");
+        fs::write(&parent, "not-a-dir").unwrap();
+        let target = parent.join("child.txt");
+
+        let err =
+            sync_optional_file(&source, &target).expect_err("expected parent creation failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to create"));
+        assert!(message.contains(&parent.display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_file_handles_root_target_parent_none() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        fs::write(&source, "data").unwrap();
+
+        let err =
+            sync_optional_file(&source, Path::new("/")).expect_err("expected root copy failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_copies_dirs_files_and_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let nested_dir = source.join("nested");
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(source.join("root.txt"), "root\n").unwrap();
+        fs::write(nested_dir.join("nested.txt"), "nested\n").unwrap();
+        UnixListener::bind(source.join("socket")).unwrap();
+        std::os::unix::fs::symlink(source.join("root.txt"), source.join("root-link")).unwrap();
+        std::os::unix::fs::symlink(&nested_dir, source.join("nested-link")).unwrap();
+
+        copy_path_recursive_following_symlinks(&source, &target).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join("root.txt")).unwrap(),
+            "root\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("root-link")).unwrap(),
+            "root\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("nested").join("nested.txt")).unwrap(),
+            "nested\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("nested-link").join("nested.txt")).unwrap(),
+            "nested\n"
+        );
+        assert!(!target.join("socket").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_skips_symlink_loops() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        std::os::unix::fs::symlink(&source, source.join("self")).unwrap();
+
+        copy_path_recursive_following_symlinks(&source, &target).unwrap();
+
+        assert!(!target.join("self").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_propagates_failures_from_symlink_targets() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let external = temp.path().join("external");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("secret.txt"), "data").unwrap();
+        std::os::unix::fs::symlink(&external, source.join("external-link")).unwrap();
+
+        fs::create_dir_all(target.join("external-link").join("secret.txt")).unwrap();
+
+        let err = copy_path_recursive_following_symlinks(&source, &target)
+            .expect_err("expected symlink copy failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_propagates_failures_from_dir_entries() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let nested = source.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("file.txt"), "data").unwrap();
+
+        fs::create_dir_all(target.join("nested").join("file.txt")).unwrap();
+
+        let err =
+            copy_path_recursive_following_symlinks(&source, &target).expect_err("expected failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_reports_dir_entry_read_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("file.txt"), "data").unwrap();
+
+        let err = with_copy_path_recursive_following_symlinks_dir_entry_hook(
+            |_| Err(std::io::Error::other("boom")),
+            || copy_path_recursive_following_symlinks(&source, &target).unwrap_err(),
+        );
+        let message = err.to_string();
+        let message_with_causes = format!("{err:#}");
+        assert!(message.contains("Failed to read"));
+        assert!(message_with_causes.contains("boom"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_ssh_home_propagates_failures_when_copying_dot_ssh() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        fs::create_dir_all(host_home.join(".ssh")).unwrap();
+        fs::create_dir_all(&target_home).unwrap();
+        fs::write(host_home.join(".ssh").join("config"), "Host test\n").unwrap();
+
+        let err = with_copy_path_recursive_before_symlink_metadata_hook(
+            |path| {
+                let _ = fs::remove_file(path);
+            },
+            || sync_ssh_home(&target_home, &host_home).unwrap_err(),
+        );
+
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_ssh_home_propagates_failures_when_copying_xdg_ssh() {
+        let temp = TempDir::new().unwrap();
+        let host_home = temp.path().join("host-home");
+        let target_home = temp.path().join("target-home");
+        fs::create_dir_all(host_home.join(".config").join("ssh")).unwrap();
+        fs::create_dir_all(&target_home).unwrap();
+        fs::write(
+            host_home.join(".config").join("ssh").join("config"),
+            "Host xdg-test\n",
+        )
+        .unwrap();
+
+        let err = with_copy_path_recursive_before_symlink_metadata_hook(
+            |path| {
+                let _ = fs::remove_file(path);
+            },
+            || sync_ssh_home(&target_home, &host_home).unwrap_err(),
+        );
+
+        assert!(err.to_string().contains("Failed to read file type for"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_optional_path_following_symlinks_propagates_remove_errors() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("unremovable");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("file.txt"), "hello").unwrap();
+
+        let mut perms = fs::metadata(&target).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&target, perms).unwrap();
+
+        let err = sync_optional_path_following_symlinks(&source, &target).unwrap_err();
+        assert!(err.to_string().contains("Failed to remove"));
+
+        let mut reset = fs::metadata(&target).unwrap().permissions();
+        reset.set_mode(0o755);
+        fs::set_permissions(&target, reset).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_file_with_permissions_handles_root_target_parent_none() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        fs::write(&source, "data").unwrap();
+
+        let err = copy_file_with_permissions(&source, Path::new("/"))
+            .expect_err("expected root target copy failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_path_recursive_following_symlinks_noops_for_sockets() {
+        let temp = TempDir::new().unwrap();
+        let socket_path = temp.path().join("socket");
+        UnixListener::bind(&socket_path).unwrap();
+        let target = temp.path().join("socket-copy");
+
+        copy_path_recursive_following_symlinks(&socket_path, &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_skips_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("file.txt"), "data").unwrap();
+        std::os::unix::fs::symlink(source.join("file.txt"), source.join("file-link")).unwrap();
+
+        copy_dir_recursive(&source, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(target.join("file.txt")).unwrap(), "data");
+        assert!(!target.join("file-link").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_reports_copy_failures_with_context() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("file.txt"), "data").unwrap();
+        fs::create_dir_all(target.join("file.txt")).unwrap();
+
+        let err = copy_dir_recursive(&source, &target).expect_err("expected copy failure");
+        let message = err.to_string();
+        assert!(message.contains("Failed to copy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_claude_settings_file_removes_target_when_source_missing() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("missing-source");
+        let target = temp.path().join("settings.json");
+        fs::write(&target, "{}").unwrap();
+
+        sync_claude_settings_file(&source, &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_runtime_identity_files_clear_root_entries_when_uid_gid_zero() {
+        if std::env::var_os(RUNTIME_IDENTITY_CHILD_FLAG).is_some() {
+            let home_source =
+                PathBuf::from(std::env::var_os(RUNTIME_IDENTITY_HOME_SOURCE_VAR).unwrap());
+            let home_target = PathBuf::from("/tmp/runtime-home");
+            write_runtime_identity_files(&home_source, &home_target).unwrap();
+            let passwd = fs::read_to_string(home_source.join(RUNTIME_PASSWD_FILE_NAME)).unwrap();
+            let group = fs::read_to_string(home_source.join(RUNTIME_GROUP_FILE_NAME)).unwrap();
+            assert!(!passwd.contains("root:x:0:0:root:/root:/bin/bash"));
+            assert!(!group.contains("root:x:0:\n"));
+            assert!(passwd.contains("Tenex runtime user"));
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        let home_source = temp.path().join("runtime-home");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&home_source).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let id_script = bin_dir.join("id");
+        fs::write(
+            &id_script,
+            "#!/bin/sh\ncase \"$1\" in\n  -u|-g) echo 0 ;;\n  -un|-gn) echo tenex ;;\n  *) exit 1 ;;\nesac\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&id_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&id_script, perms).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let prefixed_path = format!("{}:{path}", bin_dir.display());
+        let output = Command::new(current_exe)
+            .arg("--exact")
+            .arg("runtime::docker::tests::test_write_runtime_identity_files_clear_root_entries_when_uid_gid_zero")
+            .arg("--nocapture")
+            .env(RUNTIME_IDENTITY_CHILD_FLAG, "1")
+            .env(RUNTIME_IDENTITY_HOME_SOURCE_VAR, &home_source)
+            .env("PATH", prefixed_path)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
     }
 
     #[cfg(unix)]
     fn docker_mount_log_for_test(
         temp: &TempDir,
-    ) -> Result<(String, PreparedRuntimeHome, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    ) -> (String, PreparedRuntimeHome, PathBuf, PathBuf) {
         let log = temp.path().join("docker.log");
         let script = write_fake_docker_script(
             temp,
@@ -2818,16 +5865,16 @@ command = "docker"
                 "#!/bin/sh\nset -eu\nif [ \"$1\" = \"version\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"inspect\" ]; then\n  echo 'No such object' >&2\n  exit 1\nfi\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
                 log.display()
             ),
-        )?;
+        );
 
-        let fixture = prepare_docker_mount_test_fixture(temp)?;
-        create_test_container_mount_log(script, &fixture)?;
+        let fixture = prepare_docker_mount_test_fixture(temp);
+        create_test_container_mount_log(script, &fixture);
 
-        Ok((
-            fs::read_to_string(&log)?,
+        (
+            fs::read_to_string(&log).unwrap(),
             fixture.prepared,
             fixture.repo_root,
             fixture.host_home,
-        ))
+        )
     }
 }

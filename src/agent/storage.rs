@@ -1,4 +1,5 @@
 //! Agent persistence layer
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::{Agent, WorkspaceKind};
 use crate::config::Config;
@@ -9,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
@@ -19,24 +19,15 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 const STATE_FILE_MODE: u32 = 0o600;
 
+#[cfg(any(test, coverage))]
+thread_local! {
+    static TEST_FORCE_SAVE_ERROR_AFTER_SUCCESSFUL_SAVES: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
 fn resolve_state_path(path: &Path) -> std::path::PathBuf {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return path.to_path_buf();
-    };
-
-    if !metadata.file_type().is_symlink() {
-        return path.to_path_buf();
-    }
-
-    let Ok(target) = fs::read_link(path) else {
-        return path.to_path_buf();
-    };
-
-    if target.is_absolute() {
-        return target;
-    }
-
-    path.parent().unwrap_or_else(|| Path::new(".")).join(target)
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn backup_state_path(path: &Path) -> std::path::PathBuf {
@@ -67,6 +58,62 @@ fn temp_state_path(path: &Path) -> std::path::PathBuf {
     path.with_file_name(tmp_name)
 }
 
+trait TempStateFileOps {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()>;
+    fn sync_all(&self) -> std::io::Result<()>;
+}
+
+impl TempStateFileOps for fs::File {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        std::io::Write::write_all(self, buf)
+    }
+
+    fn sync_all(&self) -> std::io::Result<()> {
+        Self::sync_all(self)
+    }
+}
+
+#[cfg(coverage)]
+struct CoverageTempStateFile {
+    fail_write: bool,
+    fail_sync: bool,
+}
+
+#[cfg(coverage)]
+impl TempStateFileOps for CoverageTempStateFile {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn write_all(&mut self, _buf: &[u8]) -> std::io::Result<()> {
+        if self.fail_write {
+            return Err(std::io::Error::other("forced coverage write failure"));
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn sync_all(&self) -> std::io::Result<()> {
+        if self.fail_sync {
+            return Err(std::io::Error::other("forced coverage sync failure"));
+        }
+        Ok(())
+    }
+}
+
+fn write_temp_state_contents(
+    file: &mut dyn TempStateFileOps,
+    path: &Path,
+    contents: &str,
+) -> Result<()> {
+    file.write_all(contents.as_bytes()).context(format!(
+        "Failed to write temp state file {}",
+        path.display()
+    ))?;
+    file.sync_all().context(format!(
+        "Failed to sync temp state file to disk {}",
+        path.display()
+    ))?;
+    Ok(())
+}
+
 fn write_temp_state_file(path: &Path, contents: &str) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -77,35 +124,28 @@ fn write_temp_state_file(path: &Path, contents: &str) -> Result<()> {
         options.mode(STATE_FILE_MODE);
     }
 
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("Failed to create temp state file {}", path.display()))?;
+    let mut file = options.open(path).context(format!(
+        "Failed to create temp state file {}",
+        path.display()
+    ))?;
 
-    file.write_all(contents.as_bytes())
-        .with_context(|| format!("Failed to write temp state file {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("Failed to sync temp state file to disk {}", path.display()))?;
-    Ok(())
+    write_temp_state_contents(&mut file, path, contents)
 }
 
 fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permissions>) -> Result<()> {
     if let Some(permissions) = existing_permissions {
-        fs::set_permissions(path, permissions).with_context(|| {
-            format!(
-                "Failed to set permissions for temp state file {}",
-                path.display()
-            )
-        })?;
+        fs::set_permissions(path, permissions).context(format!(
+            "Failed to set permissions for temp state file {}",
+            path.display()
+        ))?;
         return Ok(());
     }
 
     #[cfg(target_os = "linux")]
-    fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).with_context(|| {
-        format!(
-            "Failed to set permissions for temp state file {}",
-            path.display()
-        )
-    })?;
+    fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE)).context(format!(
+        "Failed to set permissions for temp state file {}",
+        path.display()
+    ))?;
     Ok(())
 }
 
@@ -138,6 +178,12 @@ fn write_state_atomically(path: &Path, contents: &str) -> Result<()> {
     }
 
     write_result
+}
+
+fn lock_state_file(lock_file: &fs::File, lock_path: &Path) -> Result<()> {
+    lock_file
+        .lock_exclusive()
+        .context(format!("Failed to lock state {}", lock_path.display()))
 }
 
 /// Pre-computed visible agent information for efficient rendering
@@ -305,8 +351,20 @@ impl Storage {
     ///
     /// Returns an error if the state file exists but cannot be read or parsed
     pub fn load() -> Result<Self> {
-        let configured_path = Config::state_path();
-        let path = resolve_state_path(&configured_path);
+        Self::load_at(&Config::state_path())
+    }
+
+    /// Load state from the provided path.
+    ///
+    /// This performs the same backup fallback behavior as `load` but avoids reading configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state file exists but cannot be read or parsed and no usable backup
+    /// exists.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    pub fn load_at(configured_path: &Path) -> Result<Self> {
+        let path = resolve_state_path(configured_path);
         let backup_path = backup_state_path(&path);
 
         if path.exists() {
@@ -435,6 +493,7 @@ impl Storage {
     /// Tenex stores agents in a global state file, so it can load agents created from different
     /// repositories. The UI groups agents by this root, and agent creation uses it to ensure new
     /// worktrees are created in the highlighted repository instead of the process CWD.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn backfill_repo_roots(&mut self) -> bool {
         let mut changed = false;
 
@@ -496,17 +555,124 @@ impl Storage {
         self.save_to(&path)
     }
 
+    #[cfg(any(test, coverage))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn with_forced_save_error_after_successes_for_tests<T>(
+        successful_saves: usize,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        TEST_FORCE_SAVE_ERROR_AFTER_SUCCESSFUL_SAVES.with(|slot| {
+            let previous = slot.replace(Some(successful_saves));
+            let result = f();
+            slot.set(previous);
+            result
+        })
+    }
+
+    #[cfg(coverage)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[doc(hidden)]
+    pub fn exercise_private_save_boundary_for_coverage(path: &Path) {
+        let mut write_file = CoverageTempStateFile {
+            fail_write: true,
+            fail_sync: false,
+        };
+        let _ = write_temp_state_contents(&mut write_file, path, "payload");
+
+        let mut sync_file = CoverageTempStateFile {
+            fail_write: false,
+            fail_sync: true,
+        };
+        let _ = write_temp_state_contents(&mut sync_file, path, "payload");
+
+        let missing_parent = path.join("missing").join("state.json");
+        let _ = write_temp_state_file(&missing_parent, "payload");
+
+        if let Ok(permissions) =
+            fs::metadata(std::env::temp_dir()).map(|metadata| metadata.permissions())
+        {
+            let _ = set_temp_permissions(&missing_parent, Some(permissions));
+        }
+
+        #[cfg(target_os = "linux")]
+        let _ = set_temp_permissions(&missing_parent, None);
+    }
+
+    #[cfg(coverage)]
+    #[doc(hidden)]
+    pub fn exercise_load_and_backfill_paths_for_coverage() {
+        let root = std::env::temp_dir().join(format!("tenex-storage-coverage-{}", Uuid::new_v4()));
+        let _ = fs::create_dir_all(&root);
+
+        let missing_state = root.join("missing-state.json");
+        let _ = Self::load_at(&missing_state);
+
+        let existing_worktree = root.join("existing-worktree");
+        let _ = fs::create_dir_all(&existing_worktree);
+        let missing_worktree = root.join("missing-worktree");
+
+        let mut already_backfilled = Agent::new(
+            "coverage already backfilled".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-already".to_string(),
+            root.clone(),
+        );
+        already_backfilled.repo_root = Some(root.clone());
+
+        let existing = Agent::new(
+            "coverage existing".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-existing".to_string(),
+            existing_worktree,
+        );
+        let missing = Agent::new(
+            "coverage missing".to_string(),
+            "echo".to_string(),
+            "tenex/coverage-missing".to_string(),
+            missing_worktree,
+        );
+
+        let mut storage = Self::new();
+        storage.add(already_backfilled);
+        storage.add(existing);
+        storage.add(missing);
+        let _ = storage.backfill_repo_roots();
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Save state to a specific path
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be written
     pub fn save_to(&mut self, path: &Path) -> Result<()> {
+        self.save_to_with_lock(path, lock_state_file)
+    }
+
+    fn save_to_with_lock(
+        &mut self,
+        path: &Path,
+        lock: fn(&fs::File, &Path) -> Result<()>,
+    ) -> Result<()> {
+        #[cfg(any(test, coverage))]
+        TEST_FORCE_SAVE_ERROR_AFTER_SUCCESSFUL_SAVES.with(|slot| {
+            if let Some(remaining) = slot.get() {
+                if remaining == 0 {
+                    anyhow::bail!("forced storage save error for test");
+                }
+                slot.set(Some(remaining.saturating_sub(1)));
+            }
+            Ok(())
+        })?;
+
         let path = resolve_state_path(path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create state directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent).context(format!(
+                "Failed to create state directory {}",
+                parent.display()
+            ))?;
         }
 
         let lock_path = lock_state_path(&path);
@@ -516,10 +682,8 @@ impl Storage {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .with_context(|| format!("Failed to open state lock {}", lock_path.display()))?;
-        lock_file
-            .lock_exclusive()
-            .with_context(|| format!("Failed to lock state {}", lock_path.display()))?;
+            .context(format!("Failed to open state lock {}", lock_path.display()))?;
+        lock(&lock_file, &lock_path)?;
 
         let disk = if path.exists()
             && fs::metadata(&path)
@@ -623,6 +787,17 @@ impl Storage {
     /// Get a mutable reference to an agent by ID
     pub fn get_mut(&mut self, id: Uuid) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| a.id == id)
+    }
+
+    /// Set the collapsed state of an agent by ID.
+    ///
+    /// Returns `true` when the agent existed and was updated.
+    pub fn set_collapsed(&mut self, id: Uuid, collapsed: bool) -> bool {
+        let Some(agent) = self.get_mut(id) else {
+            return false;
+        };
+        agent.collapsed = collapsed;
+        true
     }
 
     /// Get an agent by index
@@ -1057,10 +1232,20 @@ fn apply_agent_changes(target: &mut Agent, baseline: &Agent, ours: &Agent) {
 mod tests {
     use super::*;
     use crate::agent::WorkspaceKind;
-    use crate::agent::{ChildConfig, Status};
+    use crate::agent::{AgentRuntime, ChildConfig, Status};
+    use crate::test_support::lock_env_test_environment;
     use chrono::Duration;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, f)
+    }
 
     fn create_test_agent(title: &str) -> Agent {
         Agent::new(
@@ -1071,12 +1256,184 @@ mod tests {
         )
     }
 
+    struct StubTempStateFile {
+        fail_write: bool,
+        fail_sync: bool,
+    }
+
+    impl TempStateFileOps for StubTempStateFile {
+        fn write_all(&mut self, _buf: &[u8]) -> std::io::Result<()> {
+            if self.fail_write {
+                return Err(std::io::Error::other("stub write failure"));
+            }
+            Ok(())
+        }
+
+        fn sync_all(&self) -> std::io::Result<()> {
+            if self.fail_sync {
+                return Err(std::io::Error::other("stub sync failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_write_temp_state_contents_reports_write_failure_with_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let path = temp_dir.path().join("state.json");
+        let mut file = StubTempStateFile {
+            fail_write: true,
+            fail_sync: false,
+        };
+
+        let err =
+            write_temp_state_contents(&mut file, &path, "payload").expect_err("write should fail");
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Failed to write temp state file"));
+        assert!(message.contains(&path.display().to_string()));
+    }
+
+    #[test]
+    fn test_write_temp_state_contents_reports_sync_failure_with_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let path = temp_dir.path().join("state.json");
+        let mut file = StubTempStateFile {
+            fail_write: false,
+            fail_sync: true,
+        };
+
+        let err =
+            write_temp_state_contents(&mut file, &path, "payload").expect_err("sync should fail");
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Failed to sync temp state file to disk"));
+        assert!(message.contains(&path.display().to_string()));
+    }
+
+    #[test]
+    fn test_write_temp_state_contents_succeeds_when_ops_succeed() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let path = temp_dir.path().join("state.json");
+        let mut file = StubTempStateFile {
+            fail_write: false,
+            fail_sync: false,
+        };
+
+        write_temp_state_contents(&mut file, &path, "payload").expect("write should succeed");
+    }
+
+    #[test]
+    fn test_set_temp_permissions_errors_when_path_missing() {
+        let temp_dir = TempDir::new().expect("temp dir");
+
+        let existing = temp_dir.path().join("existing.json");
+        std::fs::write(&existing, "{}").expect("write existing file");
+        let permissions = std::fs::metadata(&existing)
+            .expect("read existing metadata")
+            .permissions();
+
+        let missing = temp_dir.path().join("missing.json");
+        let err = set_temp_permissions(&missing, Some(permissions))
+            .expect_err("set permissions should fail for missing path");
+        assert!(format!("{err:#}").contains("Failed to set permissions for temp state file"));
+    }
+
+    #[test]
+    fn test_state_sidecar_paths_use_default_name_without_file_name() {
+        let path = Path::new("/");
+
+        assert_eq!(backup_state_path(path), PathBuf::from("/state.json.bak"));
+        assert_eq!(lock_state_path(path), PathBuf::from("/state.json.lock"));
+
+        let temp_path = temp_state_path(path);
+        let file_name = temp_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("temp path should have file name");
+        assert!(file_name.starts_with(".state.json.tmp-"));
+    }
+
     #[test]
     fn test_new_storage() {
         let storage = Storage::new();
         assert!(storage.is_empty());
         assert_eq!(storage.len(), 0);
         assert_eq!(storage.version, 1);
+    }
+
+    #[test]
+    fn test_set_collapsed_updates_agent_when_present() {
+        let mut storage = Storage::new();
+        let agent = create_test_agent("root");
+        let agent_id = agent.id;
+        storage.add(agent);
+
+        assert!(storage.set_collapsed(agent_id, true));
+        assert!(storage.get(agent_id).is_some_and(|agent| agent.collapsed));
+
+        assert!(storage.set_collapsed(agent_id, false));
+        assert!(storage.get(agent_id).is_some_and(|agent| !agent.collapsed));
+    }
+
+    #[test]
+    fn test_set_collapsed_returns_false_when_missing() {
+        let mut storage = Storage::new();
+        assert!(!storage.set_collapsed(Uuid::new_v4(), true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_state_path_resolves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let real_path = temp_dir.path().join("real.json");
+        std::fs::write(&real_path, "{}").expect("write real state");
+        let canonical_real_path = real_path.canonicalize().expect("canonical real state");
+
+        let relative_link = temp_dir.path().join("state.json");
+        symlink("real.json", &relative_link).expect("symlink relative");
+        assert_eq!(resolve_state_path(&relative_link), canonical_real_path);
+
+        let absolute_link = temp_dir.path().join("absolute.json");
+        symlink(&real_path, &absolute_link).expect("symlink absolute");
+        assert_eq!(resolve_state_path(&absolute_link), canonical_real_path);
+
+        let direct = temp_dir.path().join("direct.json");
+        assert_eq!(resolve_state_path(&direct), direct);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_set_temp_permissions_reports_context_for_existing_permissions() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let perms_source = temp_dir.path().join("perms-source");
+        std::fs::write(&perms_source, "x").expect("write perms source");
+        let permissions = std::fs::metadata(&perms_source)
+            .expect("metadata perms source")
+            .permissions();
+
+        let missing = temp_dir.path().join("missing");
+        let err = set_temp_permissions(&missing, Some(permissions))
+            .expect_err("expected set_permissions to fail for missing path");
+        assert!(
+            err.to_string()
+                .contains("Failed to set permissions for temp state file")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_set_temp_permissions_reports_context_for_default_permissions() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let missing = temp_dir.path().join("missing");
+        let err = set_temp_permissions(&missing, None)
+            .expect_err("expected set_permissions to fail for missing path");
+        assert!(
+            err.to_string()
+                .contains("Failed to set permissions for temp state file")
+        );
     }
 
     #[test]
@@ -1091,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_agent() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_remove_agent() {
         let mut storage = Storage::new();
         let agent = create_test_agent("test");
         let id = agent.id;
@@ -1100,9 +1457,8 @@ mod tests {
         let removed = storage.remove(id);
 
         assert!(removed.is_some());
-        assert_eq!(removed.ok_or("Agent not found")?.id, id);
+        assert_eq!(removed.expect("Agent not found").id, id);
         assert!(storage.is_empty());
-        Ok(())
     }
 
     #[test]
@@ -1125,56 +1481,52 @@ mod tests {
     }
 
     #[test]
-    fn test_get_mut() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_get_mut() {
         let mut storage = Storage::new();
         let agent = create_test_agent("test");
         let id = agent.id;
 
         storage.add(agent);
 
-        if let Some(agent) = storage.get_mut(id) {
-            agent.set_status(Status::Running);
-        }
+        storage
+            .get_mut(id)
+            .expect("Agent not found")
+            .set_status(Status::Running);
 
         assert_eq!(
-            storage.get(id).ok_or("Agent not found")?.status,
+            storage.get(id).expect("Agent not found").status,
             Status::Running
         );
-        Ok(())
     }
 
     #[test]
-    fn test_get_by_index() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_get_by_index() {
         let mut storage = Storage::new();
         storage.add(create_test_agent("first"));
         storage.add(create_test_agent("second"));
 
         assert_eq!(
-            storage.get_by_index(0).ok_or("Agent not found")?.title,
+            storage.get_by_index(0).expect("Agent not found").title,
             "first"
         );
         assert_eq!(
-            storage.get_by_index(1).ok_or("Agent not found")?.title,
+            storage.get_by_index(1).expect("Agent not found").title,
             "second"
         );
         assert!(storage.get_by_index(2).is_none());
-        Ok(())
     }
 
     #[test]
-    fn test_get_by_index_mut() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_get_by_index_mut() {
         let mut storage = Storage::new();
         storage.add(create_test_agent("test"));
 
-        if let Some(agent) = storage.get_by_index_mut(0) {
-            agent.title = "modified".to_string();
-        }
+        storage.get_by_index_mut(0).expect("Agent not found").title = "modified".to_string();
 
         assert_eq!(
-            storage.get_by_index(0).ok_or("Agent not found")?.title,
+            storage.get_by_index(0).expect("Agent not found").title,
             "modified"
         );
-        Ok(())
     }
 
     #[test]
@@ -1251,99 +1603,127 @@ mod tests {
     }
 
     #[test]
-    fn test_save_and_load() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_save_and_load() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
 
         let mut storage = Storage::new();
         storage.add(create_test_agent("test1"));
         storage.add(create_test_agent("test2"));
 
-        storage.save_to(&state_path)?;
-        let loaded = Storage::load_from(&state_path)?;
+        storage.save_to(&state_path).expect("save storage");
+        let loaded = Storage::load_from(&state_path).expect("load storage");
 
         assert_eq!(storage.len(), loaded.len());
         assert_eq!(storage.agents[0].title, loaded.agents[0].title);
         assert_eq!(storage.agents[1].title, loaded.agents[1].title);
-        Ok(())
     }
 
     #[test]
-    fn test_save_merges_new_agents_from_other_clients() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_save_merges_new_agents_from_other_clients() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
 
         let mut initial = Storage::new();
         initial.add(create_test_agent("one"));
-        initial.save_to(&state_path)?;
+        initial.save_to(&state_path).expect("save initial");
 
-        let mut client_a = Storage::load_from(&state_path)?;
-        let mut client_b = Storage::load_from(&state_path)?;
+        let mut client_a = Storage::load_from(&state_path).expect("load client a");
+        let mut client_b = Storage::load_from(&state_path).expect("load client b");
 
         client_a.add(create_test_agent("two"));
-        client_a.save_to(&state_path)?;
+        client_a.save_to(&state_path).expect("save client a");
 
-        if let Some(agent) = client_b.agents.first_mut() {
-            agent.set_status(Status::Running);
-        }
-        client_b.save_to(&state_path)?;
+        client_b
+            .agents
+            .first_mut()
+            .expect("Agent not found")
+            .set_status(Status::Running);
+        client_b.save_to(&state_path).expect("save client b");
 
-        let merged = Storage::load_from(&state_path)?;
+        let merged = Storage::load_from(&state_path).expect("load merged");
         assert_eq!(merged.agents.len(), 2);
         assert!(merged.agents.iter().any(|agent| agent.title == "two"));
         assert!(
             merged
                 .agents
                 .iter()
-                .any(|agent| agent.title == "one" && agent.status == Status::Running)
+                .any(|agent| (agent.title.as_str(), agent.status) == ("one", Status::Running))
         );
-        Ok(())
     }
 
     #[test]
-    fn test_save_does_not_resurrect_deleted_agents() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_merge_storage_three_way_skips_agents_already_on_disk() {
+        let mut baseline_storage = Storage::new();
+        let root = create_test_agent("root");
+        baseline_storage.add(root);
+        let baseline = StorageSnapshot::capture(&baseline_storage);
+
+        let mut disk = baseline_storage.clone();
+        let disk_only = create_test_agent("disk-only");
+        let disk_only_id = disk_only.id;
+        disk.add(disk_only.clone());
+
+        let mut ours = baseline_storage.clone();
+        ours.add(disk_only);
+
+        let merged = merge_storage_three_way(&baseline, &disk, &ours);
+        assert!(merged.get(disk_only_id).is_some());
+        assert_eq!(
+            merged
+                .agents
+                .iter()
+                .filter(|agent| agent.id == disk_only_id)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_save_does_not_resurrect_deleted_agents() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
 
         let mut initial = Storage::new();
         let agent = create_test_agent("one");
         let agent_id = agent.id;
         initial.add(agent);
-        initial.save_to(&state_path)?;
+        initial.save_to(&state_path).expect("save initial");
 
-        let mut client_a = Storage::load_from(&state_path)?;
-        let mut client_b = Storage::load_from(&state_path)?;
+        let mut client_a = Storage::load_from(&state_path).expect("load client a");
+        let mut client_b = Storage::load_from(&state_path).expect("load client b");
 
         client_a.remove(agent_id);
-        client_a.save_to(&state_path)?;
+        client_a.save_to(&state_path).expect("save client a");
 
-        if let Some(agent) = client_b.agents.first_mut() {
-            agent.set_status(Status::Running);
-        }
-        client_b.save_to(&state_path)?;
+        client_b
+            .agents
+            .first_mut()
+            .expect("Agent not found")
+            .set_status(Status::Running);
+        client_b.save_to(&state_path).expect("save client b");
 
-        let merged = Storage::load_from(&state_path)?;
+        let merged = Storage::load_from(&state_path).expect("load merged");
         assert!(merged.get(agent_id).is_none());
-        Ok(())
     }
 
     #[test]
-    fn test_save_applies_field_updates_from_ours() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_save_applies_field_updates_from_ours() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
 
         let mut initial = Storage::new();
         let agent = create_test_agent("one");
         let agent_id = agent.id;
         initial.add(agent);
-        initial.save_to(&state_path)?;
+        initial.save_to(&state_path).expect("save initial");
 
-        let mut client = Storage::load_from(&state_path)?;
+        let mut client = Storage::load_from(&state_path).expect("load client");
         client.version = 2;
         client.instance_id = Some("deadbeef".to_string());
         client.mux_socket = Some("socket".to_string());
 
-        let agent = client.get_mut(agent_id).ok_or("missing agent")?;
+        let agent = client.get_mut(agent_id).expect("missing agent");
         let baseline_created_at = agent.created_at;
         let baseline_updated_at = agent.updated_at;
 
@@ -1355,6 +1735,8 @@ mod tests {
         agent.worktree_path = PathBuf::from("/tmp/tenex-storage-test/worktree");
         agent.repo_root = Some(PathBuf::from("/tmp/tenex-storage-test/repo"));
         agent.workspace_kind = WorkspaceKind::PlainDir;
+        agent.runtime = AgentRuntime::Docker;
+        agent.runtime_scope = "runtime-scope".to_string();
         agent.mux_session = "mux-session".to_string();
         agent.created_at = baseline_created_at + Duration::seconds(1);
         agent.updated_at = baseline_updated_at + Duration::seconds(2);
@@ -1362,14 +1744,14 @@ mod tests {
         agent.window_index = Some(42);
         agent.is_terminal = true;
 
-        client.save_to(&state_path)?;
+        client.save_to(&state_path).expect("save client");
 
-        let merged = Storage::load_from(&state_path)?;
+        let merged = Storage::load_from(&state_path).expect("load merged");
         assert_eq!(merged.version, 2);
         assert_eq!(merged.instance_id.as_deref(), Some("deadbeef"));
         assert_eq!(merged.mux_socket.as_deref(), Some("socket"));
 
-        let merged_agent = merged.get(agent_id).ok_or("missing agent")?;
+        let merged_agent = merged.get(agent_id).expect("missing agent");
         assert_eq!(merged_agent.title, "updated");
         assert_eq!(merged_agent.program, "updated-program");
         assert_eq!(merged_agent.conversation_id.as_deref(), Some("conv"));
@@ -1384,6 +1766,8 @@ mod tests {
             Some(PathBuf::from("/tmp/tenex-storage-test/repo").as_path())
         );
         assert_eq!(merged_agent.workspace_kind, WorkspaceKind::PlainDir);
+        assert_eq!(merged_agent.runtime, AgentRuntime::Docker);
+        assert_eq!(merged_agent.runtime_scope, "runtime-scope");
         assert_eq!(merged_agent.mux_session, "mux-session");
         assert_eq!(
             merged_agent.created_at,
@@ -1396,13 +1780,11 @@ mod tests {
         assert!(merged_agent.parent_id.is_some());
         assert_eq!(merged_agent.window_index, Some(42));
         assert!(merged_agent.is_terminal);
-
-        Ok(())
     }
 
     #[test]
-    fn test_save_does_not_persist_collapsed_state() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_save_does_not_persist_collapsed_state() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
 
         let mut storage = Storage::new();
@@ -1425,19 +1807,18 @@ mod tests {
             },
         ));
 
-        storage.save_to(&state_path)?;
+        storage.save_to(&state_path).expect("save storage");
 
-        let loaded = Storage::load_from(&state_path)?;
-        let loaded_root = loaded.get(root_id).ok_or("missing root")?;
+        let loaded = Storage::load_from(&state_path).expect("load storage");
+        let loaded_root = loaded.get(root_id).expect("missing root");
         assert!(loaded_root.collapsed);
-        Ok(())
     }
 
     #[test]
-    fn test_backfill_workspace_kinds_marks_plain_dirs() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_backfill_workspace_kinds_marks_plain_dirs() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let non_git_path = temp_dir.path().join("plain");
-        std::fs::create_dir_all(&non_git_path)?;
+        std::fs::create_dir_all(&non_git_path).expect("create plain dir");
 
         let mut storage = Storage::new();
         let mut agent = create_test_agent("plain");
@@ -1446,15 +1827,13 @@ mod tests {
         storage.add(agent);
 
         assert!(storage.backfill_workspace_kinds());
-        let loaded = storage.agents.first().ok_or("missing agent")?;
+        let loaded = storage.agents.first().expect("missing agent");
         assert_eq!(loaded.workspace_kind, WorkspaceKind::PlainDir);
-        Ok(())
     }
 
     #[test]
-    fn test_backfill_workspace_kinds_leaves_missing_paths_unchanged()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_backfill_workspace_kinds_leaves_missing_paths_unchanged() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let missing_path = temp_dir.path().join("missing");
 
         let mut storage = Storage::new();
@@ -1464,18 +1843,50 @@ mod tests {
         storage.add(agent);
 
         assert!(!storage.backfill_workspace_kinds());
-        let loaded = storage.agents.first().ok_or("missing agent")?;
+        let loaded = storage.agents.first().expect("missing agent");
         assert_eq!(loaded.workspace_kind, WorkspaceKind::GitWorktree);
-        Ok(())
     }
 
     #[test]
-    fn test_backfill_workspace_kinds_handles_legacy_state_files()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_backfill_workspace_kinds_skips_non_git_worktree_kind() {
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("plain");
+        agent.workspace_kind = WorkspaceKind::PlainDir;
+        storage.add(agent);
+
+        assert!(!storage.backfill_workspace_kinds());
+    }
+
+    #[test]
+    fn test_backfill_workspace_kinds_keeps_git_worktrees_inside_git_repos() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(&repo_root)
+            .status()
+            .expect("git init");
+        assert!(status.success());
+
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("git");
+        agent.worktree_path = repo_root;
+        agent.workspace_kind = WorkspaceKind::GitWorktree;
+        storage.add(agent);
+
+        assert!(!storage.backfill_workspace_kinds());
+        let loaded = storage.agents.first().expect("missing agent");
+        assert_eq!(loaded.workspace_kind, WorkspaceKind::GitWorktree);
+    }
+
+    #[test]
+    fn test_backfill_workspace_kinds_handles_legacy_state_files() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let plain_dir = temp_dir.path().join("plain");
-        std::fs::create_dir_all(&plain_dir)?;
-        let plain_dir_json = serde_json::to_string(&plain_dir.to_string_lossy().into_owned())?;
+        std::fs::create_dir_all(&plain_dir).expect("create plain dir");
+        let plain_dir_json = serde_json::to_string(&plain_dir.to_string_lossy().into_owned())
+            .expect("serialize plain dir");
 
         let state_path = temp_dir.path().join("state.json");
         let contents = format!(
@@ -1501,21 +1912,19 @@ mod tests {
 }}
 "#
         );
-        std::fs::write(&state_path, contents)?;
+        std::fs::write(&state_path, contents).expect("write legacy state");
 
-        let mut loaded = Storage::load_from(&state_path)?;
-        let agent = loaded.agents.first().ok_or("missing agent")?;
+        let mut loaded = Storage::load_from(&state_path).expect("load legacy state");
+        let agent = loaded.agents.first().expect("missing agent");
         assert_eq!(agent.workspace_kind, WorkspaceKind::GitWorktree);
 
         assert!(loaded.backfill_workspace_kinds());
-        let agent = loaded.agents.first().ok_or("missing agent")?;
+        let agent = loaded.agents.first().expect("missing agent");
         assert_eq!(agent.workspace_kind, WorkspaceKind::PlainDir);
-        Ok(())
     }
 
     #[test]
-    fn test_backfill_conversation_ids_sets_claude_uuid_when_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_backfill_conversation_ids_sets_claude_uuid_when_missing() {
         let mut storage = Storage::new();
         let agent = Agent::new(
             "plain".to_string(),
@@ -1528,16 +1937,14 @@ mod tests {
         storage.add(agent);
 
         assert!(storage.backfill_conversation_ids());
-        let loaded = storage.get(agent_id).ok_or("missing agent")?;
+        let loaded = storage.get(agent_id).expect("missing agent");
         assert_eq!(loaded.conversation_id.as_deref(), Some(expected.as_str()));
 
         assert!(!storage.backfill_conversation_ids());
-        Ok(())
     }
 
     #[test]
-    fn test_backfill_conversation_ids_does_not_touch_other_programs()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_backfill_conversation_ids_does_not_touch_other_programs() {
         let mut storage = Storage::new();
         let agent = Agent::new(
             "plain".to_string(),
@@ -1549,9 +1956,45 @@ mod tests {
         storage.add(agent);
 
         assert!(!storage.backfill_conversation_ids());
-        let loaded = storage.get(agent_id).ok_or("missing agent")?;
+        let loaded = storage.get(agent_id).expect("missing agent");
         assert!(loaded.conversation_id.is_none());
-        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_conversation_ids_skips_terminal_agents() {
+        let mut storage = Storage::new();
+        let mut agent = Agent::new(
+            "terminal".to_string(),
+            "claude --debug".to_string(),
+            "tenex/terminal".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        agent.is_terminal = true;
+        let agent_id = agent.id;
+        storage.add(agent);
+
+        assert!(!storage.backfill_conversation_ids());
+        let loaded = storage.get(agent_id).expect("missing agent");
+        assert!(loaded.conversation_id.is_none());
+    }
+
+    #[test]
+    fn test_backfill_conversation_ids_treats_whitespace_as_missing() {
+        let mut storage = Storage::new();
+        let mut agent = Agent::new(
+            "plain".to_string(),
+            "claude --debug".to_string(),
+            "tenex/plain".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let agent_id = agent.id;
+        let expected = agent_id.to_string();
+        agent.conversation_id = Some("   ".to_string());
+        storage.add(agent);
+
+        assert!(storage.backfill_conversation_ids());
+        let loaded = storage.get(agent_id).expect("missing agent");
+        assert_eq!(loaded.conversation_id.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -1569,28 +2012,94 @@ mod tests {
         ]);
         storage.add(child);
 
-        let mut custom = create_child_agent(&root, "My custom title (deadbeef)", 3);
-        custom.id = uuid::Uuid::from_bytes([
+        let mut planner = create_child_agent(&root, "Planner 1 (deadbeef)", 3);
+        planner.id = uuid::Uuid::from_bytes([
             0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x01,
+        ]);
+        storage.add(planner);
+
+        let mut reviewer = create_child_agent(&root, "Reviewer 1 (deadbeef)", 4);
+        reviewer.id = uuid::Uuid::from_bytes([
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
+        ]);
+        storage.add(reviewer);
+
+        let mut custom = create_child_agent(&root, "My custom title (deadbeef)", 5);
+        custom.id = uuid::Uuid::from_bytes([
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x03,
         ]);
         storage.add(custom);
 
         assert!(storage.backfill_child_titles());
 
         let children = storage.children(root_id);
-        assert_eq!(children.len(), 2);
-        assert_eq!(children[0].title, "Agent 1");
-        assert_eq!(children[1].title, "My custom title (deadbeef)");
+        assert_eq!(children.len(), 4);
+        assert!(children.iter().any(|agent| agent.title == "Agent 1"));
+        assert!(children.iter().any(|agent| agent.title == "Planner 1"));
+        assert!(children.iter().any(|agent| agent.title == "Reviewer 1"));
+        assert!(
+            children
+                .iter()
+                .any(|agent| agent.title == "My custom title (deadbeef)")
+        );
     }
 
     #[test]
-    fn test_load_nonexistent_returns_empty() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+    fn test_backfill_child_titles_noops_when_suffix_is_missing() {
+        let mut storage = Storage::new();
+        let root = create_test_agent("root");
+        let root_id = root.id;
+        storage.add(root.clone());
+
+        let child = create_child_agent(&root, "Agent 1", 2);
+        storage.add(child);
+
+        assert!(!storage.backfill_child_titles());
+        let children = storage.children(root_id);
+        let child = children.first().unwrap();
+        assert_eq!(child.title, "Agent 1");
+    }
+
+    #[test]
+    fn test_backfill_repo_roots_skips_when_present() {
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("root");
+        agent.repo_root = Some(PathBuf::from("/tmp/repo"));
+        let agent_id = agent.id;
+        storage.add(agent);
+
+        assert!(!storage.backfill_repo_roots());
+        let loaded = storage.get(agent_id).unwrap();
+        assert_eq!(loaded.repo_root.as_deref(), Some(Path::new("/tmp/repo")));
+    }
+
+    #[test]
+    fn test_backfill_repo_roots_uses_worktree_path_on_workspace_root_error() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let plain_dir = temp_dir.path().join("plain");
+        std::fs::create_dir_all(&plain_dir).expect("create plain dir");
+
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("plain");
+        agent.worktree_path = plain_dir.clone();
+        agent.repo_root = None;
+        let agent_id = agent.id;
+        storage.add(agent);
+
+        assert!(storage.backfill_repo_roots());
+        let loaded = storage.get(agent_id).expect("missing agent");
+        assert_eq!(loaded.repo_root.as_deref(), Some(plain_dir.as_path()));
+    }
+
+    #[test]
+    fn test_load_nonexistent_returns_empty() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("nonexistent.json");
 
         assert!(Storage::load_from(&state_path).is_err());
-        Ok(())
     }
 
     #[test]
@@ -1598,6 +2107,270 @@ mod tests {
         let storage = Storage::default();
         assert!(storage.is_empty());
         assert_eq!(storage.version, 1);
+    }
+
+    #[test]
+    fn test_normalize_instance_id_rejects_invalid_values() {
+        assert!(Storage::normalize_instance_id("short").is_none());
+        assert!(Storage::normalize_instance_id("zzzzzzzz").is_none());
+    }
+
+    #[test]
+    fn test_ensure_instance_id_normalizes_and_overwrites_invalid_values() {
+        let mut storage = Storage::new();
+        storage.instance_id = Some("DEADBEEF".to_string());
+        assert_eq!(storage.ensure_instance_id(), "deadbeef");
+        assert_eq!(storage.instance_id.as_deref(), Some("deadbeef"));
+
+        let mut invalid = Storage::new();
+        invalid.instance_id = Some("nothex!!".to_string());
+        let generated = invalid.ensure_instance_id().to_string();
+        assert_eq!(generated.len(), 8);
+        assert!(
+            invalid
+                .instance_id
+                .as_deref()
+                .is_some_and(|id| id.len() == 8)
+        );
+    }
+
+    #[test]
+    fn test_load_falls_back_to_backup_when_state_is_corrupt() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        let backup_path = backup_state_path(&state_path);
+
+        std::fs::write(&state_path, "not json").expect("write corrupt state");
+        std::fs::write(&backup_path, r#"{ "agents": [], "version": 1 }"#)
+            .expect("write backup state");
+
+        let loaded =
+            with_tracing_dispatch(|| Storage::load_at(&state_path)).expect("load from backup");
+        assert!(loaded.agents.is_empty());
+    }
+
+    #[test]
+    fn test_load_errors_when_state_is_corrupt_without_backup() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        std::fs::write(&state_path, "not json").expect("write corrupt state");
+
+        let err = Storage::load_at(&state_path).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse state from"));
+    }
+
+    #[test]
+    fn test_load_recovers_missing_state_by_renaming_backup() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        let backup_path = backup_state_path(&state_path);
+
+        std::fs::write(&backup_path, r#"{ "agents": [], "version": 1 }"#)
+            .expect("write backup state");
+        assert!(!state_path.exists());
+
+        let loaded =
+            with_tracing_dispatch(|| Storage::load_at(&state_path)).expect("recover missing state");
+        assert!(loaded.agents.is_empty());
+        assert!(state_path.exists());
+        assert!(!backup_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_reads_backup_in_place_when_rename_fails() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct DirPermissionGuard {
+            path: PathBuf,
+            permissions: std::fs::Permissions,
+        }
+
+        impl Drop for DirPermissionGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.path, self.permissions.clone());
+            }
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        let backup_path = backup_state_path(&state_path);
+        std::fs::write(&backup_path, r#"{ "agents": [], "version": 1 }"#)
+            .expect("write backup state");
+
+        let original_permissions = std::fs::metadata(temp_dir.path())
+            .expect("metadata temp dir")
+            .permissions();
+        let _permissions_guard = DirPermissionGuard {
+            path: temp_dir.path().to_path_buf(),
+            permissions: original_permissions,
+        };
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o500))
+            .expect("set temp dir permissions");
+
+        let loaded =
+            with_tracing_dispatch(|| Storage::load_at(&state_path)).expect("load backup in place");
+        assert!(loaded.agents.is_empty());
+        assert!(!state_path.exists());
+        assert!(backup_path.exists());
+    }
+
+    #[test]
+    fn test_save_to_uses_backup_when_state_is_corrupt() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        let backup_path = backup_state_path(&state_path);
+        std::fs::write(&state_path, "not json").expect("write corrupt state");
+        std::fs::write(&backup_path, r#"{ "agents": [], "version": 1 }"#)
+            .expect("write backup state");
+
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("one"));
+        with_tracing_dispatch(|| storage.save_to(&state_path)).expect("save to state");
+
+        let loaded = Storage::load_from(&state_path).expect("load state");
+        assert!(loaded.agents.iter().any(|agent| agent.title == "one"));
+    }
+
+    #[test]
+    fn test_save_to_returns_error_when_state_path_is_empty() {
+        struct CurrentDirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for CurrentDirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
+            }
+        }
+
+        let _env_guard = lock_env_test_environment();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let original = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(temp_dir.path()).expect("set current dir");
+        let _current_dir_guard = CurrentDirGuard { original };
+
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("one"));
+        let err = storage.save_to(Path::new("")).unwrap_err();
+        let err_text = format!("{err:#}");
+        assert!(err_text.contains("Failed to replace state file"));
+
+        assert!(!temp_dir.path().join("state.json").exists());
+        let tmp_prefix = ".state.json.tmp-";
+        for entry in std::fs::read_dir(temp_dir.path()).expect("read temp dir") {
+            let entry = entry.expect("dir entry");
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let leaked_tmp = file_name.starts_with(tmp_prefix);
+            assert!(!leaked_tmp);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_write_state_atomically_returns_error_when_temp_file_disappears_before_permissions_set()
+    {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+
+        let removed_flag = Arc::new(AtomicBool::new(false));
+        let removed_flag_for_thread = Arc::clone(&removed_flag);
+        let watch_dir = temp_dir.path().to_path_buf();
+
+        std::fs::write(temp_dir.path().join("keep.txt"), "keep").expect("write keep file");
+        let prefix = format!(".state.json.tmp-{}-", std::process::id());
+        let watcher = std::thread::spawn(move || {
+            for _ in 0..20_000 {
+                let entries = std::fs::read_dir(&watch_dir).expect("read watch dir");
+                let mut removed = false;
+                for entry in entries {
+                    let entry = entry.expect("dir entry");
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with(&prefix) {
+                        let _ = std::fs::remove_file(entry.path());
+                        removed_flag_for_thread.store(true, Ordering::SeqCst);
+                        removed = true;
+                    }
+                }
+                if removed {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+
+        // Give the watcher time by making the write and sync non-trivial.
+        let contents = "x".repeat(4 * 1024 * 1024);
+        let err = write_state_atomically(&state_path, &contents).expect_err("expected error");
+        assert!(format!("{err:#}").contains("Failed to set permissions for temp state file"));
+
+        watcher.join().expect("watcher thread");
+        assert!(removed_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_save_to_reports_lock_error_with_context() {
+        fn fail_lock(_file: &fs::File, lock_path: &Path) -> Result<()> {
+            Err(std::io::Error::other("stub lock failure"))
+                .context(format!("Failed to lock state {}", lock_path.display()))
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("one"));
+        let err = storage
+            .save_to_with_lock(&state_path, fail_lock)
+            .expect_err("expected lock error");
+        assert!(format!("{err:#}").contains("Failed to lock state"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_to_reports_serialize_failure_for_non_utf8_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+
+        let mut storage = Storage::new();
+        let mut agent = create_test_agent("one");
+        agent.worktree_path = PathBuf::from(OsString::from_vec(vec![0xF0, 0x9F, 0x92, 0x00]));
+        storage.add(agent);
+
+        let err = storage
+            .save_to(&state_path)
+            .expect_err("expected serialize error");
+        assert!(format!("{err:#}").contains("Failed to serialize state"));
+    }
+
+    #[test]
+    fn test_save_to_returns_error_when_state_and_backup_are_both_corrupt() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state_path = temp_dir.path().join("state.json");
+        let backup_path = backup_state_path(&state_path);
+
+        std::fs::write(&state_path, "not json").expect("write corrupt state");
+        std::fs::write(&backup_path, "also not json").expect("write corrupt backup");
+
+        let mut storage = Storage::new();
+        storage.add(create_test_agent("one"));
+        let err =
+            with_tracing_dispatch(|| storage.save_to(&state_path)).expect_err("expected error");
+        assert!(format!("{err:#}").contains("Failed to parse state from"));
+    }
+
+    #[test]
+    fn test_remove_with_descendants_noops_when_agent_is_missing() {
+        let mut storage = Storage::new();
+        assert!(storage.remove_with_descendants(Uuid::new_v4()).is_empty());
     }
 
     // === Hierarchy Tests ===
@@ -1678,7 +2451,7 @@ mod tests {
     }
 
     #[test]
-    fn test_root_ancestor() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_root_ancestor() {
         let mut storage = Storage::new();
         let root = create_test_agent("root");
         let root_id = root.id;
@@ -1704,23 +2477,34 @@ mod tests {
 
         // Root's ancestor is itself
         assert_eq!(
-            storage.root_ancestor(root_id).ok_or("Agent not found")?.id,
+            storage.root_ancestor(root_id).expect("Agent not found").id,
             root_id
         );
         // Child's ancestor is root
         assert_eq!(
-            storage.root_ancestor(child_id).ok_or("Agent not found")?.id,
+            storage.root_ancestor(child_id).expect("Agent not found").id,
             root_id
         );
         // Grandchild's ancestor is also root
         assert_eq!(
             storage
                 .root_ancestor(grandchild_id)
-                .ok_or("Agent not found")?
+                .expect("Agent not found")
                 .id,
             root_id
         );
-        Ok(())
+
+        let mut orphan = create_test_agent("orphan");
+        orphan.parent_id = Some(Uuid::new_v4());
+        let orphan_id = orphan.id;
+        storage.add(orphan);
+        assert_eq!(
+            storage
+                .root_ancestor(orphan_id)
+                .expect("Agent not found")
+                .id,
+            orphan_id
+        );
     }
 
     #[test]
@@ -1780,6 +2564,14 @@ mod tests {
         assert_eq!(storage.depth(root_id), 0);
         assert_eq!(storage.depth(child_id), 1);
         assert_eq!(storage.depth(grandchild_id), 2);
+
+        assert_eq!(storage.depth(Uuid::new_v4()), 0);
+
+        let mut broken_parent = create_test_agent("broken");
+        broken_parent.parent_id = Some(Uuid::new_v4());
+        let broken_id = broken_parent.id;
+        storage.add(broken_parent);
+        assert_eq!(storage.depth(broken_id), 1);
     }
 
     #[test]
@@ -1819,7 +2611,45 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_agent_at() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_visible_agents_with_info_handles_root_without_children() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false;
+        let root_id = root.id;
+        storage.add(root);
+
+        let visible = storage.visible_agents_with_info();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].agent.id, root_id);
+        assert_eq!(visible[0].depth, 0);
+        assert!(!visible[0].has_children);
+        assert_eq!(visible[0].child_count, 0);
+    }
+
+    #[test]
+    fn test_visible_agents_with_info_includes_expanded_children() {
+        let mut storage = Storage::new();
+        let mut root = create_test_agent("root");
+        root.collapsed = false;
+        let root_id = root.id;
+        let child = create_child_agent(&root, "child", 2);
+        let child_id = child.id;
+
+        storage.add(root);
+        storage.add(child);
+
+        let visible = storage.visible_agents_with_info();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].agent.id, root_id);
+        assert_eq!(visible[0].depth, 0);
+        assert!(visible[0].has_children);
+        assert_eq!(visible[0].child_count, 1);
+        assert_eq!(visible[1].agent.id, child_id);
+        assert_eq!(visible[1].depth, 1);
+    }
+
+    #[test]
+    fn test_visible_agent_at() {
         let mut storage = Storage::new();
         let mut root = create_test_agent("root");
         root.collapsed = false;
@@ -1829,15 +2659,14 @@ mod tests {
         storage.add(child);
 
         assert_eq!(
-            storage.visible_agent_at(0).ok_or("Agent not found")?.title,
+            storage.visible_agent_at(0).expect("Agent not found").title,
             "root"
         );
         assert_eq!(
-            storage.visible_agent_at(1).ok_or("Agent not found")?.title,
+            storage.visible_agent_at(1).expect("Agent not found").title,
             "child"
         );
         assert!(storage.visible_agent_at(2).is_none());
-        Ok(())
     }
 
     #[test]
