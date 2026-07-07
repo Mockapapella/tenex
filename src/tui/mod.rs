@@ -441,7 +441,7 @@ fn pop_keyboard_enhancement(stdout: &mut dyn io::Write, enabled: bool) {
     }
 }
 
-fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
+fn send_batched_keys_to_mux(app: &mut App, batched_keys: &[String]) {
     if batched_keys.is_empty() {
         return;
     }
@@ -452,7 +452,9 @@ fn send_batched_keys_to_mux(app: &App, batched_keys: &[String]) {
             |idx| format!("{}:{}", agent.mux_session, idx),
         );
         // Use synchronous call so the mux processes keys before we capture.
-        let _ = crate::mux::SessionManager::new().send_keys_batch(&target, batched_keys);
+        if let Err(err) = crate::mux::SessionManager::new().send_keys_batch(&target, batched_keys) {
+            app.set_status(format!("Input not sent: {err}"));
+        }
     }
 }
 

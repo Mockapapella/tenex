@@ -8,6 +8,27 @@ use tracing::debug;
 
 const CLAUDE_ENTER_CSI_U: &[u8] = b"\x1b[13;1u";
 const CLAUDE_CSI_U_SPLIT_DELAY_MS: u64 = 150;
+/// Maximum raw input bytes accepted for one logical send.
+///
+/// This matches the server's per-window queue capacity so a send is accepted or rejected as one
+/// queue entry. A single queue-sized JSON `SendInput` frame stays comfortably below the 16 MiB IPC
+/// frame cap, even when `Vec<u8>` is encoded as JSON numbers.
+pub const MAX_SEND_INPUT_BYTES: usize = super::backend::INPUT_QUEUE_CAPACITY_BYTES;
+/// Conservative allowance for JSON enum tags, field names, brackets, commas, and target names.
+///
+/// JSON can encode each input byte as up to four payload bytes such as `255,`, so the compile-time
+/// frame check multiplies the raw send cap by four and then adds this margin. The IPC boundary
+/// remains authoritative for unusually large targets or future request shapes.
+const SEND_INPUT_JSON_FRAME_OVERHEAD_BYTES: usize = 64 * 1024;
+const SEND_INPUT_JSON_BYTE_OVERHEAD_FACTOR: usize = 4;
+
+const _: () = assert!(MAX_SEND_INPUT_BYTES <= super::backend::INPUT_QUEUE_CAPACITY_BYTES);
+const _: () = assert!(
+    MAX_SEND_INPUT_BYTES
+        .saturating_mul(SEND_INPUT_JSON_BYTE_OVERHEAD_FACTOR)
+        .saturating_add(SEND_INPUT_JSON_FRAME_OVERHEAD_BYTES)
+        <= super::ipc::MAX_FRAME_BYTES
+);
 
 /// Manager for mux sessions.
 #[derive(Debug, Clone, Copy, Default)]
@@ -449,17 +470,27 @@ impl Manager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the input cannot be written.
+    /// Returns an error if the logical send is too large or cannot be accepted by the mux.
     pub fn send_keys_batch(&self, target: &str, keys: &[String]) -> Result<()> {
         let mut payload = Vec::new();
         for key in keys {
-            payload.extend_from_slice(key.as_bytes());
+            append_key_to_logical_send(&mut payload, key.as_bytes())?;
         }
-        self.send_input_bytes(target, &payload)
+
+        if !payload.is_empty() {
+            self.send_input_frame(target, &payload)?;
+        }
+
+        Ok(())
     }
 
     fn send_input_bytes(self, target: &str, data: &[u8]) -> Result<()> {
+        self.send_input_frame(target, data)
+    }
+
+    fn send_input_frame(self, target: &str, data: &[u8]) -> Result<()> {
         let _ = self;
+        validate_send_input_len(data.len())?;
         match super::client::request(&MuxRequest::SendInput {
             target: target.to_string(),
             data: data.to_vec(),
@@ -469,6 +500,25 @@ impl Manager {
             other => bail!("Unexpected response: {other:?}"),
         }
     }
+}
+
+fn append_key_to_logical_send(payload: &mut Vec<u8>, key: &[u8]) -> Result<()> {
+    let new_len = payload
+        .len()
+        .checked_add(key.len())
+        .ok_or_else(|| anyhow::anyhow!("input too large: input length overflow"))?;
+    validate_send_input_len(new_len)?;
+    payload.extend_from_slice(key);
+    Ok(())
+}
+
+fn validate_send_input_len(len: usize) -> Result<()> {
+    if len > MAX_SEND_INPUT_BYTES {
+        bail!(
+            "input too large: {len} bytes exceeds max single send size {MAX_SEND_INPUT_BYTES} bytes; input was not sent"
+        );
+    }
+    Ok(())
 }
 
 /// Information about a mux session.
@@ -1101,6 +1151,78 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data[0], b"hi");
         assert_eq!(data[1], CLAUDE_ENTER_CSI_U);
+    }
+
+    #[test]
+    fn test_send_keys_batch_sends_max_payload_as_single_frame() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().expect("Expected temp dir");
+        let (socket_display, socket_name) = make_mock_socket(&socket_dir);
+        let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let captured_server = Arc::clone(&captured);
+
+        let listener = ListenerOptions::new()
+            .name(socket_name)
+            .create_sync()
+            .expect("Expected mock listener");
+
+        let server = std::thread::spawn(move || {
+            let mut stream = listener
+                .incoming()
+                .next()
+                .expect("Expected connection")
+                .expect("Expected accept");
+
+            let request: MuxRequest = crate::mux::read_json(&mut stream).expect("Expected request");
+            let data = maybe_send_input_data(request).expect("Expected SendInput request");
+            *captured_server.lock().expect("lock") = Some(data);
+            crate::mux::write_json(&mut stream, &MuxResponse::Ok).expect("Expected ok write");
+        });
+
+        let large = "x".repeat(MAX_SEND_INPUT_BYTES);
+        crate::mux::set_socket_override(&socket_display).expect("Expected socket override");
+        Manager::new()
+            .send_keys_batch("session:0", std::slice::from_ref(&large))
+            .expect("Expected send keys");
+
+        server.join().expect("mock server join");
+        let data = captured
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("Expected captured data");
+        assert_eq!(
+            data,
+            large.as_bytes(),
+            "a logical send should stay in one SendInput frame"
+        );
+    }
+
+    #[test]
+    fn test_send_keys_batch_rejects_oversize_logical_send_before_ipc() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let large = "x".repeat(MAX_SEND_INPUT_BYTES + 1);
+
+        let err = Manager::new()
+            .send_keys_batch("session:0", std::slice::from_ref(&large))
+            .expect_err("Expected oversized logical send to fail before IPC");
+        let message = err.to_string();
+        assert!(message.contains("input too large"));
+        assert!(message.contains("max single send size"));
+        assert!(message.contains("input was not sent"));
+    }
+
+    #[test]
+    fn test_paste_keys_and_submit_rejects_oversize_payload_before_ipc() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let large = "x".repeat(MAX_SEND_INPUT_BYTES);
+
+        let err = Manager::new()
+            .paste_keys_and_submit("session:0", &large)
+            .expect_err("Expected oversized bracketed paste to fail before IPC");
+        let message = err.to_string();
+        assert!(message.contains("input too large"));
+        assert!(message.contains("input was not sent"));
     }
 
     #[test]

@@ -1,4 +1,6 @@
 use super::*;
+use crate::mux::MuxResponse;
+use base64::Engine as _;
 use interprocess::local_socket::traits::Stream as _;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
@@ -23,11 +25,95 @@ fn test_write_and_read_json_roundtrip() {
 }
 
 #[test]
+fn test_write_and_read_json_roundtrips_queue_sized_send_input() {
+    let payload = crate::mux::MuxRequest::SendInput {
+        target: "session:0".to_string(),
+        data: vec![b'x'; crate::mux::session::MAX_SEND_INPUT_BYTES],
+    };
+
+    let mut bytes = Vec::new();
+    write_json(&mut bytes, &payload).unwrap();
+
+    let mut cursor = Cursor::new(bytes);
+    let decoded: crate::mux::MuxRequest = read_json(&mut cursor).unwrap();
+    let (target, data) = send_input_request_fields(decoded).expect("expected SendInput request");
+    assert_eq!(target, "session:0");
+    assert_eq!(data.len(), crate::mux::session::MAX_SEND_INPUT_BYTES);
+    assert!(data.iter().all(|byte| *byte == b'x'));
+}
+
+#[test]
+fn test_write_and_read_json_roundtrips_worst_case_output_chunk() {
+    let raw = vec![b'x'; crate::mux::backend::OUTPUT_MAX_BYTES];
+    let data_b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+    let payload = MuxResponse::OutputChunk {
+        start: 0,
+        end: crate::mux::backend::OUTPUT_MAX_BYTES as u64,
+        data_b64,
+    };
+    let expected_b64_len = output_chunk_b64_len(&payload).expect("expected OutputChunk response");
+
+    let mut bytes = Vec::new();
+    write_json(&mut bytes, &payload).unwrap();
+    assert!(bytes.len() < MAX_FRAME_BYTES);
+
+    let mut cursor = Cursor::new(bytes);
+    let decoded: MuxResponse = read_json(&mut cursor).unwrap();
+    let (start, end, data_b64_len) =
+        output_chunk_fields(decoded).expect("expected OutputChunk response");
+    assert_eq!(start, 0);
+    assert_eq!(end, crate::mux::backend::OUTPUT_MAX_BYTES as u64);
+    assert_eq!(data_b64_len, expected_b64_len);
+}
+
+fn send_input_request_fields(request: crate::mux::MuxRequest) -> Option<(String, Vec<u8>)> {
+    match request {
+        crate::mux::MuxRequest::SendInput { target, data } => Some((target, data)),
+        _ => None,
+    }
+}
+
+fn output_chunk_b64_len(response: &MuxResponse) -> Option<usize> {
+    match response {
+        MuxResponse::OutputChunk { data_b64, .. } => Some(data_b64.len()),
+        _ => None,
+    }
+}
+
+fn output_chunk_fields(response: MuxResponse) -> Option<(u64, u64, usize)> {
+    match response {
+        MuxResponse::OutputChunk {
+            start,
+            end,
+            data_b64,
+        } => Some((start, end, data_b64.len())),
+        _ => None,
+    }
+}
+
+#[test]
 fn test_read_json_errors_when_length_is_unreadable() {
     let mut cursor = Cursor::new(Vec::<u8>::new());
     let error = read_json::<Payload>(&mut cursor).unwrap_err();
     let message = format!("{error}");
     assert!(message.contains("Failed to read message length"));
+}
+
+#[test]
+fn test_read_json_rejects_oversize_declared_frame_before_allocating_payload() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(
+        &u32::try_from(MAX_FRAME_BYTES + 1)
+            .expect("oversize test frame fits in u32")
+            .to_le_bytes(),
+    );
+
+    let mut cursor = Cursor::new(bytes);
+    let error = read_json::<Payload>(&mut cursor).unwrap_err();
+    let message = format!("{error}");
+    assert!(message.contains("Message too large"));
+    assert!(message.contains("max frame size"));
+    assert_eq!(cursor.position(), 4);
 }
 
 #[test]
@@ -81,6 +167,11 @@ fn test_write_json_errors_when_message_too_large() {
 #[test]
 fn test_exercise_len_prefixed_payload_length_for_tests_covers_boundary() {
     exercise_len_prefixed_payload_length_for_tests(0).unwrap();
+    exercise_len_prefixed_payload_length_for_tests(MAX_FRAME_BYTES).unwrap();
+
+    let error = exercise_len_prefixed_payload_length_for_tests(MAX_FRAME_BYTES + 1).unwrap_err();
+    let message = format!("{error}");
+    assert!(message.contains("max frame size"));
 
     let error = exercise_len_prefixed_payload_length_for_tests(u32::MAX as usize + 1).unwrap_err();
     let message = format!("{error}");

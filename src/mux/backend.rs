@@ -1,9 +1,9 @@
 //! Internal PTY-backed multiplexer state.
 
 use anyhow::{Context, Result, bail};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,7 +20,13 @@ pub const DEFAULT_SCROLLBACK: usize = 10_000;
 /// Number of trailing bytes retained to detect terminal queries split across reads.
 const TERMINAL_QUERY_TAIL: usize = 32;
 /// Maximum number of raw output bytes retained per window for per-client replay.
-const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Pending input bytes accepted per mux window before backpressure rejects new sends.
+///
+/// This matches the client-side maximum for one logical input send. Keeping a send as one queue
+/// entry preserves ordering between clients while bounding memory when a PTY stops consuming
+/// input.
+pub const INPUT_QUEUE_CAPACITY_BYTES: usize = 256 * 1024;
 
 /// Global mux state shared by the session and capture APIs.
 #[derive(Debug, Default)]
@@ -56,8 +62,8 @@ pub struct MuxWindow {
     pub command: Vec<String>,
     /// PTY master handle.
     pub master: Box<dyn MasterPty + Send>,
-    /// PTY writer handle.
-    pub writer: Box<dyn Write + Send>,
+    /// Queue used by the per-window writer pump.
+    pub input: WindowInput,
     /// Child process handle.
     pub child: Box<dyn Child + Send + Sync>,
     /// Terminal parser with scrollback.
@@ -98,6 +104,178 @@ pub struct OutputHistory {
 pub struct OutputCheckpoint {
     pub seq: u64,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+pub struct WindowInput {
+    queue: Arc<InputQueue>,
+}
+
+struct InputQueue {
+    state: Mutex<InputQueueState>,
+    ready: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct InputQueueState {
+    pending: VecDeque<Vec<u8>>,
+    queued_bytes: usize,
+    closed: bool,
+}
+
+impl WindowInput {
+    fn new(label: String, writer: Box<dyn Write + Send>) -> Self {
+        let input = Self {
+            queue: Arc::new(InputQueue {
+                state: Mutex::new(InputQueueState::default()),
+                ready: Condvar::new(),
+            }),
+        };
+        input.spawn_writer_pump(label, writer);
+        input
+    }
+
+    fn spawn_writer_pump(&self, label: String, mut writer: Box<dyn Write + Send>) {
+        let queue = Arc::clone(&self.queue);
+        let thread_name = format!("tenex-mux-input-{label}");
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        #[cfg(test)]
+        let force_spawn_error = FORCE_WRITER_THREAD_SPAWN_ERROR.with(std::cell::Cell::get);
+        #[cfg(not(test))]
+        let force_spawn_error = false;
+
+        let spawn_result = if force_spawn_error {
+            Err(std::io::Error::other("forced writer thread spawn failure"))
+        } else {
+            std::thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || {
+                    tracing::dispatcher::with_default(&dispatch, move || {
+                        writer_pump_loop(&queue, &mut writer, &label);
+                    });
+                })
+        };
+
+        if let Err(err) = spawn_result {
+            self.close();
+            warn!(error = %err, "Failed to spawn mux writer thread");
+        }
+    }
+
+    /// Accept bytes into the bounded input queue.
+    ///
+    /// Success means the writer pump has accepted responsibility for the bytes; it does not mean
+    /// the PTY has already consumed them.
+    pub(crate) fn enqueue(&self, payload: &[u8]) -> Result<()> {
+        if payload.is_empty() {
+            return Ok(());
+        }
+
+        let mut guard = self.queue.state.lock();
+        if guard.closed {
+            bail!("mux input queue is closed");
+        }
+
+        let available = INPUT_QUEUE_CAPACITY_BYTES.saturating_sub(guard.queued_bytes);
+        if payload.len() > available {
+            bail!(
+                "mux input queue full: queued {} of {} bytes, incoming {} bytes; agent may not be consuming input",
+                guard.queued_bytes,
+                INPUT_QUEUE_CAPACITY_BYTES,
+                payload.len()
+            );
+        }
+
+        guard.queued_bytes = guard.queued_bytes.saturating_add(payload.len());
+        guard.pending.push_back(payload.to_vec());
+        drop(guard);
+        self.queue.ready.notify_one();
+        Ok(())
+    }
+
+    pub(crate) fn close(&self) {
+        close_input_queue(&self.queue);
+    }
+}
+
+#[cfg(test)]
+impl MuxWindow {
+    pub(crate) fn replace_input_writer_for_tests(&mut self, writer: Box<dyn Write + Send>) {
+        self.input.close();
+        self.input = WindowInput::new(window_input_label(&self.name, self.index), writer);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_WRITER_THREAD_SPAWN_ERROR: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+struct ForceWriterThreadSpawnErrorGuard;
+
+#[cfg(test)]
+impl Drop for ForceWriterThreadSpawnErrorGuard {
+    fn drop(&mut self) {
+        FORCE_WRITER_THREAD_SPAWN_ERROR.with(|flag| flag.set(false));
+    }
+}
+
+#[cfg(test)]
+fn force_writer_thread_spawn_error() -> ForceWriterThreadSpawnErrorGuard {
+    FORCE_WRITER_THREAD_SPAWN_ERROR.with(|flag| flag.set(true));
+    ForceWriterThreadSpawnErrorGuard
+}
+
+fn window_input_label(window_name: &str, window_index: u32) -> String {
+    format!("{window_name}-{window_index}")
+}
+
+fn close_input_queue(queue: &InputQueue) {
+    let mut guard = queue.state.lock();
+    guard.closed = true;
+    guard.pending.clear();
+    guard.queued_bytes = 0;
+    drop(guard);
+    queue.ready.notify_all();
+}
+
+fn next_input_payload(queue: &InputQueue) -> Option<Vec<u8>> {
+    let mut guard = queue.state.lock();
+    loop {
+        if let Some(payload) = guard.pending.pop_front() {
+            guard.queued_bytes = guard.queued_bytes.saturating_sub(payload.len());
+            drop(guard);
+            queue.ready.notify_all();
+            return Some(payload);
+        }
+
+        if guard.closed {
+            drop(guard);
+            return None;
+        }
+
+        queue.ready.wait(&mut guard);
+    }
+}
+
+fn writer_pump_loop(queue: &InputQueue, writer: &mut dyn Write, label: &str) {
+    while let Some(payload) = next_input_payload(queue) {
+        if let Err(err) = write_payload_to_pty(writer, &payload) {
+            close_input_queue(queue);
+            debug!(window = label, error = %err, "Mux writer exiting");
+            break;
+        }
+    }
+}
+
+fn write_payload_to_pty(writer: &mut dyn Write, payload: &[u8]) -> Result<()> {
+    writer
+        .write_all(payload)
+        .context("Failed to write to PTY")?;
+    writer.flush().context("Failed to flush PTY writer")?;
+    Ok(())
 }
 
 impl OutputHistory {
@@ -257,13 +435,15 @@ fn spawn_window_with_system(
 
     let parser = vt100::Parser::new(size.rows, size.cols, DEFAULT_SCROLLBACK);
 
+    let input = WindowInput::new(window_input_label(window_name, index), writer);
+
     let window = Arc::new(Mutex::new(MuxWindow {
         index,
         name: window_name.to_string(),
         working_dir: working_dir.to_path_buf(),
         command: command_vec,
         master: pair.master,
-        writer,
+        input,
         child,
         parser,
         output_history: OutputHistory::default(),
@@ -352,7 +532,7 @@ fn spawn_reader_thread_inner(
                     continue;
                 }
 
-                let response_result = {
+                {
                     let mut guard = window.lock();
                     guard.parser.process(chunk);
                     let checkpoint_bytes = if guard.output_history.should_checkpoint(chunk.len()) {
@@ -361,20 +541,14 @@ fn spawn_reader_thread_inner(
                         None
                     };
                     guard.output_history.record(chunk, checkpoint_bytes);
-                    let result = respond_to_terminal_queries(
-                        &mut guard,
+                    respond_to_terminal_queries(
+                        &guard,
                         cpr_queries,
                         da_queries,
                         osc10_queries,
                         osc11_queries,
                     );
                     drop(guard);
-                    result
-                };
-
-                if let Err(err) = response_result {
-                    debug!(error = %err, "Failed to respond to terminal query");
-                    break;
                 }
             }
         });
@@ -430,26 +604,20 @@ fn count_pattern(haystack: &[u8], needle: &[u8], tail_len: usize) -> usize {
 }
 
 fn respond_to_terminal_queries(
-    window: &mut MuxWindow,
+    window: &MuxWindow,
     cpr: usize,
     da: usize,
     osc10: usize,
     osc11: usize,
-) -> Result<()> {
+) {
     let outbound = build_terminal_query_responses(window.parser.screen(), cpr, da, osc10, osc11);
     if outbound.is_empty() {
-        return Ok(());
+        return;
     }
 
-    window
-        .writer
-        .write_all(&outbound)
-        .context("Failed to write terminal query response")?;
-    window
-        .writer
-        .flush()
-        .context("Failed to flush terminal query response")?;
-    Ok(())
+    if let Err(err) = window.input.enqueue(&outbound) {
+        warn!(error = %err, "Dropping terminal query response");
+    }
 }
 
 fn build_terminal_query_responses(

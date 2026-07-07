@@ -1347,7 +1347,14 @@ fn test_send_batched_keys_to_mux_with_selected_agent_without_window_index() {
     app.data.storage.add(agent);
     select_first_agent(&mut app);
 
-    send_batched_keys_to_mux(&app, &[String::from("a")]);
+    send_batched_keys_to_mux(&mut app, &[String::from("a")]);
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Input not sent:"))
+    );
 }
 
 #[test]
@@ -1364,7 +1371,98 @@ fn test_send_batched_keys_to_mux_with_selected_agent_with_window_index() {
     app.data.storage.add(agent);
     select_first_agent(&mut app);
 
-    send_batched_keys_to_mux(&app, &[String::from("a")]);
+    send_batched_keys_to_mux(&mut app, &[String::from("a")]);
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Input not sent:"))
+    );
+}
+
+#[test]
+fn test_send_batched_keys_to_mux_keeps_status_when_send_succeeds() {
+    use interprocess::local_socket::traits::ListenerExt as _;
+    use interprocess::local_socket::{ListenerOptions, prelude::*};
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    let socket_dir = TempDir::new().expect("expected temp dir");
+    #[cfg(windows)]
+    let (socket_display, socket_name) = {
+        use interprocess::local_socket::GenericNamespaced;
+
+        let display = format!("tenex-tui-send-success-{}", uuid::Uuid::new_v4());
+        let name = display
+            .clone()
+            .to_ns_name::<GenericNamespaced>()
+            .expect("expected namespaced socket")
+            .into_owned();
+        (display, name)
+    };
+    #[cfg(not(windows))]
+    let (socket_display, socket_name) = {
+        use interprocess::local_socket::GenericFilePath;
+
+        let path = socket_dir.path().join("mux.sock");
+        let display = path.to_string_lossy().into_owned();
+        let name = path
+            .as_path()
+            .to_fs_name::<GenericFilePath>()
+            .expect("expected filesystem socket")
+            .into_owned();
+        (display, name)
+    };
+
+    crate::mux::set_socket_override(&socket_display).expect("expected socket override");
+    let listener = ListenerOptions::new()
+        .name(socket_name)
+        .create_sync()
+        .expect("expected mock mux listener");
+    let observed = Arc::new(Mutex::new(None));
+    let observed_for_thread = Arc::clone(&observed);
+    let server = std::thread::spawn(move || {
+        let mut stream = listener
+            .incoming()
+            .flatten()
+            .next()
+            .expect("expected mux client connection");
+        let request =
+            crate::mux::read_json::<crate::mux::MuxRequest>(&mut stream).expect("read request");
+        *observed_for_thread.lock().expect("lock observed request") = Some(request);
+        crate::mux::write_json(&mut stream, &crate::mux::MuxResponse::Ok).expect("write response");
+    });
+
+    let mut app = create_test_app();
+    let mut agent = Agent::new(
+        "test".to_string(),
+        "claude".to_string(),
+        "branch".to_string(),
+        PathBuf::from("/tmp"),
+    );
+    agent.mux_session = "tenex-test-session".to_string();
+    agent.window_index = Some(2);
+    app.data.storage.add(agent);
+    select_first_agent(&mut app);
+    app.set_status("ready");
+
+    send_batched_keys_to_mux(&mut app, &[String::from("a")]);
+
+    assert_eq!(app.data.ui.status_message.as_deref(), Some("ready"));
+    server.join().expect("mock mux server should finish");
+    let observed_send_input = observed
+        .lock()
+        .expect("lock observed request")
+        .take()
+        .and_then(|request| match request {
+            crate::mux::MuxRequest::SendInput { target, data } => Some((target, data)),
+            _ => None,
+        });
+    assert_eq!(
+        observed_send_input,
+        Some(("tenex-test-session:2".to_string(), b"a".to_vec()))
+    );
 }
 
 #[test]

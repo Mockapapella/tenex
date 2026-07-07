@@ -1,6 +1,9 @@
 use super::*;
+use crate::test_support::BlockingWriter;
 use portable_pty::{Child, ChildKiller, MasterPty, PtyPair, PtySystem, SlavePty};
 use std::io;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 fn with_tracing_dispatch<T>(f: impl FnOnce() -> T) -> T {
     let subscriber = tracing_subscriber::fmt()
@@ -219,33 +222,76 @@ impl io::Write for FailingWriter {
 }
 
 #[derive(Debug)]
-struct FlushFailWriter;
+struct GatedReader {
+    first: Option<Vec<u8>>,
+    second: Option<Vec<u8>>,
+    proceed: mpsc::Receiver<()>,
+}
 
-impl io::Write for FlushFailWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        Ok(buf.len())
+impl GatedReader {
+    fn new(first: Vec<u8>, second: Vec<u8>, proceed: mpsc::Receiver<()>) -> Self {
+        Self {
+            first: Some(first),
+            second: Some(second),
+            proceed,
+        }
     }
+}
 
-    fn flush(&mut self) -> io::Result<()> {
-        Err(io::Error::other("flush failed"))
+impl io::Read for GatedReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(chunk) = self.first.take() {
+            return Ok(copy_read_chunk(buf, &chunk));
+        }
+
+        if let Some(chunk) = self.second.take() {
+            if self.proceed.recv().is_err() {
+                return Ok(0);
+            }
+            return Ok(copy_read_chunk(buf, &chunk));
+        }
+
+        Ok(0)
     }
+}
+
+fn copy_read_chunk(buf: &mut [u8], chunk: &[u8]) -> usize {
+    let len = chunk.len().min(buf.len());
+    buf[..len].copy_from_slice(&chunk[..len]);
+    len
 }
 
 fn stub_window(name: &str, writer: Box<dyn io::Write + Send>) -> Arc<Mutex<MuxWindow>> {
     let size = default_pty_size();
     let parser = vt100::Parser::new(size.rows, size.cols, DEFAULT_SCROLLBACK);
+    let input = WindowInput::new(window_input_label(name, 0), writer);
     Arc::new(Mutex::new(MuxWindow {
         index: 0,
         name: name.to_string(),
         working_dir: std::env::temp_dir(),
         command: Vec::new(),
         master: Box::new(StubMasterPty),
-        writer,
+        input,
         child: Box::new(StubChild),
         parser,
         output_history: OutputHistory::default(),
         size,
     }))
+}
+
+#[test]
+fn test_window_input_accepts_empty_payload() {
+    let input = WindowInput::new("empty-payload".to_string(), Box::new(FailingWriter));
+    input.enqueue(&[]).expect("empty payload is a no-op");
+    input.close();
+}
+
+#[test]
+fn test_window_input_closes_when_writer_thread_spawn_fails() {
+    let _guard = force_writer_thread_spawn_error();
+    let input = WindowInput::new("forced-spawn-failure".to_string(), Box::new(io::sink()));
+    let err = input.enqueue(b"input").expect_err("queue should be closed");
+    assert!(err.to_string().contains("mux input queue is closed"));
 }
 
 #[test]
@@ -386,29 +432,39 @@ fn test_update_terminal_query_tail_returns_early_for_empty_buffer() {
 #[test]
 fn test_respond_to_terminal_queries_noops_without_queries() {
     let window = stub_window("no-queries", Box::new(io::sink()));
-    let mut guard = window.lock();
-    respond_to_terminal_queries(&mut guard, 0, 0, 0, 0)
-        .expect("Expected terminal query response to succeed");
+    let guard = window.lock();
+    respond_to_terminal_queries(&guard, 0, 0, 0, 0);
 }
 
 #[test]
 fn test_respond_to_terminal_queries_succeeds_with_queries() {
     let window = stub_window("queries-ok", Box::new(io::sink()));
-    let mut guard = window.lock();
-    respond_to_terminal_queries(&mut guard, 1, 0, 0, 0)
-        .expect("Expected terminal query response to succeed");
+    let guard = window.lock();
+    respond_to_terminal_queries(&guard, 1, 0, 0, 0);
 }
 
 #[test]
-fn test_respond_to_terminal_queries_propagates_flush_errors() {
-    let window = stub_window("flush-fail", Box::new(FlushFailWriter));
-    let mut guard = window.lock();
-    let err =
-        respond_to_terminal_queries(&mut guard, 1, 0, 0, 0).expect_err("expected flush failure");
-    err.to_string()
-        .contains("Failed to flush terminal query response")
-        .then_some(())
-        .expect("expected flush context");
+fn test_respond_to_terminal_queries_drops_when_queue_full() {
+    let (writer, writer_handle) = BlockingWriter::new();
+    let window = stub_window("queue-full", Box::new(writer));
+    {
+        let guard = window.lock();
+        guard.input.enqueue(b"block-writer").expect("block writer");
+    }
+    writer_handle
+        .wait_until_blocked(Duration::from_secs(2))
+        .expect("writer should enter blocking write");
+    {
+        let guard = window.lock();
+        guard
+            .input
+            .enqueue(&vec![b'x'; INPUT_QUEUE_CAPACITY_BYTES])
+            .expect("fill queue");
+    }
+
+    let guard = window.lock();
+    respond_to_terminal_queries(&guard, 1, 0, 0, 0);
+    writer_handle.release().expect("release blocking writer");
 }
 
 #[test]
@@ -491,7 +547,7 @@ fn test_spawn_reader_thread_inner_checkpoints_without_queries() {
 }
 
 #[test]
-fn test_spawn_reader_thread_inner_breaks_on_terminal_query_response_error() {
+fn test_spawn_reader_thread_inner_logs_terminal_query_response_error() {
     with_tracing_dispatch(|| {
         let window = stub_window("query-error", Box::new(FailingWriter));
         {
@@ -507,6 +563,69 @@ fn test_spawn_reader_thread_inner_breaks_on_terminal_query_response_error() {
         let guard = window.lock();
         assert!(guard.output_history.checkpoint.is_some());
         drop(guard);
+    });
+}
+
+fn wait_for_output_len(window: &Arc<Mutex<MuxWindow>>, min_len: u64, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if window.lock().output_history.seq_end >= min_len {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+#[test]
+fn test_reader_survives_full_queue_terminal_query_response_drop() {
+    with_tracing_dispatch(|| {
+        let (writer, writer_handle) = BlockingWriter::new();
+        let window = stub_window("query-full-survives", Box::new(writer));
+        {
+            let guard = window.lock();
+            guard.input.enqueue(b"block-writer").expect("block writer");
+        }
+        writer_handle
+            .wait_until_blocked(Duration::from_secs(2))
+            .expect("writer should enter blocking write");
+        {
+            let guard = window.lock();
+            guard
+                .input
+                .enqueue(&vec![b'x'; INPUT_QUEUE_CAPACITY_BYTES])
+                .expect("fill queue");
+        }
+
+        let (proceed_tx, proceed_rx) = mpsc::sync_channel(1);
+        let reader = GatedReader::new(b"\x1b[6n".to_vec(), b"after-drain".to_vec(), proceed_rx);
+        let handle =
+            spawn_reader_thread_inner(window.clone(), Box::new(reader)).expect("Spawn reader");
+
+        assert!(
+            wait_for_output_len(&window, 4, Duration::from_secs(2)),
+            "reader should record the terminal query"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        let survived = !handle.is_finished();
+
+        writer_handle.release().expect("release blocking writer");
+        let _ = proceed_tx.send(());
+        handle.join().expect("Reader thread panicked");
+
+        assert!(
+            survived,
+            "reader should keep running after dropping a response"
+        );
+        let guard = window.lock();
+        assert!(
+            guard
+                .output_history
+                .buf
+                .windows(b"after-drain".len())
+                .any(|window| window == b"after-drain"),
+            "reader should capture later output after the input queue drains"
+        );
     });
 }
 
