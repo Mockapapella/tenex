@@ -805,13 +805,13 @@ fn test_open_pr_in_browser_agent_not_found() -> Result<(), Box<dyn std::error::E
 #[test]
 fn test_open_pr_flow_sets_confirm_for_unpushed() -> Result<(), Box<dyn std::error::Error>> {
     let (mut app, _temp) = create_test_app()?;
-    let temp_dir = TempDir::new()?;
+    let (_fixture_temp, _remote_repo, local_repo) = create_bare_remote_fixture()?;
 
     let agent = Agent::new(
         "pr-agent".to_string(),
         "claude".to_string(),
         "feature/pr-agent".to_string(),
-        temp_dir.path().to_path_buf(),
+        local_repo,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);
@@ -1570,6 +1570,36 @@ fn git_revision(repo: &std::path::Path, rev: &str) -> Result<String, Box<dyn std
     Ok(git_stdout(repo, &["rev-parse", rev])?.trim().to_string())
 }
 
+fn create_bare_remote_fixture() -> Result<(TempDir, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let remote_repo = temp_dir.path().join("remote.git");
+    let local_repo = temp_dir.path().join("local");
+
+    std::fs::create_dir_all(&remote_repo)?;
+    std::fs::create_dir_all(&local_repo)?;
+
+    run_git(&remote_repo, &["init", "--bare", "-q", "-b", "main"])?;
+    run_git(&local_repo, &["init", "-q", "-b", "main"])?;
+    run_git(&local_repo, &["config", "user.email", "tenex@test.invalid"])?;
+    run_git(&local_repo, &["config", "user.name", "Tenex Test"])?;
+    run_git(&local_repo, &["config", "push.autoSetupRemote", "false"])?;
+    std::fs::write(local_repo.join("README.md"), "test\n")?;
+    run_git(&local_repo, &["add", "."])?;
+    run_git(&local_repo, &["commit", "-q", "--no-verify", "-m", "init"])?;
+    run_git(
+        &local_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ],
+    )?;
+    run_git(&local_repo, &["push", "-q", "-u", "origin", "main"])?;
+
+    Ok((temp_dir, remote_repo, local_repo))
+}
+
 #[test]
 fn test_execute_root_rename_keeps_remote_branch() -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::Settings;
@@ -1997,6 +2027,119 @@ fn test_has_unpushed_commits_uses_configured_upstream_after_rename()
 }
 
 #[test]
+fn test_has_unpushed_commits_detects_deleted_configured_upstream_after_rename_and_push_recreates()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp_dir, remote_repo, local_repo) = create_bare_remote_fixture()?;
+    let old_branch = "feature/stale-old";
+    let new_branch = "feature/stale-new";
+
+    run_git(&local_repo, &["checkout", "-q", "-b", old_branch])?;
+    run_git(&local_repo, &["push", "-q", "-u", "origin", old_branch])?;
+    run_git(&local_repo, &["fetch", "-q", "origin"])?;
+    run_git(&local_repo, &["branch", "-m", old_branch, new_branch])?;
+    run_git(
+        &remote_repo,
+        &["update-ref", "-d", &format!("refs/heads/{old_branch}")],
+    )?;
+
+    assert!(git_ref_exists(
+        &local_repo,
+        &format!("refs/remotes/origin/{old_branch}")
+    )?);
+    assert!(Actions::has_unpushed_commits(&local_repo, new_branch)?);
+
+    let (mut app, _temp) = create_test_app()?;
+    let agent = Agent::new(
+        "stale-renamed".to_string(),
+        "claude".to_string(),
+        new_branch.to_string(),
+        local_repo.clone(),
+    );
+    let agent_id = agent.id;
+    app.data.storage.add(agent);
+    app.data.git_op.agent_id = Some(agent_id);
+    app.data.git_op.branch_name = new_branch.to_string();
+
+    let next = with_tracing_dispatch(|| Actions::execute_push(&mut app.data))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, AppMode::normal());
+    assert_eq!(
+        git_revision(&remote_repo, &format!("refs/heads/{old_branch}"))?,
+        git_revision(&local_repo, "HEAD")?
+    );
+    assert!(!git_ref_exists(
+        &remote_repo,
+        &format!("refs/heads/{new_branch}")
+    )?);
+    assert_eq!(
+        git_config_value(&local_repo, &format!("branch.{new_branch}.remote"))?.as_deref(),
+        Some("origin")
+    );
+    let expected_merge = format!("refs/heads/{old_branch}");
+    assert_eq!(
+        git_config_value(&local_repo, &format!("branch.{new_branch}.merge"))?.as_deref(),
+        Some(expected_merge.as_str())
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_has_unpushed_commits_detects_deleted_fallback_remote_ref()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp_dir, remote_repo, local_repo) = create_bare_remote_fixture()?;
+    let branch = "feature/stale-fallback";
+
+    run_git(&local_repo, &["checkout", "-q", "-b", branch])?;
+    run_git(&local_repo, &["push", "-q", "origin", branch])?;
+    run_git(&local_repo, &["fetch", "-q", "origin"])?;
+    assert_eq!(
+        git_config_value(&local_repo, &format!("branch.{branch}.remote"))?,
+        None
+    );
+    assert!(git_ref_exists(
+        &local_repo,
+        &format!("refs/remotes/origin/{branch}")
+    )?);
+
+    run_git(
+        &remote_repo,
+        &["update-ref", "-d", &format!("refs/heads/{branch}")],
+    )?;
+
+    assert!(Actions::has_unpushed_commits(&local_repo, branch)?);
+    Ok(())
+}
+
+#[test]
+fn test_has_unpushed_commits_fallback_uses_live_remote_ref()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp_dir, _remote_repo, local_repo) = create_bare_remote_fixture()?;
+    let branch = "feature/live-fallback";
+
+    run_git(&local_repo, &["checkout", "-q", "-b", branch])?;
+    run_git(&local_repo, &["push", "-q", "origin", branch])?;
+    run_git(&local_repo, &["fetch", "-q", "origin"])?;
+    assert_eq!(
+        git_config_value(&local_repo, &format!("branch.{branch}.remote"))?,
+        None
+    );
+
+    assert!(!Actions::has_unpushed_commits(&local_repo, branch)?);
+
+    std::fs::write(local_repo.join("fallback-change.txt"), "after fallback\n")?;
+    run_git(&local_repo, &["add", "fallback-change.txt"])?;
+    run_git(
+        &local_repo,
+        &["commit", "-q", "--no-verify", "-m", "after fallback"],
+    )?;
+
+    assert!(Actions::has_unpushed_commits(&local_repo, branch)?);
+    Ok(())
+}
+
+#[test]
 fn test_execute_root_rename_before_push_leaves_no_upstream()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -2158,13 +2301,13 @@ fn test_handle_rename_no_agent() -> Result<(), Box<dyn std::error::Error>> {
 fn test_open_pr_flow_with_agent() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Actions::new();
     let (mut app, _temp) = create_test_app()?;
-    let temp_dir = TempDir::new()?;
+    let (_fixture_temp, _remote_repo, local_repo) = create_bare_remote_fixture()?;
 
     let agent = Agent::new(
         "test-agent".to_string(),
         "claude".to_string(),
         "tenex/test".to_string(),
-        temp_dir.path().to_path_buf(),
+        local_repo,
     );
     let agent_id = agent.id;
     app.data.storage.add(agent);

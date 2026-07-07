@@ -10,8 +10,8 @@ use crate::state::{AppMode, ConfirmPushMode, ErrorModalMode};
 use super::super::Actions;
 
 pub(super) struct ConfiguredUpstream {
-    remote: String,
-    merge_ref: String,
+    pub(super) remote: String,
+    pub(super) merge_ref: String,
 }
 
 impl ConfiguredUpstream {

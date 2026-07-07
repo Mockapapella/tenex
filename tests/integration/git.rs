@@ -820,6 +820,23 @@ fn test_open_pr_action_handler() -> Result<(), Box<dyn std::error::Error>> {
     let branch_name = "tenex-test-pr-action-branch";
     let worktree_path = fixture.worktree_path().join(branch_name);
     worktree_mgr.create_with_new_branch(&worktree_path, branch_name)?;
+    let remote_repo = fixture.worktree_dir.path().join("origin.git");
+    std::fs::create_dir_all(&remote_repo)?;
+    let output = git_command()
+        .args(["init", "--bare", "-q", "-b", "main"])
+        .current_dir(&remote_repo)
+        .output()?;
+    assert_git_success(&output, "init bare origin");
+    let output = git_command()
+        .args([
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_string_lossy().as_ref(),
+        ])
+        .current_dir(&fixture.repo_path)
+        .output()?;
+    assert_git_success(&output, "add bare origin");
 
     let agent = Agent::new(
         "pr-action-test".to_string(),
