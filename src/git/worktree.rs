@@ -165,6 +165,54 @@ fn is_empty_dir(path: &Path) -> Result<bool> {
     Ok(entries.next().is_none())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TargetPreparationKind {
+    Registered(PathBuf),
+    Ready { cleaned_stale_target: bool },
+}
+
+/// Result of checking a worktree target before creation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetPreparation {
+    kind: TargetPreparationKind,
+}
+
+impl TargetPreparation {
+    const fn registered(path: PathBuf) -> Self {
+        Self {
+            kind: TargetPreparationKind::Registered(path),
+        }
+    }
+
+    const fn ready(cleaned_stale_target: bool) -> Self {
+        Self {
+            kind: TargetPreparationKind::Ready {
+                cleaned_stale_target,
+            },
+        }
+    }
+
+    /// Returns the registered worktree path when git already knows this branch's worktree.
+    #[must_use]
+    pub fn registered_path(&self) -> Option<&Path> {
+        match &self.kind {
+            TargetPreparationKind::Registered(path) => Some(path),
+            TargetPreparationKind::Ready { .. } => None,
+        }
+    }
+
+    /// Returns true when preparation removed a stale Tenex-owned target directory.
+    #[must_use]
+    pub const fn cleaned_stale_target(&self) -> bool {
+        match &self.kind {
+            TargetPreparationKind::Registered(_) => false,
+            TargetPreparationKind::Ready {
+                cleaned_stale_target,
+            } => *cleaned_stale_target,
+        }
+    }
+}
+
 fn normalize_ignored_rel_path(raw_path: &[u8]) -> Option<PathBuf> {
     use std::ffi::OsStr;
     use std::path::Component;
@@ -515,6 +563,193 @@ impl<'a> Manager<'a> {
         Self { repo }
     }
 
+    /// Prepare a worktree target path before creating or reusing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path already exists but is not a safe Tenex-owned
+    /// stale worktree target, or when stale cleanup fails.
+    pub fn prepare_worktree_creation_target(
+        &self,
+        path: &Path,
+        branch: &str,
+        worktree_root: &Path,
+    ) -> Result<TargetPreparation> {
+        if let Some(registered_path) = self.worktree_path(branch) {
+            return Ok(TargetPreparation::registered(registered_path));
+        }
+
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(TargetPreparation::ready(false));
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to inspect worktree target {}", path.display())
+                });
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "Cannot create Tenex worktree at {} because that path is a symlink; Tenex will not create a worktree at or traverse it",
+                path.display()
+            );
+        }
+        if metadata.is_file() {
+            bail!(
+                "Cannot create Tenex worktree at {} because that path is a file, not a directory Tenex can use",
+                path.display()
+            );
+        }
+        if !metadata.is_dir() {
+            bail!(
+                "Cannot create Tenex worktree at {} because that path is not a directory Tenex can use",
+                path.display()
+            );
+        }
+        if !Self::existing_path_is_inside_root(path, worktree_root) {
+            bail!(
+                "Cannot create Tenex worktree at {} because it is outside the configured Tenex worktree root {}; Tenex will not touch it automatically",
+                path.display(),
+                worktree_root.display()
+            );
+        }
+
+        let worktree_name = branch.replace('/', "-");
+        let stale_empty = is_empty_dir(path)?;
+        let stale_owned = if stale_empty {
+            false
+        } else {
+            self.target_dir_looks_like_stale_own_worktree(path, &worktree_name)?
+        };
+
+        if stale_empty || stale_owned {
+            remove_dir_all_with_retries(path).with_context(|| {
+                format!(
+                    "Failed to remove stale Tenex worktree target {}",
+                    path.display()
+                )
+            })?;
+            return Ok(TargetPreparation::ready(true));
+        }
+
+        bail!(
+            "Cannot create Tenex worktree at {} because that directory already exists and does not look like one of this repo's Tenex worktrees; Tenex will not delete or reuse it automatically",
+            path.display()
+        );
+    }
+
+    fn existing_path_is_inside_root(path: &Path, root: &Path) -> bool {
+        let Ok(path) = path.canonicalize() else {
+            return false;
+        };
+        let Ok(root) = root.canonicalize() else {
+            return false;
+        };
+
+        path != root && path.starts_with(root)
+    }
+
+    fn target_dir_looks_like_stale_own_worktree(
+        &self,
+        path: &Path,
+        worktree_name: &str,
+    ) -> Result<bool> {
+        let admin_dir = self.repo.path().join("worktrees").join(worktree_name);
+        Self::target_git_file_points_to_admin_dir(path, &admin_dir)
+    }
+
+    fn target_git_file_points_to_admin_dir(path: &Path, admin_dir: &Path) -> Result<bool> {
+        let git_file = path.join(".git");
+        if !git_file.exists() {
+            return Ok(false);
+        }
+
+        let metadata = fs::symlink_metadata(&git_file)
+            .with_context(|| format!("Failed to inspect {}", git_file.display()))?;
+        if !metadata.is_file() {
+            return Ok(false);
+        }
+
+        let Some(gitdir) = Self::read_gitdir_pointer(&git_file, path)? else {
+            return Ok(false);
+        };
+
+        Ok(Self::paths_match(&gitdir, admin_dir))
+    }
+
+    fn read_gitdir_pointer(path: &Path, relative_base: &Path) -> Result<Option<PathBuf>> {
+        Self::read_resolved_gitdir(path, relative_base, |raw| {
+            raw.trim()
+                .strip_prefix("gitdir:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+    }
+
+    fn read_gitdir_path_file(path: &Path, relative_base: &Path) -> Result<Option<PathBuf>> {
+        Self::read_resolved_gitdir(path, relative_base, |raw| {
+            let gitdir = raw.trim();
+            if gitdir.is_empty() {
+                None
+            } else {
+                Some(gitdir.to_string())
+            }
+        })
+    }
+
+    fn read_resolved_gitdir(
+        path: &Path,
+        relative_base: &Path,
+        parse: impl FnOnce(&str) -> Option<String>,
+    ) -> Result<Option<PathBuf>> {
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        Ok(parse(&raw).map(|gitdir| Self::resolve_gitdir_path(&gitdir, relative_base)))
+    }
+
+    fn resolve_gitdir_path(gitdir: &str, relative_base: &Path) -> PathBuf {
+        let candidate = PathBuf::from(gitdir);
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            relative_base.join(candidate)
+        }
+    }
+
+    fn paths_match(left: &Path, right: &Path) -> bool {
+        if let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) {
+            return left == right;
+        }
+
+        Self::normalize_absolute_path(left) == Self::normalize_absolute_path(right)
+    }
+
+    fn normalize_absolute_path(path: &Path) -> PathBuf {
+        Self::normalize_path_components(path)
+    }
+
+    fn normalize_path_components(path: &Path) -> PathBuf {
+        use std::path::Component;
+
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::Normal(part) => normalized.push(part),
+                component @ (Component::Prefix(_) | Component::RootDir) => {
+                    normalized.push(component.as_os_str());
+                }
+            }
+        }
+        normalized
+    }
+
     /// Create a new worktree for a branch
     ///
     /// # Errors
@@ -780,27 +1015,18 @@ impl<'a> Manager<'a> {
         } else {
             let gitdir_path = admin_dir.join("gitdir");
             if gitdir_path.exists() {
-                let raw_gitdir = fs::read_to_string(&gitdir_path)
-                    .context(format!("Failed to read {}", gitdir_path.display()))?;
-                let gitdir = raw_gitdir.trim();
-                if gitdir.is_empty() {
-                    Some(RemoveReason::EmptyGitdir)
-                } else {
-                    let candidate = PathBuf::from(gitdir);
-                    let resolved = if candidate.is_absolute() {
-                        candidate
-                    } else {
-                        admin_dir.join(candidate)
-                    };
-
-                    if resolved.exists() {
-                        None
-                    } else {
-                        Some(RemoveReason::Stale {
-                            resolved_gitdir: resolved,
-                        })
-                    }
-                }
+                Self::read_gitdir_path_file(&gitdir_path, &admin_dir)?.map_or(
+                    Some(RemoveReason::EmptyGitdir),
+                    |resolved| {
+                        if resolved.exists() {
+                            None
+                        } else {
+                            Some(RemoveReason::Stale {
+                                resolved_gitdir: resolved,
+                            })
+                        }
+                    },
+                )
             } else {
                 Some(RemoveReason::MissingGitdir)
             }
@@ -1344,6 +1570,469 @@ mod tests {
 
         remove_dir_all_with_retries(&file_path).unwrap();
         assert!(!file_path.exists());
+    }
+
+    fn admin_dir_for_branch(repo: &Repository, branch: &str) -> PathBuf {
+        repo.path().join("worktrees").join(branch.replace('/', "-"))
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_reports_missing_path_ready() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("missing");
+
+        let branch = "feature/missing";
+        let root = worktree_root.path();
+        let preparation = manager.prepare_worktree_creation_target(&path, branch, root)?;
+
+        assert!(preparation.registered_path().is_none());
+        assert!(!preparation.cleaned_stale_target());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_reports_registered_worktree() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("registered");
+        let branch = "feature/registered";
+        manager.create_with_new_branch(&path, branch)?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, worktree_root.path())?;
+        let registered_path = preparation
+            .registered_path()
+            .ok_or_else(|| anyhow::anyhow!("missing registered path"))?;
+
+        assert_eq!(registered_path.canonicalize()?, path.canonicalize()?);
+        assert!(!preparation.cleaned_stale_target());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_removes_empty_stale_dir() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("empty-stale");
+        let branch = "feature/empty-stale";
+        fs::create_dir_all(&path)?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, worktree_root.path())?;
+
+        assert!(preparation.registered_path().is_none());
+        assert!(preparation.cleaned_stale_target());
+        assert!(!path.exists());
+        manager.create_with_new_branch(&path, branch)?;
+        assert!(path.join(".git").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_removes_target_git_file_match() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("git-file-stale");
+        let branch = "feature/git-file-stale";
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&admin_dir)?;
+        fs::create_dir_all(&path)?;
+        let gitdir = format!("gitdir: {}\n", admin_dir.display());
+        fs::write(path.join(".git"), gitdir)?;
+        fs::write(path.join("payload.txt"), "stale")?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, worktree_root.path())?;
+
+        assert!(preparation.cleaned_stale_target());
+        assert!(!path.exists());
+        manager.create_with_new_branch(&path, branch)?;
+        assert!(path.join(".git").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_removes_missing_admin_git_file_match() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("missing-admin-stale");
+        let branch = "feature/missing-admin-stale";
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&path)?;
+        let gitdir = format!("gitdir: {}\n", admin_dir.display());
+        fs::write(path.join(".git"), gitdir)?;
+        fs::write(path.join("payload.txt"), "stale")?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, worktree_root.path())?;
+
+        assert!(preparation.cleaned_stale_target());
+        assert!(!path.exists());
+        manager.create_with_new_branch(&path, branch)?;
+        assert!(path.join(".git").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_non_empty_admin_gitdir_file_match_without_target_git_file()
+    -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("admin-gitdir-file-stale");
+        let branch = "feature/admin-gitdir-file-stale";
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&admin_dir)?;
+        fs::create_dir_all(&path)?;
+        let gitdir = path.join(".git").display().to_string();
+        fs::write(admin_dir.join("gitdir"), gitdir)?;
+        fs::write(path.join("payload.txt"), "stale")?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, branch, worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected admin-only foreign path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("does not look like one of this repo's Tenex worktrees"));
+        assert!(path.join("payload.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_removes_empty_admin_gitdir_target_match() -> Result<()>
+    {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("admin-gitdir-target-stale");
+        let branch = "feature/admin-gitdir-target-stale";
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&admin_dir)?;
+        fs::create_dir_all(&path)?;
+        fs::write(admin_dir.join("gitdir"), path.display().to_string())?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, worktree_root.path())?;
+
+        assert!(preparation.cleaned_stale_target());
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_removes_relative_target_git_file_match() -> Result<()>
+    {
+        let (repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = repo_dir.path().join("tenex-worktrees");
+        let path = worktree_root.join("relative-gitdir-stale");
+        let branch = "feature/relative-gitdir-stale";
+        let worktree_name = branch.replace('/', "-");
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&admin_dir)?;
+        fs::create_dir_all(&path)?;
+        let gitdir = format!("gitdir: ../../.git/worktrees/{worktree_name}\n");
+        fs::write(path.join(".git"), gitdir)?;
+        fs::write(path.join("payload.txt"), "stale")?;
+
+        let preparation =
+            manager.prepare_worktree_creation_target(&path, branch, &worktree_root)?;
+
+        assert!(preparation.cleaned_stale_target());
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_foreign_non_empty_dir() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("foreign");
+        fs::create_dir_all(&path)?;
+        fs::write(path.join("payload.txt"), "foreign")?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/foreign", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected foreign path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("does not look like one of this repo's Tenex worktrees"));
+        assert!(path.join("payload.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_file_path() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("file-target");
+        fs::write(&path, "not a directory")?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/file-target", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected file path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("is a file, not a directory"));
+        assert!(path.is_file());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_dangling_symlink_path() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("dangling-symlink-target");
+        symlink(worktree_root.path().join("missing-destination"), &path)?;
+
+        let err = manager
+            .prepare_worktree_creation_target(
+                &path,
+                "feature/dangling-symlink",
+                worktree_root.path(),
+            )
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected symlink path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("is a symlink"));
+        assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_outside_symlink_path() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let outside = TempDir::new()?;
+        let path = worktree_root.path().join("outside-symlink-target");
+        symlink(outside.path(), &path)?;
+
+        let err = manager
+            .prepare_worktree_creation_target(
+                &path,
+                "feature/outside-symlink",
+                worktree_root.path(),
+            )
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected symlink path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("is a symlink"));
+        assert!(outside.path().exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_inside_symlink_path() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let destination = worktree_root.path().join("inside-destination");
+        let path = worktree_root.path().join("inside-symlink-target");
+        fs::create_dir_all(&destination)?;
+        symlink(&destination, &path)?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/inside-symlink", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected symlink path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("is a symlink"));
+        assert!(destination.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_socket_path() -> Result<()> {
+        use std::os::unix::net::UnixListener;
+
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("socket-target");
+        let listener = UnixListener::bind(&path)?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/socket", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected socket path error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("is not a directory Tenex can use"));
+        drop(listener);
+        fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_outside_worktree_root() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let outside = TempDir::new()?;
+        let path = outside.path().join("stale");
+        fs::create_dir_all(&path)?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/outside", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected outside root error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("outside the configured Tenex worktree root"));
+        assert!(path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_existing_path_is_inside_root_rejects_uncanonicalizable_inputs() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let existing_path = temp_dir.path().join("path");
+        let missing_path = temp_dir.path().join("missing-path");
+        let missing_root = temp_dir.path().join("missing-root");
+        fs::create_dir_all(&existing_path)?;
+
+        assert!(!Manager::existing_path_is_inside_root(
+            &missing_path,
+            temp_dir.path()
+        ));
+        assert!(!Manager::existing_path_is_inside_root(
+            &existing_path,
+            &missing_root
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_git_dir_marker_as_foreign() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("git-dir-marker");
+        fs::create_dir_all(path.join(".git"))?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, "feature/git-dir-marker", worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected git dir marker error"))?;
+
+        assert!(err.to_string().contains("does not look like"));
+        assert!(path.join(".git").is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_invalid_git_file_marker() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("invalid-git-file");
+        fs::create_dir_all(&path)?;
+        fs::write(path.join(".git"), "not a gitdir pointer")?;
+
+        let err = manager
+            .prepare_worktree_creation_target(
+                &path,
+                "feature/invalid-git-file",
+                worktree_root.path(),
+            )
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected invalid git file error"))?;
+
+        assert!(err.to_string().contains("does not look like"));
+        assert!(path.join(".git").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn test_prepare_worktree_creation_target_rejects_empty_admin_gitdir_file() -> Result<()> {
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("empty-admin-gitdir");
+        let branch = "feature/empty-admin-gitdir";
+        let admin_dir = admin_dir_for_branch(&repo, branch);
+        fs::create_dir_all(&admin_dir)?;
+        fs::write(admin_dir.join("gitdir"), "\n")?;
+        fs::create_dir_all(&path)?;
+        fs::write(path.join("payload.txt"), "foreign")?;
+
+        let err = manager
+            .prepare_worktree_creation_target(&path, branch, worktree_root.path())
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected empty admin gitdir error"))?;
+
+        assert!(err.to_string().contains("does not look like"));
+        assert!(path.join("payload.txt").exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_worktree_creation_target_reports_stale_removal_errors() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_repo_dir, repo) = init_test_repo_with_commit();
+        let manager = Manager::new(&repo);
+        let worktree_root = TempDir::new()?;
+        let path = worktree_root.path().join("unremovable-empty");
+        fs::create_dir_all(&path)?;
+        fs::set_permissions(worktree_root.path(), fs::Permissions::from_mode(0o500))?;
+
+        let result = manager.prepare_worktree_creation_target(
+            &path,
+            "feature/unremovable",
+            worktree_root.path(),
+        );
+        fs::set_permissions(worktree_root.path(), fs::Permissions::from_mode(0o700))?;
+        let err = result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected stale removal error"))?;
+        let message = err.to_string();
+
+        assert!(message.contains("Failed to remove stale Tenex worktree target"));
+        assert!(message.contains(&path.display().to_string()));
+        assert!(path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_path_components_covers_dot_and_parent_segments() {
+        let normalized = Manager::normalize_path_components(Path::new("./tmp/../worktree"));
+        assert_eq!(normalized, PathBuf::from("worktree"));
     }
 
     #[test]

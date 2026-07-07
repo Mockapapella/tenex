@@ -4,7 +4,7 @@
 use crate::agent::{Agent, AgentRuntime, ChildConfig};
 use crate::git::{self, WorktreeCreateOptions, WorktreeManager};
 use crate::mux::SessionManager;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -559,8 +559,13 @@ impl Actions {
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
-        // Check if worktree/branch already exists - prompt user for action
-        if let Some(conflict_worktree_path) = worktree_mgr.worktree_path(&branch) {
+        let target_preparation = worktree_mgr.prepare_worktree_creation_target(
+            &worktree_path,
+            &branch,
+            &app_data.config.worktree_dir_for_repo_root(&repo_path),
+        )?;
+
+        if let Some(conflict_worktree_path) = target_preparation.registered_path() {
             debug!(branch, "Worktree already exists, prompting user");
 
             // Get current HEAD info for new worktree context
@@ -578,7 +583,7 @@ impl Actions {
                 title: title.to_string(),
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
-                worktree_path: conflict_worktree_path,
+                worktree_path: conflict_worktree_path.to_path_buf(),
                 repo_root: repo_path.clone(),
                 existing_branch,
                 existing_commit,
@@ -592,7 +597,11 @@ impl Actions {
             .into());
         }
 
+        let cleaned_stale_target = target_preparation.cleaned_stale_target();
         self.create_agent_internal(app_data, &repo_path, title, prompt, &branch, &worktree_path)?;
+        if cleaned_stale_target {
+            app_data.set_status(format!("Cleaned stale worktree and created agent: {title}"));
+        }
         Ok(AppMode::normal())
     }
 
@@ -635,6 +644,17 @@ impl Actions {
         let repo = git::open_repository(repo_path)?;
         let worktree_mgr = WorktreeManager::new(&repo);
         let runtime = crate::runtime::new_root_runtime(&app_data.settings);
+        let target_preparation = worktree_mgr.prepare_worktree_creation_target(
+            worktree_path,
+            branch,
+            &app_data.config.worktree_dir_for_repo_root(repo_path),
+        )?;
+        if let Some(registered_path) = target_preparation.registered_path() {
+            bail!(
+                "Cannot create worktree for branch '{branch}' because a registered worktree already exists at {}",
+                registered_path.display()
+            );
+        }
 
         let created = worktree_mgr.create_with_new_branch_with_options(
             worktree_path,
@@ -660,7 +680,11 @@ impl Actions {
         app_data.select_agent_by_id(agent_id);
 
         info!(title, %branch, "Agent created successfully");
-        app_data.set_status(format!("Created agent: {title}"));
+        if target_preparation.cleaned_stale_target() {
+            app_data.set_status(format!("Cleaned stale worktree and created agent: {title}"));
+        } else {
+            app_data.set_status(format!("Created agent: {title}"));
+        }
         Ok(())
     }
 
@@ -1122,11 +1146,16 @@ impl Actions {
         branch: &str,
         runtime: AgentRuntime,
     ) -> Result<std::path::PathBuf> {
-        if let Some(path) = worktree_mgr.worktree_path(branch) {
-            return Ok(path);
+        let worktree_path = config.worktree_path_for_repo_root(repo_root, branch);
+        let target_preparation = worktree_mgr.prepare_worktree_creation_target(
+            &worktree_path,
+            branch,
+            &config.worktree_dir_for_repo_root(repo_root),
+        )?;
+        if let Some(path) = target_preparation.registered_path() {
+            return Ok(path.to_path_buf());
         }
 
-        let worktree_path = config.worktree_path_for_repo_root(repo_root, branch);
         let created = worktree_mgr.create_with_options(
             &worktree_path,
             branch,
@@ -1988,7 +2017,7 @@ mod tests {
             .expect_err("expected recreate_worktree to error");
         assert!(
             err.to_string()
-                .contains("Failed to create parent directory")
+                .contains("Failed to inspect worktree target")
         );
     }
 
@@ -2227,7 +2256,7 @@ mod tests {
                 .expect_err("expected create_agent to error");
         assert!(
             err.to_string()
-                .contains("Failed to create parent directory")
+                .contains("Failed to inspect worktree target")
         );
     }
 
@@ -3307,7 +3336,101 @@ mod tests {
                 &worktree_path,
             )
             .expect_err("expected create_agent_internal to fail");
-        assert!(err.to_string().contains("worktree"));
+        let message = err.to_string();
+        assert!(message.contains(&worktree_path.display().to_string()));
+        assert!(message.contains("does not look like one of this repo's Tenex worktrees"));
+    }
+
+    #[test]
+    fn test_create_agent_internal_cleans_empty_stale_worktree_path() -> anyhow::Result<()> {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-stale-empty");
+        crate::mux::set_socket_override(&socket)?;
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new()?;
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let branch = "tenex-test/stale-empty".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+        std::fs::create_dir_all(&worktree_path)?;
+
+        handler.create_agent_internal(
+            &mut app.data,
+            &repo_root,
+            "stale empty",
+            None,
+            &branch,
+            &worktree_path,
+        )?;
+
+        assert!(worktree_path.join(".git").is_file());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Cleaned stale worktree and created agent: stale empty")
+        );
+
+        for agent in app.data.storage.iter() {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_agent_internal_cleans_broken_checkout_worktree_path() -> anyhow::Result<()> {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("agent-life-stale-broken");
+        crate::mux::set_socket_override(&socket)?;
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_root) = init_repo();
+        let repo = git::open_repository(&repo_root)?;
+        let worktree_dir = TempDir::new()?;
+
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.config.branch_prefix = "tenex-test/".to_string();
+
+        let branch = "tenex-test/stale-broken".to_string();
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_root, &branch);
+        let admin_dir = repo.path().join("worktrees").join(branch.replace('/', "-"));
+        std::fs::create_dir_all(&worktree_path)?;
+        std::fs::write(
+            worktree_path.join(".git"),
+            format!("gitdir: {}\n", admin_dir.display()),
+        )?;
+        std::fs::write(worktree_path.join("payload.txt"), "stale")?;
+
+        handler.create_agent_internal(
+            &mut app.data,
+            &repo_root,
+            "stale broken",
+            None,
+            &branch,
+            &worktree_path,
+        )?;
+
+        assert!(worktree_path.join(".git").is_file());
+        assert!(!worktree_path.join("payload.txt").exists());
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Cleaned stale worktree and created agent: stale broken")
+        );
+
+        for agent in app.data.storage.iter() {
+            let _ = crate::mux::SessionManager::new().kill(&agent.mux_session);
+        }
+        Ok(())
     }
 
     #[test]
@@ -3843,7 +3966,41 @@ mod tests {
             AgentRuntime::Host,
         )
         .expect_err("expected non-empty worktree path to error");
-        assert!(err.to_string().contains("worktree"));
+        let message = err.to_string();
+        assert!(message.contains(&worktree_path.display().to_string()));
+        assert!(message.contains("does not look like one of this repo's Tenex worktrees"));
+    }
+
+    #[test]
+    fn test_ensure_worktree_for_branch_cleans_empty_stale_target_path() -> anyhow::Result<()> {
+        let (_repo_dir, repo_root) = init_repo();
+        let worktree_dir = TempDir::new()?;
+
+        let config = Config {
+            worktree_dir: worktree_dir.path().to_path_buf(),
+            branch_prefix: "tenex-test/".to_string(),
+            ..Config::default()
+        };
+
+        let repo = git::open_repository(&repo_root)?;
+        let branch_mgr = git::BranchManager::new(&repo);
+        branch_mgr.create("feature")?;
+
+        let worktree_mgr = WorktreeManager::new(&repo);
+        let worktree_path = config.worktree_path_for_repo_root(&repo_root, "feature");
+        std::fs::create_dir_all(&worktree_path)?;
+
+        let created = Actions::ensure_worktree_for_branch(
+            &config,
+            &repo_root,
+            &worktree_mgr,
+            "feature",
+            AgentRuntime::Host,
+        )?;
+
+        assert_eq!(created.canonicalize()?, worktree_path.canonicalize()?);
+        assert!(worktree_path.join(".git").is_file());
+        Ok(())
     }
 
     #[test]

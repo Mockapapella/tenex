@@ -13,6 +13,7 @@ pub use diff::{
 };
 pub use worktree::{
     CreateOptions as WorktreeCreateOptions, Info as WorktreeInfo, Manager as WorktreeManager,
+    TargetPreparation as WorktreeTargetPreparation,
 };
 
 use anyhow::{Context, Result};

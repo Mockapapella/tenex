@@ -28,6 +28,11 @@ pub struct SpawnConfig {
     pub parent_agent_id: uuid::Uuid,
 }
 
+struct NewRootSpawnConfig {
+    config: SpawnConfig,
+    cleaned_stale_worktree: bool,
+}
+
 #[derive(Clone, Copy)]
 struct ReviewChildAgentConfig<'a> {
     root_session: &'a str,
@@ -679,11 +684,11 @@ impl Actions {
             "Spawning child agents"
         );
 
-        let spawn_config = if let Some(pid) = parent_id {
-            Self::get_existing_parent_config(app_data, pid)?
+        let (spawn_config, cleaned_stale_worktree) = if let Some(pid) = parent_id {
+            (Self::get_existing_parent_config(app_data, pid)?, false)
         } else {
             match self.create_new_root_for_swarm(app_data, task, count)? {
-                Some(config) => config,
+                Some(new_root) => (new_root.config, new_root.cleaned_stale_worktree),
                 None => {
                     return Ok(ConfirmingMode {
                         action: ConfirmAction::WorktreeConflict,
@@ -702,7 +707,13 @@ impl Actions {
 
         app_data.storage.save()?;
         info!(count, parent_id = %spawn_config.parent_agent_id, "Child agents spawned successfully");
-        app_data.set_status(format!("Spawned {count} child agents"));
+        if cleaned_stale_worktree {
+            app_data.set_status(format!(
+                "Cleaned stale worktree and spawned {count} child agents"
+            ));
+        } else {
+            app_data.set_status(format!("Spawned {count} child agents"));
+        }
         Ok(AppMode::normal())
     }
 
@@ -733,7 +744,7 @@ impl Actions {
         app_data: &mut AppData,
         task: Option<&str>,
         count: usize,
-    ) -> Result<Option<SpawnConfig>> {
+    ) -> Result<Option<NewRootSpawnConfig>> {
         let root_title = Self::generate_root_title(task);
         let cwd_fallback = PathBuf::from(".");
         let repo_path = Self::resolve_swarm_repo_path(
@@ -742,29 +753,37 @@ impl Actions {
         );
         let Ok(repo) = git::open_repository(&repo_path) else {
             let config = self.create_plain_dir_root_for_swarm(app_data, root_title, repo_path)?;
-            return Ok(Some(config));
+            return Ok(Some(NewRootSpawnConfig {
+                config,
+                cleaned_stale_worktree: false,
+            }));
         };
         let branch = app_data.config.generate_branch_name(&root_title);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
-        if let Some(conflict_worktree_path) = worktree_mgr.worktree_path(&branch) {
+        let worktree_path = app_data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
+        let target_preparation = worktree_mgr.prepare_worktree_creation_target(
+            &worktree_path,
+            &branch,
+            &app_data.config.worktree_dir_for_repo_root(&repo_path),
+        )?;
+
+        if let Some(conflict_worktree_path) = target_preparation.registered_path() {
             Self::setup_worktree_conflict(
                 app_data,
                 &worktree_mgr,
                 root_title,
                 task,
                 branch,
-                conflict_worktree_path,
+                conflict_worktree_path.to_path_buf(),
                 count,
                 repo_path,
             );
             return Ok(None);
         }
-
-        let worktree_path = app_data
-            .config
-            .worktree_path_for_repo_root(&repo_path, &branch);
 
         let runtime = crate::runtime::new_root_runtime(&app_data.settings);
         let worktree_options = Self::root_worktree_create_options(runtime);
@@ -785,13 +804,16 @@ impl Actions {
         let root_id = root_agent.id;
 
         app_data.storage.add(root_agent);
-        Ok(Some(SpawnConfig {
-            root_session,
-            worktree_path,
-            branch,
-            workspace_kind: WorkspaceKind::GitWorktree,
-            runtime,
-            parent_agent_id: root_id,
+        Ok(Some(NewRootSpawnConfig {
+            config: SpawnConfig {
+                root_session,
+                worktree_path,
+                branch,
+                workspace_kind: WorkspaceKind::GitWorktree,
+                runtime,
+                parent_agent_id: root_id,
+            },
+            cleaned_stale_worktree: target_preparation.cleaned_stale_target(),
         }))
     }
 
@@ -2647,7 +2669,7 @@ mod tests {
             .expect_err("expected worktree create to error");
         assert!(
             err.to_string()
-                .contains("Failed to create parent directory")
+                .contains("Failed to inspect worktree target")
         );
         assert!(app.data.storage.is_empty());
     }
@@ -2780,6 +2802,50 @@ mod tests {
         let expected_repo_root = canonicalize_or_self(&repo_path);
         assert_eq!(actual_repo_root, expected_repo_root);
         assert_eq!(conflict.swarm_child_count, Some(2));
+    }
+
+    #[test]
+    fn test_spawn_children_cleans_empty_stale_root_worktree_path() -> anyhow::Result<()> {
+        let _mux_guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("swarm-stale-empty");
+        crate::mux::set_socket_override(&socket)?;
+
+        let (mut app, _temp) = create_test_app();
+        let (_repo_dir, repo_path) = init_git_repo();
+        let worktree_dir = tempfile::TempDir::new()?;
+
+        app.data.spawn.root_repo_path = Some(repo_path.clone());
+        app.data.config.worktree_dir = worktree_dir.path().to_path_buf();
+        app.data.spawn.spawning_under = None;
+        app.data.spawn.child_count = 1;
+
+        let task = "stale swarm";
+        let root_title = Actions::generate_root_title(Some(task));
+        let branch = app.data.config.generate_branch_name(&root_title);
+        let worktree_path = app
+            .data
+            .config
+            .worktree_path_for_repo_root(&repo_path, &branch);
+        std::fs::create_dir_all(&worktree_path)?;
+
+        let next = with_tracing_dispatch(|| {
+            let handler = Actions::new();
+            handler.spawn_children(&mut app.data, Some(task))
+        })?;
+        app.apply_mode(next);
+
+        assert_eq!(app.mode, AppMode::normal());
+        assert!(worktree_path.join(".git").is_file());
+        assert_eq!(app.data.storage.len(), 2);
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Cleaned stale worktree and spawned 1 child agents")
+        );
+
+        for agent in app.data.storage.iter() {
+            let _ = SessionManager::new().kill(&agent.mux_session);
+        }
+        Ok(())
     }
 
     #[test]

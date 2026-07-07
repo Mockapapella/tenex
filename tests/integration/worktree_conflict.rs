@@ -141,6 +141,55 @@ fn test_worktree_conflict_reconnect_single_agent() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// Test that an unregistered stale directory is cleaned and recreated for a single agent
+#[test]
+fn test_stale_empty_worktree_path_creates_single_agent() -> anyhow::Result<()> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture =
+        TestFixture::new("wt_stale_empty_single").map_err(|err| anyhow::anyhow!("{err}"))?;
+
+    let config = fixture.config();
+    let storage = fixture.storage();
+    let mut app = App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = Actions::new();
+
+    let title = "stale-empty-agent";
+    let branch_name = app.data.config.generate_branch_name(title);
+    let worktree_path = app
+        .data
+        .config
+        .worktree_path_for_repo_root(&fixture.repo_path, &branch_name);
+    fs::create_dir_all(&worktree_path)?;
+
+    let next = handler.create_agent(&mut app.data, title, Some("test prompt"))?;
+    app.apply_mode(next);
+
+    assert_eq!(app.mode, tenex::AppMode::normal());
+    assert!(app.data.spawn.worktree_conflict.is_none());
+    assert!(worktree_path.join(".git").is_file());
+    assert_eq!(
+        app.data.ui.status_message.as_deref(),
+        Some("Cleaned stale worktree and created agent: stale-empty-agent")
+    );
+
+    let agent = app
+        .data
+        .storage
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("expected created agent"))?;
+    assert_eq!(agent.title, title);
+
+    fixture.cleanup_sessions();
+    fixture.cleanup_branches();
+
+    Ok(())
+}
+
 /// Test recreating worktree (delete and create fresh)
 #[test]
 #[expect(clippy::expect_used, reason = "test assertions")]
