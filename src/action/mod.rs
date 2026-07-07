@@ -370,11 +370,6 @@ pub fn dispatch_preview_focused_mode(
     modifiers: KeyModifiers,
     batched_keys: &mut Vec<String>,
 ) -> Result<()> {
-    // Tab switching is bound to Normal mode only.
-    if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
-        return Ok(());
-    }
-
     // Ctrl+C is a sharp edge: forwarding it to an agent will interrupt/terminate the agent
     // process and can cause the agent pane to disappear. Require confirmation for non-terminal
     // agents while attached.
@@ -1772,6 +1767,29 @@ mod tests {
             err.to_string()
                 .contains("forced infallible action error for test")
         );
+    }
+
+    #[test]
+    fn test_dispatch_preview_focused_mode_forwards_tab_keys() {
+        let (mut app, _temp) = create_test_app();
+        app.data.active_tab = crate::app::Tab::Preview;
+        app.enter_mode(PreviewFocusedMode.into());
+        let mut keys = Vec::new();
+
+        let tab_result =
+            dispatch_preview_focused_mode(&mut app, KeyCode::Tab, KeyModifiers::NONE, &mut keys);
+        let backtab_result = dispatch_preview_focused_mode(
+            &mut app,
+            KeyCode::BackTab,
+            KeyModifiers::NONE,
+            &mut keys,
+        );
+
+        assert!(tab_result.is_ok());
+        assert!(backtab_result.is_ok());
+        assert_eq!(keys, vec!["\t".to_string(), "\u{1b}[Z".to_string()]);
+        assert_eq!(app.data.active_tab, crate::app::Tab::Preview);
+        assert_eq!(app.mode, AppMode::PreviewFocused(PreviewFocusedMode));
     }
 
     #[test]
