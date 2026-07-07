@@ -480,9 +480,31 @@ fn init_preview_dimensions(terminal: &dyn TerminalInfo, app: &mut App, action_ha
 
     let area = Rect::new(0, 0, size.width, size.height);
     let (width, height) = render::calculate_preview_dimensions(area);
-    app.set_preview_dimensions(width, height);
-    action_handler.resize_agent_windows(app);
-    app.ensure_agent_list_scroll();
+    if apply_preview_dimensions(app, action_handler, width, height) {
+        app.ensure_agent_list_scroll();
+    }
+}
+
+fn apply_preview_dimensions(
+    app: &mut App,
+    action_handler: Actions,
+    width: u16,
+    height: u16,
+) -> bool {
+    if width == 0 || height == 0 {
+        warn!(width, height, "Skipping zero-sized preview dimensions");
+        app.set_status(format!(
+            "Preview is too small to resize agents: {width}x{height}"
+        ));
+        return false;
+    }
+
+    if action_handler.resize_agent_windows_to_dimensions(app, width, height) {
+        app.set_preview_dimensions(width, height);
+        return true;
+    }
+
+    false
 }
 
 fn drain_events(
@@ -621,9 +643,9 @@ fn apply_pending_resize(app: &mut App, action_handler: Actions, last_resize: Opt
     app.set_terminal_dimensions(width, height);
     let (preview_width, preview_height) =
         render::calculate_preview_dimensions(Rect::new(0, 0, width, height));
-    if app.data.ui.preview_dimensions != Some((preview_width, preview_height)) {
-        app.set_preview_dimensions(preview_width, preview_height);
-        action_handler.resize_agent_windows(app);
+    if app.data.ui.preview_dimensions != Some((preview_width, preview_height))
+        && apply_preview_dimensions(app, action_handler, preview_width, preview_height)
+    {
         app.ensure_agent_list_scroll();
     }
 }

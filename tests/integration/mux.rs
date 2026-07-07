@@ -617,6 +617,60 @@ fn test_mux_pane_size() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_mux_resize_down_updates_pane_size() -> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("resize_down")?;
+    let manager = SessionManager::new();
+    let session_name = fixture.session_name("resize-down");
+
+    let _ = manager.kill(&session_name);
+    manager.create(&session_name, &fixture.worktree_path(), None)?;
+    wait_for_session(manager, &session_name)?;
+
+    let capture = tenex::mux::OutputCapture::new();
+    manager.resize_window(&session_name, 120, 40)?;
+    assert_eq!(capture.pane_size(&session_name)?, (120, 40));
+
+    manager.resize_window(&session_name, 80, 24)?;
+    assert_eq!(capture.pane_size(&session_name)?, (80, 24));
+
+    let _ = manager.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
+fn test_mux_resize_last_request_wins_for_shared_session() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("resize_last_wins")?;
+    let client_a = SessionManager::new();
+    let client_b = SessionManager::new();
+    let session_name = fixture.session_name("resize-last-wins");
+
+    let _ = client_a.kill(&session_name);
+    client_a.create(&session_name, &fixture.worktree_path(), None)?;
+    wait_for_session(client_a, &session_name)?;
+
+    let capture = tenex::mux::OutputCapture::new();
+    client_a.resize_window(&session_name, 120, 40)?;
+    assert_eq!(capture.pane_size(&session_name)?, (120, 40));
+
+    client_b.resize_window(&session_name, 72, 18)?;
+    assert_eq!(capture.pane_size(&session_name)?, (72, 18));
+
+    let _ = client_a.kill(&session_name);
+
+    Ok(())
+}
+
+#[test]
 fn test_mux_cursor_position() -> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());

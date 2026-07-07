@@ -1,6 +1,6 @@
 //! Window operations: resize and adjust window indices
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::Actions;
 use crate::app::{App, AppData};
@@ -9,18 +9,43 @@ impl Actions {
     /// Resize all agent mux windows to match the preview pane dimensions
     ///
     /// This ensures the terminal output renders correctly in the preview pane.
-    pub fn resize_agent_windows(&self, app: &App) {
+    pub fn resize_agent_windows(self, app: &mut App) -> bool {
         let Some((width, height)) = app.data.ui.preview_dimensions else {
-            return;
+            return true;
         };
 
+        self.resize_agent_windows_to_dimensions(app, width, height)
+    }
+
+    pub(crate) fn resize_agent_windows_to_dimensions(
+        self,
+        app: &mut App,
+        width: u16,
+        height: u16,
+    ) -> bool {
+        if width == 0 || height == 0 {
+            warn!(width, height, "Skipping zero-sized agent preview resize");
+            app.set_status(format!(
+                "Preview is too small to resize agents: {width}x{height}"
+            ));
+            return false;
+        }
+
+        let targets = self.resize_targets(app);
+        let mut resized_all = true;
+        for target in targets {
+            resized_all &= self.resize_agent_window_target(app, &target, width, height);
+        }
+        resized_all
+    }
+
+    fn resize_targets(self, app: &App) -> Vec<String> {
+        let mut targets = Vec::new();
         for agent in app.data.storage.iter() {
             if agent.is_root() {
                 // Root agent: resize the session
                 if self.session_manager.exists(&agent.mux_session) {
-                    let _ = self
-                        .session_manager
-                        .resize_window(&agent.mux_session, width, height);
+                    targets.push(agent.mux_session.clone());
                 }
             } else if let Some(window_idx) = agent.window_index {
                 // Child agent: resize the specific window
@@ -36,10 +61,32 @@ impl Actions {
                         &root_agent.mux_session,
                         window_idx,
                     );
-                    let _ = self
-                        .session_manager
-                        .resize_window(&window_target, width, height);
+                    targets.push(window_target);
                 }
+            }
+        }
+        targets
+    }
+
+    fn resize_agent_window_target(
+        self,
+        app: &mut App,
+        target: &str,
+        width: u16,
+        height: u16,
+    ) -> bool {
+        match self.session_manager.resize_window(target, width, height) {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    target,
+                    width,
+                    height,
+                    error = %err,
+                    "Failed to resize agent preview"
+                );
+                app.set_status(format!("Failed to resize agent preview: {err}"));
+                false
             }
         }
     }
@@ -146,10 +193,10 @@ mod tests {
     #[test]
     fn test_resize_agent_windows_no_dimensions() {
         let handler = Actions::new();
-        let app = create_test_app();
+        let mut app = create_test_app();
 
         // Should not panic when no dimensions are set
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
         assert!(app.data.ui.preview_dimensions.is_none());
     }
 
@@ -170,8 +217,31 @@ mod tests {
         ));
 
         // Should not panic when resizing non-existent sessions
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
         assert_eq!(app.data.ui.preview_dimensions, Some((100, 50)));
+    }
+
+    #[test]
+    fn test_resize_agent_windows_rejects_zero_dimensions() {
+        let handler = Actions::new();
+
+        with_tracing_dispatch(|| {
+            for (width, height, expected_status_size) in [(0, 24, "0x24"), (80, 0, "80x0")] {
+                let mut app = create_test_app();
+
+                app.set_preview_dimensions(width, height);
+
+                assert!(!handler.resize_agent_windows(&mut app));
+                assert_eq!(app.data.ui.preview_dimensions, Some((width, height)));
+                assert!(
+                    app.data
+                        .ui
+                        .status_message
+                        .as_deref()
+                        .is_some_and(|status| status.contains(expected_status_size))
+                );
+            }
+        });
     }
 
     #[test]
@@ -208,7 +278,7 @@ mod tests {
         ));
 
         // Should handle both root and child agents without panicking
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
     }
 
     #[test]
@@ -236,6 +306,10 @@ mod tests {
             .session_manager
             .create(&root_session, temp.path(), None)
             .expect("Create mux session");
+        let child_index = handler
+            .session_manager
+            .create_window(&root_session, "child", temp.path(), None)
+            .expect("Create mux child window");
 
         app.data.storage.add(Agent::new_child(
             "child".to_string(),
@@ -245,15 +319,31 @@ mod tests {
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
-                window_index: 2,
+                window_index: child_index,
                 repo_root: None,
             },
         ));
 
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
+        assert!(app.data.ui.status_message.is_none());
 
         let _ = handler.session_manager.kill(&root_session);
         let _ = crate::mux::terminate_mux_daemon_for_socket(&socket);
+    }
+
+    #[test]
+    fn test_resize_agent_window_target_sets_status_on_failure() {
+        let handler = Actions::new();
+        let mut app = create_test_app();
+
+        assert!(!handler.resize_agent_window_target(&mut app, "missing-session", 80, 24));
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|status| status.contains("Failed to resize agent preview"))
+        );
     }
 
     #[test]
@@ -294,7 +384,7 @@ mod tests {
             .expect("Child agent should exist")
             .window_index = None;
 
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
     }
 
     #[test]
@@ -317,7 +407,7 @@ mod tests {
             },
         ));
 
-        handler.resize_agent_windows(&app);
+        assert!(handler.resize_agent_windows(&mut app));
     }
 
     #[test]
