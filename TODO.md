@@ -4,13 +4,13 @@ Triage of every open issue against master `3a2a408` on 2026-07-06. Each item tra
 
 ## Already fixed on master, close with evidence
 
-- [ ] #113 Long-running unviewed agents cause lag. Fixed by cursor-based activity polling (`7080ef2`): non-selected agents are polled via cheap output-cursor sequence checks, preview reads only the selected agent, and daemon buffers are capped. A request-count regression test lands with the mux cluster below.
-- [ ] #122 Crash/reboot does not renew old state. Child respawn from persisted state and conversation resume are both implemented on master (respawn walk in `src/app/handlers/sync.rs`, persisted `conversation_id` resume in `src/conversation.rs` / `src/runtime/mod.rs`). Branch switch deleting children is by design.
+- [x] #113 Long-running unviewed agents cause lag. Fixed by cursor-based activity polling (`7080ef2`): non-selected agents are polled via cheap output-cursor sequence checks, preview reads only the selected agent, and daemon buffers are capped. Closed with evidence; a request-count regression test lands with the mux cluster below.
+- [x] #122 Crash/reboot does not renew old state. Child respawn from persisted state and conversation resume are both implemented on master (respawn walk in `src/app/handlers/sync.rs`, persisted `conversation_id` resume in `src/conversation.rs` / `src/runtime/mod.rs`). Branch switch deleting children is by design. Closed with evidence.
 
 ## Bugs to fix
 
 - [ ] #124 Review agents always compare against main/master. The chosen base branch is bracketed-pasted into Codex's `/review` branch picker, which ignores pasted text. Send it as typed keys instead. (S)
-- [ ] #102 Terminal agents have no tab-complete. Attached preview dispatch swallows `Tab`/`BackTab` before forwarding. Forward both. (S)
+- [x] #102 Terminal agents have no tab-complete. Attached preview dispatch swallowed `Tab`/`BackTab` before forwarding; both are now forwarded while attached, with docs updated. Merged in #143. (S)
 - [ ] #121 Renaming an agent breaks remote tracking. Rename re-pushes with `-u` to a new remote branch instead of preserving the old upstream. Preserve tracking by default; make remote rename an explicit follow-up action. (M)
 - [ ] #110 Stale PTY size after restart on a smaller screen. The daemon clamps every resize to the historical maximum. Make resize mean the exact requested size. (S)
 - [ ] #108 Large paste hard-locks the app and wedges restart. The daemon writes unbounded input to the PTY while holding the window lock, so a filled PTY buffer deadlocks every other request including startup liveness checks. Bounded input queue, no blocking I/O under the lock, IPC frame cap. (L)
