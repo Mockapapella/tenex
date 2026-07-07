@@ -170,8 +170,14 @@ impl Actions {
         worktree_path: &std::path::Path,
         branch_name: &str,
     ) -> Result<bool> {
-        // Check if remote tracking branch exists
-        let remote_branch = format!("origin/{branch_name}");
+        let remote_branch = if super::push::configured_upstream(worktree_path, branch_name)
+            .context("Failed to check remote branch")?
+            .is_some()
+        {
+            format!("{branch_name}@{{upstream}}")
+        } else {
+            format!("origin/{branch_name}")
+        };
         let output = crate::git::git_command()
             .args(["rev-parse", "--verify", &remote_branch])
             .current_dir(worktree_path)
@@ -230,12 +236,7 @@ impl Actions {
 
         debug!(branch = %branch_name, "Executing push before opening PR");
 
-        // Push to remote
-        let push_output = crate::git::git_command()
-            .args(["push", "-u", "origin", &branch_name])
-            .current_dir(&worktree_path)
-            .output()
-            .context("Failed to push to remote")?;
+        let push_output = super::push::run_push(&worktree_path, &branch_name)?;
 
         if !push_output.status.success() {
             let stderr = String::from_utf8_lossy(&push_output.stderr);
@@ -403,18 +404,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_has_unpushed_commits_reports_error_when_rev_list_spawn_fails() {
-        let worktree = TempDir::new().unwrap();
-        let temp = TempDir::new().unwrap();
-        let script =
-            write_fake_script(temp.path(), "git", "#!/bin/sh\nrm -- \"$0\"\nexit 0\n").unwrap();
+    fn test_has_unpushed_commits_reports_error_when_rev_list_spawn_fails() -> Result<()> {
+        let worktree = TempDir::new()?;
+        let temp = TempDir::new()?;
+        let script = write_fake_script(
+            temp.path(),
+            "git",
+            r#"#!/bin/sh
+if [ "$1" = "config" ]; then
+  exit 1
+fi
+if [ "$1" = "rev-parse" ]; then
+  rm -- "$0"
+  exit 0
+fi
+exit 0
+"#,
+        )?;
 
         let err = crate::git::with_git_program_override_for_tests(script, || {
             Actions::has_unpushed_commits(worktree.path(), "feature")
         })
-        .expect_err("expected rev-list spawn to fail");
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected rev-list spawn to fail"))?;
 
         assert!(err.to_string().contains("Failed to count unpushed commits"));
+        Ok(())
     }
 
     #[test]
