@@ -226,6 +226,11 @@ mod tests {
     #[test]
     fn test_keycode_to_input_sequence_covers_more_special_keys() {
         assert_eq!(
+            keycode_to_input_sequence(KeyCode::Tab, KeyModifiers::NONE).as_deref(),
+            Some("\t")
+        );
+
+        assert_eq!(
             keycode_to_input_sequence(KeyCode::BackTab, KeyModifiers::NONE).as_deref(),
             Some("\u{1b}[Z")
         );

@@ -704,26 +704,26 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_key_event_preview_focused_tab_is_ignored() {
+    fn test_handle_key_event_preview_focused_tab_forwards_without_tab_switch() {
         let (mut app, _temp) = create_test_app();
         app.mode = AppMode::PreviewFocused(PreviewFocusedMode);
         app.data.active_tab = Tab::Preview;
         let mut batched_keys = Vec::new();
 
-        handle_key_event(
+        let result = handle_key_event(
             &mut app,
             KeyCode::Tab,
             KeyModifiers::NONE,
             &mut batched_keys,
-        )
-        .expect("Expected preview focused Tab to succeed");
+        );
 
+        assert!(result.is_ok());
         assert_eq!(app.data.active_tab, Tab::Preview);
         assert_eq!(
             std::mem::discriminant(&app.mode),
             std::mem::discriminant(&AppMode::PreviewFocused(PreviewFocusedMode))
         );
-        assert!(batched_keys.is_empty());
+        assert_eq!(batched_keys, vec!["\t".to_string()]);
     }
 
     #[test]

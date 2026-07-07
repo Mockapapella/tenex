@@ -393,7 +393,7 @@ impl Action {
             Self::Push => "[Ctrl+p]ush branch to remote",
             Self::RenameBranch => "[r]ename branch",
             Self::OpenPR => "[Ctrl+o]pen pull request",
-            Self::SwitchTab => "[Tab] next tab",
+            Self::SwitchTab => "[Tab] next tab when detached",
             Self::DiffCursorUp => "[↑] diff cursor up",
             Self::DiffCursorDown => "[↓] diff cursor down",
             Self::DiffToggleVisual => "[shift+v] block select/unselect",
