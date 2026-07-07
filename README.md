@@ -103,7 +103,7 @@ tenex
 | `Enter` | Attach terminal (forward keystrokes to agent) |
 | `Ctrl+q` | Detach terminal / Quit (with confirm if agents running) |
 | `Esc` | Cancel current modal or flow |
-| `Tab` | Cycle tabs forward (Preview/Diff/Commits) |
+| `Tab` | Cycle tabs forward when detached; forwarded to agent when attached |
 | `Space` | Collapse/expand agent tree |
 | `Ctrl+u` | Scroll preview/diff/commits up |
 | `Ctrl+d` | Scroll preview/diff/commits down |

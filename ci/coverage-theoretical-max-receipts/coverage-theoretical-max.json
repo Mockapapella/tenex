@@ -7,15 +7,15 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 3298,
+        "amount": 3299,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35954,
+        "amount": 35970,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62022,
+        "amount": 62060,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
@@ -25,15 +25,15 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 3298,
+        "amount": 3299,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35954,
+        "amount": 35970,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62022,
+        "amount": 62060,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
@@ -43,15 +43,15 @@
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 3298,
+        "amount": 3299,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 35954,
+        "amount": 35970,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 62022,
+        "amount": 62060,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     }
@@ -61,13 +61,13 @@
       "amount": 1812
     },
     "functions": {
-      "amount": 3298
+      "amount": 3299
     },
     "lines": {
-      "amount": 35954
+      "amount": 35970
     },
     "regions": {
-      "amount": 62022
+      "amount": 62060
     }
   }
 }
