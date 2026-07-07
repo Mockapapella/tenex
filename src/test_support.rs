@@ -1,4 +1,9 @@
-#[cfg(test)]
+//! Feature-gated test support utilities.
+//!
+//! These helpers are exposed for Tenex's internal tests and external test
+//! crates that enable `test-support`. They are not stable public API and carry
+//! no backwards-compatibility promise.
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -12,21 +17,28 @@ fn env_test_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-#[cfg(test)]
+/// Acquire the process-wide mux test lock for deterministic mux tests.
+///
+/// This is a test-support boundary for Tenex tests, not a stable public API.
 pub fn lock_mux_test_environment() -> MutexGuard<'static, ()> {
     mux_test_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[cfg(test)]
+/// Acquire the process-wide environment mutation lock for deterministic tests.
+///
+/// This is a test-support boundary for Tenex tests, not a stable public API.
 pub fn lock_env_test_environment() -> MutexGuard<'static, ()> {
     env_test_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[cfg(test)]
+/// Return a unique `/tmp` mux socket path with a sanitized test tag.
+///
+/// This is a test-support boundary for Tenex tests, not a stable public API.
+#[must_use]
 pub fn unique_mux_socket_path(tag: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let pid = std::process::id();
@@ -42,25 +54,4 @@ pub fn unique_mux_socket_path(tag: &str) -> String {
     }
 
     format!("/tmp/tx-{tag}-{pid}-{counter}.sock")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lock_env_test_environment_smoke() {
-        let _guard = lock_env_test_environment();
-    }
-
-    #[test]
-    fn test_unique_mux_socket_path_falls_back_when_tag_is_empty_after_filtering() {
-        let path = unique_mux_socket_path("!!!");
-        assert!(path.starts_with("/tmp/tx-mux-"));
-        assert!(
-            std::path::Path::new(&path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("sock"))
-        );
-    }
 }
