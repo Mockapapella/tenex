@@ -15,7 +15,7 @@ Triage of every open issue against master `3a2a408` on 2026-07-06. Each item tra
 - [ ] #110 Stale PTY size after restart on a smaller screen. The daemon clamps every resize to the historical maximum. Make resize mean the exact requested size. (S)
 - [x] #108 Large paste hard-locks the app and wedges restart. Fixed with a bounded per-window input queue drained by a writer pump (no blocking I/O under the window lock), atomic whole-send accept-or-reject semantics, graceful terminal-query degradation under backpressure, a 16 MiB validated IPC frame cap, and surfaced send errors. Merged in #149. (L)
 - [ ] #112 Subagents lack full scrollback. Paused/scrolled preview renders from a client-side stream cache instead of the daemon's canonical scrollback. Read full history on scroll-up. (S)
-- [ ] #129 Worktree creation fails on stale directories. Creation only detects Git-registered worktree conflicts; classify stale states at the boundary and reattach, clean after confirmation, or refuse foreign paths with a clear modal. (M)
+- [x] #129 Worktree creation fails on stale directories. Fixed with a boundary classifier: registered worktrees reattach via the existing modal, stale empty or reciprocally-proven Tenex-owned directories are cleaned and recreated with a status notice, and symlinks, files, foreign, or ambiguous paths are refused with specific errors. Merged in #150. (M)
 
 ## Enhancements to implement
 
