@@ -15,8 +15,20 @@ import tty
 ENTER_CSI_U = b"\x1b[13;1u"
 PASTE_START = b"\x1b[200~"
 PASTE_END = b"\x1b[201~"
+BRANCHES = [__BRANCH_LIST__]
 
 tty.setraw(sys.stdin.fileno())
+
+
+def selected_branch(text: str) -> str:
+    query = text.strip()
+    if not query:
+        return "master"
+    query_lower = query.lower()
+    for branch in BRANCHES:
+        if query_lower in branch.lower():
+            return branch
+    return "master"
 
 
 def read_escape_sequence() -> bytes:
@@ -44,7 +56,7 @@ def handle_submit(state: int, text: str) -> int:
         print("Select a base branch", flush=True)
         return 2
     if state == 2:
-        branch = text.strip() or "master"
+        branch = selected_branch(text)
         print(f">> Code review started: changes against '{branch}' <<", flush=True)
         return 3
     return state
@@ -85,11 +97,24 @@ while True:
         buffer.pop()
         continue
 
+    if in_paste and state == 2:
+        continue
+
     buffer += ch
     if state == 0 and not in_paste and not hint_shown and buffer == b"/review":
         print("  /review  review my current changes and find issues", flush=True)
         hint_shown = True
 "#;
+
+#[cfg(unix)]
+fn codex_review_flow_mock_script(branches: &[&str]) -> String {
+    let branch_list = branches
+        .iter()
+        .map(|branch| format!("\"{branch}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    CODEX_REVIEW_FLOW_MOCK_SCRIPT.replace("__BRANCH_LIST__", &branch_list)
+}
 
 #[cfg(unix)]
 fn write_executable_script(path: &Path, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -415,7 +440,8 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 #[cfg(unix)]
-fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::error::Error>> {
+fn test_spawn_review_agents_codex_selects_typed_base_branch()
+-> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
     }
@@ -427,7 +453,10 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
     let codex_path = fixture.repo_path.join("codex");
     #[cfg(unix)]
     {
-        write_executable_script(&codex_path, CODEX_REVIEW_FLOW_MOCK_SCRIPT)?;
+        write_executable_script(
+            &codex_path,
+            &codex_review_flow_mock_script(&["master", "stage"]),
+        )?;
     }
 
     let settings = tenex::app::Settings {
@@ -458,7 +487,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     app.data.spawn.spawning_under = Some(root_id);
     app.data.spawn.child_count = 1;
-    app.data.review.base_branch = Some("master".to_string());
+    app.data.review.base_branch = Some("stage".to_string());
 
     let result = handler.spawn_review_agents(&mut app.data);
 
@@ -507,8 +536,8 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             "Expected Codex review agents to type /review, got: {output:?}"
         );
         assert!(
-            output.contains("master"),
-            "Expected Codex review agents to enter the base branch, got: {output:?}"
+            output.contains("'stage'") && !output.contains("'master'"),
+            "Expected Codex review agents to start against the selected branch, got: {output:?}"
         );
         assert!(
             output.contains("review started"),
@@ -528,21 +557,135 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
 #[test]
 #[cfg(not(unix))]
-fn test_spawn_review_agents_codex_uses_review_flow() {}
+fn test_spawn_review_agents_codex_selects_typed_base_branch() {}
+
+#[test]
+#[cfg(unix)]
+fn test_spawn_review_agents_codex_warns_when_branch_picker_selects_colliding_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("review_codex_colliding_base")?;
+    let config = fixture.config();
+    let storage = fixture.storage();
+
+    let codex_path = fixture.repo_path.join("codex");
+    write_executable_script(
+        &codex_path,
+        &codex_review_flow_mock_script(&["feature/stage", "stage", "master"]),
+    )?;
+
+    let settings = tenex::app::Settings {
+        review_agent_program: tenex::app::AgentProgram::Custom,
+        review_custom_agent_command: codex_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+
+    let mut app = tenex::App::new(config, storage, settings, false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = tenex::app::Actions::new();
+
+    app.data.spawn.child_count = 1;
+    app.data.spawn.spawning_under = None;
+    let spawn_result = handler.spawn_children(&mut app.data, Some("test-swarm"));
+    if spawn_result.is_err() {
+        return Ok(());
+    }
+
+    let root = app
+        .data
+        .storage
+        .iter()
+        .find(|agent| agent.is_root())
+        .ok_or("No root agent found")?;
+    let root_id = root.id;
+
+    app.data.spawn.spawning_under = Some(root_id);
+    app.data.spawn.child_count = 1;
+    app.data.review.base_branch = Some("stage".to_string());
+
+    let review_result = handler.spawn_review_agents(&mut app.data);
+
+    let capture = tenex::mux::OutputCapture::new();
+    let mut checked = 0usize;
+    for agent in app
+        .data
+        .storage
+        .iter()
+        .filter(|agent| agent.title.contains("Reviewer"))
+    {
+        let window_index = agent
+            .window_index
+            .ok_or("Missing window index for review agent")?;
+        let target = SessionManager::window_target(&agent.mux_session, window_index);
+        let output = {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(10);
+            let poll_interval = std::time::Duration::from_millis(100);
+            let mut last_output = String::new();
+
+            loop {
+                match capture.capture_pane_with_history(&target, 200) {
+                    Ok(output) => {
+                        if output.contains("review started") {
+                            break output;
+                        }
+                        last_output = output;
+                    }
+                    Err(_) if start.elapsed() < timeout => {}
+                    Err(err) => return Err(err.into()),
+                }
+                if start.elapsed() >= timeout {
+                    break last_output;
+                }
+                std::thread::sleep(poll_interval);
+            }
+        };
+
+        assert!(
+            output.contains("'feature/stage'"),
+            "Expected mock Codex picker to select the first contains match, got: {output:?}"
+        );
+        checked = checked.saturating_add(1);
+    }
+
+    if review_result.is_err() {
+        return Ok(());
+    }
+
+    assert!(checked > 0, "Expected at least one Codex review agent");
+    let status = app.data.ui.status_message.as_deref().unwrap_or_default();
+    assert!(
+        status.contains("Codex review may be running against a different base than requested"),
+        "Expected user-visible mismatch status, got: {status:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[cfg(not(unix))]
+fn test_spawn_review_agents_codex_warns_when_branch_picker_selects_colliding_name() {}
 
 #[test]
 fn test_review_prompt_contains_base_branch() {
     let prompt = tenex::prompts::build_review_prompt("main");
+    let stage_prompt = tenex::prompts::build_review_prompt("stage");
 
     // Should contain the base branch name
     assert!(prompt.contains("main"));
+    assert!(stage_prompt.contains("stage"));
 
     // Should contain key review instructions
     assert!(prompt.contains("git diff main...HEAD"));
+    assert!(stage_prompt.contains("git diff stage...HEAD"));
     assert!(prompt.contains("git diff --staged"));
     assert!(prompt.contains("git diff"));
     assert!(prompt.contains("git status"));
     assert!(prompt.contains("git log main..HEAD"));
+    assert!(stage_prompt.contains("git log stage..HEAD"));
 
     // Should contain review categories
     assert!(prompt.contains("Code Quality"));
