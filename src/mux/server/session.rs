@@ -1,7 +1,6 @@
 //! PTY-backed session management (server-side).
 
 use anyhow::{Context, Result, bail};
-use std::io::Write;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -139,9 +138,9 @@ impl Manager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the bytes cannot be written.
+    /// Returns an error if the bytes cannot be accepted into the target input queue.
     pub fn send_input(target: &str, data: &[u8]) -> Result<()> {
-        write_to_target(target, data)
+        enqueue_to_target(target, data)
     }
 
     /// Rename a session.
@@ -400,22 +399,29 @@ pub struct Window {
     pub name: String,
 }
 
-fn write_to_target(target: &str, payload: &[u8]) -> Result<()> {
+fn enqueue_to_target(target: &str, payload: &[u8]) -> Result<()> {
     let window = super::super::backend::resolve_window(target)?;
-    {
-        let mut guard = window.lock();
-        guard
-            .writer
-            .write_all(payload)
-            .context("Failed to write to PTY")?;
-        guard.writer.flush().context("Failed to flush PTY writer")?;
+    let input = {
+        let guard = window.lock();
+        guard.input.clone()
+    };
+
+    if let Err(err) = input.enqueue(payload) {
+        bail!("failed to queue input for '{target}': {err}");
     }
+
     Ok(())
 }
 
 fn kill_window_handle(
     window: &std::sync::Arc<parking_lot::Mutex<super::super::backend::MuxWindow>>,
 ) -> Result<()> {
+    let input = {
+        let guard = window.lock();
+        guard.input.clone()
+    };
+    input.close();
+
     {
         let mut guard = window.lock();
         guard

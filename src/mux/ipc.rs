@@ -6,8 +6,20 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io::{Read, Write};
 
+/// Maximum length-prefixed JSON frame accepted by the mux IPC boundary.
+///
+/// Tenex retains up to 4 MiB of raw output history per window. The largest legitimate output
+/// frame is therefore roughly 4 MiB inflated by base64 encoding to about 5.33 MiB, plus the JSON
+/// envelope for the response fields. A 16 MiB ceiling gives about a 2x safety margin over that
+/// worst-case response while still rejecting corrupt or hostile length prefixes before allocation.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn payload_len_bytes(payload_len: usize) -> Result<[u8; 4]> {
+    if payload_len > MAX_FRAME_BYTES {
+        bail!("Message too large: {payload_len} bytes exceeds max frame size {MAX_FRAME_BYTES}");
+    }
+
     let Ok(len) = u32::try_from(payload_len) else {
         bail!("Message too large");
     };
@@ -55,6 +67,10 @@ pub fn read_json<T: DeserializeOwned>(reader: &mut dyn Read) -> Result<T> {
         .read_exact(&mut len_bytes)
         .context("Failed to read message length")?;
     let len = u32::from_le_bytes(len_bytes) as usize;
+    if len > MAX_FRAME_BYTES {
+        bail!("Message too large: {len} bytes exceeds max frame size {MAX_FRAME_BYTES}");
+    }
+
     let mut buf = vec![0u8; len];
     reader
         .read_exact(&mut buf)

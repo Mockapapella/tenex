@@ -724,6 +724,39 @@ fn test_run_accepts_single_connection_then_returns() {
 }
 
 #[test]
+fn test_run_continues_after_oversize_frame_client() {
+    let temp = tempfile::Builder::new()
+        .prefix("t108")
+        .tempdir_in("/tmp")
+        .unwrap_or_else(|_| TempDir::new().unwrap());
+    let endpoint = unique_path_endpoint(&temp, "t108");
+
+    let endpoint_for_thread = endpoint.clone();
+    let server = std::thread::spawn(move || {
+        with_tracing_dispatch(|| run_with_connection_limit(&endpoint_for_thread, Some(2)))
+    });
+
+    let mut bad_client = connect_with_retry(&endpoint.name).expect("Expected bad client connect");
+    std::io::Write::write_all(
+        &mut bad_client,
+        &u32::try_from(ipc::MAX_FRAME_BYTES + 1)
+            .expect("oversize test frame fits in u32")
+            .to_le_bytes(),
+    )
+    .expect("write oversize length");
+    drop(bad_client);
+
+    let mut client = connect_with_retry(&endpoint.name).expect("Expected mux client to connect");
+    ipc::write_json(&mut client, &MuxRequest::Ping).unwrap();
+    let response: MuxResponse = ipc::read_json(&mut client).unwrap();
+    assert!(response_is_pong(&response));
+    drop(client);
+
+    server.join().unwrap().unwrap();
+    cleanup_endpoint(&endpoint);
+}
+
+#[test]
 fn test_run_returns_ok_when_existing_daemon_responds_to_ping() {
     let temp = TempDir::new().unwrap();
     let endpoint = unique_path_endpoint(&temp, "tenex-test-daemon-already-running");

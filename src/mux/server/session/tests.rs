@@ -1,6 +1,8 @@
 use super::*;
+use crate::test_support::BlockingWriter;
 use portable_pty::{Child, ChildKiller, MasterPty};
 use std::io;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -166,6 +168,18 @@ fn test_exit_command() -> Vec<String> {
     {
         vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
     }
+}
+
+fn run_with_timeout<T: Send + 'static>(
+    timeout: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> std::result::Result<T, mpsc::RecvTimeoutError> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    let _handle = std::thread::spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout)
 }
 
 fn test_update_like_root_command(marker_path: &Path) -> Vec<String> {
@@ -598,7 +612,7 @@ fn test_kill_window_errors_for_unknown_index() {
 }
 
 #[test]
-fn test_send_input_propagates_write_errors() {
+fn test_send_input_accepts_before_writer_write_errors() {
     let _guard = crate::test_support::lock_mux_test_environment();
     let session_name = "tenex-test-send-input-write-error";
     let tmp = std::env::temp_dir();
@@ -620,20 +634,19 @@ fn test_send_input_propagates_write_errors() {
     };
     {
         let mut window = window.lock();
-        window.writer = Box::new(StubWriter {
+        window.replace_input_writer_for_tests(Box::new(StubWriter {
             write_ok: false,
             flush_ok: true,
-        });
+        }));
     }
 
-    let err = Manager::send_input(session_name, b"ignored").unwrap_err();
-    assert!(format!("{err:?}").contains("Failed to write to PTY"));
+    Manager::send_input(session_name, b"accepted").unwrap();
 
     let _ = Manager::kill(session_name);
 }
 
 #[test]
-fn test_send_input_propagates_flush_errors() {
+fn test_send_input_accepts_before_writer_flush_errors() {
     let _guard = crate::test_support::lock_mux_test_environment();
     let session_name = "tenex-test-send-input-flush-error";
     let tmp = std::env::temp_dir();
@@ -655,15 +668,169 @@ fn test_send_input_propagates_flush_errors() {
     };
     {
         let mut window = window.lock();
-        window.writer = Box::new(StubWriter {
+        window.replace_input_writer_for_tests(Box::new(StubWriter {
             write_ok: true,
             flush_ok: false,
-        });
+        }));
     }
 
-    let err = Manager::send_input(session_name, b"ignored").unwrap_err();
-    assert!(format!("{err:?}").contains("Failed to flush PTY writer"));
+    Manager::send_input(session_name, b"accepted").unwrap();
 
+    let _ = Manager::kill(session_name);
+}
+
+#[test]
+fn test_send_input_returns_queue_full_when_writer_is_wedged() {
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let session_name = "tenex-test-send-input-queue-full";
+    let tmp = std::env::temp_dir();
+
+    let _ = Manager::kill(session_name);
+    Manager::create(session_name, &tmp, Some(&test_command())).unwrap();
+
+    let session_ref = {
+        let state = global_state().lock();
+        let session_ref = state.sessions.get(session_name).cloned().unwrap();
+        drop(state);
+        session_ref
+    };
+    let window = {
+        let guard = session_ref.lock();
+        let window = guard.windows.first().cloned().unwrap();
+        drop(guard);
+        window
+    };
+
+    let (writer, writer_handle) = BlockingWriter::new();
+    {
+        let mut window = window.lock();
+        window.replace_input_writer_for_tests(Box::new(writer));
+    }
+
+    Manager::send_input(session_name, b"wedged").unwrap();
+    writer_handle
+        .wait_until_blocked(Duration::from_secs(2))
+        .expect("writer should enter blocking write");
+
+    let fill = vec![b'x'; crate::mux::backend::INPUT_QUEUE_CAPACITY_BYTES];
+    Manager::send_input(session_name, &fill).unwrap();
+    let err = Manager::send_input(session_name, b"x").unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("failed to queue input"));
+    assert!(message.contains("mux input queue full"));
+    assert!(message.contains("agent may not be consuming input"));
+
+    writer_handle.release().expect("release blocking writer");
+    let _ = Manager::kill(session_name);
+}
+
+#[test]
+fn test_wedged_writer_pump_does_not_block_window_operations() {
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let session_name = "tenex-test-wedged-writer-blocks-window-ops";
+    let other_session = "tenex-test-wedged-writer-other-window";
+    let tmp = std::env::temp_dir();
+
+    let _ = Manager::kill(session_name);
+    let _ = Manager::kill(other_session);
+    Manager::create(session_name, &tmp, Some(&test_command())).unwrap();
+    Manager::create(other_session, &tmp, Some(&test_command())).unwrap();
+
+    let session_ref = {
+        let state = global_state().lock();
+        let session_ref = state.sessions.get(session_name).cloned().unwrap();
+        drop(state);
+        session_ref
+    };
+    let window = {
+        let guard = session_ref.lock();
+        let window = guard.windows.first().cloned().unwrap();
+        drop(guard);
+        window
+    };
+
+    let (writer, writer_handle) = BlockingWriter::new();
+    {
+        let mut window = window.lock();
+        window.replace_input_writer_for_tests(Box::new(writer));
+    }
+
+    Manager::send_input(session_name, b"wedged").unwrap();
+    writer_handle
+        .wait_until_blocked(Duration::from_secs(2))
+        .expect("writer should enter blocking write");
+
+    assert!(
+        run_with_timeout(Duration::from_secs(1), move || Manager::exists(
+            session_name
+        ))
+        .expect("exists should finish"),
+        "wedged session should still exist"
+    );
+    let listed = run_with_timeout(Duration::from_secs(1), move || {
+        Manager::list_windows(session_name)
+    })
+    .expect("list should finish")
+    .expect("list should succeed");
+    assert_eq!(listed.len(), 1);
+    let captured = run_with_timeout(Duration::from_secs(1), move || {
+        super::super::capture::Capture::capture_pane(session_name)
+    })
+    .expect("capture should finish")
+    .expect("capture should succeed");
+    assert!(!captured.is_empty());
+    let other_listed = run_with_timeout(Duration::from_secs(1), move || {
+        Manager::list_windows(other_session)
+    })
+    .expect("other list should finish")
+    .expect("other list should succeed");
+    assert_eq!(other_listed.len(), 1);
+
+    writer_handle.release().expect("release blocking writer");
+    let _ = Manager::kill(session_name);
+    let _ = Manager::kill(other_session);
+}
+
+#[test]
+fn test_kill_window_returns_while_writer_pump_is_wedged() {
+    let _guard = crate::test_support::lock_mux_test_environment();
+    let session_name = "tenex-test-kill-wedged-writer";
+    let tmp = std::env::temp_dir();
+
+    let _ = Manager::kill(session_name);
+    Manager::create(session_name, &tmp, Some(&test_command())).unwrap();
+
+    let session_ref = {
+        let state = global_state().lock();
+        let session_ref = state.sessions.get(session_name).cloned().unwrap();
+        drop(state);
+        session_ref
+    };
+    let window = {
+        let guard = session_ref.lock();
+        let window = guard.windows.first().cloned().unwrap();
+        drop(guard);
+        window
+    };
+
+    let (writer, writer_handle) = BlockingWriter::new();
+    {
+        let mut window = window.lock();
+        window.replace_input_writer_for_tests(Box::new(writer));
+    }
+
+    Manager::send_input(session_name, b"wedged").unwrap();
+    writer_handle
+        .wait_until_blocked(Duration::from_secs(2))
+        .expect("writer should enter blocking write");
+
+    run_with_timeout(Duration::from_secs(1), move || {
+        Manager::kill_window(session_name, 0)
+    })
+    .expect("kill should finish")
+    .expect("kill should succeed");
+
+    writer_handle.release().expect("release blocking writer");
     let _ = Manager::kill(session_name);
 }
 
@@ -1078,10 +1245,10 @@ fn test_stub_writer_success_path() {
     };
     {
         let mut window = window.lock();
-        window.writer = Box::new(StubWriter {
+        window.replace_input_writer_for_tests(Box::new(StubWriter {
             write_ok: true,
             flush_ok: true,
-        });
+        }));
     }
 
     Manager::send_input(session_name, b"ignored").unwrap();
