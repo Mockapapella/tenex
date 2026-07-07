@@ -380,6 +380,20 @@ fn test_open_pr_action_returns_error_modal_when_not_git_workspace() {
 #[test]
 fn test_open_pr_action_enters_confirm_push_for_pr_when_unpushed() {
     let (_dir, repo_path) = init_repo();
+    let remote_dir = TempDir::new().expect("origin dir should be created");
+    let remote_path = remote_dir.path().join("remote.git");
+    std::fs::create_dir_all(&remote_path).expect("origin repo dir should be created");
+    git_ok(&remote_path, &["init", "--bare", "-q", "-b", "main"]).expect("origin repo should init");
+    git_ok(
+        &repo_path,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_path.to_string_lossy().as_ref(),
+        ],
+    )
+    .expect("remote should be added");
 
     let agent = Agent::new(
         "agent-1".to_string(),

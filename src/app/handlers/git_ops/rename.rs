@@ -10,11 +10,14 @@ use crate::state::{AppMode, ErrorModalMode, RenameBranchMode};
 
 use super::super::Actions;
 
+fn branch_config_key(branch: &str, field: &str) -> String {
+    format!("branch.{branch}.{field}")
+}
+
 impl Actions {
     /// Rename the selected agent (r key)
     ///
-    /// For root agents: Renames local branch + agent title + mux session. If a remote branch exists,
-    /// Tenex pushes the new branch name but keeps the old remote branch to avoid closing PRs.
+    /// For root agents: Renames local branch + agent title + mux session.
     /// For sub-agents: Renames agent title + mux window only
     ///
     /// # Errors
@@ -43,26 +46,9 @@ impl Actions {
         Ok(RenameBranchMode.into())
     }
 
-    /// Check if a remote branch exists
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    pub(crate) fn check_remote_branch_exists(
-        worktree_path: &std::path::Path,
-        branch_name: &str,
-    ) -> Result<bool> {
-        let remote_branch = format!("origin/{branch_name}");
-        let output = crate::git::git_command()
-            .args(["rev-parse", "--verify", &remote_branch])
-            .current_dir(worktree_path)
-            .output()
-            .context("Failed to check remote branch")?;
-
-        Ok(output.status.success())
-    }
-
     /// Execute rename operation
     ///
-    /// For root agents: Renames local branch + agent title + mux session. If a remote branch exists,
-    /// Tenex pushes the new branch name but keeps the old remote branch to avoid closing PRs.
+    /// For root agents: Renames local branch + agent title + mux session.
     /// For sub-agents: Renames agent title + mux window only
     ///
     /// # Errors
@@ -152,9 +138,6 @@ impl Actions {
             .config
             .worktree_path_for_repo_root(&repo_root, &new_branch);
 
-        // Check if remote branch exists before we start
-        let remote_exists = Self::check_remote_branch_exists(&worktree_path, &old_branch)?;
-
         // Rename local branch
         let rename_output = crate::git::git_command()
             .args(["branch", "-m", &old_branch, &new_branch])
@@ -190,16 +173,13 @@ impl Actions {
         )?;
         Self::rename_mux_session_for_agent(app_data, agent_id, &mux_session, new_name)?;
 
-        // Handle remote branch rename if needed
-        Self::handle_remote_branch_rename(
+        Self::set_root_rename_status(
             app_data,
             &effective_worktree_path,
-            &old_branch,
             &new_branch,
             old_name,
             new_name,
-            remote_exists,
-        )?;
+        );
 
         Ok(())
     }
@@ -359,52 +339,80 @@ impl Actions {
         app_data.storage.save()
     }
 
-    /// Handle remote branch rename (push new; preserve old)
+    /// Report the completed root rename without mutating remote branches.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn handle_remote_branch_rename(
+    fn set_root_rename_status(
         app_data: &mut AppData,
         worktree_path: &std::path::Path,
-        old_branch: &str,
         new_branch: &str,
         old_name: &str,
         new_name: &str,
-        remote_exists: bool,
-    ) -> Result<()> {
-        if !remote_exists {
-            info!(
-                old_name = %old_name,
-                new_name = %new_name,
-                "Root agent renamed successfully (local only)"
-            );
-            app_data.set_status(format!("Renamed: {old_name} → {new_name}"));
-            return Ok(());
+    ) {
+        info!(
+            old_name = %old_name,
+            new_name = %new_name,
+            "Root agent renamed successfully"
+        );
+        let mut status = format!("Renamed: {old_name} -> {new_name}");
+        match Self::renamed_branch_tracking_status(worktree_path, new_branch) {
+            Ok(Some(tracking_status)) => {
+                status.push_str(" (");
+                status.push_str(&tracking_status);
+                status.push(')');
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    branch = new_branch,
+                    "Failed to read renamed branch tracking status"
+                );
+            }
         }
 
-        // Push new branch to remote
-        let push_output = crate::git::git_command()
-            .args(["push", "-u", "origin", new_branch])
+        app_data.set_status(status);
+    }
+
+    fn renamed_branch_tracking_status(
+        worktree_path: &std::path::Path,
+        branch: &str,
+    ) -> Result<Option<String>> {
+        let remote = Self::git_config_get(worktree_path, &branch_config_key(branch, "remote"))?;
+        let merge = Self::git_config_get(worktree_path, &branch_config_key(branch, "merge"))?;
+
+        match (remote, merge) {
+            (Some(remote), Some(merge)) => {
+                let merge_name = merge.strip_prefix("refs/heads/").unwrap_or(merge.as_str());
+                Ok(Some(format!("tracking {remote}/{merge_name}")))
+            }
+            (None, None) => Ok(None),
+            _ => anyhow::bail!("Incomplete upstream config for branch '{branch}'"),
+        }
+    }
+
+    fn git_config_get(worktree_path: &std::path::Path, key: &str) -> Result<Option<String>> {
+        let output = crate::git::git_command()
+            .args(["config", "--get", key])
             .current_dir(worktree_path)
             .output()
-            .context("Failed to push renamed branch")?;
+            .with_context(|| format!("Failed to read git config key '{key}'"))?;
 
-        if push_output.status.success() {
-            info!(
-                old_name = %old_name,
-                new_name = %new_name,
-                "Root agent renamed successfully"
-            );
-            app_data.set_status(format!(
-                "Renamed: {old_name} → {new_name} (kept origin/{old_branch})"
-            ));
-        } else {
-            let stderr = String::from_utf8_lossy(&push_output.stderr);
-            warn!(error = %stderr, "Failed to push renamed branch to remote");
-            app_data.set_status(format!(
-                "Renamed to {new_name} (remote push failed; origin/{old_branch} kept)"
-            ));
+        if output.status.success() {
+            let raw = String::from_utf8(output.stdout)
+                .with_context(|| format!("Git config key '{key}' was not UTF-8"))?;
+            let value = raw.trim_end_matches('\n').trim_end_matches('\r');
+            if value.is_empty() {
+                anyhow::bail!("Git config key '{key}' is empty");
+            }
+            return Ok(Some(value.to_string()));
         }
 
-        Ok(())
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to read git config key '{key}': {}", stderr.trim());
     }
 
     /// Execute rename for a sub-agent (title + mux window only)
@@ -499,6 +507,212 @@ mod tests {
             &["commit", "-q", "--no-verify", "-m", "init"],
         );
         repo_dir
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &Path, body: &str) {
+        std::fs::write(path, body).expect("write script");
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[test]
+    fn test_renamed_branch_tracking_status_uses_actual_merge_value() {
+        let repo_dir = init_repo_with_commit();
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.feature.remote", "upstream"],
+        );
+        git_ok(
+            repo_dir.path(),
+            &[
+                "config",
+                "branch.feature.merge",
+                "refs/heads/differently-named-remote-branch",
+            ],
+        );
+
+        assert_eq!(
+            Actions::renamed_branch_tracking_status(repo_dir.path(), "feature")
+                .expect("read tracking")
+                .as_deref(),
+            Some("tracking upstream/differently-named-remote-branch")
+        );
+
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.tagged.remote", "origin"],
+        );
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.tagged.merge", "refs/tags/v1"],
+        );
+        assert_eq!(
+            Actions::renamed_branch_tracking_status(repo_dir.path(), "tagged")
+                .expect("read tracking")
+                .as_deref(),
+            Some("tracking origin/refs/tags/v1")
+        );
+    }
+
+    #[test]
+    fn test_renamed_branch_tracking_status_handles_missing_and_incomplete_config() {
+        let repo_dir = init_repo_with_commit();
+
+        assert_eq!(
+            Actions::renamed_branch_tracking_status(repo_dir.path(), "feature")
+                .expect("read missing tracking"),
+            None
+        );
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.feature.remote", "origin"],
+        );
+        let err = Actions::renamed_branch_tracking_status(repo_dir.path(), "feature")
+            .expect_err("expected incomplete upstream");
+        assert!(err.to_string().contains("Incomplete upstream config"));
+
+        git_ok(
+            repo_dir.path(),
+            &["config", "--unset", "branch.feature.remote"],
+        );
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.feature.merge", "refs/heads/feature"],
+        );
+        let err = Actions::renamed_branch_tracking_status(repo_dir.path(), "feature")
+            .expect_err("expected incomplete upstream");
+        assert!(err.to_string().contains("Incomplete upstream config"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_renamed_branch_tracking_status_propagates_merge_read_errors() {
+        let repo_dir = init_repo_with_commit();
+        let script_path = repo_dir.path().join("fake-git.sh");
+        write_executable_script(
+            &script_path,
+            r#"#!/bin/sh
+set -eu
+if [ "$#" -ge 3 ] && [ "$1" = "config" ] && [ "$2" = "--get" ]; then
+  case "$3" in
+    branch.feature.remote)
+      printf 'origin\n'
+      exit 0
+      ;;
+    branch.feature.merge)
+      echo "forced merge read failure" >&2
+      exit 2
+      ;;
+  esac
+fi
+exec git "$@"
+"#,
+        );
+
+        crate::git::with_git_program_override_for_tests(script_path, || {
+            let err = Actions::renamed_branch_tracking_status(repo_dir.path(), "feature")
+                .expect_err("expected merge read error");
+            assert!(err.to_string().contains("forced merge read failure"));
+        });
+    }
+
+    #[test]
+    fn test_set_root_rename_status_reports_tracking_and_falls_back_on_read_failure() {
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let storage = Storage::with_path(temp_file.path().to_path_buf());
+        let mut app = App::new(Config::default(), storage, Settings::default(), false);
+        let repo_dir = init_repo_with_commit();
+        git_ok(repo_dir.path(), &["config", "branch.new.remote", "origin"]);
+        git_ok(
+            repo_dir.path(),
+            &["config", "branch.new.merge", "refs/heads/old"],
+        );
+
+        with_tracing_dispatch(|| {
+            Actions::set_root_rename_status(
+                &mut app.data,
+                repo_dir.path(),
+                "new",
+                "Old Name",
+                "New Name",
+            );
+        });
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Renamed: Old Name -> New Name (tracking origin/old)")
+        );
+
+        let missing_worktree = repo_dir.path().join("missing");
+        with_tracing_dispatch(|| {
+            Actions::set_root_rename_status(
+                &mut app.data,
+                &missing_worktree,
+                "new",
+                "Old Name",
+                "New Name",
+            );
+        });
+        assert_eq!(
+            app.data.ui.status_message.as_deref(),
+            Some("Renamed: Old Name -> New Name")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_git_config_get_boundary_errors() {
+        let repo_dir = init_repo_with_commit();
+        git_ok(repo_dir.path(), &["config", "tenex.value", "value"]);
+        git_ok(repo_dir.path(), &["config", "tenex.empty", ""]);
+
+        assert_eq!(
+            Actions::git_config_get(repo_dir.path(), "tenex.value")
+                .expect("read config")
+                .as_deref(),
+            Some("value")
+        );
+        assert_eq!(
+            Actions::git_config_get(repo_dir.path(), "tenex.missing").expect("read missing"),
+            None
+        );
+
+        let err = Actions::git_config_get(repo_dir.path(), "tenex.empty")
+            .expect_err("expected empty config value");
+        assert!(err.to_string().contains("is empty"));
+
+        let missing_worktree = repo_dir.path().join("missing");
+        let err = Actions::git_config_get(&missing_worktree, "tenex.value")
+            .expect_err("expected spawn error");
+        assert!(err.to_string().contains("Failed to read git config key"));
+
+        let script_path = repo_dir.path().join("fake-git.sh");
+        write_executable_script(
+            &script_path,
+            r#"#!/bin/sh
+set -eu
+if [ "$#" -ge 3 ] && [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "tenex.invalid_utf8" ]; then
+  printf '\377'
+  exit 0
+fi
+if [ "$#" -ge 3 ] && [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "tenex.fail" ]; then
+  echo "forced get failure" >&2
+  exit 2
+fi
+exec git "$@"
+"#,
+        );
+
+        crate::git::with_git_program_override_for_tests(script_path, || {
+            let err = Actions::git_config_get(repo_dir.path(), "tenex.invalid_utf8")
+                .expect_err("expected invalid utf8");
+            assert!(err.to_string().contains("was not UTF-8"));
+
+            let err = Actions::git_config_get(repo_dir.path(), "tenex.fail")
+                .expect_err("expected git config failure");
+            assert!(err.to_string().contains("forced get failure"));
+        });
     }
 
     #[test]
@@ -652,44 +866,11 @@ mod tests {
         assert!(message.contains("Failed to rename branch:"));
     }
 
-    #[test]
-    fn test_execute_root_rename_propagates_check_remote_branch_exists_errors() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(Config::default(), storage, Settings::default(), false);
-
-        let temp_dir = TempDir::new().expect("temp dir");
-        let missing_worktree = temp_dir.path().join("missing");
-
-        let agent = Agent::new(
-            "old-agent".to_string(),
-            "claude".to_string(),
-            "master".to_string(),
-            missing_worktree,
-        );
-        let agent_id = agent.id;
-        app.data.storage.add(agent);
-
-        let err = with_tracing_dispatch(|| {
-            Actions::execute_root_rename(&mut app.data, agent_id, "old-agent", "new-agent")
-        })
-        .expect_err("expected remote branch check to fail");
-        assert!(err.to_string().contains("Failed to check remote branch"));
-    }
-
     #[cfg(unix)]
     #[test]
     fn test_execute_root_rename_reports_error_when_local_branch_rename_spawn_fails() {
         let temp_dir = TempDir::new().expect("temp dir");
-        let script_dir = TempDir::new().expect("temp dir");
-        let script_path = script_dir.path().join("fake-git.sh");
-
-        std::fs::write(&script_path, "#!/bin/sh\nrm -- \"$0\"\nexit 0\n").expect("write script");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod");
+        let missing_git = temp_dir.path().join("missing-git");
 
         let temp_file = NamedTempFile::new().expect("temp file");
         let storage = Storage::with_path(temp_file.path().to_path_buf());
@@ -704,7 +885,7 @@ mod tests {
         let agent_id = agent.id;
         app.data.storage.add(agent);
 
-        let err = crate::git::with_git_program_override_for_tests(script_path, || {
+        let err = crate::git::with_git_program_override_for_tests(missing_git, || {
             Actions::execute_root_rename(&mut app.data, agent_id, "old-agent", "new-agent")
         })
         .expect_err("expected local branch rename spawn to fail");
@@ -916,144 +1097,6 @@ mod tests {
             Path::new("/tmp/new-worktree"),
         )
         .expect("update ok");
-    }
-
-    #[test]
-    fn test_handle_remote_branch_rename_sets_status_when_remote_missing() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(Config::default(), storage, Settings::default(), false);
-
-        with_tracing_dispatch(|| {
-            Actions::handle_remote_branch_rename(
-                &mut app.data,
-                Path::new("/tmp"),
-                "old-branch",
-                "new-branch",
-                "Old Name",
-                "New Name",
-                false,
-            )
-            .expect("rename ok");
-        });
-
-        let status = app.data.ui.status_message.as_deref().unwrap_or("");
-        assert!(status.contains("Renamed:"));
-    }
-
-    #[test]
-    fn test_handle_remote_branch_rename_sets_status_when_push_fails() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(Config::default(), storage, Settings::default(), false);
-
-        with_tracing_dispatch(|| {
-            Actions::handle_remote_branch_rename(
-                &mut app.data,
-                Path::new("/tmp"),
-                "old-branch",
-                "new-branch",
-                "Old Name",
-                "New Name",
-                true,
-            )
-            .expect("rename ok");
-        });
-
-        let status = app.data.ui.status_message.as_deref().unwrap_or("");
-        assert!(status.contains("remote push failed"));
-    }
-
-    #[test]
-    fn test_handle_remote_branch_rename_propagates_spawn_errors() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(Config::default(), storage, Settings::default(), false);
-
-        let missing_dir = TempDir::new().expect("temp dir");
-        let worktree_path = missing_dir.path().join("missing");
-
-        let err = Actions::handle_remote_branch_rename(
-            &mut app.data,
-            &worktree_path,
-            "old-branch",
-            "new-branch",
-            "Old Name",
-            "New Name",
-            true,
-        )
-        .expect_err("expected spawn error");
-
-        assert!(err.to_string().contains("Failed to push renamed branch"));
-    }
-
-    #[test]
-    fn test_handle_remote_branch_rename_push_success_sets_status() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(Config::default(), storage, Settings::default(), false);
-
-        let temp_dir = TempDir::new().expect("temp dir");
-        let remote_repo = temp_dir.path().join("remote.git");
-        let local_repo = temp_dir.path().join("local");
-        std::fs::create_dir_all(&remote_repo).expect("create remote");
-        std::fs::create_dir_all(&local_repo).expect("create local");
-
-        git_ok(&remote_repo, &["init", "--bare"]);
-        git_ok(&local_repo, &["init", "-q", "-b", "master"]);
-        git_ok(&local_repo, &["config", "user.email", "tenex@test.invalid"]);
-        git_ok(&local_repo, &["config", "user.name", "Tenex Test"]);
-        std::fs::write(local_repo.join("README.md"), "test\n").expect("write readme");
-        git_ok(&local_repo, &["add", "."]);
-        git_ok(&local_repo, &["commit", "-q", "--no-verify", "-m", "init"]);
-        git_ok(
-            &local_repo,
-            &[
-                "remote",
-                "add",
-                "origin",
-                remote_repo.to_string_lossy().as_ref(),
-            ],
-        );
-        git_ok(&local_repo, &["checkout", "-q", "-b", "new-branch"]);
-
-        with_tracing_dispatch(|| {
-            Actions::handle_remote_branch_rename(
-                &mut app.data,
-                &local_repo,
-                "old-branch",
-                "new-branch",
-                "Old Name",
-                "New Name",
-                true,
-            )
-            .expect("push ok");
-        });
-
-        let status = app.data.ui.status_message.as_deref().unwrap_or("");
-        assert!(status.contains("kept origin/old-branch"));
-    }
-
-    #[test]
-    fn test_check_remote_branch_exists_propagates_spawn_errors() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let worktree_path = temp_dir.path().join("missing");
-        let err = Actions::check_remote_branch_exists(&worktree_path, "master")
-            .expect_err("expected error");
-        assert!(err.to_string().contains("Failed to check remote branch"));
-    }
-
-    #[test]
-    fn test_check_remote_branch_exists_returns_true_when_remote_tracking_ref_present() {
-        let repo_dir = init_repo_with_commit();
-        git_ok(
-            repo_dir.path(),
-            &["update-ref", "refs/remotes/origin/master", "HEAD"],
-        );
-
-        let result = Actions::check_remote_branch_exists(repo_dir.path(), "master")
-            .expect("check remote branch exists");
-        assert!(result);
     }
 
     #[test]
@@ -1635,80 +1678,6 @@ mod tests {
 
         assert!(new_path.exists());
         assert!(!new_path.join(".git").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_execute_root_rename_propagates_handle_remote_branch_rename_errors() {
-        let worktree_dir = TempDir::new().expect("temp dir");
-        let repo_root = TempDir::new().expect("temp dir");
-
-        let config = Config {
-            worktree_dir: worktree_dir.path().to_path_buf(),
-            ..Config::default()
-        };
-
-        let new_branch = config.generate_branch_name("new-agent");
-        let worktree_path = config.worktree_path_for_repo_root(repo_root.path(), &new_branch);
-        std::fs::create_dir_all(&worktree_path).expect("worktree path");
-        git_ok(&worktree_path, &["init", "-q", "-b", "master"]);
-        git_ok(
-            &worktree_path,
-            &["config", "user.email", "tenex@test.invalid"],
-        );
-        git_ok(&worktree_path, &["config", "user.name", "Tenex Test"]);
-        std::fs::write(worktree_path.join("README.md"), "test\n").expect("write readme");
-        git_ok(&worktree_path, &["add", "."]);
-        git_ok(
-            &worktree_path,
-            &["commit", "-q", "--no-verify", "-m", "init"],
-        );
-
-        let script_dir = TempDir::new().expect("temp dir");
-        let script_path = script_dir.path().join("fake-git.sh");
-        std::fs::write(
-            &script_path,
-            r#"#!/bin/sh
-set -eu
-if [ $# -ge 1 ] && [ "$1" = "rev-parse" ]; then
-  exit 0
-fi
-if [ $# -ge 2 ] && [ "$1" = "branch" ] && [ "$2" = "-m" ]; then
-  cwd="$PWD"
-  cd /
-  rm -rf "$cwd"
-  exit 0
-fi
-exit 0
-"#,
-        )
-        .expect("write script");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod");
-
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let storage = Storage::with_path(temp_file.path().to_path_buf());
-        let mut app = App::new(config, storage, Settings::default(), false);
-
-        let mut agent = Agent::new(
-            "old-agent".to_string(),
-            "claude".to_string(),
-            "master".to_string(),
-            worktree_path,
-        );
-        agent.repo_root = Some(repo_root.path().to_path_buf());
-        let agent_id = agent.id;
-        app.data.storage.add(agent);
-
-        let err = crate::git::with_git_program_override_for_tests(script_path, || {
-            Actions::execute_root_rename(&mut app.data, agent_id, "old-agent", "new-agent")
-        })
-        .expect_err("expected push error");
-
-        assert!(err.to_string().contains("Failed to push renamed branch"));
     }
 
     #[test]

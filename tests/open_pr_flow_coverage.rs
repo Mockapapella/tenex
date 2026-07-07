@@ -34,6 +34,14 @@ fn init_repo(repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn add_bare_origin(repo: &Path) -> Result<TempDir, Box<dyn std::error::Error>> {
+    let remote_dir = TempDir::new()?;
+    run_git(remote_dir.path(), &["init", "--bare"])?;
+    let remote = remote_dir.path().to_string_lossy().into_owned();
+    run_git(repo, &["remote", "add", "origin", &remote])?;
+    Ok(remote_dir)
+}
+
 fn commit_file(
     repo: &Path,
     name: &str,
@@ -80,6 +88,7 @@ fn test_open_pr_flow_probe_has_unpushed_prints_confirm_push_for_pr()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
     init_repo(repo_dir.path())?;
+    let _remote_dir = add_bare_origin(repo_dir.path())?;
     commit_file(repo_dir.path(), "file.txt", "base\n", "base")?;
     run_git(repo_dir.path(), &["checkout", "-b", "feature/has-unpushed"])?;
 
@@ -249,6 +258,7 @@ fn test_open_pr_flow_probe_exits_nonzero_when_stdout_write_fails()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
     init_repo(repo_dir.path())?;
+    let _remote_dir = add_bare_origin(repo_dir.path())?;
     commit_file(repo_dir.path(), "file.txt", "base\n", "base")?;
     run_git(repo_dir.path(), &["checkout", "-b", "feature/has-unpushed"])?;
 
@@ -273,6 +283,7 @@ fn test_open_pr_flow_probe_exits_nonzero_when_stdout_flush_fails()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
     init_repo(repo_dir.path())?;
+    let _remote_dir = add_bare_origin(repo_dir.path())?;
     commit_file(repo_dir.path(), "file.txt", "base\n", "base")?;
     run_git(repo_dir.path(), &["checkout", "-b", "feature/has-unpushed"])?;
 
@@ -297,6 +308,7 @@ fn test_open_pr_flow_probe_ignores_unknown_stdout_fail_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
     init_repo(repo_dir.path())?;
+    let _remote_dir = add_bare_origin(repo_dir.path())?;
     commit_file(repo_dir.path(), "file.txt", "base\n", "base")?;
     run_git(repo_dir.path(), &["checkout", "-b", "feature/has-unpushed"])?;
 

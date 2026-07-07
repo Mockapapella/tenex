@@ -15,6 +15,37 @@ thread_local! {
     static GH_BINARY_OVERRIDE: RefCell<std::ffi::OsString> = RefCell::new(std::ffi::OsString::from("gh"));
 }
 
+struct RemoteTrackingRef {
+    remote: String,
+    merge_ref: String,
+    local_ref: String,
+}
+
+impl RemoteTrackingRef {
+    fn for_branch(worktree_path: &std::path::Path, branch_name: &str) -> Result<Self> {
+        if let Some(upstream) = super::push::configured_upstream(worktree_path, branch_name)
+            .context("Failed to check remote branch")?
+        {
+            let mut local_ref = branch_name.to_string();
+            local_ref.push('@');
+            local_ref.push('{');
+            local_ref.push_str("upstream");
+            local_ref.push('}');
+            return Ok(Self {
+                remote: upstream.remote,
+                merge_ref: upstream.merge_ref,
+                local_ref,
+            });
+        }
+
+        Ok(Self {
+            remote: "origin".to_string(),
+            merge_ref: format!("refs/heads/{branch_name}"),
+            local_ref: format!("origin/{branch_name}"),
+        })
+    }
+}
+
 #[cfg(test)]
 pub(super) fn set_gh_binary_override(path: std::path::PathBuf) {
     GH_BINARY_OVERRIDE.with(|value| {
@@ -170,10 +201,39 @@ impl Actions {
         worktree_path: &std::path::Path,
         branch_name: &str,
     ) -> Result<bool> {
-        // Check if remote tracking branch exists
-        let remote_branch = format!("origin/{branch_name}");
+        let remote_branch = RemoteTrackingRef::for_branch(worktree_path, branch_name)?;
+        let remote_output = crate::git::git_command()
+            .args([
+                "ls-remote",
+                "--heads",
+                &remote_branch.remote,
+                &remote_branch.merge_ref,
+            ])
+            .current_dir(worktree_path)
+            .output()
+            .with_context(|| {
+                format!(
+                    "Failed to check remote ref '{}' on remote '{}'",
+                    remote_branch.merge_ref, remote_branch.remote
+                )
+            })?;
+
+        if !remote_output.status.success() {
+            let stderr = String::from_utf8_lossy(&remote_output.stderr);
+            bail!(
+                "Failed to check remote ref '{}' on remote '{}': {}",
+                remote_branch.merge_ref,
+                remote_branch.remote,
+                stderr.trim()
+            );
+        }
+
+        if remote_output.stdout.is_empty() {
+            return Ok(true);
+        }
+
         let output = crate::git::git_command()
-            .args(["rev-parse", "--verify", &remote_branch])
+            .args(["rev-parse", "--verify", &remote_branch.local_ref])
             .current_dir(worktree_path)
             .output()
             .context("Failed to check remote branch")?;
@@ -188,7 +248,7 @@ impl Actions {
             .args([
                 "rev-list",
                 "--count",
-                &format!("{remote_branch}..{branch_name}"),
+                &format!("{}..{branch_name}", remote_branch.local_ref),
             ])
             .current_dir(worktree_path)
             .output()
@@ -230,12 +290,7 @@ impl Actions {
 
         debug!(branch = %branch_name, "Executing push before opening PR");
 
-        // Push to remote
-        let push_output = crate::git::git_command()
-            .args(["push", "-u", "origin", &branch_name])
-            .current_dir(&worktree_path)
-            .output()
-            .context("Failed to push to remote")?;
+        let push_output = super::push::run_push(&worktree_path, &branch_name)?;
 
         if !push_output.status.success() {
             let stderr = String::from_utf8_lossy(&push_output.stderr);
@@ -403,18 +458,68 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_has_unpushed_commits_reports_error_when_rev_list_spawn_fails() {
-        let worktree = TempDir::new().unwrap();
-        let temp = TempDir::new().unwrap();
-        let script =
-            write_fake_script(temp.path(), "git", "#!/bin/sh\nrm -- \"$0\"\nexit 0\n").unwrap();
+    fn test_has_unpushed_commits_reports_error_when_rev_list_spawn_fails() -> Result<()> {
+        let worktree = TempDir::new()?;
+        let temp = TempDir::new()?;
+        let script = write_fake_script(
+            temp.path(),
+            "git",
+            r#"#!/bin/sh
+if [ "$1" = "config" ]; then
+  exit 1
+fi
+if [ "$1" = "ls-remote" ]; then
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/feature\n'
+  exit 0
+fi
+if [ "$1" = "rev-parse" ]; then
+  rm -- "$0"
+  exit 0
+fi
+exit 0
+"#,
+        )?;
 
         let err = crate::git::with_git_program_override_for_tests(script, || {
             Actions::has_unpushed_commits(worktree.path(), "feature")
         })
-        .expect_err("expected rev-list spawn to fail");
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected rev-list spawn to fail"))?;
 
         assert!(err.to_string().contains("Failed to count unpushed commits"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_has_unpushed_commits_reports_error_when_ls_remote_fails() -> Result<()> {
+        let worktree = TempDir::new()?;
+        let temp = TempDir::new()?;
+        let script = write_fake_script(
+            temp.path(),
+            "git",
+            r#"#!/bin/sh
+if [ "$1" = "config" ]; then
+  exit 1
+fi
+if [ "$1" = "ls-remote" ]; then
+  printf 'remote unavailable\n' >&2
+  exit 128
+fi
+exit 0
+"#,
+        )?;
+
+        let err = crate::git::with_git_program_override_for_tests(script, || {
+            Actions::has_unpushed_commits(worktree.path(), "feature")
+        })
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected ls-remote failure"))?;
+
+        let message = err.to_string();
+        assert!(message.contains("Failed to check remote ref"));
+        assert!(message.contains("remote unavailable"));
+        Ok(())
     }
 
     #[test]

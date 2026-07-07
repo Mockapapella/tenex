@@ -3,71 +3,71 @@
   "platforms": {
     "linux": {
       "branches": {
-        "amount": 1764,
+        "amount": 1776,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 2116,
+        "amount": 2125,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 22085,
+        "amount": 22152,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 36876,
+        "amount": 36867,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
     "macos": {
       "branches": {
-        "amount": 1764,
+        "amount": 1776,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 2116,
+        "amount": 2125,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 22085,
+        "amount": 22152,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 36876,
+        "amount": 36867,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     },
     "windows": {
       "branches": {
-        "amount": 1764,
+        "amount": 1776,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "functions": {
-        "amount": 2116,
+        "amount": 2125,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "lines": {
-        "amount": 22085,
+        "amount": 22152,
         "theoretical_max_percent": "100.00000000000000000000000000"
       },
       "regions": {
-        "amount": 36876,
+        "amount": 36867,
         "theoretical_max_percent": "100.00000000000000000000000000"
       }
     }
   },
   "union": {
     "branches": {
-      "amount": 1764
+      "amount": 1776
     },
     "functions": {
-      "amount": 2116
+      "amount": 2125
     },
     "lines": {
-      "amount": 22085
+      "amount": 22152
     },
     "regions": {
-      "amount": 36876
+      "amount": 36867
     }
   }
 }
