@@ -50,8 +50,21 @@ const CODEX_REVIEW_BASE_BRANCH_TIMEOUT: &str =
     "Timed out waiting for Codex /review base branch prompt; leaving agent for manual review";
 const CODEX_REVIEW_START_TIMEOUT: &str =
     "Timed out waiting for Codex /review to start; leaving agent for manual review";
+const CODEX_REVIEW_BASE_BRANCH_MISMATCH_STATUS: &str =
+    "Codex review may be running against a different base than requested";
 const SYNTHESIS_KILL_WINDOW_WARN: &str =
     "Failed to kill descendant mux window during synthesis cleanup";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexReviewStart {
+    NotObserved,
+    MatchedBaseBranch,
+    BaseBranchMismatch,
+}
+
+fn codex_review_base_branch_hint(base_branch: &str) -> String {
+    format!("changes against '{base_branch}'")
+}
 
 #[cfg(any(test, coverage))]
 thread_local! {
@@ -417,7 +430,7 @@ impl Actions {
         Ok(synthesis_file)
     }
 
-    fn start_codex_review_flow(self, target: &str, base_branch: &str) -> Result<()> {
+    fn start_codex_review_flow(self, target: &str, base_branch: &str) -> Result<CodexReviewStart> {
         self.start_codex_review_flow_with_timings(
             target,
             base_branch,
@@ -431,7 +444,7 @@ impl Actions {
         target: &str,
         base_branch: &str,
         timings: CodexReviewTimings,
-    ) -> Result<()> {
+    ) -> Result<CodexReviewStart> {
         let base_branch = base_branch.trim();
         if base_branch.is_empty() {
             bail!("Base branch cannot be empty for Codex review flow");
@@ -443,7 +456,7 @@ impl Actions {
 
         if !self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval) {
             warn!(target, "{}", CODEX_PANE_SETTLE_TIMEOUT);
-            return Ok(());
+            return Ok(CodexReviewStart::NotObserved);
         }
 
         self.session_manager.send_keys(target, "/review")?;
@@ -462,20 +475,20 @@ impl Actions {
             poll_interval,
         ) {
             warn!(target, "{}", CODEX_REVIEW_PRESET_TIMEOUT);
-            return Ok(());
+            return Ok(CodexReviewStart::NotObserved);
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains_any(target, &["base branch"], step_timeout, poll_interval) {
             warn!(target, "{}", CODEX_REVIEW_BASE_BRANCH_TIMEOUT);
-            return Ok(());
+            return Ok(CodexReviewStart::NotObserved);
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
         self.session_manager.send_keys(target, base_branch)?;
         self.session_manager.send_keys_and_submit(target, "")?;
-        if !self.wait_for_pane_contains_any(
+        let review_start = self.wait_for_pane_contains_any_text(
             target,
             &[
                 "review started",
@@ -484,26 +497,42 @@ impl Actions {
             ],
             step_timeout,
             poll_interval,
-        ) {
+        );
+        let Some(review_start) = review_start else {
             warn!(target, "{}", CODEX_REVIEW_START_TIMEOUT);
+            return Ok(CodexReviewStart::NotObserved);
+        };
+
+        let expected_hint = codex_review_base_branch_hint(base_branch);
+        if !review_start.contains(&expected_hint) {
+            warn!(
+                target,
+                requested_base_branch = base_branch,
+                expected_hint,
+                review_confirmation = %review_start,
+                "Codex /review may have started against a different base branch"
+            );
+            return Ok(CodexReviewStart::BaseBranchMismatch);
         }
 
-        Ok(())
+        Ok(CodexReviewStart::MatchedBaseBranch)
     }
 
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn start_codex_review_flows(self, flows: Vec<(String, String)>) {
+    fn start_codex_review_flows(self, flows: Vec<(String, String)>) -> bool {
+        let mut found_mismatch = false;
         for (target, base_branch) in flows {
-            if let Err(err) = self.start_codex_review_flow(&target, &base_branch) {
-                warn!(target, error = %err, "Failed to drive Codex /review flow");
+            match self.start_codex_review_flow(&target, &base_branch) {
+                Ok(CodexReviewStart::BaseBranchMismatch) => {
+                    found_mismatch = true;
+                }
+                Ok(CodexReviewStart::NotObserved | CodexReviewStart::MatchedBaseBranch) => {}
+                Err(err) => {
+                    warn!(target, error = %err, "Failed to drive Codex /review flow");
+                }
             }
         }
-    }
-
-    fn start_codex_review_flows_in_background(self, flows: Vec<(String, String)>) {
-        std::thread::spawn(move || {
-            self.start_codex_review_flows(flows);
-        });
+        found_mismatch
     }
 
     fn codex_review_flow_for_child(child: &Agent, base_branch: &str) -> Option<(String, String)> {
@@ -525,16 +554,27 @@ impl Actions {
         timeout: Duration,
         poll_interval: Duration,
     ) -> bool {
+        self.wait_for_pane_contains_any_text(target, needles, timeout, poll_interval)
+            .is_some()
+    }
+
+    fn wait_for_pane_contains_any_text(
+        self,
+        target: &str,
+        needles: &[&str],
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Option<String> {
         let start = Instant::now();
         while start.elapsed() < timeout {
             if let Ok(pane) = self.output_capture.capture_pane(target)
                 && needles.iter().any(|needle| pane.contains(needle))
             {
-                return true;
+                return Some(pane);
             }
             std::thread::sleep(poll_interval);
         }
-        false
+        None
     }
 
     fn wait_for_pane_idle(
@@ -1040,7 +1080,12 @@ impl Actions {
         app_data.review.clear();
 
         if !codex_review_flows.is_empty() {
-            self.start_codex_review_flows_in_background(codex_review_flows);
+            let found_mismatch = self.start_codex_review_flows(codex_review_flows);
+            if found_mismatch {
+                app_data.set_status(format!(
+                    "{CODEX_REVIEW_BASE_BRANCH_MISMATCH_STATUS}: {base_branch}"
+                ));
+            }
         }
 
         Ok(())
@@ -1239,6 +1284,39 @@ mod tests {
             .finish();
         let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, f)
+    }
+
+    #[derive(Clone)]
+    struct SharedTraceWriter {
+        buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for SharedTraceWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buffer.lock().expect("lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn with_captured_tracing<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = SharedTraceWriter {
+            buffer: std::sync::Arc::clone(&buffer),
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        let result = tracing::dispatcher::with_default(&dispatch, f);
+        let bytes = buffer.lock().expect("lock").clone();
+        let logs = String::from_utf8(bytes).expect("trace logs utf8");
+        (result, logs)
     }
 
     #[test]
@@ -1581,7 +1659,7 @@ mod tests {
             "review my current changes",
             "review preset",
             "base branch",
-            "review started",
+            ">> Code review started: changes against 'main' <<",
         ]
         .join("\n");
 
@@ -1614,7 +1692,7 @@ mod tests {
             "review my current changes",
             "review preset",
             "base branch",
-            "review started",
+            ">> Code review started: changes against 'stage' <<",
         ]
         .join("\n");
 
@@ -1629,9 +1707,10 @@ mod tests {
             command_hint_timeout: Duration::from_millis(50),
         };
 
-        handler
+        let review_start = handler
             .start_codex_review_flow_with_timings("session", "stage", timings)
             .expect("review flow should succeed");
+        assert_eq!(review_start, CodexReviewStart::MatchedBaseBranch);
 
         server.join().expect("mock mux server panicked");
         let inputs = captured_inputs.lock().expect("lock");
@@ -1641,6 +1720,52 @@ mod tests {
         assert_eq!(inputs[2], b"\r");
         assert_eq!(inputs[3], b"stage");
         assert_eq!(inputs[4], b"\r");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_start_codex_review_flow_warns_when_confirmation_names_different_base_branch() {
+        let _mux_guard = crate::test_support::lock_mux_test_environment();
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let (display, name) = make_mock_socket(&temp);
+        crate::mux::set_socket_override(&display).expect("set socket override");
+
+        let capture_text = [
+            "review my current changes",
+            "review preset",
+            "base branch",
+            ">> Code review started: changes against 'feature/stage' <<",
+        ]
+        .join("\n");
+
+        let (server, captured_inputs) =
+            spawn_capturing_mock_mux_server(name, capture_text, Vec::new(), 15);
+
+        let handler = Actions::new();
+        let timings = CodexReviewTimings {
+            poll_interval: Duration::from_millis(1),
+            step_timeout: Duration::from_millis(250),
+            idle_stable_for: Duration::from_millis(0),
+            command_hint_timeout: Duration::from_millis(50),
+        };
+
+        let (result, logs) = with_captured_tracing(|| {
+            handler.start_codex_review_flow_with_timings("session", "stage", timings)
+        });
+
+        assert_eq!(
+            result.expect("review flow should succeed"),
+            CodexReviewStart::BaseBranchMismatch
+        );
+        assert!(
+            logs.contains("Codex /review may have started against a different base branch"),
+            "expected mismatch warning in logs, got: {logs:?}"
+        );
+
+        server.join().expect("mock mux server panicked");
+        let inputs = captured_inputs.lock().expect("lock");
+        assert_eq!(inputs.len(), 5);
+        assert_eq!(inputs[3], b"stage");
     }
 
     #[cfg(unix)]
