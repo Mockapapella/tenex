@@ -9,9 +9,9 @@ Triage of every open issue against master `3a2a408` on 2026-07-06. Each item tra
 
 ## Bugs to fix
 
-- [ ] #124 Review agents always compare against main/master. The chosen base branch is bracketed-pasted into Codex's `/review` branch picker, which ignores pasted text. Send it as typed keys instead. (S)
+- [x] #124 Review agents always compare against main/master. The base branch is now typed into Codex's `/review` picker instead of bracketed-pasted, with post-start verification of the exact selected base and a visible warning on colliding-name mismatches. Merged in #144. (S)
 - [x] #102 Terminal agents have no tab-complete. Attached preview dispatch swallowed `Tab`/`BackTab` before forwarding; both are now forwarded while attached, with docs updated. Merged in #143. (S)
-- [ ] #121 Renaming an agent breaks remote tracking. Rename re-pushes with `-u` to a new remote branch instead of preserving the old upstream. Preserve tracking by default; make remote rename an explicit follow-up action. (M)
+- [x] #121 Renaming an agent breaks remote tracking. Rename no longer touches the remote (git branch -m migrates tracking natively); push and open-PR flows are now upstream-aware, including ls-remote verification against stale tracking refs. Merged in #146. (M)
 - [ ] #110 Stale PTY size after restart on a smaller screen. The daemon clamps every resize to the historical maximum. Make resize mean the exact requested size. (S)
 - [ ] #108 Large paste hard-locks the app and wedges restart. The daemon writes unbounded input to the PTY while holding the window lock, so a filled PTY buffer deadlocks every other request including startup liveness checks. Bounded input queue, no blocking I/O under the lock, IPC frame cap. (L)
 - [ ] #112 Subagents lack full scrollback. Paused/scrolled preview renders from a client-side stream cache instead of the daemon's canonical scrollback. Read full history on scroll-up. (S)
@@ -19,7 +19,7 @@ Triage of every open issue against master `3a2a408` on 2026-07-06. Each item tra
 
 ## Enhancements to implement
 
-- [ ] #140 Move all tests out of app files. 87 inline `#[cfg(test)] mod tests` blocks (~60k lines) move to sibling `tests.rs` files following the existing convention. Four move-only PRs, landed early to give everything else a stable rebase base. (XL)
+- [ ] #140 Move all tests out of app files. 87 inline `#[cfg(test)] mod tests` blocks (~60k lines) move to sibling `tests.rs` files following the existing convention. Four move-only PRs, landed early to give everything else a stable rebase base. Progress: action+tui merged in #145, git/mux/runtime merged in #147; top-level/config and app-core/handlers batches remain. (XL)
 - [ ] #12 Selective synthesis. Mark agents in the sidebar; `s` synthesizes marked descendants and falls back to all when nothing is marked. (M)
 - [ ] #100 Ctrl+f project picker. Searchable picker of discovered git repos to spawn agents in other projects; multi-project support already exists in core. (M)
 - [ ] #141 Property-based tests wherever a test can be property-based. proptest is a declared dev-dependency with zero uses today. Add property tests for the highest-value invariant surfaces: mux wire-protocol roundtrip, IPC framing, input-state cursor invariants, scroll clamping, branch-name generation, output decoders, and more. (L)
