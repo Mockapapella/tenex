@@ -204,238 +204,66 @@ impl Config {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(any(test, feature = "test-support"))]
+/// Integration-test helpers for otherwise private configuration logic.
+pub mod test_support {
+    use super::Config;
+    use std::path::{Path, PathBuf};
 
-    #[test]
-    fn test_default_config() {
-        let config = Config::default();
-        #[cfg(windows)]
-        assert_eq!(
-            config.default_program,
-            "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\""
-        );
-        #[cfg(not(windows))]
-        assert_eq!(config.default_program, "sh -c 'sleep 3600'");
-        assert_eq!(config.branch_prefix, "agent/");
-        assert!(!config.auto_yes);
-        assert_eq!(config.poll_interval_ms, 100);
+    /// Return the default agent command for either test or non-test mode.
+    #[must_use]
+    pub fn default_agent_program(test_mode: bool) -> String {
+        super::default_agent_program(test_mode)
     }
 
-    #[test]
-    fn test_default_agent_program_non_test_returns_claude() {
-        assert_eq!(
-            default_agent_program(false),
-            "claude --allow-dangerously-skip-permissions"
-        );
+    /// Resolve a state path override against an injected current directory.
+    #[must_use]
+    pub fn resolve_state_path_override_with_cwd(
+        candidate: PathBuf,
+        cwd: Option<PathBuf>,
+    ) -> PathBuf {
+        Config::resolve_state_path_override_with_cwd(candidate, cwd)
     }
 
-    #[test]
-    fn test_generate_branch_name() {
-        let config = Config::default();
-
-        assert_eq!(
-            config.generate_branch_name("Fix Auth Bug"),
-            "agent/fix-auth-bug"
-        );
-        assert_eq!(
-            config.generate_branch_name("hello_world"),
-            "agent/hello-world"
-        );
-        assert_eq!(config.generate_branch_name("  spaces  "), "agent/spaces");
+    /// Resolve a raw state path override against the process current directory.
+    #[must_use]
+    pub fn resolve_state_path_override(raw: &str) -> PathBuf {
+        Config::resolve_state_path_override(raw)
     }
 
-    #[test]
-    fn test_generate_branch_name_truncation() {
-        let config = Config::default();
-        let long_title = "a".repeat(100);
-        let branch = config.generate_branch_name(&long_title);
-        assert!(branch.len() <= 57);
+    /// Parse a state path override value, ignoring blank values.
+    #[must_use]
+    pub fn state_path_from_env_value(raw: &str) -> Option<PathBuf> {
+        Config::state_path_from_env_value(raw)
     }
 
-    #[test]
-    fn test_state_path() {
-        let state_path = Config::default_state_path();
-        assert_eq!(
-            state_path.file_name().and_then(|p| p.to_str()),
-            Some("state.json")
-        );
-        assert!(state_path.to_string_lossy().contains(".tenex"));
+    /// Parse an environment lookup result for a state path override.
+    #[must_use]
+    pub fn state_path_from_env_var(raw: Result<String, std::env::VarError>) -> Option<PathBuf> {
+        Config::state_path_from_env_var(raw)
     }
 
-    #[test]
-    fn test_state_path_relative_env_resolves_from_cwd() {
-        let expected = std::env::current_dir().unwrap().join("state.json");
-        assert_eq!(
-            Config::resolve_state_path_override_with_cwd(
-                PathBuf::from("state.json"),
-                Some(expected.parent().unwrap().to_path_buf())
-            ),
-            expected
-        );
+    /// Resolve the default Tenex instance root from an injected home directory.
+    #[must_use]
+    pub fn default_instance_root_from(home_dir: Option<PathBuf>) -> PathBuf {
+        Config::default_instance_root_from(home_dir)
     }
 
-    #[test]
-    fn test_state_path_relative_env_falls_back_when_cwd_is_missing() {
-        assert_eq!(
-            Config::resolve_state_path_override_with_cwd(PathBuf::from("state.json"), None),
-            PathBuf::from("state.json")
-        );
+    /// Resolve an instance root from an injected state path.
+    #[must_use]
+    pub fn instance_root_from_state_path(state_path: &Path) -> PathBuf {
+        Config::instance_root_from_state_path(state_path)
     }
 
-    #[test]
-    fn test_state_path_from_env_value_ignores_blank_value() {
-        assert!(Config::state_path_from_env_value("   ").is_none());
+    /// Return the project directory leaf name for a repository root.
+    #[must_use]
+    pub fn project_dir_name(repo_root: &Path) -> String {
+        Config::project_dir_name(repo_root)
     }
 
-    #[test]
-    fn test_state_path_from_env_var_returns_none_when_env_missing() {
-        assert!(Config::state_path_from_env_var(Err(std::env::VarError::NotPresent)).is_none());
-    }
-
-    #[test]
-    fn test_state_path_from_env_var_returns_none_for_blank_value() {
-        assert!(Config::state_path_from_env_var(Ok("   ".to_string())).is_none());
-    }
-
-    #[test]
-    fn test_state_path_from_env_var_accepts_absolute_path() {
-        let expected = std::env::temp_dir().join("state.json");
-        assert_eq!(
-            Config::state_path_from_env_var(Ok(expected.to_string_lossy().to_string())),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn test_resolve_state_path_override_with_cwd_prefers_absolute_candidate() {
-        let absolute = std::env::temp_dir().join("state.json");
-        let cwd = std::env::temp_dir().join("other");
-        assert_eq!(
-            Config::resolve_state_path_override_with_cwd(absolute.clone(), Some(cwd)),
-            absolute
-        );
-    }
-
-    #[test]
-    fn test_resolve_state_path_override_joins_current_dir_for_relative_path() {
-        let expected = std::env::current_dir().unwrap().join("state.json");
-        assert_eq!(Config::resolve_state_path_override("state.json"), expected);
-    }
-
-    #[test]
-    fn test_default_instance_root_from_none_falls_back_to_dot_tenex() {
-        assert_eq!(
-            Config::default_instance_root_from(None),
-            PathBuf::from(".").join(".tenex")
-        );
-    }
-
-    #[test]
-    fn test_default_instance_root_from_some_appends_tenex_dir() {
-        let home = std::env::temp_dir().join("tenex-home");
-        assert_eq!(
-            Config::default_instance_root_from(Some(home.clone())),
-            home.join(".tenex")
-        );
-    }
-
-    #[test]
-    fn test_instance_root_from_state_path_falls_back_when_parent_missing() {
-        #[cfg(windows)]
-        let root = Path::new("C:\\");
-        #[cfg(not(windows))]
-        let root = Path::new("/");
-
-        assert_eq!(
-            Config::instance_root_from_state_path(root),
-            PathBuf::from(".")
-        );
-    }
-
-    #[test]
-    fn test_instance_root_from_state_path_returns_parent_directory() {
-        let state_path = std::env::temp_dir().join("state.json");
-        assert_eq!(
-            Config::instance_root_from_state_path(&state_path),
-            std::env::temp_dir()
-        );
-    }
-
-    #[test]
-    fn test_project_dir_name_defaults_when_repo_root_missing_file_name() {
-        assert_eq!(Config::project_dir_name(Path::new("")), "project");
-    }
-
-    #[test]
-    fn test_worktree_leaf_dir_name_strips_prefix_and_replaces_slashes() {
-        assert_eq!(
-            Config::worktree_leaf_dir_name("agent/feature/foo", "agent/"),
-            "feature-foo"
-        );
-    }
-
-    #[test]
-    fn test_worktree_leaf_dir_name_falls_back_to_tenex_prefix() {
-        assert_eq!(
-            Config::worktree_leaf_dir_name("tenex/feature/foo", "agent/"),
-            "feature-foo"
-        );
-    }
-
-    #[test]
-    fn test_worktree_leaf_dir_name_preserves_branch_when_no_prefix_matches() {
-        assert_eq!(
-            Config::worktree_leaf_dir_name("feature/foo", "agent/"),
-            "feature-foo"
-        );
-    }
-
-    #[test]
-    fn test_worktree_path_for_repo_root_uses_project_name_and_leaf_name() {
-        let mut config = Config::default();
-        let worktree_dir = std::env::temp_dir().join("tenex-worktrees");
-        config.worktree_dir = worktree_dir.clone();
-
-        assert_eq!(
-            config.worktree_path_for_repo_root(Path::new("repo"), "agent/feature/foo"),
-            worktree_dir.join("repo").join("feature-foo")
-        );
-    }
-
-    #[test]
-    fn test_generate_branch_name_special_chars() {
-        let config = Config::default();
-
-        // Test various special characters
-        assert_eq!(
-            config.generate_branch_name("fix@#$%bug"),
-            "agent/fix----bug"
-        );
-        assert_eq!(
-            config.generate_branch_name("hello/world"),
-            "agent/hello-world"
-        );
-    }
-
-    #[test]
-    fn test_default_worktree_dir_has_path() {
-        let config = Config::default();
-        assert!(config.worktree_dir.to_string_lossy().contains("worktrees"));
-    }
-
-    #[test]
-    fn test_config_clone() {
-        let config = Config::default();
-        let cloned = config.clone();
-        assert_eq!(config, cloned);
-    }
-
-    #[test]
-    fn test_config_debug() {
-        let config = Config::default();
-        let debug = format!("{config:?}");
-        assert!(debug.contains("Config"));
+    /// Return the worktree leaf directory for a branch and configured branch prefix.
+    #[must_use]
+    pub fn worktree_leaf_dir_name(branch: &str, branch_prefix: &str) -> String {
+        Config::worktree_leaf_dir_name(branch, branch_prefix)
     }
 }
