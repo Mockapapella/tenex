@@ -85,6 +85,9 @@ while True:
         buffer.pop()
         continue
 
+    if in_paste and state == 2:
+        continue
+
     buffer += ch
     if state == 0 and not in_paste and not hint_shown and buffer == b"/review":
         print("  /review  review my current changes and find issues", flush=True)
@@ -415,7 +418,8 @@ fn test_spawn_review_agents() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 #[cfg(unix)]
-fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::error::Error>> {
+fn test_spawn_review_agents_codex_selects_typed_base_branch()
+-> Result<(), Box<dyn std::error::Error>> {
     if skip_if_no_mux() {
         return Ok(());
     }
@@ -458,7 +462,7 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
     app.data.spawn.spawning_under = Some(root_id);
     app.data.spawn.child_count = 1;
-    app.data.review.base_branch = Some("master".to_string());
+    app.data.review.base_branch = Some("stage".to_string());
 
     let result = handler.spawn_review_agents(&mut app.data);
 
@@ -507,8 +511,8 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
             "Expected Codex review agents to type /review, got: {output:?}"
         );
         assert!(
-            output.contains("master"),
-            "Expected Codex review agents to enter the base branch, got: {output:?}"
+            output.contains("'stage'") && !output.contains("'master'"),
+            "Expected Codex review agents to start against the selected branch, got: {output:?}"
         );
         assert!(
             output.contains("review started"),
@@ -528,21 +532,25 @@ fn test_spawn_review_agents_codex_uses_review_flow() -> Result<(), Box<dyn std::
 
 #[test]
 #[cfg(not(unix))]
-fn test_spawn_review_agents_codex_uses_review_flow() {}
+fn test_spawn_review_agents_codex_selects_typed_base_branch() {}
 
 #[test]
 fn test_review_prompt_contains_base_branch() {
     let prompt = tenex::prompts::build_review_prompt("main");
+    let stage_prompt = tenex::prompts::build_review_prompt("stage");
 
     // Should contain the base branch name
     assert!(prompt.contains("main"));
+    assert!(stage_prompt.contains("stage"));
 
     // Should contain key review instructions
     assert!(prompt.contains("git diff main...HEAD"));
+    assert!(stage_prompt.contains("git diff stage...HEAD"));
     assert!(prompt.contains("git diff --staged"));
     assert!(prompt.contains("git diff"));
     assert!(prompt.contains("git status"));
     assert!(prompt.contains("git log main..HEAD"));
+    assert!(stage_prompt.contains("git log stage..HEAD"));
 
     // Should contain review categories
     assert!(prompt.contains("Code Quality"));

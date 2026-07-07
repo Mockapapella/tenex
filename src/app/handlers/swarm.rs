@@ -473,7 +473,7 @@ impl Actions {
         }
 
         let _ = self.wait_for_pane_idle(target, idle_stable_for, step_timeout, poll_interval);
-        self.session_manager.paste_keys(target, base_branch)?;
+        self.session_manager.send_keys(target, base_branch)?;
         self.session_manager.send_keys_and_submit(target, "")?;
         if !self.wait_for_pane_contains_any(
             target,
@@ -1476,12 +1476,26 @@ mod tests {
     }
 
     #[cfg(unix)]
+    type CapturedInputs = std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>;
+
+    #[cfg(unix)]
     fn spawn_mock_mux_server(
         name: interprocess::local_socket::Name<'static>,
         capture_text: String,
         send_input_responses: Vec<crate::mux::MuxResponse>,
         expected_requests: usize,
     ) -> std::thread::JoinHandle<()> {
+        spawn_capturing_mock_mux_server(name, capture_text, send_input_responses, expected_requests)
+            .0
+    }
+
+    #[cfg(unix)]
+    fn spawn_capturing_mock_mux_server(
+        name: interprocess::local_socket::Name<'static>,
+        capture_text: String,
+        send_input_responses: Vec<crate::mux::MuxResponse>,
+        expected_requests: usize,
+    ) -> (std::thread::JoinHandle<()>, CapturedInputs) {
         use crate::mux::{MuxRequest, MuxResponse};
 
         let listener = ListenerOptions::new()
@@ -1489,8 +1503,10 @@ mod tests {
             .create_sync()
             .expect("Expected mock mux listener to start");
         let send_input_counter = AtomicUsize::new(0);
+        let captured_inputs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_inputs_server = std::sync::Arc::clone(&captured_inputs);
 
-        std::thread::spawn(move || {
+        let server = std::thread::spawn(move || {
             let mut handled = 0usize;
             for mut stream in listener.incoming().flatten() {
                 while handled < expected_requests {
@@ -1502,7 +1518,8 @@ mod tests {
                         MuxRequest::Capture { .. } => MuxResponse::Text {
                             text: capture_text.clone(),
                         },
-                        MuxRequest::SendInput { .. } => {
+                        MuxRequest::SendInput { data, .. } => {
+                            captured_inputs_server.lock().expect("lock").push(data);
                             let idx = send_input_counter.fetch_add(1, Ordering::SeqCst);
                             send_input_responses
                                 .get(idx)
@@ -1522,7 +1539,9 @@ mod tests {
                     break;
                 }
             }
-        })
+        });
+
+        (server, captured_inputs)
     }
 
     fn require_mux_err_response(
@@ -1581,6 +1600,47 @@ mod tests {
             .expect("review flow should succeed");
 
         server.join().expect("mock mux server panicked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_start_codex_review_flow_types_base_branch_without_bracketed_paste() {
+        let _mux_guard = crate::test_support::lock_mux_test_environment();
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let (display, name) = make_mock_socket(&temp);
+        crate::mux::set_socket_override(&display).expect("set socket override");
+
+        let capture_text = [
+            "review my current changes",
+            "review preset",
+            "base branch",
+            "review started",
+        ]
+        .join("\n");
+
+        let (server, captured_inputs) =
+            spawn_capturing_mock_mux_server(name, capture_text, Vec::new(), 15);
+
+        let handler = Actions::new();
+        let timings = CodexReviewTimings {
+            poll_interval: Duration::from_millis(1),
+            step_timeout: Duration::from_millis(250),
+            idle_stable_for: Duration::from_millis(0),
+            command_hint_timeout: Duration::from_millis(50),
+        };
+
+        handler
+            .start_codex_review_flow_with_timings("session", "stage", timings)
+            .expect("review flow should succeed");
+
+        server.join().expect("mock mux server panicked");
+        let inputs = captured_inputs.lock().expect("lock");
+        assert_eq!(inputs.len(), 5);
+        assert_eq!(inputs[0], b"/review");
+        assert_eq!(inputs[1], b"\r");
+        assert_eq!(inputs[2], b"\r");
+        assert_eq!(inputs[3], b"stage");
+        assert_eq!(inputs[4], b"\r");
     }
 
     #[cfg(unix)]
@@ -1703,7 +1763,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_start_codex_review_flow_propagates_paste_errors() {
+    fn test_start_codex_review_flow_propagates_base_branch_send_errors() {
         let _mux_guard = crate::test_support::lock_mux_test_environment();
         let temp = tempfile::TempDir::new().expect("tempdir");
         let (display, name) = make_mock_socket(&temp);
@@ -1722,7 +1782,7 @@ mod tests {
             crate::mux::MuxResponse::Ok,
             crate::mux::MuxResponse::Ok,
             crate::mux::MuxResponse::Err {
-                message: "paste failed".to_string(),
+                message: "base branch send failed".to_string(),
             },
         ];
         let server = spawn_mock_mux_server(name, capture_text, send_input_responses, 13);
@@ -1737,15 +1797,15 @@ mod tests {
 
         let err = handler
             .start_codex_review_flow_with_timings("session", "main", timings)
-            .expect_err("expected paste_keys to error");
-        assert!(err.to_string().contains("paste failed"));
+            .expect_err("expected base branch send_keys to error");
+        assert!(err.to_string().contains("base branch send failed"));
 
         server.join().expect("mock mux server panicked");
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_start_codex_review_flow_propagates_submit_after_paste_errors() {
+    fn test_start_codex_review_flow_propagates_submit_after_base_branch_errors() {
         let _mux_guard = crate::test_support::lock_mux_test_environment();
         let temp = tempfile::TempDir::new().expect("tempdir");
         let (display, name) = make_mock_socket(&temp);
@@ -1765,7 +1825,7 @@ mod tests {
             crate::mux::MuxResponse::Ok,
             crate::mux::MuxResponse::Ok,
             crate::mux::MuxResponse::Err {
-                message: "submit after paste failed".to_string(),
+                message: "submit after base branch failed".to_string(),
             },
         ];
         let server = spawn_mock_mux_server(name, capture_text, send_input_responses, 14);
@@ -1780,8 +1840,8 @@ mod tests {
 
         let err = handler
             .start_codex_review_flow_with_timings("session", "main", timings)
-            .expect_err("expected send_keys_and_submit after paste to error");
-        assert!(err.to_string().contains("submit after paste failed"));
+            .expect_err("expected send_keys_and_submit after base branch to error");
+        assert!(err.to_string().contains("submit after base branch failed"));
 
         server.join().expect("mock mux server panicked");
     }
