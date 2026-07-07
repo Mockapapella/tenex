@@ -19,7 +19,7 @@ Triage of every open issue against master `3a2a408` on 2026-07-06. Each item tra
 
 ## Enhancements to implement
 
-- [ ] #140 Move all tests out of app files. 87 inline `#[cfg(test)] mod tests` blocks (~60k lines) move to sibling `tests.rs` files following the existing convention. Four move-only PRs, landed early to give everything else a stable rebase base. Progress: action+tui merged in #145, git/mux/runtime merged in #147; top-level/config and app-core/handlers batches remain. (XL)
+- [ ] #140 Move all tests out of app files, into the top-level `tests/` directory, organized. Corrected scope per owner review of #147: sibling `src/**/tests.rs` files are not the end state; all tests leave `src/` entirely. PRs #145/#147 (inline -> sibling extraction) stand as step one; a design pass now covers the `tests/` organization, the `test-support` feature surface for tests that need non-public access, and the main.rs/binary strategy, followed by gated migration batches until `src/` holds no test code. (XL)
 - [ ] #12 Selective synthesis. Mark agents in the sidebar; `s` synthesizes marked descendants and falls back to all when nothing is marked. (M)
 - [ ] #100 Ctrl+f project picker. Searchable picker of discovered git repos to spawn agents in other projects; multi-project support already exists in core. (M)
 - [ ] #141 Property-based tests wherever a test can be property-based. proptest is a declared dev-dependency with zero uses today. Add property tests for the highest-value invariant surfaces: mux wire-protocol roundtrip, IPC framing, input-state cursor invariants, scroll clamping, branch-name generation, output decoders, and more. (L)
