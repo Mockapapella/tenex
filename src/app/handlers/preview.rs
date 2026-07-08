@@ -40,15 +40,7 @@ impl Actions {
                 let cols = cols.max(1);
                 let rows = rows.max(1);
 
-                let streamed_ok = self.try_update_preview_streamed(
-                    app,
-                    &target,
-                    cols,
-                    rows,
-                    wants_full_history,
-                    HISTORY_LINES_FOLLOWING,
-                );
-                if !streamed_ok {
+                if wants_full_history {
                     self.update_preview_with_capture(
                         app,
                         &target,
@@ -56,6 +48,24 @@ impl Actions {
                         wants_full_history,
                         HISTORY_LINES_FOLLOWING,
                     );
+                } else {
+                    let streamed_ok = self.try_update_preview_streamed(
+                        app,
+                        &target,
+                        cols,
+                        rows,
+                        wants_full_history,
+                        HISTORY_LINES_FOLLOWING,
+                    );
+                    if !streamed_ok {
+                        self.update_preview_with_capture(
+                            app,
+                            &target,
+                            rows,
+                            wants_full_history,
+                            HISTORY_LINES_FOLLOWING,
+                        );
+                    }
                 }
             } else {
                 app.data.ui.preview_vt_by_target.remove(&target);
@@ -786,6 +796,9 @@ mod tests {
                                     y: config.cursor_position.1,
                                     hidden: config.cursor_position.2,
                                 }
+                            }
+                            crate::mux::MuxRequest::OutputCursor { .. } => {
+                                crate::mux::MuxResponse::OutputCursor { start: 0, end: 0 }
                             }
                             other => crate::mux::MuxResponse::Err {
                                 message: format!("mock: unsupported request {other:?}"),
@@ -2296,6 +2309,200 @@ mod tests {
     }
 
     #[test]
+    fn test_issue_112_paused_preview_uses_full_history_instead_of_stream_cache() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let full_history = "earliest line\nmiddle line\nlatest line\n".to_string();
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(mux_output_chunk(0, 13, b"latest line\n"));
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: full_history.clone(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 4);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 10));
+        app.data.ui.preview_follow = false;
+        app.data.storage.add(Agent::new(
+            "preview".to_string(),
+            "echo".to_string(),
+            "muster/preview".to_string(),
+            socket_dir.path().to_path_buf(),
+        ));
+
+        handler.update_preview(&mut app).unwrap();
+
+        assert_eq!(app.data.ui.preview_content, full_history);
+
+        let observed = config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observed_requests
+            .clone();
+        assert!(observed.iter().any(|req| matches!(
+            req,
+            crate::mux::MuxRequest::Capture {
+                kind: crate::mux::CaptureKind::FullHistory,
+                ..
+            }
+        )));
+        assert!(
+            !observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::ReadOutput { .. }))
+        );
+    }
+
+    #[test]
+    fn test_issue_113_regression_selected_preview_reads_once_without_non_selected_captures() {
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: {
+                let mut responses = std::collections::VecDeque::new();
+                responses.push_back(mux_output_chunk(0, 0, b""));
+                responses
+            },
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 2);
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        app.data.ui.preview_dimensions = Some((80, 10));
+        app.data.ui.preview_follow = true;
+
+        let mut selected = Agent::new(
+            "selected".to_string(),
+            "echo".to_string(),
+            "muster/selected".to_string(),
+            socket_dir.path().to_path_buf(),
+        );
+        selected.set_status(crate::agent::Status::Running);
+        app.data.storage.add(selected);
+
+        let mut other = Agent::new(
+            "other".to_string(),
+            "echo".to_string(),
+            "muster/other".to_string(),
+            socket_dir.path().to_path_buf(),
+        );
+        other.set_status(crate::agent::Status::Running);
+        app.data.storage.add(other);
+
+        handler.update_preview(&mut app).unwrap();
+
+        let observed = config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observed_requests
+            .clone();
+        let read_output_count = observed
+            .iter()
+            .filter(|req| matches!(req, crate::mux::MuxRequest::ReadOutput { .. }))
+            .count();
+        assert_eq!(read_output_count, 1);
+        assert!(
+            !observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::Capture { .. }))
+        );
+    }
+
+    #[test]
+    fn test_issue_113_regression_many_agent_activity_polling_uses_output_cursor_without_capture() {
+        const AGENT_COUNT: usize = 8;
+
+        let _guard = crate::test_support::lock_mux_test_environment();
+        let socket_dir = TempDir::new().unwrap();
+        let (socket_display, socket_name) = make_mock_mux_socket(&socket_dir);
+
+        let config = Arc::new(Mutex::new(MockMuxConfig {
+            session_exists: true,
+            read_output_responses: std::collections::VecDeque::new(),
+            capture_visible: String::new(),
+            capture_history: String::new(),
+            capture_full_history: String::new(),
+            pane_size: (80, 24),
+            cursor_position: (0, 0, false),
+            observed_requests: Vec::new(),
+        }));
+
+        let server = spawn_mock_mux_server(
+            socket_name,
+            Arc::clone(&config),
+            AGENT_COUNT.saturating_add(1),
+        );
+        let _server_guard = MockMuxServerGuard::new(server);
+
+        crate::mux::set_socket_override(&socket_display).unwrap();
+
+        let handler = Actions::new();
+        let mut app = create_test_app();
+        for idx in 0..AGENT_COUNT {
+            let mut agent = Agent::new(
+                format!("agent-{idx}"),
+                "echo".to_string(),
+                format!("muster/agent-{idx}"),
+                socket_dir.path().to_path_buf(),
+            );
+            agent.set_status(crate::agent::Status::Running);
+            app.data.storage.add(agent);
+        }
+
+        handler.sync_agent_pane_activity(&mut app).unwrap();
+
+        let observed = config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observed_requests
+            .clone();
+        let cursor_count = observed
+            .iter()
+            .filter(|req| matches!(req, crate::mux::MuxRequest::OutputCursor { .. }))
+            .count();
+        assert_eq!(cursor_count, AGENT_COUNT);
+        assert!(
+            !observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::Capture { .. }))
+        );
+        assert!(
+            !observed
+                .iter()
+                .any(|req| matches!(req, crate::mux::MuxRequest::ReadOutput { .. }))
+        );
+    }
+
+    #[test]
     fn test_update_preview_switching_to_full_history_preserves_scroll_distance() {
         let _guard = crate::test_support::lock_mux_test_environment();
         let socket_dir = TempDir::new().unwrap();
@@ -2323,7 +2530,7 @@ mod tests {
             observed_requests: Vec::new(),
         }));
 
-        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 5);
+        let server = spawn_mock_mux_server(socket_name, Arc::clone(&config), 4);
         let _server_guard = MockMuxServerGuard::new(server);
 
         crate::mux::set_socket_override(&socket_display).unwrap();

@@ -1,9 +1,9 @@
 //! Tests for Actions handler with real operations
 
 use crate::common::{TestFixture, git_command, skip_if_no_mux};
-use std::time::Duration;
-use tenex::agent::Storage;
-use tenex::mux::{OutputRead, OutputStream, SessionManager};
+use std::time::{Duration, Instant};
+use tenex::agent::{Agent, ChildConfig, Storage};
+use tenex::mux::{OutputCapture, OutputRead, OutputStream, SessionManager};
 
 const fn interactive_shell_program() -> &'static str {
     #[cfg(windows)]
@@ -13,6 +13,65 @@ const fn interactive_shell_program() -> &'static str {
     #[cfg(not(windows))]
     {
         "sh"
+    }
+}
+
+fn long_running_command() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 3600".to_string(),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["sh".to_string(), "-c".to_string(), "sleep 3600".to_string()]
+    }
+}
+
+fn child_scrollback_command(prefix: &str, lines: u32) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!(
+                "$i=1; while ($i -le {lines}) {{ Write-Output ('{prefix}_' + $i.ToString().PadLeft(4,'0')); $i++ }}; Start-Sleep -Seconds 3600"
+            ),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "i=1; while [ $i -le {lines} ]; do printf '{prefix}_%04d\\n' $i; i=$((i+1)); done; sleep 3600"
+            ),
+        ]
+    }
+}
+
+fn wait_for_capture_contains(
+    capture: OutputCapture,
+    target: &str,
+    marker: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    loop {
+        if let Ok(output) = capture.capture_full_history(target)
+            && output.contains(marker)
+        {
+            return Ok(output);
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(anyhow::anyhow!("Timed out waiting for mux output marker {marker}").into());
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -494,6 +553,104 @@ fn test_actions_update_preview_full_history_when_scrolled() -> Result<(), Box<dy
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_actions_update_preview_child_full_history_when_scrolled()
+-> Result<(), Box<dyn std::error::Error>> {
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("actions_preview_child_scroll")?;
+    let config = fixture.config();
+    let storage = fixture.storage();
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    app.set_preview_dimensions(80, 20);
+
+    let handler = tenex::app::Actions::new();
+    let manager = SessionManager::new();
+    let capture = OutputCapture::new();
+
+    let root_command = long_running_command();
+    let mut root = Agent::new(
+        "preview-child-root".to_string(),
+        root_command.join(" "),
+        format!("{}/preview-child-root", fixture.session_prefix),
+        fixture.repo_path.clone(),
+    );
+    root.collapsed = false;
+    root.set_status(tenex::agent::Status::Running);
+    let root_id = root.id;
+    let root_session = root.mux_session.clone();
+    manager.create(&root_session, &fixture.repo_path, Some(&root_command))?;
+
+    let prefix = "TENEX_CHILD_SCROLL_TEST_LINE";
+    let child_command = child_scrollback_command(prefix, 500);
+    let child_window_index = manager.create_window(
+        &root_session,
+        "preview-child",
+        &fixture.repo_path,
+        Some(&child_command),
+    )?;
+    let target = SessionManager::window_target(&root_session, child_window_index);
+
+    let mut child = Agent::new_child(
+        "preview-child".to_string(),
+        child_command.join(" "),
+        root.branch.clone(),
+        fixture.repo_path.clone(),
+        ChildConfig {
+            parent_id: root_id,
+            mux_session: root_session.clone(),
+            window_index: child_window_index,
+            repo_root: Some(fixture.repo_path.clone()),
+        },
+    );
+    child.set_status(tenex::agent::Status::Running);
+    let child_id = child.id;
+
+    app.data.storage.add(root);
+    app.data.storage.add(child);
+    let child_visible_index = app
+        .data
+        .storage
+        .visible_index_of(child_id)
+        .ok_or_else(|| anyhow::anyhow!("Child agent was not visible"))?;
+    app.data.selected = child_visible_index.saturating_add(1);
+    app.validate_selection();
+
+    let final_marker = format!("{prefix}_0500");
+    let first_marker = format!("{prefix}_0001");
+    let captured = wait_for_capture_contains(capture, &target, &final_marker)?;
+    assert!(
+        captured.contains(&first_marker),
+        "Expected canonical child capture to include first line"
+    );
+
+    handler.update_preview(&mut app)?;
+    assert!(app.data.ui.preview_follow);
+    assert!(!app.data.ui.preview_using_full_history);
+    assert!(
+        !app.data.ui.preview_content.contains(&first_marker),
+        "Follow-mode child preview should render the short tail"
+    );
+
+    app.scroll_up(10);
+    assert!(!app.data.ui.preview_follow);
+
+    handler.update_preview(&mut app)?;
+    assert!(app.data.ui.preview_using_full_history);
+    assert!(
+        app.data.ui.preview_content.contains(&first_marker),
+        "Scrolled child preview should render from full mux history"
+    );
+
+    let _ = manager.kill(&root_session);
 
     Ok(())
 }
