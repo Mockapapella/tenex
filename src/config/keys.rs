@@ -67,6 +67,8 @@ pub enum Action {
     AddChildren,
     /// Synthesize children into parent
     Synthesize,
+    /// Toggle synthesis mark on selected agent
+    ToggleSynthesisMark,
     /// Toggle expand/collapse of selected agent
     ToggleCollapse,
     /// Broadcast message to agent and all descendants
@@ -195,6 +197,11 @@ const BINDINGS: &[Binding] = &[
         code: KeyCode::Char('s'),
         modifiers: KeyModifiers::NONE,
         action: Action::Synthesize,
+    },
+    Binding {
+        code: KeyCode::Char('m'),
+        modifiers: KeyModifiers::NONE,
+        action: Action::ToggleSynthesisMark,
     },
     Binding {
         code: KeyCode::Char(' '),
@@ -416,6 +423,7 @@ impl Action {
             Self::PlanSwarm => "[P] spawn planners for selected agent",
             Self::AddChildren => "[+] spawn sub-agents for selected agent",
             Self::Synthesize => "[s]ynthesize sub-agent outputs",
+            Self::ToggleSynthesisMark => "[m]ark subtree for synthesis",
             Self::ToggleCollapse => "[Space] collapse/expand",
             Self::Broadcast => "[B]roadcast to leaf sub-agents",
             Self::ReviewSwarm => "[R] spawn reviewers for selected agent",
@@ -458,6 +466,7 @@ impl Action {
             Self::PlanSwarm => "P",
             Self::AddChildren => "+",
             Self::Synthesize => "s",
+            Self::ToggleSynthesisMark => "m",
             Self::ToggleCollapse => "Space",
             Self::Broadcast => "B",
             Self::ReviewSwarm => "R",
@@ -484,6 +493,7 @@ impl Action {
             | Self::PlanSwarm
             | Self::AddChildren
             | Self::Synthesize
+            | Self::ToggleSynthesisMark
             | Self::Broadcast
             | Self::ReviewSwarm => ActionGroup::Agents,
             Self::SpawnTerminal | Self::SpawnTerminalPrompted => ActionGroup::Terminals,
@@ -535,6 +545,7 @@ impl Action {
         Self::ReviewSwarm,
         Self::AddChildren,
         Self::Synthesize,
+        Self::ToggleSynthesisMark,
         Self::Broadcast,
         // Terminals
         Self::SpawnTerminal,

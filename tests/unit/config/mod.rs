@@ -170,6 +170,12 @@ const ACTION_METADATA: &[(Action, &str, &str, ActionGroup)] = &[
         ActionGroup::Agents,
     ),
     (
+        Action::ToggleSynthesisMark,
+        "m",
+        "[m]ark subtree for synthesis",
+        ActionGroup::Agents,
+    ),
+    (
         Action::ToggleCollapse,
         "Space",
         "[Space] collapse/expand",
@@ -245,6 +251,10 @@ fn test_keybindings() {
     assert_eq!(
         get_action(KeyCode::Char('s'), KeyModifiers::CONTROL),
         Some(Action::SwitchBranch)
+    );
+    assert_eq!(
+        get_action(KeyCode::Char('m'), KeyModifiers::NONE),
+        Some(Action::ToggleSynthesisMark)
     );
 }
 
@@ -358,6 +368,7 @@ fn test_unknown_key() {
 fn test_action_keys() {
     assert_eq!(Action::NewAgent.keys(), "a");
     assert_eq!(Action::SpawnChildren.keys(), "S");
+    assert_eq!(Action::ToggleSynthesisMark.keys(), "m");
     assert_eq!(Action::NextAgent.keys(), "↓");
     assert_eq!(Action::DiffToggleVisual.keys(), "shift+v");
 }
@@ -377,6 +388,10 @@ fn test_action_description() {
     assert_eq!(
         Action::PlanSwarm.description(),
         "[P] spawn planners for selected agent"
+    );
+    assert_eq!(
+        Action::ToggleSynthesisMark.description(),
+        "[m]ark subtree for synthesis"
     );
     assert_eq!(
         Action::DiffToggleVisual.description(),
@@ -407,6 +422,8 @@ fn test_action_metadata_covers_every_action() {
             "{action:?}"
         );
     }
+
+    assert!(Action::ALL_FOR_HELP.contains(&Action::ToggleSynthesisMark));
 }
 
 #[test]
@@ -428,6 +445,7 @@ fn test_all_keybinding_entries_resolve_to_actions() {
         (KeyCode::Char('+'), none, Action::AddChildren),
         (KeyCode::Char('+'), shift, Action::AddChildren),
         (KeyCode::Char('s'), none, Action::Synthesize),
+        (KeyCode::Char('m'), none, Action::ToggleSynthesisMark),
         (KeyCode::Char(' '), none, Action::ToggleCollapse),
         (KeyCode::Char('B'), none, Action::Broadcast),
         (KeyCode::Char('B'), shift, Action::Broadcast),

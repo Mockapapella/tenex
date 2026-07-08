@@ -128,6 +128,7 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::PlanSwarm => PlanSwarmAction.execute(NormalMode, app_data),
         KeyAction::AddChildren => AddChildrenAction.execute(NormalMode, app_data),
         KeyAction::Synthesize => SynthesizeAction.execute(NormalMode, app_data),
+        KeyAction::ToggleSynthesisMark => ToggleSynthesisMarkAction.execute(NormalMode, app_data),
         KeyAction::ToggleCollapse => ToggleCollapseAction.execute(NormalMode, app_data),
         KeyAction::Broadcast => BroadcastAction.execute(NormalMode, app_data),
         KeyAction::ReviewSwarm => ReviewSwarmAction.execute(NormalMode, app_data),
@@ -191,6 +192,9 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::PlanSwarm => PlanSwarmAction.execute(ScrollingMode, app_data),
         KeyAction::AddChildren => AddChildrenAction.execute(ScrollingMode, app_data),
         KeyAction::Synthesize => SynthesizeAction.execute(ScrollingMode, app_data),
+        KeyAction::ToggleSynthesisMark => {
+            ToggleSynthesisMarkAction.execute(ScrollingMode, app_data)
+        }
         KeyAction::ToggleCollapse => ToggleCollapseAction.execute(ScrollingMode, app_data),
         KeyAction::Broadcast => BroadcastAction.execute(ScrollingMode, app_data),
         KeyAction::ReviewSwarm => ReviewSwarmAction.execute(ScrollingMode, app_data),

@@ -1,5 +1,7 @@
 //! Window operations: resize and adjust window indices
 
+use std::collections::HashSet;
+
 use tracing::{debug, warn};
 
 use super::Actions;
@@ -103,26 +105,33 @@ pub fn adjust_window_indices_after_deletion(
     deleted_agent_id: uuid::Uuid,
     deleted_indices: &[u32],
 ) {
+    adjust_window_indices_after_deletions(app_data, root_id, &[deleted_agent_id], deleted_indices);
+}
+
+pub fn adjust_window_indices_after_deletions(
+    app_data: &mut AppData,
+    root_id: uuid::Uuid,
+    deleted_agent_ids: &[uuid::Uuid],
+    deleted_indices: &[u32],
+) {
     if deleted_indices.is_empty() {
         return;
     }
 
-    // Sort deleted indices for efficient counting
     let mut sorted_deleted: Vec<u32> = deleted_indices.to_vec();
     sorted_deleted.sort_unstable();
 
-    // Get all descendants of the root (excluding the deleted agent and its descendants)
+    let mut deleted_ids = HashSet::new();
+    for deleted_agent_id in deleted_agent_ids {
+        deleted_ids.insert(*deleted_agent_id);
+        deleted_ids.extend(app_data.storage.descendant_ids(*deleted_agent_id));
+    }
+
     let descendants_to_update: Vec<uuid::Uuid> = app_data
         .storage
         .descendants(root_id)
         .iter()
-        .filter(|a| a.id != deleted_agent_id)
-        .filter(|a| {
-            !app_data
-                .storage
-                .descendant_ids(deleted_agent_id)
-                .contains(&a.id)
-        })
+        .filter(|a| !deleted_ids.contains(&a.id))
         .map(|a| a.id)
         .collect();
 
@@ -545,6 +554,96 @@ mod tests {
             .get(surviving_id)
             .expect("Surviving agent should exist");
         assert_eq!(surviving.window_index, Some(3));
+    }
+
+    #[test]
+    fn test_adjust_window_indices_after_deletions_excludes_deleted_subtrees() {
+        let mut app = create_test_app();
+
+        let root = Agent::new(
+            "root".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app.data.storage.add(root);
+
+        let deleted_parent = Agent::new_child(
+            "deleted-parent".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+                repo_root: None,
+            },
+        );
+        let deleted_parent_id = deleted_parent.id;
+        app.data.storage.add(deleted_parent);
+
+        let deleted_child = Agent::new_child(
+            "deleted-child".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: deleted_parent_id,
+                mux_session: root_session.clone(),
+                window_index: 3,
+                repo_root: None,
+            },
+        );
+        app.data.storage.add(deleted_child);
+
+        let deleted_sibling = Agent::new_child(
+            "deleted-sibling".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 4,
+                repo_root: None,
+            },
+        );
+        let deleted_sibling_id = deleted_sibling.id;
+        app.data.storage.add(deleted_sibling);
+
+        let surviving = Agent::new_child(
+            "surviving".to_string(),
+            "claude".to_string(),
+            "muster/root".to_string(),
+            PathBuf::from("/tmp"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 5,
+                repo_root: None,
+            },
+        );
+        let surviving_id = surviving.id;
+        app.data.storage.add(surviving);
+
+        adjust_window_indices_after_deletions(
+            &mut app.data,
+            root_id,
+            &[deleted_parent_id, deleted_sibling_id],
+            &[2, 3, 4],
+        );
+
+        let surviving = app.data.storage.get(surviving_id).expect("surviving agent");
+        assert_eq!(surviving.window_index, Some(2));
+        let deleted_parent = app
+            .data
+            .storage
+            .get(deleted_parent_id)
+            .expect("deleted parent");
+        assert_eq!(deleted_parent.window_index, Some(2));
     }
 
     #[test]

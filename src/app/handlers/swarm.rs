@@ -1172,16 +1172,9 @@ impl Actions {
 
         info!(%parent_id, %parent_title, "Synthesizing descendants into parent");
 
-        // Collect findings from all descendants (children, grandchildren, etc.)
-        // Filter out terminal agents - they are interactive shells, not research agents
-        let descendants: Vec<_> = app_data
-            .storage
-            .descendants(parent_id)
-            .into_iter()
-            .filter(|d| !d.is_terminal_agent())
-            .collect();
+        let targets = app_data.synthesis_targets_for(parent_id);
 
-        if descendants.is_empty() {
+        if targets.capture_agent_ids.is_empty() {
             warn!(agent_id = %parent_id, title = %parent_title, "No non-terminal children to synthesize");
             return Ok(ErrorModalMode {
                 message: "Selected agent has no non-terminal children to synthesize".to_string(),
@@ -1189,22 +1182,8 @@ impl Actions {
             .into());
         }
 
-        let mut findings: Vec<(String, String)> = Vec::new();
-
-        for descendant in &descendants {
-            // Capture terminal output from descendant's window
-            let target = descendant.window_index.map_or_else(
-                || descendant.mux_session.clone(),
-                |window_idx| SessionManager::window_target(&parent_session, window_idx),
-            );
-
-            let output = self
-                .output_capture
-                .capture_pane_with_history(&target, 5000)
-                .unwrap_or_else(|_| "(Could not capture output)".to_string());
-
-            findings.push((descendant.title.clone(), output));
-        }
+        let findings =
+            self.capture_synthesis_findings(app_data, &parent_session, &targets.capture_agent_ids);
 
         // Build synthesis content
         let synthesis_content = prompts::build_synthesis_prompt(&findings);
@@ -1215,21 +1194,18 @@ impl Actions {
 
         debug!(?synthesis_file, "Wrote synthesis file");
 
-        // Kill all descendant windows and remove from storage
-        // Collect IDs and window indices first to avoid borrow issues
-        let descendant_info: Vec<_> = descendants.iter().map(|d| (d.id, d.window_index)).collect();
-        let descendants_count = descendant_info.len();
-
-        for (descendant_id, window_idx) in descendant_info {
-            // Kill the window if it has one
-            if let Some(idx) = window_idx
-                && let Err(e) = self.session_manager.kill_window(&parent_session, idx)
-            {
-                warn!(session = %parent_session, window_index = idx, error = %e, "{}", SYNTHESIS_KILL_WINDOW_WARN);
-            }
-            // Remove from storage (remove_with_descendants handles nested removal)
-            app_data.storage.remove(descendant_id);
-        }
+        let root_id = app_data
+            .storage
+            .root_ancestor(parent_id)
+            .map_or(parent_id, |root| root.id);
+        let descendants_count = targets.capture_agent_ids.len();
+        self.remove_synthesis_targets(
+            app_data,
+            root_id,
+            &parent_session,
+            &targets.teardown_root_ids,
+            &targets.teardown_agent_ids,
+        );
 
         // Now tell the parent to read the file
         let read_command = Self::build_synthesis_read_command(synthesis_id, prompt);
@@ -1241,9 +1217,71 @@ impl Actions {
 
         app_data.validate_selection();
         app_data.storage.save()?;
+        app_data.clear_synthesis_marks();
         info!(%parent_title, descendants_count, "Synthesis complete");
         app_data.set_status("Synthesized findings into parent agent");
         Ok(AppMode::normal())
+    }
+
+    fn capture_synthesis_findings(
+        self,
+        app_data: &AppData,
+        parent_session: &str,
+        capture_agent_ids: &[uuid::Uuid],
+    ) -> Vec<(String, String)> {
+        let mut findings = Vec::new();
+
+        for agent_id in capture_agent_ids {
+            let Some(descendant) = app_data.storage.get(*agent_id) else {
+                continue;
+            };
+            let target = descendant.window_index.map_or_else(
+                || descendant.mux_session.clone(),
+                |window_idx| SessionManager::window_target(parent_session, window_idx),
+            );
+
+            let output = self
+                .output_capture
+                .capture_pane_with_history(&target, 5000)
+                .unwrap_or_else(|_| "(Could not capture output)".to_string());
+
+            findings.push((descendant.title.clone(), output));
+        }
+
+        findings
+    }
+
+    fn remove_synthesis_targets(
+        self,
+        app_data: &mut AppData,
+        root_id: uuid::Uuid,
+        parent_session: &str,
+        teardown_root_ids: &[uuid::Uuid],
+        teardown_agent_ids: &[uuid::Uuid],
+    ) {
+        let mut deleted_indices: Vec<u32> = teardown_agent_ids
+            .iter()
+            .filter_map(|agent_id| app_data.storage.get(*agent_id)?.window_index)
+            .collect();
+        deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
+        deleted_indices.dedup();
+
+        for idx in &deleted_indices {
+            if let Err(e) = self.session_manager.kill_window(parent_session, *idx) {
+                warn!(session = %parent_session, window_index = *idx, error = %e, "{}", SYNTHESIS_KILL_WINDOW_WARN);
+            }
+        }
+
+        super::window::adjust_window_indices_after_deletions(
+            app_data,
+            root_id,
+            teardown_root_ids,
+            &deleted_indices,
+        );
+
+        for descendant_id in teardown_root_ids {
+            app_data.storage.remove_with_descendants(*descendant_id);
+        }
     }
 }
 
@@ -1283,7 +1321,7 @@ mod tests {
     use std::path::PathBuf;
     #[cfg(unix)]
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::NamedTempFile;
 
     fn create_test_app() -> (App, NamedTempFile) {
@@ -1339,6 +1377,304 @@ mod tests {
         let bytes = buffer.lock().expect("lock").clone();
         let logs = String::from_utf8(bytes).expect("trace logs utf8");
         (result, logs)
+    }
+
+    #[cfg(unix)]
+    struct TestMuxCleanup {
+        session: String,
+    }
+
+    #[cfg(unix)]
+    impl Drop for TestMuxCleanup {
+        fn drop(&mut self) {
+            let _ = SessionManager::new().kill(&self.session);
+        }
+    }
+
+    #[cfg(unix)]
+    fn wait_for_mux_marker(target: &str, marker: &str) {
+        let capture = crate::mux::OutputCapture::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(output) = capture.capture_full_history(target)
+                && output.contains(marker)
+            {
+                return;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for marker {marker} in {target}"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[cfg(unix)]
+    fn marker_command(marker: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("printf '{marker}\\n'; sleep 60"),
+        ]
+    }
+
+    #[cfg(unix)]
+    fn add_synthesis_root(app: &mut App, workdir: &Path) -> (uuid::Uuid, String) {
+        let mut root = Agent::new(
+            "root".to_string(),
+            "sh".to_string(),
+            "main".to_string(),
+            workdir.to_path_buf(),
+        );
+        root.collapsed = false;
+        let root_id = root.id;
+        let session = root.mux_session.clone();
+        app.data.storage.add(root);
+        app.data.select_agent_by_id(root_id);
+        (root_id, session)
+    }
+
+    #[cfg(unix)]
+    fn start_synthesis_parent(
+        manager: SessionManager,
+        session: &str,
+        workdir: &Path,
+    ) -> TestMuxCleanup {
+        manager
+            .create(session, workdir, Some(&marker_command("PARENT_READY")))
+            .expect("create mux session");
+        wait_for_mux_marker(session, "PARENT_READY");
+        TestMuxCleanup {
+            session: session.to_string(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    struct MuxChildSpec<'a> {
+        title: &'a str,
+        program: &'a str,
+        window_name: &'a str,
+        marker: &'a str,
+    }
+
+    #[cfg(unix)]
+    fn add_mux_child_agent(
+        app_data: &mut AppData,
+        manager: SessionManager,
+        session: &str,
+        workdir: &Path,
+        parent_id: uuid::Uuid,
+        spec: MuxChildSpec<'_>,
+    ) -> uuid::Uuid {
+        let window_index = manager
+            .create_window(
+                session,
+                spec.window_name,
+                workdir,
+                Some(&marker_command(spec.marker)),
+            )
+            .expect("create child window");
+        wait_for_mux_marker(
+            &SessionManager::window_target(session, window_index),
+            spec.marker,
+        );
+
+        let mut child = Agent::new_child(
+            spec.title.to_string(),
+            spec.program.to_string(),
+            "main".to_string(),
+            workdir.to_path_buf(),
+            ChildConfig {
+                parent_id,
+                mux_session: session.to_string(),
+                window_index,
+                repo_root: None,
+            },
+        );
+        child.is_terminal = spec.program == "terminal";
+        let child_id = child.id;
+        app_data.storage.add(child);
+        child_id
+    }
+
+    #[cfg(unix)]
+    fn read_only_synthesis_file(workdir: &Path) -> String {
+        let tenex_dir = workdir.join(".tenex");
+        let entries: Vec<_> = std::fs::read_dir(&tenex_dir)
+            .expect("read .tenex")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+            .collect();
+        assert_eq!(entries.len(), 1);
+        std::fs::read_to_string(entries[0].path()).expect("read synthesis file")
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    struct MarkedSubtreeIds {
+        marked_child: uuid::Uuid,
+        marked_grandchild: uuid::Uuid,
+        terminal_grandchild: uuid::Uuid,
+        unmarked_child: uuid::Uuid,
+        unmarked_grandchild: uuid::Uuid,
+    }
+
+    #[cfg(unix)]
+    fn add_marked_subtree_agents(
+        app_data: &mut AppData,
+        manager: SessionManager,
+        session: &str,
+        workdir: &Path,
+        root_id: uuid::Uuid,
+    ) -> MarkedSubtreeIds {
+        let marked_child_id = add_mux_child_agent(
+            app_data,
+            manager,
+            session,
+            workdir,
+            root_id,
+            MuxChildSpec {
+                title: "Marked Child",
+                program: "sh",
+                window_name: "marked-child",
+                marker: "MARKED_CHILD_READY",
+            },
+        );
+        let marked_grandchild_id = add_mux_child_agent(
+            app_data,
+            manager,
+            session,
+            workdir,
+            marked_child_id,
+            MuxChildSpec {
+                title: "Marked Grandchild",
+                program: "sh",
+                window_name: "marked-grandchild",
+                marker: "MARKED_GRANDCHILD_READY",
+            },
+        );
+        let terminal_grandchild_id = add_mux_child_agent(
+            app_data,
+            manager,
+            session,
+            workdir,
+            marked_child_id,
+            MuxChildSpec {
+                title: "Marked Terminal",
+                program: "terminal",
+                window_name: "marked-terminal",
+                marker: "MARKED_TERMINAL_READY",
+            },
+        );
+        let unmarked_child_id = add_mux_child_agent(
+            app_data,
+            manager,
+            session,
+            workdir,
+            root_id,
+            MuxChildSpec {
+                title: "Unmarked Child",
+                program: "sh",
+                window_name: "unmarked-child",
+                marker: "UNMARKED_CHILD_READY",
+            },
+        );
+        let unmarked_grandchild_id = add_mux_child_agent(
+            app_data,
+            manager,
+            session,
+            workdir,
+            unmarked_child_id,
+            MuxChildSpec {
+                title: "Unmarked Grandchild",
+                program: "sh",
+                window_name: "unmarked-grandchild",
+                marker: "UNMARKED_GRANDCHILD_READY",
+            },
+        );
+
+        MarkedSubtreeIds {
+            marked_child: marked_child_id,
+            marked_grandchild: marked_grandchild_id,
+            terminal_grandchild: terminal_grandchild_id,
+            unmarked_child: unmarked_child_id,
+            unmarked_grandchild: unmarked_grandchild_id,
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_marked_subtree_storage(app_data: &AppData, ids: &MarkedSubtreeIds) {
+        assert!(app_data.storage.get(ids.marked_child).is_none());
+        assert!(app_data.storage.get(ids.marked_grandchild).is_none());
+        assert!(app_data.storage.get(ids.terminal_grandchild).is_none());
+        assert!(app_data.storage.get(ids.unmarked_child).is_some());
+        assert!(app_data.storage.get(ids.unmarked_grandchild).is_some());
+        assert!(app_data.synthesis_marks.is_empty());
+        for agent in app_data.storage.iter() {
+            assert!(agent.parent_id.is_none_or(|parent_id| {
+                ![
+                    ids.marked_child,
+                    ids.marked_grandchild,
+                    ids.terminal_grandchild,
+                ]
+                .contains(&parent_id)
+            }));
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_marked_subtree_synthesis(synthesis: &str) {
+        assert!(synthesis.contains("2 parallel research sessions"));
+        assert!(synthesis.contains("Marked Child"));
+        assert!(synthesis.contains("MARKED_CHILD_READY"));
+        assert!(synthesis.contains("Marked Grandchild"));
+        assert!(synthesis.contains("MARKED_GRANDCHILD_READY"));
+        assert!(!synthesis.contains("Unmarked Child"));
+        assert!(!synthesis.contains("UNMARKED_CHILD_READY"));
+        assert!(!synthesis.contains("Unmarked Grandchild"));
+        assert!(!synthesis.contains("UNMARKED_GRANDCHILD_READY"));
+        assert!(!synthesis.contains("Marked Terminal"));
+        assert!(!synthesis.contains("MARKED_TERMINAL_READY"));
+    }
+
+    #[cfg(unix)]
+    fn assert_unmarked_subtree_windows(
+        app_data: &AppData,
+        manager: SessionManager,
+        session: &str,
+        ids: &MarkedSubtreeIds,
+    ) {
+        let windows = manager.list_windows(session).expect("list windows");
+        assert!(!windows.iter().any(|window| window.name == "marked-child"));
+        assert!(
+            !windows
+                .iter()
+                .any(|window| window.name == "marked-grandchild")
+        );
+        assert!(
+            !windows
+                .iter()
+                .any(|window| window.name == "marked-terminal")
+        );
+        assert!(windows.iter().any(|window| window.name == "unmarked-child"));
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.name == "unmarked-grandchild")
+        );
+        for (agent_id, window_name) in [
+            (ids.unmarked_child, "unmarked-child"),
+            (ids.unmarked_grandchild, "unmarked-grandchild"),
+        ] {
+            let window = windows
+                .iter()
+                .find(|window| window.name == window_name)
+                .expect("unmarked window");
+            let stored = app_data.storage.get(agent_id).expect("unmarked agent");
+            assert_eq!(stored.window_index, Some(window.index));
+        }
     }
 
     #[test]
@@ -2359,6 +2695,89 @@ mod tests {
         assert_eq!(md_count, 1);
 
         let _ = manager.kill(&session);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_synthesize_marked_subtree_removes_descendants_and_updates_window_indices() {
+        let _mux_guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("swarm-syn-mark");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let manager = SessionManager::new();
+        let (root_id, session) = add_synthesis_root(&mut app, workdir.path());
+        let _cleanup = start_synthesis_parent(manager, &session, workdir.path());
+
+        let ids =
+            add_marked_subtree_agents(&mut app.data, manager, &session, workdir.path(), root_id);
+
+        assert!(app.data.toggle_synthesis_mark(ids.marked_child));
+        assert!(!app.data.toggle_synthesis_mark(ids.terminal_grandchild));
+
+        let next = with_tracing_dispatch(|| handler.synthesize(&mut app.data))
+            .expect("synthesize marked subtree");
+        assert_eq!(next, AppMode::normal());
+
+        assert_marked_subtree_storage(&app.data, &ids);
+        let synthesis = read_only_synthesis_file(workdir.path());
+        assert_marked_subtree_synthesis(&synthesis);
+        assert_unmarked_subtree_windows(&app.data, manager, &session, &ids);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_synthesize_without_marks_still_removes_all_non_terminal_descendants() {
+        let _mux_guard = crate::test_support::lock_mux_test_environment();
+        let socket = crate::test_support::unique_mux_socket_path("swarm-syn-all");
+        crate::mux::set_socket_override(&socket).expect("set socket override");
+
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let manager = SessionManager::new();
+        let (root_id, session) = add_synthesis_root(&mut app, workdir.path());
+        let _cleanup = start_synthesis_parent(manager, &session, workdir.path());
+
+        let first_child_id = add_mux_child_agent(
+            &mut app.data,
+            manager,
+            &session,
+            workdir.path(),
+            root_id,
+            MuxChildSpec {
+                title: "First Child",
+                program: "sh",
+                window_name: "first-child",
+                marker: "FIRST_CHILD_READY",
+            },
+        );
+        let second_child_id = add_mux_child_agent(
+            &mut app.data,
+            manager,
+            &session,
+            workdir.path(),
+            root_id,
+            MuxChildSpec {
+                title: "Second Child",
+                program: "sh",
+                window_name: "second-child",
+                marker: "SECOND_CHILD_READY",
+            },
+        );
+
+        let next =
+            with_tracing_dispatch(|| handler.synthesize(&mut app.data)).expect("synthesize all");
+        assert_eq!(next, AppMode::normal());
+        assert!(app.data.storage.get(first_child_id).is_none());
+        assert!(app.data.storage.get(second_child_id).is_none());
+
+        let synthesis = read_only_synthesis_file(workdir.path());
+        assert!(synthesis.contains("2 parallel research sessions"));
+        assert!(synthesis.contains("First Child"));
+        assert!(synthesis.contains("Second Child"));
     }
 
     #[cfg(unix)]

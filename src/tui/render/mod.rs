@@ -332,13 +332,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ))]
                     },
                     |agent| {
-                        let descendants_count = app
-                            .data
-                            .storage
-                            .descendants(agent.id)
-                            .into_iter()
-                            .filter(|a| !a.is_terminal_agent())
-                            .count();
+                        let targets = app.data.synthesis_targets_for(agent.id);
+                        let descendants_count = targets.capture_agent_ids.len();
                         if descendants_count == 0 {
                             return vec![Line::from(Span::styled(
                                 "No non-terminal descendants to synthesize",
@@ -349,6 +344,11 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             "agent"
                         } else {
                             "agents"
+                        };
+                        let cleanup_warning = if targets.marked {
+                            "Marked descendant subtrees will be terminated."
+                        } else {
+                            "All synthesized descendant subtrees will be terminated."
                         };
                         vec![
                             Line::from(Span::styled(
@@ -370,7 +370,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                             )),
                             Line::from(""),
                             Line::from(Span::styled(
-                                "All descendant non-terminal agents will be terminated.",
+                                cleanup_warning,
                                 Style::default().fg(colors::DIFF_REMOVE),
                             )),
                         ]

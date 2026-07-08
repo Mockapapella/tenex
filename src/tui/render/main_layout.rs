@@ -2,7 +2,7 @@
 
 use crate::agent::{AgentRuntime, Status, WorkspaceKind};
 use crate::app::{App, DiffLineMeta, PreviewSelectionPoint, Tab};
-use crate::app::{SidebarItem, SidebarProject};
+use crate::app::{SidebarAgentInfo, SidebarItem, SidebarProject};
 use crate::state::AppMode;
 use ratatui::{
     Frame,
@@ -20,8 +20,9 @@ use super::colors;
 fn agent_list_item<'a>(
     app: &App,
     idx: usize,
-    info: &crate::agent::VisibleAgentInfo<'a>,
+    sidebar_agent: &SidebarAgentInfo<'a>,
 ) -> ListItem<'a> {
+    let info = &sidebar_agent.info;
     let (status_symbol, status_color) = match info.agent.status {
         Status::Starting => (info.agent.status.symbol(), colors::STATUS_STARTING),
         Status::Running => {
@@ -73,6 +74,20 @@ fn agent_list_item<'a>(
         spans.push(Span::styled(
             "[D] ",
             Style::default().fg(colors::DOCKER_BADGE),
+        ));
+    }
+    if sidebar_agent.synthesis_marked {
+        spans.push(Span::styled(
+            "[m] ",
+            Style::default()
+                .fg(colors::SELECTED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if sidebar_agent.marked_descendant_count > 0 {
+        spans.push(Span::styled(
+            format!("[{}m] ", sidebar_agent.marked_descendant_count),
+            Style::default().fg(colors::SELECTED),
         ));
     }
     spans.push(Span::styled(&info.agent.title, style));
@@ -143,7 +158,7 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, item)| match item {
             SidebarItem::Project(project) => project_list_item(app, i, project),
-            SidebarItem::Agent(agent) => agent_list_item(app, i, &agent.info),
+            SidebarItem::Agent(agent) => agent_list_item(app, i, agent),
         })
         .collect();
 

@@ -15,6 +15,8 @@ pub struct SidebarProject {
 #[derive(Debug, Clone)]
 pub struct SidebarAgentInfo<'a> {
     pub info: VisibleAgentInfo<'a>,
+    pub synthesis_marked: bool,
+    pub marked_descendant_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +62,7 @@ impl AppData {
     pub(crate) fn sidebar_items(&self) -> Vec<SidebarItem<'_>> {
         let mut child_counts: HashMap<Uuid, usize> = HashMap::new();
         let mut children_map: HashMap<Uuid, Vec<&Agent>> = HashMap::new();
+        let marked_descendant_counts = self.marked_synthesis_descendant_counts();
 
         let mut roots_in_order: Vec<&Agent> = Vec::new();
         for agent in &self.storage.agents {
@@ -148,6 +151,8 @@ impl AppData {
                     1,
                     &child_counts,
                     &children_map,
+                    &self.synthesis_marks,
+                    &marked_descendant_counts,
                     &mut result,
                 );
             }
@@ -177,6 +182,8 @@ fn add_visible_with_info_recursive<'a>(
     depth: usize,
     child_counts: &HashMap<Uuid, usize>,
     children_map: &HashMap<Uuid, Vec<&'a Agent>>,
+    synthesis_marks: &[Uuid],
+    marked_descendant_counts: &HashMap<Uuid, usize>,
     result: &mut Vec<SidebarItem<'a>>,
 ) {
     let child_count = child_counts.get(&agent.id).copied().unwrap_or(0);
@@ -187,13 +194,30 @@ fn add_visible_with_info_recursive<'a>(
             has_children: child_count > 0,
             child_count,
         },
+        synthesis_marked: synthesis_marks.contains(&agent.id),
+        marked_descendant_count: if agent.collapsed {
+            marked_descendant_counts
+                .get(&agent.id)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        },
     }));
 
     if !agent.collapsed
         && let Some(children) = children_map.get(&agent.id)
     {
         for child in children {
-            add_visible_with_info_recursive(child, depth + 1, child_counts, children_map, result);
+            add_visible_with_info_recursive(
+                child,
+                depth + 1,
+                child_counts,
+                children_map,
+                synthesis_marks,
+                marked_descendant_counts,
+                result,
+            );
         }
     }
 }
@@ -222,6 +246,16 @@ mod tests {
             SidebarItem::Agent(agent) => Some(agent.info.agent.title.clone()),
             SidebarItem::Project(_) => None,
         }
+    }
+
+    fn agent_info_by_title<'a>(
+        items: &'a [SidebarItem<'a>],
+        title: &str,
+    ) -> Option<&'a SidebarAgentInfo<'a>> {
+        items.iter().find_map(|item| match item {
+            SidebarItem::Agent(agent) if agent.info.agent.title == title => Some(agent),
+            SidebarItem::Agent(_) | SidebarItem::Project(_) => None,
+        })
     }
 
     #[test]
@@ -351,6 +385,117 @@ mod tests {
 
         let label = project_label_for_root(root, &counts);
         assert_eq!(label, "/");
+    }
+
+    #[test]
+    fn test_sidebar_items_expose_synthesis_mark_state() {
+        let mut app_data = AppData::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "echo".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp/repo-wt"),
+        );
+        root.repo_root = Some(PathBuf::from("/tmp/repo"));
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app_data.storage.add(root);
+
+        let child = Agent::new_child(
+            "child".to_string(),
+            "echo".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp/repo-wt"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session,
+                window_index: 2,
+                repo_root: Some(PathBuf::from("/tmp/repo")),
+            },
+        );
+        let child_id = child.id;
+        app_data.storage.add(child);
+        assert!(app_data.toggle_synthesis_mark(child_id));
+
+        let items = app_data.sidebar_items();
+        let child_info = agent_info_by_title(&items, "child").expect("missing child row");
+        assert!(child_info.synthesis_marked);
+        let root_info = agent_info_by_title(&items, "root").expect("missing root row");
+        assert_eq!(root_info.marked_descendant_count, 0);
+    }
+
+    #[test]
+    fn test_sidebar_items_count_hidden_synthesis_marks_on_collapsed_parent() {
+        let mut app_data = AppData::new(
+            Config::default(),
+            Storage::new(),
+            Settings::default(),
+            false,
+        );
+
+        let mut root = Agent::new(
+            "root".to_string(),
+            "echo".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp/repo-wt"),
+        );
+        root.repo_root = Some(PathBuf::from("/tmp/repo"));
+        root.collapsed = false;
+        let root_id = root.id;
+        let root_session = root.mux_session.clone();
+        app_data.storage.add(root);
+
+        let mut child = Agent::new_child(
+            "child".to_string(),
+            "echo".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp/repo-wt"),
+            ChildConfig {
+                parent_id: root_id,
+                mux_session: root_session.clone(),
+                window_index: 2,
+                repo_root: Some(PathBuf::from("/tmp/repo")),
+            },
+        );
+        child.collapsed = false;
+        let child_id = child.id;
+        app_data.storage.add(child);
+
+        let grandchild = Agent::new_child(
+            "grandchild".to_string(),
+            "echo".to_string(),
+            "branch".to_string(),
+            PathBuf::from("/tmp/repo-wt"),
+            ChildConfig {
+                parent_id: child_id,
+                mux_session: root_session,
+                window_index: 3,
+                repo_root: Some(PathBuf::from("/tmp/repo")),
+            },
+        );
+        let grandchild_id = grandchild.id;
+        app_data.storage.add(grandchild);
+
+        assert!(app_data.toggle_synthesis_mark(grandchild_id));
+        app_data
+            .storage
+            .get_mut(child_id)
+            .expect("missing child")
+            .collapsed = true;
+
+        let items = app_data.sidebar_items();
+        assert!(agent_info_by_title(&items, "grandchild").is_none());
+        let child_info = agent_info_by_title(&items, "child").expect("missing child row");
+        assert_eq!(child_info.marked_descendant_count, 1);
+        let root_info = agent_info_by_title(&items, "root").expect("missing root row");
+        assert_eq!(root_info.marked_descendant_count, 0);
     }
 
     #[test]
