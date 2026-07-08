@@ -470,9 +470,29 @@ impl Actions {
         }
     }
 
-    fn resize_target_to_preview(self, app_data: &AppData, target: &str) {
+    fn resize_target_to_preview(self, app_data: &mut AppData, target: &str) {
         if let Some((width, height)) = app_data.ui.preview_dimensions {
-            let _ = self.session_manager.resize_window(target, width, height);
+            if width == 0 || height == 0 {
+                warn!(
+                    target,
+                    width, height, "Skipping zero-sized agent preview resize"
+                );
+                app_data.set_status(format!(
+                    "Preview is too small to resize agent: {width}x{height}"
+                ));
+                return;
+            }
+
+            if let Err(err) = self.session_manager.resize_window(target, width, height) {
+                warn!(
+                    target,
+                    width,
+                    height,
+                    error = %err,
+                    "Failed to resize agent preview"
+                );
+                app_data.set_status(format!("Failed to resize agent preview: {err}"));
+            }
         }
     }
 
@@ -500,7 +520,7 @@ impl Actions {
 
     pub(crate) fn launch_child_agent(
         self,
-        app_data: &AppData,
+        app_data: &mut AppData,
         agent: &mut Agent,
         title: &str,
         prompt: Option<&str>,
@@ -1599,7 +1619,30 @@ mod tests {
         let (mut app, _temp) = create_test_app();
         app.data.ui.preview_dimensions = Some((80, 24));
 
-        handler.resize_target_to_preview(&app.data, "missing-session");
+        handler.resize_target_to_preview(&mut app.data, "missing-session");
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|status| status.contains("Failed to resize agent preview"))
+        );
+    }
+
+    #[test]
+    fn test_resize_target_to_preview_rejects_zero_dimensions() {
+        let handler = Actions::new();
+        let (mut app, _temp) = create_test_app();
+        app.data.ui.preview_dimensions = Some((0, 24));
+
+        handler.resize_target_to_preview(&mut app.data, "missing-session");
+        assert!(
+            app.data
+                .ui
+                .status_message
+                .as_deref()
+                .is_some_and(|status| status.contains("0x24"))
+        );
     }
 
     fn test_sleep_program() -> String {
@@ -2264,7 +2307,7 @@ mod tests {
     #[test]
     fn test_launch_child_agent_propagates_runtime_ready_errors() {
         let handler = Actions::new();
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
         let worktree = TempDir::new().expect("create worktree dir");
         let docker = TempDir::new().expect("create docker dir");
         let script =
@@ -2279,7 +2322,7 @@ mod tests {
         agent.runtime = AgentRuntime::Docker;
 
         let err = crate::runtime::with_docker_program_override_for_tests(script, || {
-            handler.launch_child_agent(&app.data, &mut agent, "Child", None)
+            handler.launch_child_agent(&mut app.data, &mut agent, "Child", None)
         })
         .expect_err("expected docker readiness to fail");
         assert!(err.to_string().contains("Docker"));
@@ -2288,7 +2331,7 @@ mod tests {
     #[test]
     fn test_launch_child_agent_propagates_program_parse_errors() {
         let handler = Actions::new();
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
         let worktree = TempDir::new().expect("create worktree dir");
 
         let mut agent = Agent::new(
@@ -2299,7 +2342,7 @@ mod tests {
         );
 
         let err = handler
-            .launch_child_agent(&app.data, &mut agent, "Child", None)
+            .launch_child_agent(&mut app.data, &mut agent, "Child", None)
             .expect_err("expected invalid program to error");
         assert!(err.to_string().contains("Failed to parse command line"));
     }

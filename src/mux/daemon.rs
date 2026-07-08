@@ -4,30 +4,17 @@
 use super::endpoint::SocketEndpoint;
 use super::ipc;
 use super::protocol::{CaptureKind, MuxRequest, MuxResponse, SessionInfo, WindowInfo};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 use interprocess::local_socket::{ListenerOptions, Stream};
-use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use std::sync::OnceLock;
 use tracing::{debug, info, warn};
-
-static RESIZE_MAX: OnceLock<Mutex<HashMap<String, (u16, u16)>>> = OnceLock::new();
 
 trait ReadWrite: io::Read + io::Write {}
 
 impl<T: io::Read + io::Write + ?Sized> ReadWrite for T {}
-
-fn new_resize_max() -> Mutex<HashMap<String, (u16, u16)>> {
-    Mutex::new(HashMap::new())
-}
-
-fn resize_max() -> &'static Mutex<HashMap<String, (u16, u16)>> {
-    RESIZE_MAX.get_or_init(new_resize_max)
-}
 
 /// Run the mux daemon in the foreground.
 ///
@@ -256,39 +243,12 @@ fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> R
 
 fn handle_kill_session(name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::kill(name)?;
-    let prefix = format!("{name}:");
-    resize_max()
-        .lock()
-        .retain(|target, _| target != name && !target.starts_with(&prefix));
     Ok(MuxResponse::Ok)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_rename_session(old_name: &str, new_name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::rename(old_name, new_name)?;
-    {
-        let mut guard = resize_max().lock();
-        if let Some(value) = guard.remove(old_name) {
-            guard.insert(new_name.to_string(), value);
-        }
-
-        let old_prefix = format!("{old_name}:");
-        let new_prefix = format!("{new_name}:");
-        let updates: Vec<(String, String, (u16, u16))> = guard
-            .iter()
-            .filter_map(|(target, dims)| {
-                target
-                    .strip_prefix(&old_prefix)
-                    .map(|suffix| (target.clone(), format!("{new_prefix}{suffix}"), *dims))
-            })
-            .collect();
-        for (old_target, _, _) in &updates {
-            guard.remove(old_target);
-        }
-        for (_, new_target, dims) in updates {
-            guard.insert(new_target, dims);
-        }
-    }
     Ok(MuxResponse::Ok)
 }
 
@@ -321,9 +281,6 @@ fn handle_create_window(
 
 fn handle_kill_window(session: &str, window_index: u32) -> Result<MuxResponse> {
     super::server::SessionManager::kill_window(session, window_index)?;
-    resize_max()
-        .lock()
-        .remove(&format!("{session}:{window_index}"));
     Ok(MuxResponse::Ok)
 }
 
@@ -332,12 +289,17 @@ fn handle_rename_window(session: &str, window_index: u32, new_name: &str) -> Res
     Ok(MuxResponse::Ok)
 }
 
+/// Resize stores exactly the most recent request for a shared PTY target.
+///
+/// Multiple clients attached to the same session/window share one PTY size.
+/// Whichever valid resize request reaches the daemon last wins; the daemon
+/// does not negotiate per-client sizes or keep a historical maximum.
 fn handle_resize(target: &str, cols: u16, rows: u16) -> Result<MuxResponse> {
-    let current = resize_max().lock().get(target).copied().unwrap_or((0, 0));
-    let proposed = (current.0.max(cols), current.1.max(rows));
+    if cols == 0 || rows == 0 {
+        bail!("Resize dimensions must be nonzero");
+    }
 
-    super::server::SessionManager::resize_window(target, proposed.0, proposed.1)?;
-    resize_max().lock().insert(target.to_string(), proposed);
+    super::server::SessionManager::resize_window(target, cols, rows)?;
     Ok(MuxResponse::Ok)
 }
 

@@ -626,7 +626,7 @@ impl Actions {
 
     fn spawn_review_child_agent(
         self,
-        app_data: &AppData,
+        app_data: &mut AppData,
         config: ReviewChildAgentConfig<'_>,
     ) -> Result<Agent> {
         let child_title = format!("Reviewer {}", config.reviewer_number);
@@ -2069,7 +2069,7 @@ mod tests {
     #[test]
     fn test_spawn_review_child_agent_uses_child_runtime_scope_when_parent_missing() {
         let handler = Actions::new();
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
 
         let missing_parent_id = uuid::Uuid::new_v4();
         let config = ReviewChildAgentConfig {
@@ -2086,7 +2086,7 @@ mod tests {
         };
 
         handler
-            .spawn_review_child_agent(&app.data, config)
+            .spawn_review_child_agent(&mut app.data, config)
             .expect_err("expected missing session to error");
     }
 

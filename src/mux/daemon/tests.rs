@@ -845,75 +845,6 @@ fn test_serve_incoming_warns_on_accept_errors() {
 }
 
 #[test]
-fn test_rename_session_updates_resize_state() {
-    resize_max().lock().clear();
-
-    let session = unique_session("tenex-test-daemon-resize-rename");
-    let working_dir = temp_working_dir();
-
-    let _ = super::super::server::SessionManager::kill(&session);
-
-    let _ = dispatch(MuxRequest::CreateSession {
-        name: session.clone(),
-        working_dir: working_dir.clone(),
-        command: long_running_command(),
-        cols: 80,
-        rows: 24,
-    })
-    .unwrap();
-
-    let response = dispatch(MuxRequest::CreateWindow {
-        session: session.clone(),
-        window_name: "child".to_string(),
-        working_dir,
-        command: long_running_command(),
-        cols: 80,
-        rows: 24,
-    })
-    .unwrap();
-    let window_index = expect_window_created(&response).unwrap();
-
-    let _ = dispatch(MuxRequest::Resize {
-        target: session.clone(),
-        cols: 90,
-        rows: 30,
-    })
-    .unwrap();
-    let _ = dispatch(MuxRequest::Resize {
-        target: format!("{session}:{window_index}"),
-        cols: 120,
-        rows: 40,
-    })
-    .unwrap();
-
-    let renamed = format!("{session}-renamed");
-    let _ = dispatch(MuxRequest::RenameSession {
-        old_name: session.clone(),
-        new_name: renamed.clone(),
-    })
-    .unwrap();
-
-    {
-        let guard = resize_max().lock();
-        assert!(guard.contains_key(&renamed));
-        assert!(!guard.contains_key(&session));
-        assert!(guard.contains_key(&format!("{renamed}:{window_index}")));
-        assert!(!guard.contains_key(&format!("{session}:{window_index}")));
-        drop(guard);
-    }
-
-    let _ = dispatch(MuxRequest::KillSession {
-        name: renamed.clone(),
-    })
-    .unwrap();
-
-    let guard = resize_max().lock();
-    assert!(!guard.contains_key(&renamed));
-    assert!(guard.is_empty());
-    drop(guard);
-}
-
-#[test]
 fn test_try_ping_existing_true_and_false() {
     let temp = TempDir::new().unwrap();
     let endpoint = unique_path_endpoint(&temp, "tenex-test-daemon-ping");
@@ -1259,8 +1190,53 @@ fn test_dispatch_output_cursor_reflects_history_bounds() {
 }
 
 #[test]
-fn test_resize_is_monotonic_max_per_target() {
-    let session = unique_session("tenex-test-daemon-resize-multi");
+fn test_resize_rejects_zero_dimensions() {
+    let session = unique_session("tenex-test-daemon-resize-zero");
+    let working_dir = temp_working_dir();
+    let command = long_running_command();
+
+    let _ = super::super::server::SessionManager::kill(&session);
+
+    let response = dispatch(MuxRequest::CreateSession {
+        name: session.clone(),
+        working_dir,
+        command,
+        cols: 80,
+        rows: 24,
+    })
+    .expect("create session");
+    assert!(response_is_ok(&response));
+
+    let cols_err = dispatch(MuxRequest::Resize {
+        target: session.clone(),
+        cols: 0,
+        rows: 24,
+    })
+    .expect_err("zero cols should be rejected");
+    assert!(cols_err.to_string().contains("nonzero"));
+
+    let rows_err = dispatch(MuxRequest::Resize {
+        target: session.clone(),
+        cols: 80,
+        rows: 0,
+    })
+    .expect_err("zero rows should be rejected");
+    assert!(rows_err.to_string().contains("nonzero"));
+
+    let response = dispatch(MuxRequest::PaneSize {
+        target: session.clone(),
+    })
+    .expect("pane size");
+    let (cols, rows) = expect_size(&response).expect("size response");
+    assert_eq!((cols, rows), (80, 24));
+
+    let response = dispatch(MuxRequest::KillSession { name: session }).expect("kill session");
+    assert!(response_is_ok(&response));
+}
+
+#[test]
+fn test_resize_down_updates_pane_size() {
+    let session = unique_session("tenex-test-daemon-resize-down");
     let working_dir = temp_working_dir();
     let command = long_running_command();
 
@@ -1312,7 +1288,7 @@ fn test_resize_is_monotonic_max_per_target() {
     })
     .expect("pane size");
     let (cols, rows) = expect_size(&response).expect("size response");
-    assert_eq!((cols, rows), (120, 40));
+    assert_eq!((cols, rows), (80, 24));
 
     let response = dispatch(MuxRequest::KillSession { name: session }).expect("kill session");
     assert!(response_is_ok(&response));

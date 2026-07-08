@@ -1,6 +1,6 @@
 use super::*;
 use crate::action::keycode_to_input_sequence;
-use crate::agent::{Agent, Storage};
+use crate::agent::{Agent, ChildConfig, Storage};
 use crate::config::Config;
 use crate::state::*;
 use ratatui::backend::TestBackend;
@@ -442,6 +442,31 @@ fn test_init_preview_dimensions_runs_when_only_one_dimension_is_set() {
 }
 
 #[test]
+fn test_init_preview_dimensions_skips_zero_preview_dimensions() {
+    struct TinyTerminal;
+
+    impl TerminalInfo for TinyTerminal {
+        fn size(&self) -> Result<ratatui::layout::Size> {
+            Ok(ratatui::layout::Size::new(1, 1))
+        }
+    }
+
+    let mut app = create_test_app();
+
+    init_preview_dimensions(&TinyTerminal, &mut app, Actions::new());
+
+    assert_eq!(app.data.ui.terminal_dimensions, Some((1, 1)));
+    assert!(app.data.ui.preview_dimensions.is_none());
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|status| status.contains("0x0"))
+    );
+}
+
+#[test]
 fn test_apply_pending_resize_updates_preview_dimensions_and_noops_when_unchanged() {
     let mut app = create_test_app();
 
@@ -452,6 +477,95 @@ fn test_apply_pending_resize_updates_preview_dimensions_and_noops_when_unchanged
 
     apply_pending_resize(&mut app, Actions::new(), Some((80, 24)));
     assert_eq!(app.data.ui.preview_dimensions, first_preview);
+}
+
+#[test]
+fn test_apply_pending_resize_skips_zero_preview_dimensions() {
+    let mut app = create_test_app();
+    app.set_preview_dimensions(80, 24);
+
+    apply_pending_resize(&mut app, Actions::new(), Some((1, 1)));
+
+    assert_eq!(app.data.ui.terminal_dimensions, Some((1, 1)));
+    assert_eq!(app.data.ui.preview_dimensions, Some((80, 24)));
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|status| status.contains("0x0"))
+    );
+}
+
+#[test]
+fn test_apply_pending_resize_skips_zero_height_preview_dimensions() {
+    let mut app = create_test_app();
+    app.set_preview_dimensions(80, 24);
+
+    apply_pending_resize(&mut app, Actions::new(), Some((80, 3)));
+
+    assert_eq!(app.data.ui.terminal_dimensions, Some((80, 3)));
+    assert_eq!(app.data.ui.preview_dimensions, Some((80, 24)));
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|status| status.contains("54x0"))
+    );
+}
+
+#[test]
+fn test_apply_preview_dimensions_keeps_previous_dimensions_on_resize_failure() {
+    let socket = format!("tenex-tui-preview-resize-{}", uuid::Uuid::new_v4());
+    crate::mux::set_socket_override(&socket).expect("set_socket_override");
+
+    let action_handler = Actions::new();
+    let mut app = create_test_app();
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    app.set_preview_dimensions(80, 24);
+
+    let mut root = Agent::new(
+        "root".to_string(),
+        "claude".to_string(),
+        "tenex/root".to_string(),
+        PathBuf::from("/tmp"),
+    );
+    root.mux_session = format!("tenex-tui-preview-resize-{}", uuid::Uuid::new_v4());
+    let root_id = root.id;
+    let root_session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    action_handler
+        .session_manager
+        .create(&root_session, temp.path(), None)
+        .expect("create mux session");
+
+    app.data.storage.add(Agent::new_child(
+        "child".to_string(),
+        "claude".to_string(),
+        "tenex/root".to_string(),
+        PathBuf::from("/tmp"),
+        ChildConfig {
+            parent_id: root_id,
+            mux_session: root_session.clone(),
+            window_index: 99,
+            repo_root: None,
+        },
+    ));
+
+    assert!(!apply_preview_dimensions(&mut app, action_handler, 90, 30));
+    assert_eq!(app.data.ui.preview_dimensions, Some((80, 24)));
+    assert!(
+        app.data
+            .ui
+            .status_message
+            .as_deref()
+            .is_some_and(|status| status.contains("Failed to resize agent preview"))
+    );
+
+    let _ = action_handler.session_manager.kill(&root_session);
+    let _ = crate::mux::terminate_mux_daemon_for_socket(&socket);
 }
 
 #[test]
