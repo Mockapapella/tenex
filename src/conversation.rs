@@ -3,7 +3,6 @@
 //! Tenex persists a per-agent conversation id so it can respawn agents after a reboot/crash and
 //! reconnect to the same Codex/Claude session instead of starting a new one.
 
-#![cfg_attr(coverage_nightly, coverage(off))]
 #![cfg_attr(all(coverage, not(test)), allow(dead_code))]
 
 use crate::command;
@@ -16,7 +15,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +30,6 @@ pub enum AgentCli {
 }
 
 /// Detect the agent CLI from a configured program string.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn detect_agent_cli(program: &str) -> AgentCli {
     let Ok(argv) = command::parse_command_line(program) else {
         return AgentCli::Other;
@@ -50,27 +48,6 @@ pub fn detect_agent_cli(program: &str) -> AgentCli {
     }
 }
 
-#[cfg(coverage)]
-#[doc(hidden)]
-pub fn exercise_agent_cli_detection_for_coverage() {
-    let _ = detect_agent_cli("claude");
-    let _ = detect_agent_cli("codex");
-    let _ = detect_agent_cli("sh -c 'unterminated");
-    let _ = detect_agent_cli("/usr/bin/echo hello");
-    let _ = build_spawn_argv("claude --debug", Some("hello"), Some("session"));
-    let _ = build_spawn_argv("claude --session-id existing", None, Some("session"));
-    let _ = build_spawn_argv("claude --session-id=existing", None, Some("session"));
-    let _ = build_spawn_argv("claude --resume existing", None, Some("session"));
-    let _ = build_spawn_argv("claude -r existing", None, Some("session"));
-    let _ = build_spawn_argv("claude --continue existing", None, Some("session"));
-    let _ = build_spawn_argv("claude -c existing", None, Some("session"));
-    let _ = build_spawn_argv("codex", Some("hello"), Some("session"));
-    let _ = build_spawn_argv("sh -c 'unterminated", None, None);
-    let _ = build_resume_argv("claude", "conversation");
-    let _ = build_resume_argv("codex", "conversation");
-    let _ = build_resume_argv("echo", "conversation");
-}
-
 /// Build argv for spawning an agent.
 ///
 /// For Claude, Tenex can optionally force a stable session id (so it can be resumed later).
@@ -78,7 +55,6 @@ pub fn exercise_agent_cli_detection_for_coverage() {
 /// # Errors
 ///
 /// Returns an error when `program` cannot be parsed into an argv vector.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn build_spawn_argv(
     program: &str,
     prompt: Option<&str>,
@@ -111,7 +87,6 @@ pub fn build_spawn_argv(
 /// # Errors
 ///
 /// Returns an error when `program` cannot be parsed into an argv vector.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn build_resume_argv(program: &str, conversation_id: &str) -> Result<Vec<String>> {
     let mut argv = command::parse_command_line(program)?;
 
@@ -185,7 +160,6 @@ fn detect_codex_session_id_once_in_root<S: std::hash::BuildHasher>(
     detect_codex_session_id_once_in_dirs(&date_dirs, workdir, since, exclude_ids)
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn detect_codex_session_id_once_in_dirs<S: std::hash::BuildHasher>(
     date_dirs: &[PathBuf],
     workdir: &Path,
@@ -282,22 +256,22 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     })
 }
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 #[derive(Clone)]
 enum CodexSessionsRootOverride {
     Unset,
     Value(Option<PathBuf>),
 }
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 static CODEX_SESSIONS_ROOT_OVERRIDE: OnceLock<Mutex<CodexSessionsRootOverride>> = OnceLock::new();
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 fn codex_sessions_root_override_mutex() -> &'static Mutex<CodexSessionsRootOverride> {
     CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(CodexSessionsRootOverride::Unset))
 }
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 fn codex_sessions_root_override() -> CodexSessionsRootOverride {
     let mutex = codex_sessions_root_override_mutex();
     let guard = match mutex.lock() {
@@ -307,7 +281,7 @@ fn codex_sessions_root_override() -> CodexSessionsRootOverride {
     guard.clone()
 }
 
-#[cfg(any(test, coverage))]
+#[cfg(any(test, coverage, feature = "test-support"))]
 fn set_codex_sessions_root_override_for_tests(
     new: CodexSessionsRootOverride,
 ) -> CodexSessionsRootOverride {
@@ -320,7 +294,7 @@ fn set_codex_sessions_root_override_for_tests(
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
-    #[cfg(any(test, coverage))]
+    #[cfg(any(test, coverage, feature = "test-support"))]
     match codex_sessions_root_override() {
         CodexSessionsRootOverride::Unset => {}
         CodexSessionsRootOverride::Value(root) => return root,
@@ -366,543 +340,110 @@ fn normalize_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-    use tempfile::TempDir;
+#[cfg(any(test, feature = "test-support"))]
+/// Integration-test helpers for otherwise private conversation/session tracking logic.
+pub mod test_support {
+    use chrono::NaiveDate;
+    use std::collections::HashSet;
+    use std::hash::BuildHasher;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
 
-    struct CodexSessionsRootOverrideGuard {
-        previous: CodexSessionsRootOverride,
+    struct CodexSessionsRootOverrideRestore {
+        previous: super::CodexSessionsRootOverride,
     }
 
-    impl CodexSessionsRootOverrideGuard {
-        fn unset() -> Self {
-            let previous =
-                set_codex_sessions_root_override_for_tests(CodexSessionsRootOverride::Unset);
-            Self { previous }
-        }
-
-        fn set(new: Option<PathBuf>) -> Self {
-            let previous =
-                set_codex_sessions_root_override_for_tests(CodexSessionsRootOverride::Value(new));
-            Self { previous }
-        }
-    }
-
-    impl Drop for CodexSessionsRootOverrideGuard {
+    impl Drop for CodexSessionsRootOverrideRestore {
         fn drop(&mut self) {
-            let previous = std::mem::replace(&mut self.previous, CodexSessionsRootOverride::Unset);
-            let _ = set_codex_sessions_root_override_for_tests(previous);
+            let previous =
+                std::mem::replace(&mut self.previous, super::CodexSessionsRootOverride::Unset);
+            let _ = super::set_codex_sessions_root_override_for_tests(previous);
         }
     }
 
-    fn codex_session_meta_line(id: &str, cwd: &Path) -> String {
-        format!(
-            "{}\n",
-            serde_json::json!({
-                "type": "session_meta",
-                "payload": {
-                    "id": id,
-                    "cwd": cwd.to_string_lossy().into_owned(),
-                }
-            })
-        )
-    }
-
-    #[test]
-    fn test_detect_agent_cli() {
-        assert_eq!(detect_agent_cli("claude"), AgentCli::Claude);
-        assert_eq!(detect_agent_cli("codex"), AgentCli::Codex);
-        assert_eq!(detect_agent_cli("sh -c 'echo hi'"), AgentCli::Other);
-        assert_eq!(detect_agent_cli("   "), AgentCli::Other);
-        assert_eq!(detect_agent_cli("sh -c 'unterminated"), AgentCli::Other);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_adds_session_id() {
-        let argv = build_spawn_argv("claude --debug", Some("hello"), Some("abc")).expect("argv");
-        assert_eq!(
-            argv,
-            vec!["claude", "--debug", "--session-id", "abc", "hello"]
+    /// Run a closure with the production Codex session root resolution restored.
+    pub fn with_codex_sessions_root_unset<T>(f: impl FnOnce() -> T) -> T {
+        let previous = super::set_codex_sessions_root_override_for_tests(
+            super::CodexSessionsRootOverride::Unset,
         );
+        let _restore = CodexSessionsRootOverrideRestore { previous };
+        f()
     }
 
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_duplicate_session_id() {
-        let argv = build_spawn_argv("claude --session-id existing", Some("hello"), Some("abc"))
-            .expect("argv");
-        assert_eq!(argv, vec!["claude", "--session-id", "existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_duplicate_session_id_with_equals() {
-        let argv = build_spawn_argv("claude --session-id=existing", Some("hello"), Some("abc"))
-            .expect("argv");
-        assert_eq!(argv, vec!["claude", "--session-id=existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_inject_when_resume_present() {
-        let argv =
-            build_spawn_argv("claude --resume existing", Some("hello"), Some("abc")).expect("argv");
-        assert_eq!(argv, vec!["claude", "--resume", "existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_inject_when_short_resume_present() {
-        let argv =
-            build_spawn_argv("claude -r existing", Some("hello"), Some("abc")).expect("argv");
-        assert_eq!(argv, vec!["claude", "-r", "existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_inject_when_continue_present() {
-        let argv = build_spawn_argv("claude --continue existing", Some("hello"), Some("abc"))
-            .expect("argv");
-        assert_eq!(argv, vec!["claude", "--continue", "existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_claude_does_not_inject_when_short_continue_present() {
-        let argv =
-            build_spawn_argv("claude -c existing", Some("hello"), Some("abc")).expect("argv");
-        assert_eq!(argv, vec!["claude", "-c", "existing", "hello"]);
-    }
-
-    #[test]
-    fn test_build_spawn_argv_non_claude_does_not_inject_session_id() {
-        let argv = build_spawn_argv("codex", Some("hello"), Some("abc")).expect("argv");
-        assert_eq!(argv, vec!["codex", "hello"]);
-    }
-
-    #[test]
-    fn test_build_resume_argv_codex() {
-        let argv = build_resume_argv("codex --search", "id").expect("argv");
-        assert_eq!(argv, vec!["codex", "--search", "resume", "id"]);
-    }
-
-    #[test]
-    fn test_build_resume_argv_claude() {
-        let argv = build_resume_argv("claude --debug", "id").expect("argv");
-        assert_eq!(argv, vec!["claude", "--debug", "--resume", "id"]);
-    }
-
-    #[test]
-    fn test_build_resume_argv_other() {
-        let argv = build_resume_argv("echo hello", "id").expect("argv");
-        assert_eq!(argv, vec!["echo", "hello"]);
-    }
-
-    #[test]
-    fn test_try_detect_codex_session_id_from_fake_store() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = codex_session_meta_line("deadbeef", &workdir);
-        std::fs::write(&session_path, contents).expect("write session file");
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
+    /// Run a closure with an injected Codex sessions root.
+    pub fn with_codex_sessions_root_override<T>(root: Option<PathBuf>, f: impl FnOnce() -> T) -> T {
+        let previous = super::set_codex_sessions_root_override_for_tests(
+            super::CodexSessionsRootOverride::Value(root),
         );
-        assert_eq!(id.as_deref(), Some("deadbeef"));
+        let _restore = CodexSessionsRootOverrideRestore { previous };
+        f()
     }
 
-    #[test]
-    fn test_try_detect_codex_session_id_with_retry_returns_none_on_overflow() {
-        let mut detect_once = || None;
-        let mut now = || SystemTime::UNIX_EPOCH;
-        let mut sleep = std::mem::drop::<Duration>;
-        let id = try_detect_codex_session_id_with_retry(
-            Duration::from_secs(u64::MAX),
-            &mut detect_once,
-            &mut now,
-            &mut sleep,
-        );
-        assert!(id.is_none());
+    /// Return the current Codex sessions root after applying any test override.
+    #[must_use]
+    pub fn codex_sessions_root() -> Option<PathBuf> {
+        super::codex_sessions_root()
     }
 
-    #[test]
-    fn test_try_detect_codex_session_id_with_retry_times_out() {
-        let mut detect_calls = 0;
-        let mut now_calls = 0;
-        let mut slept = false;
-        let id = {
-            let mut detect_once = || {
-                detect_calls += 1;
-                None
-            };
-            let mut now = || {
-                now_calls += 1;
-                SystemTime::UNIX_EPOCH
-            };
-            let mut sleep = |_| slept = true;
-            try_detect_codex_session_id_with_retry(
-                Duration::from_millis(0),
-                &mut detect_once,
-                &mut now,
-                &mut sleep,
-            )
-        };
-        assert!(id.is_none());
-        assert_eq!(detect_calls, 1);
-        assert_eq!(now_calls, 2);
-        assert!(!slept);
-    }
-
-    #[test]
-    fn test_try_detect_codex_session_id_returns_none_when_no_match() {
-        let temp = TempDir::new().expect("tempdir");
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-        let sessions_root = temp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_root).expect("create sessions root");
-
-        let _override_guard = CodexSessionsRootOverrideGuard::set(Some(sessions_root));
-        let id = try_detect_codex_session_id(
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-            Duration::from_millis(0),
-        );
-        assert!(id.is_none());
-    }
-
-    #[test]
-    fn test_codex_sessions_root() {
-        let _override_guard = CodexSessionsRootOverrideGuard::unset();
-        let root = codex_sessions_root().expect("missing codex sessions root");
-        assert_eq!(
-            root.file_name().and_then(|name| name.to_str()),
-            Some("sessions")
-        );
-    }
-
-    #[test]
-    fn test_read_codex_session_meta_returns_none_for_empty_file() {
-        let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("empty.jsonl");
-        std::fs::write(&path, "").expect("write empty");
-        assert!(read_codex_session_meta(&path).is_none());
-    }
-
-    #[test]
-    fn test_read_codex_session_meta_returns_none_for_invalid_json() {
-        let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("invalid.jsonl");
-        std::fs::write(&path, "{not-json}\n").expect("write invalid");
-        assert!(read_codex_session_meta(&path).is_none());
-    }
-
-    #[test]
-    fn test_read_codex_session_meta_returns_none_for_non_session_meta_kind() {
-        let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("wrong-kind.jsonl");
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "type": "not_session_meta",
-                "payload": { "id": "deadbeef", "cwd": "/tmp" },
-            })
-            .to_string()
-                + "\n",
-        )
-        .expect("write wrong-kind");
-        assert!(read_codex_session_meta(&path).is_none());
-    }
-
-    #[test]
-    fn test_read_codex_session_meta_returns_none_when_file_missing() {
-        let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("missing.jsonl");
-        assert!(read_codex_session_meta(&path).is_none());
-    }
-
-    #[test]
-    fn test_normalize_path_falls_back_when_canonicalize_fails() {
-        let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("missing");
-        assert_eq!(normalize_path(&path), path);
-    }
-
-    #[test]
-    fn test_normalize_path_prefers_canonicalize_when_it_succeeds() {
-        let temp = TempDir::new().expect("tempdir");
-        let dir = temp.path().join("dir");
-        std::fs::create_dir_all(&dir).expect("create dir");
-        let expected = dir.canonicalize().expect("canonicalize");
-        assert_eq!(normalize_path(&dir), expected);
-    }
-
-    #[test]
-    fn test_try_detect_codex_session_id_returns_none_when_sessions_root_missing() {
-        let temp = TempDir::new().expect("tempdir");
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let _override_guard = CodexSessionsRootOverrideGuard::set(None);
-        let id = try_detect_codex_session_id(
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-            Duration::from_millis(0),
-        );
-        assert!(id.is_none());
-    }
-
-    #[test]
-    fn test_codex_sessions_root_override_handles_poisoned_mutex() {
-        let mutex = codex_sessions_root_override_mutex();
+    /// Poison the Codex sessions root override mutex to exercise recovery paths.
+    pub fn poison_codex_sessions_root_override_mutex() {
+        let mutex = super::codex_sessions_root_override_mutex();
         let _ = std::panic::catch_unwind(|| {
             let _guard = mutex
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::panic::resume_unwind(Box::new(()));
         });
-
-        let tmp_root = std::env::temp_dir().join("tenex-codex-sessions");
-        let _previous = set_codex_sessions_root_override_for_tests(
-            CodexSessionsRootOverride::Value(Some(tmp_root)),
-        );
-
-        let is_value_some = |root: &CodexSessionsRootOverride| {
-            matches!(root, CodexSessionsRootOverride::Value(Some(_)))
-        };
-        let is_value_none = |root: &CodexSessionsRootOverride| {
-            matches!(root, CodexSessionsRootOverride::Value(None))
-        };
-
-        let root = codex_sessions_root_override();
-        assert!(is_value_some(&root));
-        assert!(!is_value_none(&root));
-
-        let none_root = CodexSessionsRootOverride::Value(None);
-        assert!(!is_value_some(&none_root));
-        assert!(is_value_none(&none_root));
-
-        let _ = set_codex_sessions_root_override_for_tests(CodexSessionsRootOverride::Value(None));
-        let root = codex_sessions_root_override();
-        assert!(is_value_none(&root));
-        assert!(!is_value_some(&root));
     }
 
-    #[test]
-    fn test_detect_codex_session_id_once_in_root_filters_since() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = codex_session_meta_line("deadbeef", &workdir);
-        std::fs::write(&session_path, contents).expect("write session file");
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::now() + Duration::from_secs(60),
-            &HashSet::new(),
-        );
-        assert!(id.is_none());
+    /// Return whether a file contains readable Codex session metadata.
+    #[must_use]
+    pub fn read_codex_session_meta_is_some(path: &Path) -> bool {
+        super::read_codex_session_meta(path).is_some()
     }
 
-    #[test]
-    fn test_detect_codex_session_id_once_in_root_excludes_ids() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        let session_path = date_dir.join("rollout-2026-02-01T00-00-00-deadbeef.jsonl");
-        let contents = codex_session_meta_line("deadbeef", &workdir);
-        std::fs::write(&session_path, contents).expect("write session file");
-
-        let exclude_ids: HashSet<String> = std::iter::once("deadbeef".to_string()).collect();
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &exclude_ids,
-        );
-        assert!(id.is_none());
+    /// Return a dated Codex session directory under an injected sessions root.
+    #[must_use]
+    pub fn codex_date_dir(sessions_root: &Path, date: NaiveDate) -> PathBuf {
+        super::codex_date_dir(sessions_root, date)
     }
 
-    #[test]
-    fn test_detect_codex_session_id_once_in_dirs_skips_read_dir_errors() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-        let not_a_dir = temp.path().join("not-a-dir");
-        std::fs::write(&not_a_dir, "not a directory").expect("write file");
-
-        let id = detect_codex_session_id_once_in_dirs(
-            &[not_a_dir],
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-        );
-        assert!(id.is_none());
+    /// Detect a Codex session id by scanning an injected sessions root once.
+    #[must_use]
+    pub fn detect_codex_session_id_once_in_root<S: BuildHasher>(
+        sessions_root: &Path,
+        workdir: &Path,
+        since: SystemTime,
+        exclude_ids: &HashSet<String, S>,
+    ) -> Option<String> {
+        super::detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids)
     }
 
-    #[test]
-    fn test_detect_codex_session_id_once_in_dirs_prefers_newest_modified() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        let first_path = date_dir.join("rollout-2026-02-01T00-00-00-aaaa.jsonl");
-        std::fs::write(&first_path, codex_session_meta_line("aaaa", &workdir))
-            .expect("write first session");
-
-        std::thread::sleep(Duration::from_millis(20));
-
-        let second_path = date_dir.join("rollout-2026-02-01T00-00-00-bbbb.jsonl");
-        std::fs::write(&second_path, codex_session_meta_line("bbbb", &workdir))
-            .expect("write second session");
-
-        let id = detect_codex_session_id_once_in_dirs(
-            &[date_dir],
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-        );
-        assert_eq!(id.as_deref(), Some("bbbb"));
+    /// Detect a Codex session id by scanning injected date directories once.
+    #[must_use]
+    pub fn detect_codex_session_id_once_in_dirs<S: BuildHasher>(
+        date_dirs: &[PathBuf],
+        workdir: &Path,
+        since: SystemTime,
+        exclude_ids: &HashSet<String, S>,
+    ) -> Option<String> {
+        super::detect_codex_session_id_once_in_dirs(date_dirs, workdir, since, exclude_ids)
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn test_detect_codex_session_id_once_in_root_skips_metadata_errors() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        let broken_target = date_dir.join("missing-target");
-        let broken_link = date_dir.join("broken.jsonl");
-        symlink(broken_target, broken_link).expect("symlink");
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-        );
-        assert!(id.is_none());
+    /// Try to detect a Codex session id with injected retry primitives.
+    #[must_use]
+    pub fn try_detect_codex_session_id_with_retry(
+        max_wait: Duration,
+        detect_once: &mut dyn FnMut() -> Option<String>,
+        now: &mut dyn FnMut() -> SystemTime,
+        sleep: &mut dyn FnMut(Duration),
+    ) -> Option<String> {
+        super::try_detect_codex_session_id_with_retry(max_wait, detect_once, now, sleep)
     }
 
-    #[test]
-    fn test_detect_codex_session_id_once_in_root_prefers_newest_matching() {
-        let temp = TempDir::new().expect("tempdir");
-
-        let workdir = temp.path().join("worktree");
-        std::fs::create_dir_all(&workdir).expect("create workdir");
-        let other_workdir = temp.path().join("other");
-        std::fs::create_dir_all(&other_workdir).expect("create other dir");
-
-        let sessions_root = temp.path().join("sessions");
-        let date_dir = codex_date_dir(&sessions_root, Local::now().date_naive());
-        std::fs::create_dir_all(&date_dir).expect("create date dir");
-
-        std::fs::write(date_dir.join("ignore.txt"), "hello").expect("write file");
-        std::fs::create_dir_all(date_dir.join("dir.jsonl")).expect("create dir");
-
-        std::fs::write(date_dir.join("empty.jsonl"), "").expect("write file");
-        let wrong_kind = "{\"type\":\"other\",\"payload\":{\"id\":\"other\",\"cwd\":\"/tmp\"}}\n";
-        std::fs::write(date_dir.join("wrong_kind.jsonl"), wrong_kind).expect("write file");
-        std::fs::write(date_dir.join("invalid.jsonl"), "{").expect("write file");
-        let wrong_cwd = codex_session_meta_line("wrongcwd", &other_workdir);
-        std::fs::write(date_dir.join("wrong_cwd.jsonl"), wrong_cwd).expect("write file");
-
-        let first_path = date_dir.join("first.jsonl");
-        let first_contents = codex_session_meta_line("first", &workdir);
-        std::fs::write(&first_path, first_contents).expect("write file");
-
-        let third_path = date_dir.join("third.jsonl");
-        let third_contents = codex_session_meta_line("third", &workdir);
-        std::fs::write(&third_path, third_contents).expect("write file");
-
-        std::thread::sleep(Duration::from_secs(1));
-
-        let second_path = date_dir.join("second.jsonl");
-        let second_contents = codex_session_meta_line("second", &workdir);
-        std::fs::write(&second_path, second_contents).expect("write file");
-
-        let id = detect_codex_session_id_once_in_root(
-            &sessions_root,
-            &workdir,
-            SystemTime::UNIX_EPOCH,
-            &HashSet::new(),
-        );
-        assert_eq!(id.as_deref(), Some("second"));
-    }
-
-    #[test]
-    fn test_try_detect_codex_session_id_with_retry_waits_for_session() {
-        let mut detect_calls = 0;
-        let mut now_calls = 0;
-        let mut slept = Vec::new();
-        let id = {
-            let mut detect_once = || {
-                detect_calls += 1;
-                if detect_calls == 1 {
-                    None
-                } else {
-                    Some("deadbeef".to_string())
-                }
-            };
-            let mut now = || {
-                now_calls += 1;
-                SystemTime::UNIX_EPOCH
-            };
-            let mut sleep = |duration| slept.push(duration);
-            try_detect_codex_session_id_with_retry(
-                Duration::from_millis(200),
-                &mut detect_once,
-                &mut now,
-                &mut sleep,
-            )
-        };
-        assert_eq!(id.as_deref(), Some("deadbeef"));
-        assert_eq!(detect_calls, 2);
-        assert_eq!(now_calls, 2);
-        assert_eq!(slept, vec![Duration::from_millis(25)]);
-    }
-
-    #[test]
-    fn test_normalize_path_returns_input_when_canonicalize_fails() {
-        let temp = TempDir::new().expect("tempdir");
-        let missing = temp.path().join("missing");
-        assert!(!missing.exists());
-        assert_eq!(normalize_path(&missing), missing);
+    /// Normalize a path using the production fallback behavior.
+    #[must_use]
+    pub fn normalize_path(path: &Path) -> PathBuf {
+        super::normalize_path(path)
     }
 }

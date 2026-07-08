@@ -16,7 +16,6 @@ fn test_agent_lifecycle_coverage_probe_runs_in_non_test_build()
     tenex::agent::Storage::exercise_load_and_backfill_paths_for_coverage();
     tenex::mux::exercise_endpoint_paths_for_coverage();
     tenex::mux::exercise_mux_paths_for_coverage();
-    tenex::conversation::exercise_agent_cli_detection_for_coverage();
     app.data.exercise_command_defaults_for_coverage();
     tenex::app::Actions::exercise_reset_all_paths_for_coverage();
     tenex::app::Actions::exercise_agent_lifecycle_paths_for_coverage(&mut app.data);

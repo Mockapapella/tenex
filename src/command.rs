@@ -19,31 +19,3 @@ pub fn parse_command_line(command_line: &str) -> Result<Vec<String>> {
 
     Ok(argv)
 }
-
-/// Build an argv vector from a configured program string and an optional prompt.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_command_line_rejects_empty() {
-        let error = parse_command_line("   ").unwrap_err();
-        let message = format!("{error}");
-        assert!(message.contains("Command line is empty"));
-    }
-
-    #[test]
-    fn test_parse_command_line_splits_args() {
-        let argv = parse_command_line(r#"echo "hello world""#).unwrap();
-        assert_eq!(argv, vec!["echo".to_string(), "hello world".to_string()]);
-    }
-
-    #[test]
-    fn test_parse_command_line_comment_is_empty() {
-        let error = parse_command_line("# comment only").unwrap_err();
-        let message = format!("{error}");
-        assert!(message.contains("Command line produced no argv items"));
-    }
-
-    // `build_spawn_argv` lives in `crate::conversation` and covers Tenex's current spawn needs.
-}

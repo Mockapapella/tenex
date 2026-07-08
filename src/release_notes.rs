@@ -20,18 +20,18 @@ pub struct ReleaseNoteEntry {
 
 include!(concat!(env!("OUT_DIR"), "/release_notes.rs"));
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static RELEASE_NOTES_OVERRIDE: std::cell::RefCell<Option<&'static [ReleaseNoteEntry]>> =
         const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 const fn release_note_entries() -> &'static [ReleaseNoteEntry] {
     RELEASE_NOTES
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn release_note_entries() -> &'static [ReleaseNoteEntry] {
     if let Some(entries) =
         RELEASE_NOTES_OVERRIDE.with(|override_entries| *override_entries.borrow())
@@ -42,25 +42,36 @@ fn release_note_entries() -> &'static [ReleaseNoteEntry] {
     RELEASE_NOTES
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug)]
+struct ReleaseNotesOverrideRestore(Option<&'static [ReleaseNoteEntry]>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for ReleaseNotesOverrideRestore {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        RELEASE_NOTES_OVERRIDE.with(|override_entries| {
+            *override_entries.borrow_mut() = previous;
+        });
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn set_release_notes_override_for_tests(
+    entries: &'static [ReleaseNoteEntry],
+) -> ReleaseNotesOverrideRestore {
+    let previous = RELEASE_NOTES_OVERRIDE
+        .with(|override_entries| (*override_entries.borrow_mut()).replace(entries));
+    ReleaseNotesOverrideRestore(previous)
+}
+
 #[cfg(test)]
+/// Run a closure with temporary embedded release notes.
 pub(crate) fn with_release_notes_override_for_tests<T>(
     entries: &'static [ReleaseNoteEntry],
     f: impl FnOnce() -> T,
 ) -> T {
-    struct Restore(Option<&'static [ReleaseNoteEntry]>);
-
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            let previous = self.0.take();
-            RELEASE_NOTES_OVERRIDE.with(|override_entries| {
-                *override_entries.borrow_mut() = previous;
-            });
-        }
-    }
-
-    let previous = RELEASE_NOTES_OVERRIDE
-        .with(|override_entries| (*override_entries.borrow_mut()).replace(entries));
-    let _restore = Restore(previous);
+    let _restore = set_release_notes_override_for_tests(entries);
     f()
 }
 
@@ -117,7 +128,7 @@ pub fn notes_between(
         if version > *to_inclusive {
             continue;
         }
-        if from_exclusive.is_some_and(|from| version <= *from) {
+        if matches!(from_exclusive, Some(from) if version <= *from) {
             continue;
         }
 
@@ -173,7 +184,11 @@ pub fn whats_new_lines(
     }
 
     for note in notes {
-        let date_suffix = note.date.map_or_else(String::new, |d| format!(" ({d})"));
+        let date_suffix = if note.date.is_none() {
+            String::new()
+        } else {
+            format!(" ({})", note.date.unwrap_or_default())
+        };
         lines.push(format!("v{}{date_suffix}", note.version));
         lines.push(String::new());
 
@@ -219,156 +234,39 @@ pub fn changelog_lines_for_version(version: &Version) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(all(feature = "test-support", not(test)))]
+/// Integration-test helpers for otherwise private release-note logic.
+pub mod test_support {
+    use anyhow::Result;
+    use semver::Version;
 
-    #[test]
-    fn test_parse_release_note_version_reports_context_for_invalid_entry() {
-        let err = parse_release_note_version("not-a-version")
-            .err()
-            .map(|error| error.to_string())
-            .unwrap_or_default();
-        assert!(err.contains("Invalid embedded release notes version: not-a-version"));
+    /// Parse an embedded release-note version string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the version is not valid semver.
+    pub fn parse_release_note_version(value: &str) -> Result<Version> {
+        super::parse_release_note_version(value)
     }
 
-    #[test]
-    fn test_append_release_note_body_inserts_no_details_for_empty_body() {
-        let mut lines = Vec::new();
-        append_release_note_body(&mut lines, "\n\n");
-        assert_eq!(lines, vec!["(No details.)".to_string()]);
+    /// Append a release-note body to display lines.
+    pub fn append_release_note_body(lines: &mut Vec<String>, body: &str) {
+        super::append_release_note_body(lines, body);
     }
 
-    #[test]
-    fn test_note_for_current_version_exists() {
-        let current = current_version().unwrap();
-        let note = note_for(&current).unwrap();
-        assert!(note.is_some());
+    /// Restores a previous release-notes override when dropped.
+    #[must_use]
+    #[derive(Debug)]
+    pub struct ReleaseNotesOverrideGuard {
+        _restore: super::ReleaseNotesOverrideRestore,
     }
 
-    #[test]
-    fn test_whats_new_lines_empty_range_returns_message() {
-        let current = current_version().unwrap();
-        let lines = whats_new_lines(Some(&current), &current).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line == "No release notes available.")
-        );
-    }
-
-    #[test]
-    fn test_changelog_lines_for_unknown_version_has_fallback() {
-        let unknown = Version::new(0, 0, 0);
-        let lines = changelog_lines_for_version(&unknown).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line == "No release notes available for this version.")
-        );
-    }
-
-    #[test]
-    fn test_notes_between_respects_bounds() {
-        let current = current_version().unwrap();
-
-        let mut versions = Vec::new();
-        for entry in release_note_entries() {
-            versions.push(Version::parse(entry.version).unwrap());
+    /// Set temporary embedded release notes until the returned guard is dropped.
+    pub fn set_release_notes_override(
+        entries: &'static [super::ReleaseNoteEntry],
+    ) -> ReleaseNotesOverrideGuard {
+        ReleaseNotesOverrideGuard {
+            _restore: super::set_release_notes_override_for_tests(entries),
         }
-
-        let oldest = versions
-            .iter()
-            .min()
-            .cloned()
-            .expect("embedded release notes missing");
-
-        let only_oldest = notes_between(None, &oldest).unwrap();
-        assert!(only_oldest.iter().all(|note| note.version <= oldest));
-
-        let after_oldest = notes_between(Some(&oldest), &current).unwrap();
-        assert!(after_oldest.iter().all(|note| note.version > oldest));
-    }
-
-    #[test]
-    fn test_whats_new_lines_includes_footer() {
-        let current = current_version().unwrap();
-        let lines = whats_new_lines(None, &current).unwrap();
-        assert!(lines.iter().any(|line| line == "Esc closes"));
-    }
-
-    #[test]
-    fn test_changelog_lines_for_current_version_includes_title() {
-        let current = current_version().unwrap();
-        let lines = changelog_lines_for_version(&current).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line == &format!("Tenex v{current}"))
-        );
-    }
-
-    #[test]
-    fn test_changelog_lines_for_version_includes_date_suffix() {
-        static OVERRIDE: &[ReleaseNoteEntry] = &[ReleaseNoteEntry {
-            version: "1.2.3",
-            date: Some("2026-01-19"),
-            body: "Test body",
-        }];
-
-        with_release_notes_override_for_tests(OVERRIDE, || {
-            let version = Version::new(1, 2, 3);
-            let lines = changelog_lines_for_version(&version).unwrap();
-            assert!(lines.iter().any(|line| line == "Released: 2026-01-19"));
-            assert!(lines.iter().any(|line| line == "Test body"));
-        });
-    }
-
-    #[test]
-    fn test_changelog_lines_for_version_omits_date_when_missing() {
-        static OVERRIDE: &[ReleaseNoteEntry] = &[ReleaseNoteEntry {
-            version: "1.2.3",
-            date: None,
-            body: "Test body",
-        }];
-
-        with_release_notes_override_for_tests(OVERRIDE, || {
-            let version = Version::new(1, 2, 3);
-            let lines = changelog_lines_for_version(&version).unwrap();
-            assert!(!lines.iter().any(|line| line.starts_with("Released: ")));
-            assert!(lines.iter().any(|line| line == "Test body"));
-        });
-    }
-
-    #[test]
-    fn test_notes_between_propagates_invalid_embedded_versions() {
-        static OVERRIDE: &[ReleaseNoteEntry] = &[ReleaseNoteEntry {
-            version: "not-a-version",
-            date: None,
-            body: "",
-        }];
-
-        with_release_notes_override_for_tests(OVERRIDE, || {
-            let version = Version::new(1, 0, 0);
-            let err = notes_between(None, &version).unwrap_err();
-            let message = format!("{err}");
-            assert!(message.contains("Invalid embedded release notes version: not-a-version"));
-        });
-    }
-
-    #[test]
-    fn test_whats_new_lines_propagates_release_note_parse_errors() {
-        static OVERRIDE: &[ReleaseNoteEntry] = &[ReleaseNoteEntry {
-            version: "not-a-version",
-            date: None,
-            body: "",
-        }];
-
-        with_release_notes_override_for_tests(OVERRIDE, || {
-            let version = Version::new(1, 0, 0);
-            let err = whats_new_lines(None, &version).unwrap_err();
-            let message = format!("{err}");
-            assert!(message.contains("Invalid embedded release notes version: not-a-version"));
-        });
     }
 }

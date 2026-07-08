@@ -157,289 +157,67 @@ fn is_cross_device_link_error(err: &std::io::Error) -> bool {
     err.raw_os_error() == Some(18)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(any(test, feature = "test-support"))]
+/// Integration-test helpers for otherwise private migration primitives.
+pub mod test_support {
+    use anyhow::Result;
+    use std::ffi::OsStr;
+    use std::path::Path;
 
-    fn rename_cross_device(_src: &Path, _dst: &Path) -> std::io::Result<()> {
-        Err(std::io::Error::from_raw_os_error(18))
+    /// Migrate state files between two injected directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any filesystem operation needed for migration fails.
+    pub fn migrate_state_dir(old_dir: &Path, new_dir: &Path) -> Result<bool> {
+        super::migrate_state_dir(old_dir, new_dir)
     }
 
-    fn rename_failed(_src: &Path, _dst: &Path) -> std::io::Result<()> {
-        Err(std::io::Error::other("rename failed"))
+    /// Move a file using the production migration move logic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be renamed or copied and removed.
+    pub fn move_file(src: &Path, dst: &Path) -> Result<()> {
+        super::move_file(src, dst)
     }
 
-    fn copy_failed(_src: &Path, _dst: &Path) -> std::io::Result<u64> {
-        Err(std::io::Error::other("copy failed"))
+    /// Copy a file with the production migration copy helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the filesystem copy fails.
+    pub fn copy_file(src: &Path, dst: &Path) -> std::io::Result<u64> {
+        super::copy_file(src, dst)
     }
 
-    fn remove_failed(_src: &Path) -> std::io::Result<()> {
-        Err(std::io::Error::other("remove failed"))
+    /// Remove a file with the production migration remove helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the filesystem removal fails.
+    pub fn remove_file(src: &Path) -> std::io::Result<()> {
+        super::remove_file(src)
     }
 
-    #[test]
-    fn test_move_file_accepts_missing_source() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let src = tmp.path().join("missing.json");
-        let dst = tmp.path().join("dst.json");
-        assert!(move_file(&src, &dst).is_err());
+    /// Move a file using injected filesystem operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the injected operations cannot complete the move.
+    pub fn move_file_with_ops(
+        src: &Path,
+        dst: &Path,
+        rename: fn(&Path, &Path) -> std::io::Result<()>,
+        copy: fn(&Path, &Path) -> std::io::Result<u64>,
+        remove_file: fn(&Path) -> std::io::Result<()>,
+    ) -> Result<()> {
+        super::move_file_with_ops(src, dst, rename, copy, remove_file)
     }
 
-    #[test]
-    fn test_move_file_falls_back_to_copy_on_cross_device_link_error() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let src = tmp.path().join("src.json");
-        let dst = tmp.path().join("dst.json");
-        fs::write(&src, "hello").expect("write src");
-
-        move_file_with_ops(&src, &dst, rename_cross_device, copy_file, remove_file)
-            .expect("move file with ops");
-
-        assert!(!src.exists());
-        assert_eq!(fs::read_to_string(&dst).expect("read dst"), "hello");
-    }
-
-    #[test]
-    fn test_move_file_reports_copy_errors_with_context() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let src = tmp.path().join("src.json");
-        let dst = tmp.path().join("dst.json");
-        fs::write(&src, "hello").expect("write src");
-
-        let err = move_file_with_ops(&src, &dst, rename_cross_device, copy_failed, remove_file)
-            .expect_err("expected copy failure");
-
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to copy"));
-    }
-
-    #[test]
-    fn test_move_file_reports_remove_errors_with_context() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let src = tmp.path().join("src.json");
-        let dst = tmp.path().join("dst.json");
-        fs::write(&src, "hello").expect("write src");
-
-        let err = move_file_with_ops(&src, &dst, rename_cross_device, copy_file, remove_failed)
-            .expect_err("expected remove failure");
-
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to remove"));
-    }
-
-    #[test]
-    fn test_move_file_reports_rename_errors_with_context() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let src = tmp.path().join("src.json");
-        let dst = tmp.path().join("dst.json");
-        fs::write(&src, "hello").expect("write src");
-
-        let err = move_file_with_ops(&src, &dst, rename_failed, copy_file, remove_file)
-            .expect_err("expected rename failure");
-
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to rename"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_migrate_state_dir_skips_bak_scan_when_old_dir_unreadable() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::write(old_dir.join("state.json"), "hello").expect("write state");
-
-        let mut perms = fs::metadata(&old_dir)
-            .expect("metadata old dir")
-            .permissions();
-        perms.set_mode(0o300);
-        fs::set_permissions(&old_dir, perms).expect("set perms");
-
-        let migrated = migrate_state_dir(&old_dir, &new_dir).expect("migrate state dir");
-        assert!(migrated);
-        assert!(new_dir.join("state.json").exists());
-
-        let mut perms = fs::metadata(&old_dir)
-            .expect("metadata old dir")
-            .permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(&old_dir, perms).expect("restore perms");
-    }
-
-    #[test]
-    fn test_migrate_state_dir_returns_false_when_old_dir_missing() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-        assert!(!migrate_state_dir(&old_dir, &new_dir).expect("migrate_state_dir should succeed"));
-    }
-
-    #[test]
-    fn test_migrate_state_dir_moves_bak_files_and_skips_non_files() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::create_dir_all(&new_dir).expect("create new dir");
-
-        fs::create_dir_all(old_dir.join("dir-entry")).expect("create subdir");
-
-        fs::write(old_dir.join("keep.txt"), "not a backup").expect("write keep file");
-        fs::write(old_dir.join("move.bak"), "backup").expect("write move file");
-        fs::write(new_dir.join("skip.bak"), "existing").expect("write skip file");
-        fs::write(old_dir.join("skip.bak"), "would be skipped").expect("write skip file");
-
-        assert!(migrate_state_dir(&old_dir, &new_dir).expect("migrate state dir"));
-        assert!(new_dir.join("move.bak").exists());
-        assert!(new_dir.join("skip.bak").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_migrate_state_dir_ignores_non_utf8_bak_names() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let file_name = std::ffi::OsString::from_vec(vec![0xff, b'.', b'b', b'a', b'k']);
-        assert!(!is_migratable_bak_file_name(&file_name));
-    }
-
-    #[test]
-    fn test_migrate_state_dir_reports_create_errors_with_context() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::write(
-            old_dir.join("settings.json"),
-            r#"{"agent_program":"codex"}"#,
-        )
-        .unwrap();
-        fs::write(&new_dir, "not a directory").expect("write file at new_dir");
-
-        let err = migrate_state_dir(&old_dir, &new_dir).expect_err("expected create_dir_all error");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to create"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_migrate_state_dir_reports_move_errors_with_context() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::create_dir_all(&new_dir).expect("create new dir");
-        fs::write(
-            old_dir.join("settings.json"),
-            r#"{"agent_program":"codex"}"#,
-        )
-        .unwrap();
-
-        let mut perms = fs::metadata(&new_dir)
-            .expect("metadata new dir")
-            .permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&new_dir, perms).expect("set perms");
-
-        let result = migrate_state_dir(&old_dir, &new_dir);
-
-        let mut perms = fs::metadata(&new_dir)
-            .expect("metadata new dir")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&new_dir, perms).expect("restore perms");
-
-        let err = result.expect_err("expected move failure");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to move"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_migrate_state_dir_reports_remove_dir_errors_with_context() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let parent = tmp.path().join("old-parent");
-        let old_dir = parent.join("old");
-        let new_dir = tmp.path().join("new");
-
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::write(
-            old_dir.join("settings.json"),
-            r#"{"agent_program":"codex"}"#,
-        )
-        .unwrap();
-
-        let mut perms = fs::metadata(&parent)
-            .expect("metadata parent")
-            .permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&parent, perms).expect("set perms");
-
-        let result = migrate_state_dir(&old_dir, &new_dir);
-
-        let mut perms = fs::metadata(&parent)
-            .expect("metadata parent")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&parent, perms).expect("restore perms");
-        let _ = fs::remove_dir_all(&parent);
-
-        let err = result.expect_err("expected remove_dir_all failure");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("Failed to remove old state directory"));
-    }
-
-    #[test]
-    fn test_migrate_state_dir_moves_settings_without_state() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-
-        fs::create_dir_all(&old_dir).expect("create old dir");
-
-        fs::write(
-            old_dir.join("settings.json"),
-            r#"{"agent_program":"codex"}"#,
-        )
-        .expect("write legacy settings");
-
-        assert!(migrate_state_dir(&old_dir, &new_dir).expect("migrate state dir"));
-        assert!(new_dir.join("settings.json").exists());
-        assert!(!old_dir.exists());
-    }
-
-    #[test]
-    fn test_migrate_state_dir_does_not_overwrite_existing_settings() {
-        let tmp = tempfile::TempDir::new().expect("create temp dir");
-        let old_dir = tmp.path().join("old");
-        let new_dir = tmp.path().join("new");
-
-        fs::create_dir_all(&old_dir).expect("create old dir");
-        fs::create_dir_all(&new_dir).expect("create new dir");
-
-        fs::write(
-            old_dir.join("settings.json"),
-            r#"{"agent_program":"codex"}"#,
-        )
-        .expect("write legacy settings");
-        fs::write(
-            new_dir.join("settings.json"),
-            r#"{"agent_program":"claude"}"#,
-        )
-        .expect("write current settings");
-
-        assert!(!migrate_state_dir(&old_dir, &new_dir).expect("migrate state dir"));
-
-        let settings =
-            fs::read_to_string(new_dir.join("settings.json")).expect("read current settings");
-        assert!(settings.contains("claude"));
+    /// Return whether a file name is a migratable backup file.
+    #[must_use]
+    pub fn is_migratable_bak_file_name(file_name: &OsStr) -> bool {
+        super::is_migratable_bak_file_name(file_name)
     }
 }

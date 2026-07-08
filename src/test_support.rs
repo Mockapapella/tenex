@@ -134,3 +134,14 @@ impl BlockingWriterHandle {
         self.release.send(())
     }
 }
+
+/// Split a command line into argv using Tenex's internal command parser.
+///
+/// This is a test-support boundary for Tenex tests, not a stable public API.
+///
+/// # Errors
+///
+/// Returns an error when the command line is empty or cannot be parsed.
+pub fn parse_command_line(command_line: &str) -> anyhow::Result<Vec<String>> {
+    crate::command::parse_command_line(command_line)
+}
