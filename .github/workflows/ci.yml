@@ -130,41 +130,44 @@ jobs:
         id: wsl-context
         shell: pwsh
         run: |
+          $workspaceInput = "${{ github.workspace }}"
           $distro = ""
-          $distros = (wsl.exe -l -q) -split "`r?`n" |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
-
-          if ($distros.Count -eq 0) {
-            Write-Host "No WSL distribution found; provisioning Ubuntu."
-            wsl.exe --set-default-version 2
-            wsl.exe --install --no-launch --distribution Ubuntu
-
-            # Launch once to complete first-time distro registration.
-            wsl.exe -d Ubuntu -e bash -lc "echo WSL ready"
-            $distro = "Ubuntu"
-          }
-
-          if (-not $distro) {
-            $distros = (wsl.exe -l -q) -split "`r?`n" |
-              ForEach-Object { $_.Trim() } |
-              Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
-            if ($distros.Count -eq 0) {
-              throw "No WSL distribution found on runner."
-            }
-            if ($distros -contains "Ubuntu") {
-              $distro = "Ubuntu"
-            } else {
-              $distro = $distros[0]
-            }
-          }
-
-          $distro = $distro.Trim([char]0xFEFF)
-          if (-not $distro) {
-            throw "No WSL distribution found on runner."
-          }
-
           $wslUser = "runner"
+          $workspace = ""
+          $lastPathTranslationOutput = ""
+          $lastPathTranslationExitCode = $null
+          $lastError = $null
+
+          function Format-WslLines {
+            param([object[]] $Lines)
+            return (($Lines | ForEach-Object { "$_" }) -join "`n").Trim()
+          }
+
+          function Get-WslDistros {
+            $raw = wsl.exe -l -q 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              throw "wsl.exe -l -q failed with exit code $($LASTEXITCODE): $(Format-WslLines $raw)"
+            }
+            return @(
+              $raw -split "`r?`n" |
+                ForEach-Object { ($_ -replace "`0", "").Trim().Trim([char]0xFEFF) } |
+                Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+            )
+          }
+
+          function Write-WslDiagnostics {
+            Write-Host "::group::WSL diagnostic"
+            Write-Host "workspace input: $workspaceInput"
+            Write-Host "selected distro: $distro"
+            Write-Host "wslpath exit code: $lastPathTranslationExitCode"
+            Write-Host "wslpath output: $lastPathTranslationOutput"
+            Write-Host "wsl --status:"
+            wsl.exe --status 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "wsl -l -v:"
+            wsl.exe -l -v 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "::endgroup::"
+          }
+
           $userSetup = @'
           set -euo pipefail
           user="runner"
@@ -180,11 +183,70 @@ jobs:
           chmod 0440 "/etc/sudoers.d/$user"
           '@
           $userSetup = $userSetup -replace "`r", ""
-          wsl.exe -d $distro -u root -e bash -lc "$userSetup"
 
-          $workspace = (wsl.exe -d $distro -u $wslUser -e bash -lc "wslpath -a '${{ github.workspace }}'").Trim()
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Write-Host "Resolve WSL context attempt $attempt of 3."
+              $distros = @(Get-WslDistros)
+
+              if ($distros.Count -eq 0) {
+                Write-Host "No WSL distribution found; provisioning Ubuntu."
+                wsl.exe --set-default-version 2
+                if ($LASTEXITCODE -ne 0) {
+                  throw "wsl.exe --set-default-version 2 failed with exit code $LASTEXITCODE"
+                }
+                wsl.exe --install --no-launch --distribution Ubuntu
+                if ($LASTEXITCODE -ne 0) {
+                  throw "wsl.exe --install --no-launch --distribution Ubuntu failed with exit code $LASTEXITCODE"
+                }
+                $distros = @(Get-WslDistros)
+              }
+
+              if ($distros.Count -eq 0) {
+                throw "No WSL distribution found on runner after provisioning attempt."
+              }
+
+              if ($distros -contains "Ubuntu") {
+                $distro = "Ubuntu"
+              } else {
+                $distro = $distros[0]
+              }
+
+              $readyOutput = wsl.exe -d $distro -e bash -lc "echo WSL ready" 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "wsl.exe -d $distro -e bash -lc 'echo WSL ready' failed with exit code $($LASTEXITCODE): $(Format-WslLines $readyOutput)"
+              }
+
+              $userSetupOutput = wsl.exe -d $distro -u root -e bash -lc "$userSetup" 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "runner user setup failed with exit code $($LASTEXITCODE): $(Format-WslLines $userSetupOutput)"
+              }
+
+              $pathTranslationOutput = wsl.exe -d $distro -u $wslUser -e bash -lc "wslpath -a '$workspaceInput'" 2>&1
+              $lastPathTranslationExitCode = $LASTEXITCODE
+              $lastPathTranslationOutput = Format-WslLines $pathTranslationOutput
+              if ($lastPathTranslationExitCode -ne 0) {
+                throw "wslpath failed with exit code $lastPathTranslationExitCode"
+              }
+
+              $workspace = @($lastPathTranslationOutput -split "`n")[-1].Trim()
+              if ($workspace -notmatch '^/') {
+                throw "wslpath returned '$lastPathTranslationOutput' instead of an absolute WSL path."
+              }
+              break
+            } catch {
+              $lastError = $_
+              Write-Host "Resolve WSL context attempt $attempt of 3 failed: $($_.Exception.Message)"
+              if ($attempt -lt 3) {
+                Write-Host "Retrying Resolve WSL context after transient WSL provisioning failure."
+                Start-Sleep -Seconds (5 * $attempt)
+              }
+            }
+          }
+
           if (-not $workspace) {
-            throw "Failed to translate GitHub workspace path into WSL path."
+            Write-WslDiagnostics
+            throw "Resolve WSL context failed after 3 attempts: $($lastError.Exception.Message)"
           }
 
           "distro=$distro" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -739,41 +801,44 @@ jobs:
         id: wsl-context
         shell: pwsh
         run: |
+          $workspaceInput = "${{ github.workspace }}"
           $distro = ""
-          $distros = (wsl.exe -l -q) -split "`r?`n" |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
-
-          if ($distros.Count -eq 0) {
-            Write-Host "No WSL distribution found; provisioning Ubuntu."
-            wsl.exe --set-default-version 2
-            wsl.exe --install --no-launch --distribution Ubuntu
-
-            # Launch once to complete first-time distro registration.
-            wsl.exe -d Ubuntu -e bash -lc "echo WSL ready"
-            $distro = "Ubuntu"
-          }
-
-          if (-not $distro) {
-            $distros = (wsl.exe -l -q) -split "`r?`n" |
-              ForEach-Object { $_.Trim() } |
-              Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
-            if ($distros.Count -eq 0) {
-              throw "No WSL distribution found on runner."
-            }
-            if ($distros -contains "Ubuntu") {
-              $distro = "Ubuntu"
-            } else {
-              $distro = $distros[0]
-            }
-          }
-
-          $distro = $distro.Trim([char]0xFEFF)
-          if (-not $distro) {
-            throw "No WSL distribution found on runner."
-          }
-
           $wslUser = "runner"
+          $workspace = ""
+          $lastPathTranslationOutput = ""
+          $lastPathTranslationExitCode = $null
+          $lastError = $null
+
+          function Format-WslLines {
+            param([object[]] $Lines)
+            return (($Lines | ForEach-Object { "$_" }) -join "`n").Trim()
+          }
+
+          function Get-WslDistros {
+            $raw = wsl.exe -l -q 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              throw "wsl.exe -l -q failed with exit code $($LASTEXITCODE): $(Format-WslLines $raw)"
+            }
+            return @(
+              $raw -split "`r?`n" |
+                ForEach-Object { ($_ -replace "`0", "").Trim().Trim([char]0xFEFF) } |
+                Where-Object { $_ -ne "" -and $_ -notlike "docker-desktop*" }
+            )
+          }
+
+          function Write-WslDiagnostics {
+            Write-Host "::group::WSL diagnostic"
+            Write-Host "workspace input: $workspaceInput"
+            Write-Host "selected distro: $distro"
+            Write-Host "wslpath exit code: $lastPathTranslationExitCode"
+            Write-Host "wslpath output: $lastPathTranslationOutput"
+            Write-Host "wsl --status:"
+            wsl.exe --status 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "wsl -l -v:"
+            wsl.exe -l -v 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "::endgroup::"
+          }
+
           $userSetup = @'
           set -euo pipefail
           user="runner"
@@ -789,11 +854,70 @@ jobs:
           chmod 0440 "/etc/sudoers.d/$user"
           '@
           $userSetup = $userSetup -replace "`r", ""
-          wsl.exe -d $distro -u root -e bash -lc "$userSetup"
 
-          $workspace = (wsl.exe -d $distro -u $wslUser -e bash -lc "wslpath -a '${{ github.workspace }}'").Trim()
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Write-Host "Resolve WSL context attempt $attempt of 3."
+              $distros = @(Get-WslDistros)
+
+              if ($distros.Count -eq 0) {
+                Write-Host "No WSL distribution found; provisioning Ubuntu."
+                wsl.exe --set-default-version 2
+                if ($LASTEXITCODE -ne 0) {
+                  throw "wsl.exe --set-default-version 2 failed with exit code $LASTEXITCODE"
+                }
+                wsl.exe --install --no-launch --distribution Ubuntu
+                if ($LASTEXITCODE -ne 0) {
+                  throw "wsl.exe --install --no-launch --distribution Ubuntu failed with exit code $LASTEXITCODE"
+                }
+                $distros = @(Get-WslDistros)
+              }
+
+              if ($distros.Count -eq 0) {
+                throw "No WSL distribution found on runner after provisioning attempt."
+              }
+
+              if ($distros -contains "Ubuntu") {
+                $distro = "Ubuntu"
+              } else {
+                $distro = $distros[0]
+              }
+
+              $readyOutput = wsl.exe -d $distro -e bash -lc "echo WSL ready" 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "wsl.exe -d $distro -e bash -lc 'echo WSL ready' failed with exit code $($LASTEXITCODE): $(Format-WslLines $readyOutput)"
+              }
+
+              $userSetupOutput = wsl.exe -d $distro -u root -e bash -lc "$userSetup" 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "runner user setup failed with exit code $($LASTEXITCODE): $(Format-WslLines $userSetupOutput)"
+              }
+
+              $pathTranslationOutput = wsl.exe -d $distro -u $wslUser -e bash -lc "wslpath -a '$workspaceInput'" 2>&1
+              $lastPathTranslationExitCode = $LASTEXITCODE
+              $lastPathTranslationOutput = Format-WslLines $pathTranslationOutput
+              if ($lastPathTranslationExitCode -ne 0) {
+                throw "wslpath failed with exit code $lastPathTranslationExitCode"
+              }
+
+              $workspace = @($lastPathTranslationOutput -split "`n")[-1].Trim()
+              if ($workspace -notmatch '^/') {
+                throw "wslpath returned '$lastPathTranslationOutput' instead of an absolute WSL path."
+              }
+              break
+            } catch {
+              $lastError = $_
+              Write-Host "Resolve WSL context attempt $attempt of 3 failed: $($_.Exception.Message)"
+              if ($attempt -lt 3) {
+                Write-Host "Retrying Resolve WSL context after transient WSL provisioning failure."
+                Start-Sleep -Seconds (5 * $attempt)
+              }
+            }
+          }
+
           if (-not $workspace) {
-            throw "Failed to translate GitHub workspace path into WSL path."
+            Write-WslDiagnostics
+            throw "Resolve WSL context failed after 3 attempts: $($lastError.Exception.Message)"
           }
 
           "distro=$distro" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
