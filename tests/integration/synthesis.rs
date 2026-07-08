@@ -2,7 +2,9 @@
 
 use crate::common::{TestFixture, skip_if_no_mux};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use tenex::app::Actions;
 use tenex::mux::SessionManager;
+use uuid::Uuid;
 
 #[test]
 fn test_synthesize_requires_children() -> Result<(), Box<dyn std::error::Error>> {
@@ -193,6 +195,204 @@ fn test_synthesize_removes_all_descendants() -> Result<(), Box<dyn std::error::E
     assert_eq!(entries.len(), 1, "Should have exactly one synthesis file");
 
     // Cleanup
+    let manager = SessionManager::new();
+    for agent in app.data.storage.iter() {
+        let _ = manager.kill(&agent.mux_session);
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct MarkedSubsetIds {
+    root: Uuid,
+    marked_child: Uuid,
+    marked_grandchild: Uuid,
+    unmarked_child: Uuid,
+    unmarked_grandchild: Uuid,
+}
+
+fn spawn_one_grandchild(
+    app: &mut tenex::App,
+    handler: Actions,
+    parent: Uuid,
+    task: &str,
+    missing_message: &'static str,
+) -> Result<Option<Uuid>, Box<dyn std::error::Error>> {
+    app.data.spawn.child_count = 1;
+    app.data.spawn.spawning_under = Some(parent);
+    if handler.spawn_children(&mut app.data, Some(task)).is_err() {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        app.data
+            .storage
+            .children(parent)
+            .into_iter()
+            .next()
+            .ok_or(missing_message)?
+            .id,
+    ))
+}
+
+fn prepare_marked_subset_ids(
+    app: &mut tenex::App,
+    handler: Actions,
+    root: Uuid,
+) -> Result<Option<MarkedSubsetIds>, Box<dyn std::error::Error>> {
+    let marked_child = app
+        .data
+        .storage
+        .children(root)
+        .into_iter()
+        .find(|agent| agent.title.starts_with("Agent 1"))
+        .ok_or("No Agent 1")?
+        .id;
+    let unmarked_child = app
+        .data
+        .storage
+        .children(root)
+        .into_iter()
+        .find(|agent| agent.title.starts_with("Agent 2"))
+        .ok_or("No Agent 2")?
+        .id;
+
+    let Some(marked_grandchild) = spawn_one_grandchild(
+        app,
+        handler,
+        marked_child,
+        "marked-grandchild",
+        "No marked grandchild",
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(unmarked_grandchild) = spawn_one_grandchild(
+        app,
+        handler,
+        unmarked_child,
+        "unmarked-grandchild",
+        "No unmarked grandchild",
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(MarkedSubsetIds {
+        root,
+        marked_child,
+        marked_grandchild,
+        unmarked_child,
+        unmarked_grandchild,
+    }))
+}
+
+fn assert_marked_subset_storage(
+    app: &tenex::App,
+    ids: &MarkedSubsetIds,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(app.data.storage.get(ids.marked_child).is_none());
+    assert!(app.data.storage.get(ids.marked_grandchild).is_none());
+    assert!(app.data.storage.get(ids.unmarked_child).is_some());
+    assert!(app.data.storage.get(ids.unmarked_grandchild).is_some());
+    assert_eq!(app.data.storage.children(ids.root).len(), 2);
+    assert_eq!(
+        app.data
+            .storage
+            .get(ids.unmarked_grandchild)
+            .ok_or("Unmarked grandchild gone")?
+            .parent_id,
+        Some(ids.unmarked_child)
+    );
+    for agent in app.data.storage.iter() {
+        assert!(
+            agent.parent_id.is_none_or(|parent| {
+                ![ids.marked_child, ids.marked_grandchild].contains(&parent)
+            })
+        );
+    }
+    Ok(())
+}
+
+fn assert_marked_subset_synthesis(
+    app: &tenex::App,
+    root: Uuid,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = app.data.storage.get(root).ok_or("Root gone")?;
+    let entries: Vec<_> = std::fs::read_dir(root.worktree_path.join(".tenex"))?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    assert_eq!(entries.len(), 1, "Should have exactly one synthesis file");
+    let synthesis = std::fs::read_to_string(entries[0].path())?;
+    assert!(synthesis.contains("2 parallel research sessions"));
+    assert!(synthesis.contains("Agent 1"));
+    assert!(!synthesis.contains("Agent 2"));
+    Ok(())
+}
+
+#[test]
+fn test_synthesize_marked_subset_keeps_unmarked_siblings() -> Result<(), Box<dyn std::error::Error>>
+{
+    if skip_if_no_mux() {
+        return Ok(());
+    }
+
+    let fixture = TestFixture::new("synth_marked_subset")?;
+    let config = fixture.config();
+    let storage = fixture.storage();
+
+    let mut app = tenex::App::new(config, storage, tenex::app::Settings::default(), false);
+    app.set_cwd_project_root(Some(fixture.repo_path.clone()));
+    let handler = tenex::app::Actions::new();
+
+    app.data.spawn.child_count = 3;
+    app.data.spawn.spawning_under = None;
+    let result = handler.spawn_children(&mut app.data, Some("synth-marked-subset"));
+    if result.is_err() {
+        return Ok(());
+    }
+
+    let root_id = app
+        .data
+        .storage
+        .iter()
+        .find(|agent| agent.is_root())
+        .ok_or("No root")?
+        .id;
+    app.data
+        .storage
+        .get_mut(root_id)
+        .ok_or("No root")?
+        .collapsed = false;
+
+    let Some(ids) = prepare_marked_subset_ids(&mut app, handler, root_id)? else {
+        return Ok(());
+    };
+
+    if let Some(idx) = app.data.storage.visible_index_of(ids.marked_child) {
+        app.data.selected = idx + 1;
+    }
+    handler.handle_action(&mut app, tenex::config::Action::ToggleSynthesisMark)?;
+
+    if let Some(idx) = app.data.storage.visible_index_of(ids.root) {
+        app.data.selected = idx + 1;
+    }
+    app.enter_mode(
+        tenex::state::ConfirmingMode {
+            action: tenex::app::ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
+    handler.handle_action(&mut app, tenex::config::Action::Confirm)?;
+
+    assert!(matches!(app.mode, tenex::AppMode::SynthesisPrompt(_)));
+    tenex::action::dispatch_synthesis_prompt_mode(&mut app, KeyCode::Enter, KeyModifiers::NONE)?;
+
+    assert_marked_subset_storage(&app, &ids)?;
+    assert_marked_subset_synthesis(&app, ids.root)?;
+
     let manager = SessionManager::new();
     for agent in app.data.storage.iter() {
         let _ = manager.kill(&agent.mux_session);

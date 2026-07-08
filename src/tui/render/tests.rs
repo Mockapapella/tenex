@@ -548,6 +548,78 @@ fn test_render_confirming_synthesize_mode_pluralizes_agents() {
 }
 
 #[test]
+fn test_render_confirming_synthesize_mode_counts_marked_agents() {
+    let config = create_test_config();
+    let mut storage = Storage::new();
+
+    let mut root = create_test_agent("root", Status::Running);
+    root.collapsed = false;
+    let root_id = root.id;
+    let root_session = root.mux_session.clone();
+    let root_branch = root.branch.clone();
+    let root_path = root.worktree_path.clone();
+    storage.add(root);
+
+    let child_1 = Agent::new_child(
+        "Child 1".to_string(),
+        "echo".to_string(),
+        root_branch.clone(),
+        root_path.clone(),
+        ChildConfig {
+            parent_id: root_id,
+            mux_session: root_session.clone(),
+            window_index: 1,
+            repo_root: None,
+        },
+    );
+    let child_1_id = child_1.id;
+    storage.add(child_1);
+
+    let grandchild_1 = Agent::new_child(
+        "Grandchild 1".to_string(),
+        "echo".to_string(),
+        root_branch.clone(),
+        root_path.clone(),
+        ChildConfig {
+            parent_id: child_1_id,
+            mux_session: root_session.clone(),
+            window_index: 3,
+            repo_root: None,
+        },
+    );
+    storage.add(grandchild_1);
+
+    let child_2 = Agent::new_child(
+        "Child 2".to_string(),
+        "echo".to_string(),
+        root_branch,
+        root_path,
+        ChildConfig {
+            parent_id: root_id,
+            mux_session: root_session,
+            window_index: 2,
+            repo_root: None,
+        },
+    );
+    storage.add(child_2);
+
+    let mut app = App::new(config, storage, crate::app::Settings::default(), false);
+    assert!(app.data.toggle_synthesis_mark(child_1_id));
+    app.enter_mode(
+        ConfirmingMode {
+            action: ConfirmAction::Synthesize,
+        }
+        .into(),
+    );
+
+    let terminal = render_to_terminal(&app, 80, 24);
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Synthesize 2 agents?"));
+    assert!(text.contains("Marked descendant subtrees"));
+}
+
+#[test]
 fn test_render_confirming_synthesize_mode_excludes_terminals() {
     let config = create_test_config();
     let mut storage = Storage::new();

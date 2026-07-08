@@ -270,6 +270,28 @@ impl ValidIn<ScrollingMode> for SynthesizeAction {
     }
 }
 
+/// Normal-mode action: toggle synthesis mark on the selected agent.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToggleSynthesisMarkAction;
+
+impl ValidIn<NormalMode> for ToggleSynthesisMarkAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: NormalMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.toggle_selected_synthesis_mark();
+        Ok(AppMode::normal())
+    }
+}
+
+impl ValidIn<ScrollingMode> for ToggleSynthesisMarkAction {
+    type NextState = AppMode;
+
+    fn execute(self, _state: ScrollingMode, app_data: &mut AppData) -> Result<Self::NextState> {
+        app_data.toggle_selected_synthesis_mark();
+        Ok(ScrollingMode.into())
+    }
+}
+
 /// Normal-mode action: toggle collapse state of the selected agent.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ToggleCollapseAction;

@@ -12,7 +12,7 @@ pub use data::AppData;
 pub use event::{Event, Handler};
 pub use handlers::Actions;
 pub use settings::{AgentProgram, AgentRole, Settings};
-pub(crate) use sidebar::{SidebarItem, SidebarProject};
+pub(crate) use sidebar::{SidebarAgentInfo, SidebarItem, SidebarProject};
 pub use state::{
     App, BranchInfo, DiffEdit, DiffLineMeta, InputMode, MuxdVersionMismatchInfo,
     PaneActivityDigestMode, PreviewSelectionPoint, Tab, WorktreeConflictInfo,

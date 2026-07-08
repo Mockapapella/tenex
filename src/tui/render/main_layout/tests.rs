@@ -1157,6 +1157,164 @@ fn test_render_agent_list_skips_scrollbar_when_inner_height_zero() {
 }
 
 #[test]
+fn test_render_agent_list_shows_synthesis_mark_indicator() {
+    let (mut app, _temp) = create_test_app();
+    let mut root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+    );
+    root.collapsed = false;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+    let child = Agent::new_child(
+        "child".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+        crate::agent::ChildConfig {
+            parent_id: root_id,
+            mux_session: session,
+            window_index: 2,
+            repo_root: None,
+        },
+    );
+    let child_id = child.id;
+    app.data.storage.add(child);
+    assert!(app.data.toggle_synthesis_mark(child_id));
+
+    let backend = TestBackend::new(80, 10);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_agent_list(frame, &app, frame.area()))
+        .expect("draw agent list");
+
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("[m] child"));
+}
+
+#[test]
+fn test_render_agent_list_shows_collapsed_synthesis_mark_count() {
+    let (mut app, _temp) = create_test_app();
+    let mut root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+    );
+    root.collapsed = false;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let mut child = Agent::new_child(
+        "child".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+        crate::agent::ChildConfig {
+            parent_id: root_id,
+            mux_session: session.clone(),
+            window_index: 2,
+            repo_root: None,
+        },
+    );
+    child.collapsed = false;
+    let child_id = child.id;
+    app.data.storage.add(child);
+
+    let grandchild = Agent::new_child(
+        "grandchild".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+        crate::agent::ChildConfig {
+            parent_id: child_id,
+            mux_session: session,
+            window_index: 3,
+            repo_root: None,
+        },
+    );
+    let grandchild_id = grandchild.id;
+    app.data.storage.add(grandchild);
+    assert!(app.data.toggle_synthesis_mark(grandchild_id));
+    app.data
+        .storage
+        .get_mut(child_id)
+        .expect("missing child")
+        .collapsed = true;
+
+    let backend = TestBackend::new(80, 10);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_agent_list(frame, &app, frame.area()))
+        .expect("draw agent list");
+
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("[1m] child"));
+    assert!(!text.contains("grandchild"));
+}
+
+#[test]
+fn test_render_agent_list_keeps_collapsed_synthesis_mark_count_visible_when_narrow() {
+    let (mut app, _temp) = create_test_app();
+    let mut root = Agent::new(
+        "root".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+    );
+    root.collapsed = false;
+    let root_id = root.id;
+    let session = root.mux_session.clone();
+    app.data.storage.add(root);
+
+    let mut child = Agent::new_child(
+        "child-with-a-very-long-title".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+        crate::agent::ChildConfig {
+            parent_id: root_id,
+            mux_session: session.clone(),
+            window_index: 2,
+            repo_root: None,
+        },
+    );
+    child.collapsed = true;
+    let child_id = child.id;
+    app.data.storage.add(child);
+
+    let grandchild = Agent::new_child(
+        "grandchild".to_string(),
+        "echo".to_string(),
+        "branch".to_string(),
+        std::path::PathBuf::from("/tmp"),
+        crate::agent::ChildConfig {
+            parent_id: child_id,
+            mux_session: session,
+            window_index: 3,
+            repo_root: None,
+        },
+    );
+    let grandchild_id = grandchild.id;
+    app.data.storage.add(grandchild);
+    assert!(app.data.toggle_synthesis_mark(grandchild_id));
+
+    let backend = TestBackend::new(24, 6);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_agent_list(frame, &app, frame.area()))
+        .expect("draw agent list");
+
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("[1m]"));
+    assert!(!text.contains("grandchild"));
+}
+
+#[test]
 fn test_agent_list_item_renders_docker_badge_and_plain_dir_suffix() {
     let (app, _temp) = create_test_app();
     let mut agent = Agent::new(
@@ -1176,7 +1334,13 @@ fn test_agent_list_item_renders_docker_badge_and_plain_dir_suffix() {
         child_count: 0,
     };
 
-    let item = agent_list_item(&app, 0, &info);
+    let sidebar_agent = SidebarAgentInfo {
+        info,
+        synthesis_marked: false,
+        marked_descendant_count: 0,
+    };
+
+    let item = agent_list_item(&app, 0, &sidebar_agent);
     let list = List::new(vec![item]);
     let backend = TestBackend::new(80, 1);
     let mut terminal = Terminal::new(backend).expect("Expected test terminal");

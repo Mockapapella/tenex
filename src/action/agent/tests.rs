@@ -77,6 +77,16 @@ fn add_child_agent(data: &mut AppData, parent_id: uuid::Uuid, mux_session: Strin
     id
 }
 
+fn select_agent(data: &mut AppData, agent_id: uuid::Uuid) {
+    data.selected = data
+        .sidebar_items()
+        .iter()
+        .position(
+            |item| matches!(item, SidebarItem::Agent(agent) if agent.info.agent.id == agent_id),
+        )
+        .expect("agent should be visible");
+}
+
 #[test]
 fn test_actions_without_selected_agent() {
     let (mut data, _temp) = create_test_data();
@@ -169,6 +179,106 @@ fn test_actions_with_selected_agent() {
             message: "Selected agent has no children to synthesize".to_string(),
         })
     );
+}
+
+#[test]
+fn test_toggle_synthesis_mark_action_marks_and_unmarks_eligible_descendant() {
+    let (mut data, _temp) = create_test_data();
+    let root_id = add_root_agent(&mut data, PathBuf::from("/tmp"));
+    data.storage
+        .get_mut(root_id)
+        .expect("missing root agent")
+        .collapsed = false;
+    let root_session = data
+        .storage
+        .get(root_id)
+        .expect("missing root agent")
+        .mux_session
+        .clone();
+    let child_id = add_child_agent(&mut data, root_id, root_session);
+    select_agent(&mut data, child_id);
+
+    assert_eq!(
+        ToggleSynthesisMarkAction
+            .execute(NormalMode, &mut data)
+            .unwrap(),
+        AppMode::normal()
+    );
+    assert!(data.is_synthesis_marked(child_id));
+
+    assert_eq!(
+        ToggleSynthesisMarkAction
+            .execute(NormalMode, &mut data)
+            .unwrap(),
+        AppMode::normal()
+    );
+    assert!(!data.is_synthesis_marked(child_id));
+}
+
+#[test]
+fn test_toggle_synthesis_mark_action_rejects_roots_and_terminals() {
+    let (mut data, _temp) = create_test_data();
+    let root_id = add_root_agent(&mut data, PathBuf::from("/tmp"));
+
+    assert_eq!(
+        ToggleSynthesisMarkAction
+            .execute(NormalMode, &mut data)
+            .unwrap(),
+        AppMode::normal()
+    );
+    assert!(!data.is_synthesis_marked(root_id));
+
+    data.storage
+        .get_mut(root_id)
+        .expect("missing root agent")
+        .collapsed = false;
+    let root_session = data
+        .storage
+        .get(root_id)
+        .expect("missing root agent")
+        .mux_session
+        .clone();
+    let terminal_id = add_child_agent(&mut data, root_id, root_session);
+    data.storage
+        .get_mut(terminal_id)
+        .expect("missing terminal child")
+        .is_terminal = true;
+    select_agent(&mut data, terminal_id);
+
+    assert_eq!(
+        ToggleSynthesisMarkAction
+            .execute(NormalMode, &mut data)
+            .unwrap(),
+        AppMode::normal()
+    );
+    assert!(!data.is_synthesis_marked(terminal_id));
+    assert!(data.synthesis_marks.is_empty());
+}
+
+#[test]
+fn test_toggle_synthesis_mark_action_preserves_scrolling_mode() {
+    let (mut data, _temp) = create_test_data();
+    let root_id = add_root_agent(&mut data, PathBuf::from("/tmp"));
+    data.storage
+        .get_mut(root_id)
+        .expect("missing root agent")
+        .collapsed = false;
+    let root_session = data
+        .storage
+        .get(root_id)
+        .expect("missing root agent")
+        .mux_session
+        .clone();
+    let child_id = add_child_agent(&mut data, root_id, root_session);
+    select_agent(&mut data, child_id);
+
+    assert_eq!(
+        ToggleSynthesisMarkAction
+            .execute(ScrollingMode, &mut data)
+            .unwrap(),
+        AppMode::Scrolling(ScrollingMode)
+    );
+    assert!(data.is_synthesis_marked(child_id));
 }
 
 #[test]

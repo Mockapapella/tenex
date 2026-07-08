@@ -73,6 +73,7 @@ tenex
 | `R` | Review swarm (spawn N reviewers for selected agent, then pick base branch) |
 | `+` | Spawn N sub-agents for selected agent |
 | `s` | Synthesize descendant outputs into parent |
+| `m` | Mark selected descendant subtree for selective synthesis |
 | `B` | Broadcast message to leaf agents only (excludes terminals) |
 
 ### Terminals
@@ -170,10 +171,12 @@ Reviewers get a strict review preamble with the chosen base branch. They're titl
 ### Synthesis
 
 Press `s` to synthesize. This:
-1. Captures the last ~5000 lines from each descendant's terminal buffer
+1. Captures the last ~5000 lines from each selected descendant's terminal buffer
 2. Writes combined output to `.tenex/<uuid>.md` in the parent's worktree
-3. Kills and removes all descendants
+3. Kills and removes the synthesized descendants
 4. Sends the parent a command to read the synthesized file
+
+Use `m` on visible non-terminal descendant rows to mark that row's subtree before pressing `s`. Marked rows show `[m]` in the sidebar. If the selected parent has marked descendant subtrees, synthesis uses only those subtrees. If it has none, `s` keeps the existing all-descendants behavior. Captured output excludes terminal rows, but marked subtrees are torn down after synthesis. Marks clear after synthesis.
 
 ### Broadcasting
 

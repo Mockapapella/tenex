@@ -14,8 +14,17 @@ use crate::state::{
     AppMode, ChangelogMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, ModelSelectorMode,
     PreparingDockerMode, SettingsMenuMode,
 };
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SynthesisTargets {
+    pub marked: bool,
+    pub capture_agent_ids: Vec<Uuid>,
+    pub teardown_root_ids: Vec<Uuid>,
+    pub teardown_agent_ids: Vec<Uuid>,
+}
 
 /// Persistent application data (everything except the current mode).
 #[derive(Debug)]
@@ -62,6 +71,9 @@ pub struct AppData {
     /// Spawn state (child agent spawning).
     pub spawn: SpawnState,
 
+    /// Transient synthesis marks for visible non-terminal descendants.
+    pub(crate) synthesis_marks: Vec<Uuid>,
+
     /// User settings (persistent preferences).
     pub settings: Settings,
 
@@ -96,6 +108,7 @@ impl AppData {
             settings_menu: SettingsMenuState::new(),
             model_selector: ModelSelectorState::new(),
             spawn: SpawnState::new(),
+            synthesis_marks: Vec::new(),
             settings,
             pending_changelog: None,
             keyboard_enhancement_supported,
@@ -195,6 +208,141 @@ impl AppData {
     /// Set a status message to display.
     pub(crate) fn set_status(&mut self, message: impl Into<String>) {
         self.ui.set_status(message);
+    }
+
+    pub(crate) fn synthesis_target_descendants(&self, parent_id: Uuid) -> Vec<&Agent> {
+        self.storage
+            .descendants(parent_id)
+            .into_iter()
+            .filter(|agent| !agent.is_terminal_agent())
+            .collect()
+    }
+
+    pub(crate) fn synthesis_targets_for(&self, parent_id: Uuid) -> SynthesisTargets {
+        let descendants = self.storage.descendants(parent_id);
+        let marked_root_ids: Vec<Uuid> = descendants
+            .iter()
+            .filter(|agent| !agent.is_terminal_agent())
+            .filter(|agent| self.synthesis_marks.contains(&agent.id))
+            .map(|agent| agent.id)
+            .collect();
+
+        if marked_root_ids.is_empty() {
+            let fallback_root_ids = descendants
+                .iter()
+                .filter(|agent| !agent.is_terminal_agent())
+                .map(|agent| agent.id)
+                .collect();
+            self.synthesis_targets_from_roots(parent_id, fallback_root_ids, false)
+        } else {
+            self.synthesis_targets_from_roots(parent_id, marked_root_ids, true)
+        }
+    }
+
+    fn synthesis_targets_from_roots(
+        &self,
+        parent_id: Uuid,
+        root_ids: Vec<Uuid>,
+        marked: bool,
+    ) -> SynthesisTargets {
+        let descendants = self.storage.descendants(parent_id);
+        let subtree_ids = self.synthesis_subtree_ids(&root_ids);
+        let capture_agent_ids = descendants
+            .iter()
+            .filter(|agent| subtree_ids.contains(&agent.id))
+            .filter(|agent| !agent.is_terminal_agent())
+            .map(|agent| agent.id)
+            .collect();
+        let teardown_agent_ids = descendants
+            .iter()
+            .filter(|agent| subtree_ids.contains(&agent.id))
+            .map(|agent| agent.id)
+            .collect();
+
+        SynthesisTargets {
+            marked,
+            capture_agent_ids,
+            teardown_root_ids: root_ids,
+            teardown_agent_ids,
+        }
+    }
+
+    fn synthesis_subtree_ids(&self, root_ids: &[Uuid]) -> HashSet<Uuid> {
+        let mut subtree_ids = HashSet::new();
+        for root_id in root_ids {
+            subtree_ids.insert(*root_id);
+            subtree_ids.extend(self.storage.descendant_ids(*root_id));
+        }
+        subtree_ids
+    }
+
+    pub(crate) fn is_synthesis_marked(&self, agent_id: Uuid) -> bool {
+        self.synthesis_marks.contains(&agent_id)
+    }
+
+    pub(crate) fn clear_synthesis_marks(&mut self) {
+        self.synthesis_marks.clear();
+    }
+
+    pub(crate) fn toggle_selected_synthesis_mark(&mut self) -> bool {
+        let agent_id = match self.selected_sidebar_item() {
+            Some(SidebarItem::Agent(agent)) => agent.info.agent.id,
+            Some(SidebarItem::Project(_)) | None => return false,
+        };
+        self.toggle_synthesis_mark(agent_id)
+    }
+
+    pub(crate) fn toggle_synthesis_mark(&mut self, agent_id: Uuid) -> bool {
+        if !self.is_synthesis_mark_eligible(agent_id) {
+            return false;
+        }
+
+        if self.is_synthesis_marked(agent_id) {
+            if let Some(index) = self
+                .synthesis_marks
+                .iter()
+                .position(|marked_id| *marked_id == agent_id)
+            {
+                self.synthesis_marks.remove(index);
+            }
+        } else {
+            self.synthesis_marks.push(agent_id);
+        }
+        true
+    }
+
+    fn is_synthesis_mark_eligible(&self, agent_id: Uuid) -> bool {
+        let Some(agent) = self.storage.get(agent_id) else {
+            return false;
+        };
+        let Some(parent_id) = agent.parent_id else {
+            return false;
+        };
+
+        self.synthesis_target_descendants(parent_id)
+            .into_iter()
+            .any(|target| target.id == agent_id)
+    }
+
+    pub(crate) fn marked_synthesis_descendant_counts(&self) -> HashMap<Uuid, usize> {
+        let mut counts = HashMap::new();
+
+        for marked_id in &self.synthesis_marks {
+            if !self.is_synthesis_mark_eligible(*marked_id) {
+                continue;
+            }
+
+            let mut current_id = *marked_id;
+            while let Some(agent) = self.storage.get(current_id) {
+                let Some(parent_id) = agent.parent_id else {
+                    break;
+                };
+                *counts.entry(parent_id).or_insert(0) += 1;
+                current_id = parent_id;
+            }
+        }
+
+        counts
     }
 
     pub(crate) fn select_cwd_project(&mut self) {

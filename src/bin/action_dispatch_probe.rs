@@ -127,6 +127,7 @@ fn drive_normal_mode_dispatch(app: &mut App) {
         Action::FocusPreview,
         Action::SwitchTab,
         Action::Synthesize,
+        Action::ToggleSynthesisMark,
         Action::ToggleCollapse,
         Action::Broadcast,
         Action::ReviewSwarm,

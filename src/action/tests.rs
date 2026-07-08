@@ -213,6 +213,9 @@ fn test_scrolling_mode_typed_dispatch_covers_actions() {
     assert!(mode_is_confirming(&app.mode));
     reset_to_scrolling(&mut app);
 
+    dispatch_scrolling_mode(&mut app, KeyAction::ToggleSynthesisMark).unwrap();
+    assert_eq!(app.mode, AppMode::Scrolling(ScrollingMode));
+
     dispatch_scrolling_mode(&mut app, KeyAction::ToggleCollapse).unwrap();
     assert_eq!(app.mode, AppMode::Scrolling(ScrollingMode));
 
@@ -549,6 +552,9 @@ fn test_normal_mode_typed_dispatch_covers_more_actions() {
         AppMode::MergeBranchSelector(MergeBranchSelectorMode)
     );
     app.apply_mode(AppMode::normal());
+
+    dispatch_normal_mode(&mut app, KeyAction::ToggleSynthesisMark).unwrap();
+    assert_eq!(app.mode, AppMode::normal());
 
     dispatch_normal_mode(&mut app, KeyAction::CommandPalette).unwrap();
     assert_eq!(app.mode, AppMode::CommandPalette(CommandPaletteMode));
