@@ -20,6 +20,33 @@ def repo_root() -> Path:
     return Path(output.strip())
 
 
+def clear_local_git_environment(env: dict[str, str], *, root: Path) -> None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        cwd=root,
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(detail or "git rev-parse --local-env-vars failed")
+
+    for name in result.stdout.splitlines():
+        if name:
+            env.pop(name, None)
+
+
+def sanitized_subprocess_environment(
+    *, root: Path, source_env: dict[str, str] | None = None
+) -> dict[str, str]:
+    env = os.environ.copy() if source_env is None else source_env.copy()
+    clear_local_git_environment(env, root=root)
+    return env
+
+
 def muxd_pids_from_proc(proc_dir: Path, socket: str, state_path: Path) -> set[int]:
     wanted_socket = f"TENEX_MUX_SOCKET={socket}"
     wanted_state_path = f"TENEX_STATE_PATH={state_path}"
@@ -145,13 +172,14 @@ def cleanup_hook_muxd(state_dir: Path, socket: str) -> None:
             continue
 
 
-def verify_llvm_cov_version(root: Path) -> bool:
+def verify_llvm_cov_version(root: Path, *, env: dict[str, str]) -> bool:
     required_version = (root / ".cargo-llvm-cov-version").read_text(encoding="utf-8").strip()
     result = subprocess.run(
         ["cargo", "llvm-cov", "--version"],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     installed_version = ""
     if result.returncode == 0:
@@ -181,6 +209,20 @@ def build_command(mode: str, *, root: Path) -> list[str]:
         if build_jobs.isdigit():
             job_args = ["--jobs", build_jobs]
 
+    if mode == "fmt":
+        return ["cargo", "fmt", "--all", "--", "--check"]
+
+    if mode == "clippy":
+        return [
+            "cargo",
+            "clippy",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ]
+
     if mode == "test":
         return [
             "cargo",
@@ -188,6 +230,17 @@ def build_command(mode: str, *, root: Path) -> list[str]:
             *job_args,
             "--all-targets",
             "--all-features",
+        ]
+
+    if mode == "report":
+        return [
+            "cargo",
+            "llvm-cov",
+            "report",
+            "--profile",
+            "coverage",
+            "--ignore-filename-regex",
+            "crates/vt100-ctt/",
         ]
 
     command = [
@@ -244,18 +297,24 @@ def hook_tmp_root(env: dict[str, str]) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("test", "coverage"))
+    parser.add_argument("mode", choices=("fmt", "clippy", "test", "coverage", "report"))
     args = parser.parse_args()
 
     root = repo_root()
+    env = sanitized_subprocess_environment(root=root)
 
-    if args.mode == "coverage" and not verify_llvm_cov_version(root):
+    if args.mode in ("coverage", "report") and not verify_llvm_cov_version(root, env=env):
         return 1
+
+    configure_rustc_ice(env)
+    command = build_command(args.mode, root=root)
+    if args.mode not in ("test", "coverage"):
+        result = subprocess.run(command, cwd=root, env=env, check=False)
+        return result.returncode
 
     if args.mode == "coverage":
         shutil.rmtree(root / "target" / "llvm-cov-target", ignore_errors=True)
 
-    env = os.environ.copy()
     tmp_root = hook_tmp_root(env)
     if tmp_root:
         env["TMPDIR"] = tmp_root
@@ -266,11 +325,9 @@ def main() -> int:
     mux_socket = str(state_dir / "mux.sock")
     env["TENEX_STATE_PATH"] = str(state_dir / "state.json")
     env["TENEX_MUX_SOCKET"] = mux_socket
-    configure_rustc_ice(env)
 
     cleanup_hook_muxd(state_dir, mux_socket)
     try:
-        command = build_command(args.mode, root=root)
         result = subprocess.run(
             command,
             cwd=root,

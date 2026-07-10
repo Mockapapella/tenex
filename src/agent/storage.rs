@@ -149,7 +149,12 @@ fn set_temp_permissions(path: &Path, existing_permissions: Option<fs::Permission
     Ok(())
 }
 
-fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
+fn commit_temp_state_file(
+    path: &Path,
+    tmp_path: &Path,
+    existing_permissions: Option<fs::Permissions>,
+) -> Result<()> {
+    set_temp_permissions(tmp_path, existing_permissions)?;
     fs::rename(tmp_path, path).with_context(|| {
         format!(
             "Failed to replace state file {} with {}",
@@ -161,6 +166,14 @@ fn replace_state_file(path: &Path, tmp_path: &Path) -> Result<()> {
 }
 
 fn write_state_atomically(path: &Path, contents: &str) -> Result<()> {
+    write_state_atomically_with_commit(path, contents, commit_temp_state_file)
+}
+
+fn write_state_atomically_with_commit(
+    path: &Path,
+    contents: &str,
+    commit: fn(&Path, &Path, Option<fs::Permissions>) -> Result<()>,
+) -> Result<()> {
     let existing_permissions = fs::metadata(path)
         .ok()
         .map(|metadata| metadata.permissions());
@@ -168,8 +181,7 @@ fn write_state_atomically(path: &Path, contents: &str) -> Result<()> {
 
     let write_result = (|| -> Result<()> {
         write_temp_state_file(&tmp_path, contents)?;
-        set_temp_permissions(&tmp_path, existing_permissions)?;
-        replace_state_file(path, &tmp_path)?;
+        commit(path, &tmp_path, existing_permissions)?;
         Ok(())
     })();
 
@@ -2267,50 +2279,57 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn test_write_state_atomically_returns_error_when_temp_file_disappears_before_permissions_set()
-    {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
+    fn test_write_state_atomically_cleans_up_after_missing_temp_commit_failure() {
+        fn remove_temp_before_commit(
+            path: &Path,
+            tmp_path: &Path,
+            existing_permissions: Option<fs::Permissions>,
+        ) -> Result<()> {
+            assert_eq!(path.parent(), tmp_path.parent());
+            assert!(existing_permissions.is_some());
+            assert_eq!(
+                std::fs::read_to_string(tmp_path).expect("read written temp state"),
+                "replacement state"
+            );
+
+            std::fs::remove_file(tmp_path).expect("remove temp state before commit");
+            let err = commit_temp_state_file(path, tmp_path, existing_permissions)
+                .expect_err("missing temp state should fail during commit");
+
+            std::fs::write(tmp_path, "cleanup sentinel")
+                .expect("recreate temp state to prove outer cleanup");
+            Err(err)
+        }
 
         let temp_dir = TempDir::new().expect("temp dir");
         let state_path = temp_dir.path().join("state.json");
+        std::fs::write(&state_path, "previous state").expect("write existing state");
 
-        let removed_flag = Arc::new(AtomicBool::new(false));
-        let removed_flag_for_thread = Arc::clone(&removed_flag);
-        let watch_dir = temp_dir.path().to_path_buf();
+        let err = write_state_atomically_with_commit(
+            &state_path,
+            "replacement state",
+            remove_temp_before_commit,
+        )
+        .expect_err("missing temp state should fail before replacement");
 
-        std::fs::write(temp_dir.path().join("keep.txt"), "keep").expect("write keep file");
-        let prefix = format!(".state.json.tmp-{}-", std::process::id());
-        let watcher = std::thread::spawn(move || {
-            for _ in 0..20_000 {
-                let entries = std::fs::read_dir(&watch_dir).expect("read watch dir");
-                let mut removed = false;
-                for entry in entries {
-                    let entry = entry.expect("dir entry");
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    if name.starts_with(&prefix) {
-                        let _ = std::fs::remove_file(entry.path());
-                        removed_flag_for_thread.store(true, Ordering::SeqCst);
-                        removed = true;
-                    }
-                }
-                if removed {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-        });
-
-        // Give the watcher time by making the write and sync non-trivial.
-        let contents = "x".repeat(4 * 1024 * 1024);
-        let err = write_state_atomically(&state_path, &contents).expect_err("expected error");
-        assert!(format!("{err:#}").contains("Failed to set permissions for temp state file"));
-
-        watcher.join().expect("watcher thread");
-        assert!(removed_flag.load(Ordering::SeqCst));
+        let message = format!("{err:#}");
+        assert!(message.contains("Failed to set permissions for temp state file"));
+        assert!(message.contains(".state.json.tmp-"));
+        let io_error = err
+            .root_cause()
+            .downcast_ref::<std::io::Error>()
+            .expect("root cause should be an I/O error");
+        assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            std::fs::read_to_string(&state_path).expect("read preserved state"),
+            "previous state"
+        );
+        let entries = std::fs::read_dir(temp_dir.path())
+            .expect("read state directory")
+            .map(|entry| entry.expect("state directory entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, [std::ffi::OsString::from("state.json")]);
     }
 
     #[test]

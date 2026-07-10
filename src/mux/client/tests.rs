@@ -676,14 +676,16 @@ fn test_mux_client_request_errors_when_reconnect_fails() {
         .expect("Create mux listener");
 
     let server = std::thread::spawn(move || {
-        let mut incoming = listener.incoming();
-
-        let mut stream = incoming
-            .next()
-            .expect("Missing initial connection")
-            .expect("Accept initial connection");
+        let mut stream = {
+            let mut incoming = listener.incoming();
+            incoming
+                .next()
+                .expect("Missing initial connection")
+                .expect("Accept initial connection")
+        };
 
         let _: MuxRequest = ipc::read_json(&mut stream).expect("Read initial request");
+        drop(listener);
         drop(stream);
     });
 
@@ -692,10 +694,8 @@ fn test_mux_client_request_errors_when_reconnect_fails() {
         client.request(&MuxRequest::Ping)
     })
     .expect_err("Expected mux client error");
-    assert!(
-        err.to_string()
-            .contains("Failed to resolve current executable")
-    );
+    assert_eq!(err.to_string(), "Failed to resolve current executable");
+    assert_eq!(err.root_cause().to_string(), "forced current_exe failure");
 
     server.join().expect("Server thread panicked");
 }

@@ -35,6 +35,33 @@ struct PreparedRuntimeHome {
     codex_home_target: PathBuf,
 }
 
+#[derive(Default)]
+struct DockerHostPaths {
+    runtime_home: Option<DockerHostHome>,
+    ssh_auth_sock: Option<PathBuf>,
+}
+
+struct DockerHostHome {
+    home: PathBuf,
+    data_local_dir: PathBuf,
+    codex_home: PathBuf,
+}
+
+impl DockerHostPaths {
+    fn from_process_environment() -> Self {
+        let runtime_home = paths::home_dir().map(|home| DockerHostHome {
+            data_local_dir: paths::data_local_dir().unwrap_or_else(|| home.clone()),
+            codex_home: codex_home_dir(&home),
+            home,
+        });
+
+        Self {
+            runtime_home,
+            ssh_auth_sock: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
+        }
+    }
+}
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn wrap_exec(agent: &Agent, _settings: &Settings, command: &[String]) -> Vec<String> {
     let mut argv = exec_prefix(agent);
@@ -87,25 +114,15 @@ pub(super) fn image_build_required(settings: &Settings, program: &str) -> Result
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()> {
-    let home = paths::home_dir();
-    let data_local_dir = paths::data_local_dir();
-    let ssh_auth_sock = std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from);
-    ensure_container_with_paths(
-        agent,
-        settings,
-        home.as_deref(),
-        data_local_dir.as_deref(),
-        ssh_auth_sock.as_deref(),
-    )
+    let host_paths = DockerHostPaths::from_process_environment();
+    ensure_container_with_paths(agent, settings, &host_paths)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_container_with_paths(
     agent: &Agent,
     settings: &Settings,
-    home: Option<&Path>,
-    data_local_dir: Option<&Path>,
-    ssh_auth_sock: Option<&Path>,
+    host_paths: &DockerHostPaths,
 ) -> Result<()> {
     check_available()?;
     ensure_image_ready(settings, &agent.program)?;
@@ -125,8 +142,13 @@ fn ensure_container_with_paths(
                     );
                 }
                 remove_container_by_name(&name)?;
-            } else if let Some(home) = home {
-                refresh_runtime_home_for_reuse_with_data_local_dir(agent, home, data_local_dir)?;
+            } else if let Some(runtime_home) = host_paths.runtime_home.as_ref() {
+                refresh_runtime_home_for_reuse_in(
+                    agent,
+                    &runtime_home.home,
+                    &runtime_home.data_local_dir,
+                    &runtime_home.codex_home,
+                )?;
                 if is_running {
                     return Ok(());
                 }
@@ -167,11 +189,11 @@ fn ensure_container_with_paths(
         cmd.args(["--user", &user]);
     }
 
-    if let Some(home) = home {
-        configure_home_mounts_with_data_local_dir(&mut cmd, agent, home, data_local_dir)?;
+    if let Some(runtime_home) = host_paths.runtime_home.as_ref() {
+        configure_home_mounts(&mut cmd, agent, runtime_home)?;
     }
 
-    configure_ssh_auth_sock_mount_from(&mut cmd, ssh_auth_sock);
+    configure_ssh_auth_sock_mount_from(&mut cmd, host_paths.ssh_auth_sock.as_deref());
     configure_repo_metadata_mounts(&mut cmd, agent);
 
     cmd.args(["-w", &display_path(&worktree_target)]);
@@ -361,13 +383,18 @@ fn codex_home_dir(home: &Path) -> PathBuf {
     std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from)
 }
 
-fn configure_home_mounts_with_data_local_dir(
+fn configure_home_mounts(
     cmd: &mut Command,
     agent: &Agent,
-    home: &Path,
-    data_local_dir: Option<&Path>,
+    runtime_home: &DockerHostHome,
 ) -> Result<()> {
-    let prepared_home = prepare_runtime_home_with_data_local_dir(agent, home, data_local_dir)?;
+    let home = &runtime_home.home;
+    let prepared_home = prepare_runtime_home_in(
+        agent,
+        home,
+        &runtime_home.data_local_dir,
+        &runtime_home.codex_home,
+    )?;
     let home_target = container_target_path(home);
     let codex_home_target = container_target_path(&prepared_home.codex_home_target);
     cmd.arg("-e").arg(format!("HOME={}", home_target.display()));
@@ -560,34 +587,6 @@ fn resolved_symlink_target(path: &Path, worktree: &Path, link_target: &Path) -> 
         path.parent().unwrap_or(worktree).join(link_target)
     };
     resolved.canonicalize().unwrap_or(resolved)
-}
-
-fn prepare_runtime_home_with_data_local_dir(
-    agent: &Agent,
-    home: &Path,
-    data_local_dir: Option<&Path>,
-) -> Result<PreparedRuntimeHome> {
-    let data_local_dir = data_local_dir
-        .map(Path::to_path_buf)
-        .or_else(paths::data_local_dir)
-        .or_else(paths::home_dir)
-        .unwrap_or_else(std::env::temp_dir);
-    let codex_home_target = codex_home_dir(home);
-    prepare_runtime_home_in(agent, home, &data_local_dir, &codex_home_target)
-}
-
-fn refresh_runtime_home_for_reuse_with_data_local_dir(
-    agent: &Agent,
-    home: &Path,
-    data_local_dir: Option<&Path>,
-) -> Result<()> {
-    let data_local_dir = data_local_dir
-        .map(Path::to_path_buf)
-        .or_else(paths::data_local_dir)
-        .or_else(paths::home_dir)
-        .unwrap_or_else(std::env::temp_dir);
-    let codex_home_target = codex_home_dir(home);
-    refresh_runtime_home_for_reuse_in(agent, home, &data_local_dir, &codex_home_target)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -1693,6 +1692,18 @@ mod tests {
         agent.runtime = AgentRuntime::Docker;
         agent.mux_session = "tenex-ABCD1234-root".to_string();
         agent
+    }
+
+    #[cfg(unix)]
+    fn docker_host_paths(home: &Path, data_local_dir: &Path, codex_home: &Path) -> DockerHostPaths {
+        DockerHostPaths {
+            runtime_home: Some(DockerHostHome {
+                home: home.to_path_buf(),
+                data_local_dir: data_local_dir.to_path_buf(),
+                codex_home: codex_home.to_path_buf(),
+            }),
+            ssh_auth_sock: None,
+        }
     }
 
     #[test]
@@ -4272,7 +4283,7 @@ command = "docker"
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
-        let host_codex_home = host_home.join(".codex");
+        let host_codex_home = temp.path().join("host-codex-home");
         let host_claude_dir = host_home.join(".claude");
         let log = temp.path().join("docker.log");
         fs::create_dir_all(&worktree).unwrap();
@@ -4281,7 +4292,11 @@ command = "docker"
         fs::create_dir_all(host_home.join(".ssh")).unwrap();
         fs::create_dir_all(host_home.join(".config").join("ssh")).unwrap();
         fs::write(host_codex_home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"old"}"#).unwrap();
+        fs::write(
+            host_codex_home.join("auth.json"),
+            r#"{"token":"synthetic-old"}"#,
+        )
+        .unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"plan"},"hooks":{"Stop":[]}}"#,
@@ -4305,7 +4320,11 @@ command = "docker"
             "updated-host-key\n",
         )
         .unwrap();
-        fs::write(host_codex_home.join("auth.json"), r#"{"token":"new"}"#).unwrap();
+        fs::write(
+            host_codex_home.join("auth.json"),
+            r#"{"token":"synthetic-new"}"#,
+        )
+        .unwrap();
         fs::write(
             host_claude_dir.join("settings.json"),
             r#"{"permissions":{"defaultMode":"acceptEdits"}}"#,
@@ -4319,21 +4338,16 @@ command = "docker"
             current_container_layout_hash(),
         );
         let script = write_fake_docker_script(&temp, &script_body);
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_codex_home);
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-            .unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap();
         });
 
-        assert_eq!(
-            fs::read_to_string(prepared.codex_home_source.join("auth.json")).unwrap(),
-            r#"{"token":"new"}"#
+        assert!(
+            fs::read(prepared.codex_home_source.join("auth.json")).unwrap()
+                == br#"{"token":"synthetic-new"}"#,
+            "staged auth did not match the synthetic fixture"
         );
         assert!(
             fs::read_to_string(prepared.home_source.join(".claude").join("settings.json"))
@@ -4374,16 +4388,10 @@ command = "docker"
                 current_container_layout_hash(),
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_home.join(".codex"));
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-            .unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4413,16 +4421,10 @@ command = "docker"
                 current_container_layout_hash(),
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_home.join(".codex"));
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-            .unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to start Docker container"));
@@ -4452,7 +4454,8 @@ command = "docker"
         );
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4483,7 +4486,8 @@ command = "docker"
         );
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4511,7 +4515,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to start Docker container"));
@@ -4540,7 +4545,8 @@ command = "docker"
         );
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4570,7 +4576,8 @@ command = "docker"
 
         with_docker_program_override_for_tests(script, || {
             let _user_guard = set_docker_user_override_for_tests(None);
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4597,7 +4604,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
 
         let message = err.to_string();
@@ -4631,16 +4639,10 @@ command = "docker"
                 current_container_layout_hash(),
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_home.join(".codex"));
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-            .unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap_err()
         });
 
         let message = err.to_string();
@@ -4666,7 +4668,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to inspect Docker container"));
@@ -4694,7 +4697,8 @@ command = "docker"
         );
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -4723,16 +4727,10 @@ command = "docker"
                 default_worker_dockerfile_hash(),
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_file, &host_home.join(".codex"));
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_file),
-                None,
-            )
-            .unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap_err()
         });
         assert!(
             err.to_string()
@@ -4759,7 +4757,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to create Docker container"));
@@ -4782,7 +4781,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to inspect Docker image"));
@@ -4808,7 +4808,8 @@ command = "docker"
         );
 
         let err = with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(&agent, &Settings::default(), None, None, None).unwrap_err()
+            ensure_container_with_paths(&agent, &Settings::default(), &DockerHostPaths::default())
+                .unwrap_err()
         });
         let message = err.to_string();
         assert!(message.contains("Failed to inspect Docker container"));
@@ -4954,7 +4955,7 @@ command = "docker"
         let host_home = temp.path().join("host-home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
-        let host_codex_home = host_home.join(".codex");
+        let host_codex_home = temp.path().join("host-codex-home");
         let host_gh_dir = host_home.join(".config").join("gh");
         let log = temp.path().join("docker.log");
         fs::create_dir_all(&worktree).unwrap();
@@ -4983,16 +4984,10 @@ command = "docker"
                 default_worker_dockerfile_hash(),
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_codex_home);
 
         with_docker_program_override_for_tests(script, || {
-            ensure_container_with_paths(
-                &agent,
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            )
-            .unwrap();
+            ensure_container_with_paths(&agent, &Settings::default(), &host_paths).unwrap();
         });
 
         let log_contents = fs::read_to_string(&log).unwrap();
@@ -5028,20 +5023,17 @@ command = "docker"
 
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
+        let codex_home = temp.path().join("codex-home");
         let data_local_dir = temp.path().join("xdg-data");
         let worktree = temp.path().join("worktree");
         let log = temp.path().join("docker.log");
         let path = std::env::var("PATH").unwrap_or_default();
         let prefixed_path = format!("{}:{path}", temp.path().display());
-        fs::create_dir_all(home.join(".codex").join("sessions")).unwrap();
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::create_dir_all(home.join(".ssh")).unwrap();
         fs::create_dir_all(home.join(".config").join("ssh")).unwrap();
         fs::create_dir_all(&worktree).unwrap();
-        fs::write(
-            home.join(".codex").join("config.toml"),
-            "model = \"gpt-5.4\"\n",
-        )
-        .unwrap();
+        fs::write(codex_home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
         fs::write(home.join(".ssh").join("config"), "Host test\n").unwrap();
         fs::write(
             home.join(".config").join("ssh").join("config"),
@@ -5065,6 +5057,7 @@ command = "docker"
             .env(ENSURE_CONTAINER_CHILD_FLAG, "1")
             .env(ENSURE_CONTAINER_WORKTREE_VAR, &worktree)
             .env("HOME", &home)
+            .env("CODEX_HOME", &codex_home)
             .env("XDG_DATA_HOME", &data_local_dir)
             .env("PATH", prefixed_path)
             .output()
@@ -5076,6 +5069,7 @@ command = "docker"
         let log_contents = fs::read_to_string(&log).unwrap();
         assert!(log_contents.contains("run -d --init"));
         assert!(log_contents.contains(&format!("HOME={}", home.display())));
+        assert!(log_contents.contains(&format!("CODEX_HOME={}", codex_home.display())));
         assert!(log_contents.contains(&format!(
             "-v {}:{}",
             worktree.display(),
@@ -5219,15 +5213,11 @@ command = "docker"
                 inspect_count.display()
             ),
         );
+        let host_paths = docker_host_paths(&host_home, &data_local_dir, &host_home.join(".codex"));
 
         with_docker_program_override_for_tests(script, || {
-            let result = ensure_container_with_paths(
-                &docker_agent(),
-                &Settings::default(),
-                Some(&host_home),
-                Some(&data_local_dir),
-                None,
-            );
+            let result =
+                ensure_container_with_paths(&docker_agent(), &Settings::default(), &host_paths);
             assert!(result.is_err());
             let err = result
                 .err()

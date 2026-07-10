@@ -227,9 +227,6 @@ def export_instrumented_summary(
     out_gz = out_dir / "llvm-cov-instrumented.summary.json.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not run_cargo_hook.verify_llvm_cov_version(root):
-        raise RuntimeError("cargo-llvm-cov version mismatch")
-
     # Keep the instrumented summary in sync with the later coverage run.
     #
     # `run_cargo_hook.py coverage` wipes `target/llvm-cov-target` before collecting coverage, but
@@ -240,7 +237,9 @@ def export_instrumented_summary(
 
     state_dir = Path(tempfile.mkdtemp(prefix="tenex-pre-push-"))
     mux_socket = str(state_dir / "mux.sock")
-    env = os.environ.copy()
+    env = run_cargo_hook.sanitized_subprocess_environment(root=root)
+    if not run_cargo_hook.verify_llvm_cov_version(root, env=env):
+        raise RuntimeError("cargo-llvm-cov version mismatch")
     env["TENEX_STATE_PATH"] = str(state_dir / "state.json")
     env["TENEX_MUX_SOCKET"] = mux_socket
     run_cargo_hook.configure_rustc_ice(env)
@@ -300,7 +299,7 @@ def export_coverage_summary(*, root: Path, out_dir: Path) -> Path:
     out_gz = out_dir / "llvm-cov-report.summary.json.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
     run_cargo_hook = load_run_cargo_hook(root)
-    env = os.environ.copy()
+    env = run_cargo_hook.sanitized_subprocess_environment(root=root)
     run_cargo_hook.configure_rustc_ice(env)
 
     result = subprocess.run(
