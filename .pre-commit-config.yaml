@@ -138,6 +138,14 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: ci-concurrency-policy
+        name: CI concurrency policy
+        entry: python scripts/ci/test_ci_concurrency.py
+        language: python
+        additional_dependencies:
+          - PyYAML==6.0.3
+        pass_filenames: false
+
       - id: cross-os-theoretical-max
         name: "commit: enforce cross-OS theoretical max coverage"
         entry: python3 scripts/precommit/pre_push_theoretical_max_gate.py
