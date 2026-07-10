@@ -117,23 +117,13 @@ repos:
 
       - id: cargo-fmt
         name: cargo fmt --check
-        entry: cargo fmt --all -- --check
+        entry: python3 scripts/precommit/run_cargo_hook.py fmt
         language: system
         pass_filenames: false
 
       - id: cargo-clippy
         name: cargo clippy (all targets, all features, deny warnings)
-        entry: bash -c
-        args:
-          - |
-              set -euo pipefail
-              if [ -z "${RUSTC_ICE:-}" ]; then
-                export RUSTC_ICE="${XDG_CACHE_HOME:-$HOME/.cache}/tenex/rustc-ice"
-              fi
-              if [ "${RUSTC_ICE}" != "0" ]; then
-                mkdir -p "$RUSTC_ICE"
-              fi
-              cargo clippy --all-targets --all-features -- -D warnings
+        entry: python3 scripts/precommit/run_cargo_hook.py clippy
         language: system
         pass_filenames: false
 
@@ -218,7 +208,7 @@ repos:
               sha_path="${receipt_dir}/llvm-cov-report.sha256"
 
               mkdir -p "$receipt_dir"
-              cargo llvm-cov report --profile coverage --ignore-filename-regex 'crates/vt100-ctt/' > "$report_path"
+              python3 scripts/precommit/run_cargo_hook.py report > "$report_path"
 
               python_bin="python3"
               if ! command -v "$python_bin" >/dev/null 2>&1; then
