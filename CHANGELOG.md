@@ -5,11 +5,13 @@
 ### Added
 
 - **Docker runtime**: `/toggle_docker` can launch new root agents in Docker, with child agents and terminals inheriting the root runtime; Docker-backed root worktrees skip links for ignored repo files.
+- **Platform coverage**: CI now runs native macOS, Linux, and Windows WSL2 checks with per-platform coverage receipts.
 - **Mux output streaming**: Preview rendering can read raw mux output incrementally instead of recapturing pane history on every refresh.
 
 ### Changed
 
 - **Platform support**: Tenex now supports Linux and macOS natively, with Windows through WSL2.
+- **Coverage gates**: CI and pre-commit now enforce cross-OS coverage receipts and theoretical maximum coverage checks.
 - **Preview sizing**: The mux keeps the largest requested pane size per target so multiple clients do not shrink each other's previews.
 
 ### Fixed
@@ -109,6 +111,7 @@
 - **Preview performance**: Fix preview stutter while moving the mouse.
 - **Claude Code broadcast**: Fix broadcast submit behavior.
 - **Worktree reliability**: Copy agent instruction files into worktrees for consistent agent behavior.
+- **Developer safety**: Tests no longer overwrite real user settings.
 
 ## [1.0.4] - 2025-12-20
 
