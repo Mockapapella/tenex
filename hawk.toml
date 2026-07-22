@@ -1,4 +1,0 @@
-[[production]]
-package = "tenex"
-bin = "tenex"
-reason = "shipped terminal multiplexer binary"
