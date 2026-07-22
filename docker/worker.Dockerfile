@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 RUN rustup component add clippy rustfmt
+RUN python3 -m pip install --no-cache-dir --break-system-packages pre-commit
 RUN printf '%s\n' 'export PATH=/usr/local/cargo/bin:$PATH' >/etc/profile.d/tenex-rust-path.sh \
  && chmod 0644 /etc/profile.d/tenex-rust-path.sh \
  && for bin in /usr/local/cargo/bin/*; do ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"; done

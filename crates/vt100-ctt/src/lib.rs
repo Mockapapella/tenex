@@ -16,12 +16,21 @@
 //!
 //! let screen = parser.screen().clone();
 //! parser.process(b"this text is \x1b[31mRED\x1b[m");
-//! let red = parser.screen().cell(0, 13).unwrap().fgcolor();
+//! assert_eq!(
+//!     parser.screen().cell(0, 13).unwrap().fgcolor(),
+//!     vt100::Color::Idx(1),
+//! );
 //!
 //! let screen = parser.screen().clone();
 //! parser.process(b"\x1b[3D\x1b[32mGREEN");
-//! let full_screen = parser.screen().contents_formatted();
-//! let changed_region = parser.screen().contents_diff(&screen);
+//! assert_eq!(
+//!     parser.screen().contents_formatted(),
+//!     &b"\x1b[?25h\x1b[m\x1b[H\x1b[Jthis text is \x1b[32mGREEN"[..],
+//! );
+//! assert_eq!(
+//!     parser.screen().contents_diff(&screen),
+//!     &b"\x1b[1;14H\x1b[32mGREEN"[..],
+//! );
 //! ```
 
 #![warn(clippy::pedantic)]

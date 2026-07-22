@@ -47,8 +47,8 @@ const DEFAULT_SOCKET_PREFIX: &str = "tenex-mux";
 
 /// Override the mux daemon socket for this process.
 ///
-/// The override must be set before the first mux request. Otherwise the existing endpoint choice
-/// is already cached.
+/// This supports embedding Tenex as a library. The override must be set before the first mux
+/// request. Otherwise the existing endpoint choice is already cached.
 ///
 /// The value uses the same interpretation as `TENEX_MUX_SOCKET`.
 ///
