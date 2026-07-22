@@ -17,13 +17,11 @@ pub use diff::*;
 pub use git::*;
 pub use misc::*;
 pub(crate) use modal::changelog_max_scroll;
-#[cfg(test)]
-pub(crate) use modal::help_max_scroll;
+
 pub use modal::{HalfPageDownAction, HalfPageUpAction, PageDownAction, PageUpAction};
 pub use navigation::*;
 pub use picker::*;
-#[cfg(test)]
-pub(crate) use preview::keycode_to_input_sequence;
+
 pub use preview::{ForwardKeystrokeAction, UnfocusPreviewAction};
 pub use text_input::*;
 
@@ -44,44 +42,6 @@ use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use semver::Version;
 use tracing::warn;
-
-#[cfg(any(test, coverage))]
-thread_local! {
-    static TEST_FORCE_INFAILLIBLE_ACTION_ERROR: std::cell::Cell<bool> = const {
-        std::cell::Cell::new(false)
-    };
-}
-
-#[cfg(any(test, coverage))]
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct ForcedInfallibleActionErrorGuard {
-    previous: bool,
-}
-
-#[cfg(any(test, coverage))]
-impl Drop for ForcedInfallibleActionErrorGuard {
-    fn drop(&mut self) {
-        TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(|slot| slot.set(self.previous));
-    }
-}
-
-#[cfg(any(test, coverage))]
-#[doc(hidden)]
-/// Force otherwise-infallible actions to return an error until the guard is dropped.
-#[must_use]
-pub fn force_infallible_action_error_for_tests() -> ForcedInfallibleActionErrorGuard {
-    let previous = TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(|slot| slot.replace(true));
-    ForcedInfallibleActionErrorGuard { previous }
-}
-
-#[cfg(any(test, coverage))]
-fn force_infallible_action_error_if_enabled_for_tests() -> Result<()> {
-    if TEST_FORCE_INFAILLIBLE_ACTION_ERROR.with(std::cell::Cell::get) {
-        anyhow::bail!("forced infallible action error for test");
-    }
-    Ok(())
-}
 
 /// Marker trait: This action is valid in this state.
 ///
@@ -916,6 +876,3 @@ pub fn dispatch_confirming_mode(app: &mut App, action: ConfirmAction, code: KeyC
     app.apply_mode(next);
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

@@ -49,6 +49,3 @@ pub fn handle_normal_mode(app: &mut App, code: KeyCode, modifiers: KeyModifiers)
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

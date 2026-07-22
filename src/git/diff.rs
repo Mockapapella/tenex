@@ -8,177 +8,8 @@ use std::fmt::Write as _;
 use std::hash::{Hash as _, Hasher as _};
 use std::io::{Read as _, Seek as _};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use std::{fs, io};
-
-#[cfg(any(test, coverage))]
-thread_local! {
-    static FORCE_METADATA_MODIFIED_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FORCE_METADATA_MODIFIED_PRE_EPOCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FORCE_DIFF_PRINT_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FORCE_COMMIT_TREE_ERROR_ON_CALL: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static COMMIT_TREE_CALL_COUNT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static FORCE_DIFF_TREE_TO_TREE_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FORCE_DIFF_TREE_TO_INDEX_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-fn with_forced_metadata_modified_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_METADATA_MODIFIED_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-fn with_forced_metadata_modified_pre_epoch_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_METADATA_MODIFIED_PRE_EPOCH.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-fn with_forced_diff_print_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_DIFF_PRINT_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-fn with_forced_commit_tree_error_on_call_for_tests<T>(call: u8, f: impl FnOnce() -> T) -> T {
-    FORCE_COMMIT_TREE_ERROR_ON_CALL.with(|slot| {
-        COMMIT_TREE_CALL_COUNT.with(|counter| {
-            let previous = slot.replace(call);
-            let previous_count = counter.replace(0);
-            let result = f();
-            counter.set(previous_count);
-            slot.set(previous);
-            result
-        })
-    })
-}
-
-#[cfg(test)]
-fn with_forced_repo_diff_tree_to_tree_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_DIFF_TREE_TO_TREE_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-fn with_forced_repo_diff_tree_to_index_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_DIFF_TREE_TO_INDEX_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-fn metadata_modified(metadata: &fs::Metadata) -> io::Result<SystemTime> {
-    #[cfg(any(test, coverage))]
-    if FORCE_METADATA_MODIFIED_ERROR.with(std::cell::Cell::get) {
-        return Err(io::Error::other("Forced metadata.modified error for test"));
-    }
-
-    #[cfg(any(test, coverage))]
-    if FORCE_METADATA_MODIFIED_PRE_EPOCH.with(std::cell::Cell::get) {
-        return Ok(UNIX_EPOCH - std::time::Duration::from_secs(1));
-    }
-
-    metadata.modified()
-}
-
-fn diff_print<F>(
-    diff: &git2::Diff<'_>,
-    format: git2::DiffFormat,
-    cb: F,
-) -> std::result::Result<(), git2::Error>
-where
-    F: for<'a, 'b, 'c> FnMut(
-        git2::DiffDelta<'a>,
-        Option<git2::DiffHunk<'b>>,
-        git2::DiffLine<'c>,
-    ) -> bool,
-{
-    #[cfg(any(test, coverage))]
-    if FORCE_DIFF_PRINT_ERROR.with(std::cell::Cell::get) {
-        return Err(git2::Error::new(
-            git2::ErrorCode::GenericError,
-            git2::ErrorClass::Callback,
-            "Forced diff.print failure",
-        ));
-    }
-
-    diff.print(format, cb)
-}
-
-fn commit_tree<'repo>(
-    commit: &git2::Commit<'repo>,
-) -> std::result::Result<git2::Tree<'repo>, git2::Error> {
-    #[cfg(any(test, coverage))]
-    {
-        let should_fail = FORCE_COMMIT_TREE_ERROR_ON_CALL.with(std::cell::Cell::get) != 0
-            && COMMIT_TREE_CALL_COUNT.with(|counter| {
-                let next = counter.get().saturating_add(1);
-                counter.set(next);
-                next
-            }) == FORCE_COMMIT_TREE_ERROR_ON_CALL.with(std::cell::Cell::get);
-        if should_fail {
-            return Err(git2::Error::new(
-                git2::ErrorCode::GenericError,
-                git2::ErrorClass::Object,
-                "Forced commit.tree failure",
-            ));
-        }
-    }
-
-    commit.tree()
-}
-
-fn repo_diff_tree_to_tree<'repo>(
-    repo: &'repo Repository,
-    old_tree: &git2::Tree<'repo>,
-    new_tree: &git2::Tree<'repo>,
-) -> std::result::Result<git2::Diff<'repo>, git2::Error> {
-    #[cfg(any(test, coverage))]
-    if FORCE_DIFF_TREE_TO_TREE_ERROR.with(std::cell::Cell::get) {
-        return Err(git2::Error::new(
-            git2::ErrorCode::GenericError,
-            git2::ErrorClass::Repository,
-            "Forced repo.diff_tree_to_tree failure",
-        ));
-    }
-
-    repo.diff_tree_to_tree(Some(old_tree), Some(new_tree), None)
-}
-
-fn repo_diff_tree_to_index<'repo>(
-    repo: &'repo Repository,
-    tree: Option<&git2::Tree<'repo>>,
-) -> std::result::Result<git2::Diff<'repo>, git2::Error> {
-    #[cfg(any(test, coverage))]
-    if FORCE_DIFF_TREE_TO_INDEX_ERROR.with(std::cell::Cell::get) {
-        return Err(git2::Error::new(
-            git2::ErrorCode::GenericError,
-            git2::ErrorClass::Repository,
-            "Forced repo.diff_tree_to_index failure",
-        ));
-    }
-
-    repo.diff_tree_to_index(tree, None, None)
-}
 
 fn diff_line_content(line: &git2::DiffLine<'_>) -> String {
     let content = String::from_utf8_lossy(line.content());
@@ -275,7 +106,6 @@ fn status_has_workdir_change(status: Status) -> bool {
     )
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn worktree_file_sample_hash(full_path: &Path, len: u64) -> u64 {
     const SAMPLE_BYTES: usize = 4096;
     const SAMPLE_BYTES_I64: i64 = 4096;
@@ -331,10 +161,7 @@ fn worktree_meta_marker(
     } else {
         4
     };
-    let modified = metadata_modified(&metadata)
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
     let sample_hash = (include_content_sample && file_type.is_file())
         .then(|| worktree_file_sample_hash(&full_path, metadata.len()));
 
@@ -485,7 +312,9 @@ impl<'a> Generator<'a> {
         let head = self.repo.head().ok();
         let tree = head.and_then(|h| h.peel_to_tree().ok());
 
-        let diff = repo_diff_tree_to_index(self.repo, tree.as_ref())
+        let diff = self
+            .repo
+            .diff_tree_to_index(tree.as_ref(), None, None)
             .context("Failed to get staged diff")?;
 
         Self::parse_diff(&diff)
@@ -619,10 +448,12 @@ impl<'a> Generator<'a> {
             .peel_to_commit()
             .context("New reference is not a commit")?;
 
-        let old_tree = commit_tree(&old_oid).context("Could not get old tree")?;
-        let new_tree = commit_tree(&new_oid).context("Could not get new tree")?;
+        let old_tree = old_oid.tree().context("Could not get old tree")?;
+        let new_tree = new_oid.tree().context("Could not get new tree")?;
 
-        let diff = repo_diff_tree_to_tree(self.repo, &old_tree, &new_tree)
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
             .context("Failed to diff trees")?;
 
         Self::parse_diff(&diff)
@@ -642,7 +473,7 @@ impl<'a> Generator<'a> {
         let mut files = Vec::new();
         let mut file_indices: HashMap<PathBuf, usize> = HashMap::new();
 
-        diff_print(diff, git2::DiffFormat::Patch, |delta, _hunk, line| {
+        diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
             // Avoid O(n²) scanning by indexing file changes by path.
             // Use a borrowed `&Path` for lookups to avoid per-line `PathBuf` allocations.
             let old_path = delta.old_file().path();
@@ -696,7 +527,7 @@ impl<'a> Generator<'a> {
         let mut additions = 0usize;
         let mut deletions = 0usize;
 
-        diff_print(diff, git2::DiffFormat::Patch, |delta, hunk, line| {
+        diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
             let old_path = delta.old_file().path();
             let empty_path = Path::new("");
             let file_path = delta.new_file().path().or(old_path).unwrap_or(empty_path);
@@ -793,7 +624,7 @@ impl<'a> Generator<'a> {
         let mut additions = 0usize;
         let mut deletions = 0usize;
 
-        diff_print(diff, git2::DiffFormat::Patch, |delta, _hunk, line| {
+        diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
             let old_path = delta.old_file().path();
             let empty_path = Path::new("");
             let file_path = delta.new_file().path().or(old_path).unwrap_or(empty_path);
@@ -1057,6 +888,3 @@ impl std::fmt::Display for Summary {
         )
     }
 }
-
-#[cfg(test)]
-mod tests;

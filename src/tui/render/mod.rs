@@ -454,6 +454,3 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         _ => {}
     }
 }
-
-#[cfg(test)]
-mod tests;

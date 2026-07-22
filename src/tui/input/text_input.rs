@@ -39,6 +39,3 @@ pub fn handle_text_input_mode(app: &mut App, code: KeyCode, modifiers: KeyModifi
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

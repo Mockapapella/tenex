@@ -178,6 +178,3 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

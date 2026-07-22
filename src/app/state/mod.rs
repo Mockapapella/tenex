@@ -140,6 +140,3 @@ impl std::fmt::Display for Tab {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

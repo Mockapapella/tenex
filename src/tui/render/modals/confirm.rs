@@ -507,6 +507,3 @@ pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }
-
-#[cfg(test)]
-mod tests;

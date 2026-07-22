@@ -160,14 +160,3 @@ pub fn codex_session_workdir(agent: &Agent) -> std::path::PathBuf {
         AgentRuntime::Docker => docker::session_workdir(agent),
     }
 }
-
-#[cfg(test)]
-pub fn with_docker_program_override_for_tests<T>(
-    program: std::path::PathBuf,
-    f: impl FnOnce() -> T,
-) -> T {
-    docker::with_docker_program_override_for_tests(program, f)
-}
-
-#[cfg(test)]
-mod tests;

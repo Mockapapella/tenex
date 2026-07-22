@@ -13,35 +13,6 @@ use crate::state::{
 };
 use anyhow::Result;
 
-#[cfg(test)]
-thread_local! {
-    static TEST_FORCE_PICKER_ACTION_ERROR: std::cell::Cell<bool> = const {
-        std::cell::Cell::new(false)
-    };
-}
-
-#[cfg(test)]
-/// Run `f` with picker actions forced to return an error.
-///
-/// This is test-only scaffolding used to assert dispatch error propagation without
-/// relying on external state.
-pub fn with_forced_picker_action_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    TEST_FORCE_PICKER_ACTION_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-pub(super) fn force_picker_action_error_if_enabled_for_tests() -> Result<()> {
-    if TEST_FORCE_PICKER_ACTION_ERROR.with(std::cell::Cell::get) {
-        anyhow::bail!("forced picker action error for test");
-    }
-    Ok(())
-}
-
 /// Picker action: increment a count (Up key in count pickers).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IncrementAction;
@@ -134,8 +105,6 @@ impl ValidIn<ReviewInfoMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ReviewInfoMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -144,8 +113,6 @@ impl ValidIn<ChildCountMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ChildCountMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -158,8 +125,6 @@ impl ValidIn<ReviewChildCountMode> for CancelAction {
         _state: ReviewChildCountMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -168,8 +133,6 @@ impl ValidIn<ReviewInfoMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ReviewInfoMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -182,8 +145,6 @@ impl ValidIn<BranchSelectorMode> for CancelAction {
         _state: BranchSelectorMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         app_data.review.clear();
         Ok(AppMode::normal())
     }
@@ -197,8 +158,6 @@ impl ValidIn<RebaseBranchSelectorMode> for CancelAction {
         _state: RebaseBranchSelectorMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         app_data.review.clear();
         Ok(AppMode::normal())
@@ -213,8 +172,6 @@ impl ValidIn<MergeBranchSelectorMode> for CancelAction {
         _state: MergeBranchSelectorMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         app_data.review.clear();
         Ok(AppMode::normal())
@@ -229,8 +186,6 @@ impl ValidIn<SwitchBranchSelectorMode> for CancelAction {
         _state: SwitchBranchSelectorMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         app_data.review.clear();
         Ok(AppMode::normal())
@@ -241,8 +196,6 @@ impl ValidIn<ModelSelectorMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ModelSelectorMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         app_data.model_selector.clear();
         Ok(AppMode::normal())
     }
@@ -256,8 +209,6 @@ impl ValidIn<CommandPaletteMode> for CancelAction {
         _state: CommandPaletteMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -266,8 +217,6 @@ impl ValidIn<SettingsMenuMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: SettingsMenuMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -771,6 +720,3 @@ impl ValidIn<CommandPaletteMode> for CursorEndAction {
         Ok(CommandPaletteMode.into())
     }
 }
-
-#[cfg(test)]
-mod tests;

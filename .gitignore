@@ -1,11 +1,6 @@
 /target
 .claude/
 .claudeignore
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-__pycache__/
-*.py[cod]
 worktrees/
 state.json
 settings.json

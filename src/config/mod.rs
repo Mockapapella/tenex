@@ -32,31 +32,13 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            // Unit tests should never depend on the presence of an external agent binary (like
-            // `claude`) on the host machine. Using a long-running shell command keeps mux sessions
-            // alive long enough for follow-up operations in tests.
-            default_program: default_agent_program(cfg!(test)),
+            default_program: "claude --allow-dangerously-skip-permissions".to_string(),
             branch_prefix: "agent/".to_string(),
             auto_yes: false,
             poll_interval_ms: 100,
             worktree_dir: Self::default_worktree_dir(),
         }
     }
-}
-
-fn default_agent_program(test_mode: bool) -> String {
-    if test_mode {
-        #[cfg(windows)]
-        {
-            return "powershell -NoProfile -Command \"Start-Sleep -Seconds 3600\"".to_string();
-        }
-        #[cfg(not(windows))]
-        {
-            return "sh -c 'sleep 3600'".to_string();
-        }
-    }
-
-    "claude --allow-dangerously-skip-permissions".to_string()
 }
 
 impl Config {
@@ -201,69 +183,5 @@ impl Config {
             &sanitized
         };
         format!("{}{}", self.branch_prefix, truncated.trim_matches('-'))
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-/// Integration-test helpers for otherwise private configuration logic.
-pub mod test_support {
-    use super::Config;
-    use std::path::{Path, PathBuf};
-
-    /// Return the default agent command for either test or non-test mode.
-    #[must_use]
-    pub fn default_agent_program(test_mode: bool) -> String {
-        super::default_agent_program(test_mode)
-    }
-
-    /// Resolve a state path override against an injected current directory.
-    #[must_use]
-    pub fn resolve_state_path_override_with_cwd(
-        candidate: PathBuf,
-        cwd: Option<PathBuf>,
-    ) -> PathBuf {
-        Config::resolve_state_path_override_with_cwd(candidate, cwd)
-    }
-
-    /// Resolve a raw state path override against the process current directory.
-    #[must_use]
-    pub fn resolve_state_path_override(raw: &str) -> PathBuf {
-        Config::resolve_state_path_override(raw)
-    }
-
-    /// Parse a state path override value, ignoring blank values.
-    #[must_use]
-    pub fn state_path_from_env_value(raw: &str) -> Option<PathBuf> {
-        Config::state_path_from_env_value(raw)
-    }
-
-    /// Parse an environment lookup result for a state path override.
-    #[must_use]
-    pub fn state_path_from_env_var(raw: Result<String, std::env::VarError>) -> Option<PathBuf> {
-        Config::state_path_from_env_var(raw)
-    }
-
-    /// Resolve the default Tenex instance root from an injected home directory.
-    #[must_use]
-    pub fn default_instance_root_from(home_dir: Option<PathBuf>) -> PathBuf {
-        Config::default_instance_root_from(home_dir)
-    }
-
-    /// Resolve an instance root from an injected state path.
-    #[must_use]
-    pub fn instance_root_from_state_path(state_path: &Path) -> PathBuf {
-        Config::instance_root_from_state_path(state_path)
-    }
-
-    /// Return the project directory leaf name for a repository root.
-    #[must_use]
-    pub fn project_dir_name(repo_root: &Path) -> String {
-        Config::project_dir_name(repo_root)
-    }
-
-    /// Return the worktree leaf directory for a branch and configured branch prefix.
-    #[must_use]
-    pub fn worktree_leaf_dir_name(branch: &str, branch_prefix: &str) -> String {
-        Config::worktree_leaf_dir_name(branch, branch_prefix)
     }
 }

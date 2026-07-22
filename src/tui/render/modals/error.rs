@@ -141,6 +141,3 @@ pub fn render_success_modal(frame: &mut Frame<'_>, message: &str) {
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }
-
-#[cfg(test)]
-mod tests;

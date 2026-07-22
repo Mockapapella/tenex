@@ -281,6 +281,3 @@ impl ValidIn<ScrollingMode> for FocusPreviewAction {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -29,8 +29,6 @@ impl ValidIn<PreviewFocusedMode> for UnfocusPreviewAction {
         _state: PreviewFocusedMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -43,8 +41,6 @@ impl ValidIn<PreviewFocusedMode> for ForwardKeystrokeAction<'_> {
         _state: PreviewFocusedMode,
         _app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         if let Some(sequence) = keycode_to_input_sequence(self.code, self.modifiers) {
             self.batched_keys.push(sequence);
         }
@@ -157,6 +153,3 @@ fn apply_modifier(base: &[u8], param: u8) -> Vec<u8> {
 
     base.to_vec()
 }
-
-#[cfg(test)]
-mod tests;

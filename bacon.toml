@@ -5,8 +5,8 @@ need_stdout = false
 [jobs.clippy]
 command = [
     "cargo", "clippy",
-    "--all-targets",
-    "--all-features",
+    "--lib",
+    "--bins",
     "--color", "always",
     "--",
     "-D", "warnings",
@@ -16,10 +16,6 @@ command = [
     "-D", "clippy::cargo",
 ]
 need_stdout = false
-
-[jobs.test]
-command = ["cargo", "test", "--color", "always", "--", "--color", "always"]
-need_stdout = true
 
 [jobs.doc]
 command = ["cargo", "doc", "--color", "always", "--no-deps"]

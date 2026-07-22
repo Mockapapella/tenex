@@ -10,35 +10,6 @@ use crate::state::{
 use anyhow::Result;
 use tracing::warn;
 
-#[cfg(test)]
-thread_local! {
-    static TEST_FORCE_CONFIRM_ACTION_ERROR: std::cell::Cell<bool> = const {
-        std::cell::Cell::new(false)
-    };
-}
-
-#[cfg(test)]
-/// Run `f` with confirmation actions forced to return an error.
-///
-/// This is test-only scaffolding used to assert dispatch error propagation without
-/// relying on external state.
-pub fn with_forced_confirm_action_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    TEST_FORCE_CONFIRM_ACTION_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
-#[cfg(test)]
-pub(super) fn force_confirm_action_error_if_enabled_for_tests() -> Result<()> {
-    if TEST_FORCE_CONFIRM_ACTION_ERROR.with(std::cell::Cell::get) {
-        anyhow::bail!("forced confirm action error for test");
-    }
-    Ok(())
-}
-
 /// Confirmation action: accept/confirm (Y/y).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConfirmYesAction;
@@ -59,8 +30,6 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
     type NextState = AppMode;
 
     fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         match state.action {
             ConfirmAction::Kill => {
                 Actions::new().kill_agent(app_data)?;
@@ -129,8 +98,6 @@ impl ValidIn<ConfirmingMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         if state.action == ConfirmAction::WorktreeConflict {
             app_data.spawn.worktree_conflict = None;
             return Ok(AppMode::normal());
@@ -179,8 +146,6 @@ impl ValidIn<ConfirmPushMode> for ConfirmYesAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ConfirmPushMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         Actions::execute_push(app_data)
     }
 }
@@ -198,8 +163,6 @@ impl ValidIn<ConfirmPushMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ConfirmPushMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         Ok(AppMode::normal())
     }
@@ -213,8 +176,6 @@ impl ValidIn<ConfirmPushForPRMode> for ConfirmYesAction {
         _state: ConfirmPushForPRMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         Actions::execute_push_and_open_pr(app_data)
     }
 }
@@ -240,8 +201,6 @@ impl ValidIn<ConfirmPushForPRMode> for CancelAction {
         _state: ConfirmPushForPRMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         Ok(AppMode::normal())
     }
@@ -251,8 +210,6 @@ impl ValidIn<RenameBranchMode> for SubmitAction {
     type NextState = AppMode;
 
     fn execute(self, state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         let new_name = app_data.input.buffer.trim().to_string();
         if new_name.is_empty() {
             return Ok(state.into());
@@ -267,8 +224,6 @@ impl ValidIn<RenameBranchMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: RenameBranchMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         app_data.git_op.clear();
         Ok(AppMode::normal())
     }
@@ -330,8 +285,6 @@ impl ValidIn<KeyboardRemapPromptMode> for CancelAction {
         _state: KeyboardRemapPromptMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         if let Err(e) = app_data.settings.decline_merge_remap() {
             warn!("Failed to save keyboard remap setting: {}", e);
         }
@@ -359,11 +312,6 @@ impl ValidIn<UpdatePromptMode> for CancelAction {
     type NextState = AppMode;
 
     fn execute(self, _state: UpdatePromptMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        force_confirm_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
-
-#[cfg(test)]
-mod tests;

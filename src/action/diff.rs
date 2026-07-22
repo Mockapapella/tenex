@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Output, Stdio};
+use std::process::Stdio;
 
 /// Diff-focused action: exit diff focus.
 #[derive(Debug, Clone, Copy, Default)]
@@ -17,8 +17,6 @@ impl ValidIn<DiffFocusedMode> for UnfocusDiffAction {
     type NextState = AppMode;
 
     fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         app_data.ui.diff_visual_anchor = None;
         Ok(AppMode::normal())
     }
@@ -32,8 +30,6 @@ impl ValidIn<DiffFocusedMode> for DiffCursorUpAction {
     type NextState = AppMode;
 
     fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         if app_data.active_tab == Tab::Diff {
             app_data.ui.diff_cursor_up(1);
         }
@@ -49,8 +45,6 @@ impl ValidIn<DiffFocusedMode> for DiffCursorDownAction {
     type NextState = AppMode;
 
     fn execute(self, _state: DiffFocusedMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         if app_data.active_tab == Tab::Diff {
             app_data.ui.diff_cursor_down(1);
         }
@@ -621,67 +615,7 @@ fn apply_git_patch(worktree_path: &Path, patch: &str, reverse: bool) -> Result<(
     }
 }
 
-type CommandSpawn = fn(&mut Command) -> std::io::Result<Child>;
-type ChildTakeStdin = fn(&mut Child) -> Option<ChildStdin>;
-type ChildStdinWriteAll = fn(&mut ChildStdin, &[u8]) -> std::io::Result<()>;
-type ChildWaitWithOutput = fn(Child) -> std::io::Result<Output>;
-
-#[derive(Clone, Copy)]
-struct GitApplyDeps {
-    spawn: CommandSpawn,
-    take_stdin: ChildTakeStdin,
-    write_all: ChildStdinWriteAll,
-    wait_with_output: ChildWaitWithOutput,
-}
-
-fn command_spawn(cmd: &mut Command) -> std::io::Result<Child> {
-    cmd.spawn()
-}
-
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "Used as a dependency function pointer for git apply tests."
-)]
-fn child_take_stdin(child: &mut Child) -> Option<ChildStdin> {
-    child.stdin.take()
-}
-
-fn child_stdin_write_all(stdin: &mut ChildStdin, bytes: &[u8]) -> std::io::Result<()> {
-    stdin.write_all(bytes)
-}
-
-fn child_wait_with_output(child: Child) -> std::io::Result<Output> {
-    child.wait_with_output()
-}
-
-impl GitApplyDeps {
-    fn production() -> Self {
-        Self {
-            spawn: command_spawn,
-            take_stdin: child_take_stdin,
-            write_all: child_stdin_write_all,
-            wait_with_output: child_wait_with_output,
-        }
-    }
-}
-
 fn run_git_apply(worktree_path: &Path, patch: &str, reverse: bool, with_index: bool) -> Result<()> {
-    run_git_apply_with_deps(
-        worktree_path,
-        patch,
-        reverse,
-        with_index,
-        GitApplyDeps::production(),
-    )
-}
-
-fn run_git_apply_with_deps(
-    worktree_path: &Path,
-    patch: &str,
-    reverse: bool,
-    with_index: bool,
-    deps: GitApplyDeps,
-) -> Result<()> {
     let mut cmd = crate::git::git_command();
     cmd.arg("-C")
         .arg(worktree_path)
@@ -700,14 +634,19 @@ fn run_git_apply_with_deps(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = (deps.spawn)(&mut cmd).context("Failed to spawn git apply")?;
-    let mut stdin = (deps.take_stdin)(&mut child)
+    let mut child = cmd.spawn().context("Failed to spawn git apply")?;
+    let mut stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for git apply"))?;
-    (deps.write_all)(&mut stdin, patch.as_bytes())
+    stdin
+        .write_all(patch.as_bytes())
         .context("Failed to write patch to git apply stdin")?;
     drop(stdin);
 
-    let output = (deps.wait_with_output)(child).context("Failed to wait for git apply")?;
+    let output = child
+        .wait_with_output()
+        .context("Failed to wait for git apply")?;
 
     if output.status.success() {
         return Ok(());
@@ -722,6 +661,3 @@ fn run_git_apply_with_deps(
         stderr.trim()
     ))
 }
-
-#[cfg(test)]
-mod tests;

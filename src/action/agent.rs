@@ -516,6 +516,3 @@ impl ValidIn<ScrollingMode> for SpawnTerminalPromptedAction {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

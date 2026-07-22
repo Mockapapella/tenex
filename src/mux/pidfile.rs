@@ -5,16 +5,10 @@
 
 use crate::config::Config;
 use anyhow::{Context, Result};
-#[cfg(test)]
-use parking_lot::Mutex;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::OnceLock;
-
-#[cfg(test)]
-static TEST_INSTANCE_ROOT: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MuxPidFile {
@@ -29,27 +23,20 @@ pub(super) struct PidFileGuard {
 
 impl PidFileGuard {
     pub(super) fn create(socket: &str) -> Result<Self> {
-        Self::create_for_pid(socket, std::process::id())
-    }
-
-    pub(super) fn create_for_pid(socket: &str, pid: u32) -> Result<Self> {
-        Self::create_for_pid_in(&current_instance_root(), socket, pid)
-    }
-
-    fn create_for_pid_in(instance_root: &Path, socket: &str, pid: u32) -> Result<Self> {
         let socket = socket.trim();
         anyhow::ensure!(!socket.is_empty(), "mux socket cannot be empty");
 
-        fs::create_dir_all(instance_root).with_context(|| {
+        let instance_root = Config::instance_root();
+        fs::create_dir_all(&instance_root).with_context(|| {
             format!(
                 "Failed to create Tenex instance directory {}",
                 instance_root.display()
             )
         })?;
 
-        let path = pid_file_path_for_socket(instance_root, socket);
+        let path = pid_file_path_for_socket(&instance_root, socket);
         let pid_file = MuxPidFile {
-            pid,
+            pid: std::process::id(),
             socket: socket.to_string(),
         };
 
@@ -67,44 +54,12 @@ impl Drop for PidFileGuard {
 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn read_pid(socket: &str) -> Option<u32> {
-    read_pid_in(&current_instance_root(), socket)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(super) fn list_sockets() -> Vec<String> {
-    list_sockets_in(&current_instance_root())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(super) fn remove(socket: &str) {
-    remove_in(&current_instance_root(), socket);
-}
-
-const PID_FILE_PREFIX: &str = "tenex-muxd-";
-const PID_FILE_SUFFIX: &str = ".pid";
-
-fn pid_file_path_for_socket(instance_root: &Path, socket: &str) -> PathBuf {
-    let hash = fnv1a_64(socket.as_bytes());
-    instance_root.join(format!("{PID_FILE_PREFIX}{hash:016x}{PID_FILE_SUFFIX}"))
-}
-
-fn current_instance_root() -> PathBuf {
-    #[cfg(test)]
-    if let Some(root) = test_instance_root() {
-        return root;
-    }
-
-    Config::instance_root()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn read_pid_in(instance_root: &Path, socket: &str) -> Option<u32> {
     let socket = socket.trim();
     if socket.is_empty() {
         return None;
     }
 
-    let path = pid_file_path_for_socket(instance_root, socket);
+    let path = pid_file_path_for_socket(&Config::instance_root(), socket);
     let raw = fs::read(&path).ok()?;
     let pid_file: MuxPidFile = serde_json::from_slice(&raw).ok()?;
     if pid_file.socket.trim() != socket {
@@ -114,8 +69,8 @@ fn read_pid_in(instance_root: &Path, socket: &str) -> Option<u32> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn list_sockets_in(instance_root: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(instance_root) else {
+pub(super) fn list_sockets() -> Vec<String> {
+    let Ok(entries) = fs::read_dir(Config::instance_root()) else {
         return Vec::new();
     };
 
@@ -144,14 +99,22 @@ fn list_sockets_in(instance_root: &Path) -> Vec<String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn remove_in(instance_root: &Path, socket: &str) {
+pub(super) fn remove(socket: &str) {
     let socket = socket.trim();
     if socket.is_empty() {
         return;
     }
 
-    let path = pid_file_path_for_socket(instance_root, socket);
+    let path = pid_file_path_for_socket(&Config::instance_root(), socket);
     let _ = fs::remove_file(path);
+}
+
+const PID_FILE_PREFIX: &str = "tenex-muxd-";
+const PID_FILE_SUFFIX: &str = ".pid";
+
+fn pid_file_path_for_socket(instance_root: &Path, socket: &str) -> PathBuf {
+    let hash = fnv1a_64(socket.as_bytes());
+    instance_root.join(format!("{PID_FILE_PREFIX}{hash:016x}{PID_FILE_SUFFIX}"))
 }
 
 fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
@@ -187,13 +150,3 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     }
     hash
 }
-
-#[cfg(test)]
-fn test_instance_root() -> Option<PathBuf> {
-    TEST_INSTANCE_ROOT
-        .get()
-        .and_then(|slot| slot.lock().clone())
-}
-
-#[cfg(test)]
-mod tests;

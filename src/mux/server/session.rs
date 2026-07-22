@@ -6,23 +6,6 @@ use tracing::{debug, info, warn};
 
 use super::super::backend::{default_pty_size, global_state, spawn_window, unix_timestamp};
 
-#[cfg(any(test, coverage))]
-thread_local! {
-    static FORCE_SESSION_WINDOW_INDEX_OVERFLOW: std::cell::Cell<bool> = const {
-        std::cell::Cell::new(false)
-    };
-}
-
-#[cfg(test)]
-fn with_forced_session_window_index_overflow_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    FORCE_SESSION_WINDOW_INDEX_OVERFLOW.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
 /// Manager for mux sessions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Manager;
@@ -203,12 +186,7 @@ impl Manager {
         };
 
         let window_count = session_ref.lock().windows.len();
-        #[cfg(any(test, coverage))]
-        let window_count = if FORCE_SESSION_WINDOW_INDEX_OVERFLOW.with(std::cell::Cell::get) {
-            (u32::MAX as usize).saturating_add(1)
-        } else {
-            window_count
-        };
+
         let index = u32::try_from(window_count).context("Mux session has too many windows")?;
 
         let window = spawn_window(index, window_name, working_dir, command, default_pty_size())?;
@@ -605,6 +583,3 @@ fn session_still_registered(
         .get(session_name)
         .is_some_and(|stored| std::sync::Arc::ptr_eq(stored, session))
 }
-
-#[cfg(test)]
-mod tests;

@@ -3,8 +3,6 @@
 //! Tenex persists a per-agent conversation id so it can respawn agents after a reboot/crash and
 //! reconnect to the same Codex/Claude session instead of starting a new one.
 
-#![cfg_attr(all(coverage, not(test)), allow(dead_code))]
-
 use crate::command;
 use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use serde::Deserialize;
@@ -14,9 +12,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-
-#[cfg(any(test, coverage, feature = "test-support"))]
-use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies which agent CLI a configured program string targets.
@@ -124,29 +119,17 @@ fn try_detect_codex_session_id_in_root<S: std::hash::BuildHasher>(
     exclude_ids: &HashSet<String, S>,
     max_wait: Duration,
 ) -> Option<String> {
-    let mut detect_once =
-        || detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids);
-    let mut now = SystemTime::now;
-    let mut sleep = std::thread::sleep;
-
-    try_detect_codex_session_id_with_retry(max_wait, &mut detect_once, &mut now, &mut sleep)
-}
-
-fn try_detect_codex_session_id_with_retry(
-    max_wait: Duration,
-    detect_once: &mut dyn FnMut() -> Option<String>,
-    now: &mut dyn FnMut() -> SystemTime,
-    sleep: &mut dyn FnMut(Duration),
-) -> Option<String> {
-    let deadline = now().checked_add(max_wait)?;
+    let deadline = SystemTime::now().checked_add(max_wait)?;
     loop {
-        if let Some(found) = detect_once() {
+        if let Some(found) =
+            detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids)
+        {
             return Some(found);
         }
-        if now() >= deadline {
+        if SystemTime::now() >= deadline {
             return None;
         }
-        sleep(Duration::from_millis(25));
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -256,50 +239,7 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     })
 }
 
-#[cfg(any(test, coverage, feature = "test-support"))]
-#[derive(Clone)]
-enum CodexSessionsRootOverride {
-    Unset,
-    Value(Option<PathBuf>),
-}
-
-#[cfg(any(test, coverage, feature = "test-support"))]
-static CODEX_SESSIONS_ROOT_OVERRIDE: OnceLock<Mutex<CodexSessionsRootOverride>> = OnceLock::new();
-
-#[cfg(any(test, coverage, feature = "test-support"))]
-fn codex_sessions_root_override_mutex() -> &'static Mutex<CodexSessionsRootOverride> {
-    CODEX_SESSIONS_ROOT_OVERRIDE.get_or_init(|| Mutex::new(CodexSessionsRootOverride::Unset))
-}
-
-#[cfg(any(test, coverage, feature = "test-support"))]
-fn codex_sessions_root_override() -> CodexSessionsRootOverride {
-    let mutex = codex_sessions_root_override_mutex();
-    let guard = match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    guard.clone()
-}
-
-#[cfg(any(test, coverage, feature = "test-support"))]
-fn set_codex_sessions_root_override_for_tests(
-    new: CodexSessionsRootOverride,
-) -> CodexSessionsRootOverride {
-    let mutex = codex_sessions_root_override_mutex();
-    let mut guard = match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    std::mem::replace(&mut *guard, new)
-}
-
 fn codex_sessions_root() -> Option<PathBuf> {
-    #[cfg(any(test, coverage, feature = "test-support"))]
-    match codex_sessions_root_override() {
-        CodexSessionsRootOverride::Unset => {}
-        CodexSessionsRootOverride::Value(root) => return root,
-    }
-
     let codex_home_from_env = std::env::var_os("CODEX_HOME").map(PathBuf::from);
     let codex_home_from_home = crate::paths::home_dir().map(|home| home.join(".codex"));
     let codex_home = codex_home_from_env.or(codex_home_from_home)?;
@@ -338,112 +278,4 @@ fn codex_date_dir(sessions_root: &Path, date: NaiveDate) -> PathBuf {
 
 fn normalize_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-#[cfg(any(test, feature = "test-support"))]
-/// Integration-test helpers for otherwise private conversation/session tracking logic.
-pub mod test_support {
-    use chrono::NaiveDate;
-    use std::collections::HashSet;
-    use std::hash::BuildHasher;
-    use std::path::{Path, PathBuf};
-    use std::time::{Duration, SystemTime};
-
-    struct CodexSessionsRootOverrideRestore {
-        previous: super::CodexSessionsRootOverride,
-    }
-
-    impl Drop for CodexSessionsRootOverrideRestore {
-        fn drop(&mut self) {
-            let previous =
-                std::mem::replace(&mut self.previous, super::CodexSessionsRootOverride::Unset);
-            let _ = super::set_codex_sessions_root_override_for_tests(previous);
-        }
-    }
-
-    /// Run a closure with the production Codex session root resolution restored.
-    pub fn with_codex_sessions_root_unset<T>(f: impl FnOnce() -> T) -> T {
-        let previous = super::set_codex_sessions_root_override_for_tests(
-            super::CodexSessionsRootOverride::Unset,
-        );
-        let _restore = CodexSessionsRootOverrideRestore { previous };
-        f()
-    }
-
-    /// Run a closure with an injected Codex sessions root.
-    pub fn with_codex_sessions_root_override<T>(root: Option<PathBuf>, f: impl FnOnce() -> T) -> T {
-        let previous = super::set_codex_sessions_root_override_for_tests(
-            super::CodexSessionsRootOverride::Value(root),
-        );
-        let _restore = CodexSessionsRootOverrideRestore { previous };
-        f()
-    }
-
-    /// Return the current Codex sessions root after applying any test override.
-    #[must_use]
-    pub fn codex_sessions_root() -> Option<PathBuf> {
-        super::codex_sessions_root()
-    }
-
-    /// Poison the Codex sessions root override mutex to exercise recovery paths.
-    pub fn poison_codex_sessions_root_override_mutex() {
-        let mutex = super::codex_sessions_root_override_mutex();
-        let _ = std::panic::catch_unwind(|| {
-            let _guard = mutex
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::panic::resume_unwind(Box::new(()));
-        });
-    }
-
-    /// Return whether a file contains readable Codex session metadata.
-    #[must_use]
-    pub fn read_codex_session_meta_is_some(path: &Path) -> bool {
-        super::read_codex_session_meta(path).is_some()
-    }
-
-    /// Return a dated Codex session directory under an injected sessions root.
-    #[must_use]
-    pub fn codex_date_dir(sessions_root: &Path, date: NaiveDate) -> PathBuf {
-        super::codex_date_dir(sessions_root, date)
-    }
-
-    /// Detect a Codex session id by scanning an injected sessions root once.
-    #[must_use]
-    pub fn detect_codex_session_id_once_in_root<S: BuildHasher>(
-        sessions_root: &Path,
-        workdir: &Path,
-        since: SystemTime,
-        exclude_ids: &HashSet<String, S>,
-    ) -> Option<String> {
-        super::detect_codex_session_id_once_in_root(sessions_root, workdir, since, exclude_ids)
-    }
-
-    /// Detect a Codex session id by scanning injected date directories once.
-    #[must_use]
-    pub fn detect_codex_session_id_once_in_dirs<S: BuildHasher>(
-        date_dirs: &[PathBuf],
-        workdir: &Path,
-        since: SystemTime,
-        exclude_ids: &HashSet<String, S>,
-    ) -> Option<String> {
-        super::detect_codex_session_id_once_in_dirs(date_dirs, workdir, since, exclude_ids)
-    }
-
-    /// Try to detect a Codex session id with injected retry primitives.
-    #[must_use]
-    pub fn try_detect_codex_session_id_with_retry(
-        max_wait: Duration,
-        detect_once: &mut dyn FnMut() -> Option<String>,
-        now: &mut dyn FnMut() -> SystemTime,
-        sleep: &mut dyn FnMut(Duration),
-    ) -> Option<String> {
-        super::try_detect_codex_session_id_with_retry(max_wait, detect_once, now, sleep)
-    }
-
-    /// Normalize a path using the production fallback behavior.
-    #[must_use]
-    pub fn normalize_path(path: &Path) -> PathBuf {
-        super::normalize_path(path)
-    }
 }

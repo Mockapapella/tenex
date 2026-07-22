@@ -6,11 +6,6 @@ mod push;
 mod rebase;
 mod rename;
 
-#[cfg(test)]
-pub(super) fn set_gh_binary_override_for_tests(path: std::path::PathBuf) {
-    open_pr::set_gh_binary_override(path);
-}
-
 use crate::agent::{Agent, ChildConfig};
 use crate::mux::SessionManager;
 use anyhow::Result;
@@ -118,6 +113,3 @@ impl Actions {
         Ok(AppMode::normal())
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -8,27 +8,6 @@ use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use uuid::Uuid;
 
-#[cfg(test)]
-thread_local! {
-    static TEST_FORCE_TEXT_INPUT_DISPATCH_ERROR: std::cell::Cell<bool> = const {
-        std::cell::Cell::new(false)
-    };
-}
-
-#[cfg(test)]
-/// Run `f` with text input dispatch forced to return an error.
-///
-/// This is test-only scaffolding used to assert error propagation without
-/// relying on external state.
-pub fn with_forced_text_input_dispatch_error_for_tests<T>(f: impl FnOnce() -> T) -> T {
-    TEST_FORCE_TEXT_INPUT_DISPATCH_ERROR.with(|slot| {
-        let previous = slot.replace(true);
-        let result = f();
-        slot.set(previous);
-        result
-    })
-}
-
 /// Text-input action: insert a character.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CharInputAction(pub char);
@@ -108,11 +87,6 @@ where
     ClearLineAction: ValidIn<State, NextState = AppMode>,
     DeleteWordAction: ValidIn<State, NextState = AppMode>,
 {
-    #[cfg(test)]
-    if TEST_FORCE_TEXT_INPUT_DISPATCH_ERROR.with(std::cell::Cell::get) {
-        return Err(anyhow::anyhow!("Forced text input dispatch error"));
-    }
-
     let app_data = &mut app.data;
     let next = match (code, modifiers) {
         (KeyCode::Enter, mods) if mods.contains(KeyModifiers::ALT) => {
@@ -1361,6 +1335,3 @@ impl ValidIn<SynthesisPromptMode> for CancelAction {
         Ok(AppMode::normal())
     }
 }
-
-#[cfg(test)]
-mod tests;

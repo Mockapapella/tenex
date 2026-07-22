@@ -20,61 +20,6 @@ pub struct ReleaseNoteEntry {
 
 include!(concat!(env!("OUT_DIR"), "/release_notes.rs"));
 
-#[cfg(any(test, feature = "test-support"))]
-thread_local! {
-    static RELEASE_NOTES_OVERRIDE: std::cell::RefCell<Option<&'static [ReleaseNoteEntry]>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(not(any(test, feature = "test-support")))]
-const fn release_note_entries() -> &'static [ReleaseNoteEntry] {
-    RELEASE_NOTES
-}
-
-#[cfg(any(test, feature = "test-support"))]
-fn release_note_entries() -> &'static [ReleaseNoteEntry] {
-    if let Some(entries) =
-        RELEASE_NOTES_OVERRIDE.with(|override_entries| *override_entries.borrow())
-    {
-        return entries;
-    }
-
-    RELEASE_NOTES
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Debug)]
-struct ReleaseNotesOverrideRestore(Option<&'static [ReleaseNoteEntry]>);
-
-#[cfg(any(test, feature = "test-support"))]
-impl Drop for ReleaseNotesOverrideRestore {
-    fn drop(&mut self) {
-        let previous = self.0.take();
-        RELEASE_NOTES_OVERRIDE.with(|override_entries| {
-            *override_entries.borrow_mut() = previous;
-        });
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-fn set_release_notes_override_for_tests(
-    entries: &'static [ReleaseNoteEntry],
-) -> ReleaseNotesOverrideRestore {
-    let previous = RELEASE_NOTES_OVERRIDE
-        .with(|override_entries| (*override_entries.borrow_mut()).replace(entries));
-    ReleaseNotesOverrideRestore(previous)
-}
-
-#[cfg(test)]
-/// Run a closure with temporary embedded release notes.
-pub(crate) fn with_release_notes_override_for_tests<T>(
-    entries: &'static [ReleaseNoteEntry],
-    f: impl FnOnce() -> T,
-) -> T {
-    let _restore = set_release_notes_override_for_tests(entries);
-    f()
-}
-
 /// A parsed release note entry with a semver version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseNote {
@@ -122,7 +67,7 @@ pub fn notes_between(
 ) -> Result<Vec<ReleaseNote>> {
     let mut out = Vec::new();
 
-    for entry in release_note_entries() {
+    for entry in RELEASE_NOTES {
         let version = parse_release_note_version(entry.version)?;
 
         if version > *to_inclusive {
@@ -148,7 +93,7 @@ pub fn notes_between(
 ///
 /// Returns an error if an embedded release note has an invalid version string.
 pub fn note_for(version: &Version) -> Result<Option<ReleaseNote>> {
-    for entry in release_note_entries() {
+    for entry in RELEASE_NOTES {
         let parsed = parse_release_note_version(entry.version)?;
 
         if &parsed == version {
@@ -232,41 +177,4 @@ pub fn changelog_lines_for_version(version: &Version) -> Result<Vec<String>> {
     lines.push("Esc closes".to_string());
 
     Ok(lines)
-}
-
-#[cfg(all(feature = "test-support", not(test)))]
-/// Integration-test helpers for otherwise private release-note logic.
-pub mod test_support {
-    use anyhow::Result;
-    use semver::Version;
-
-    /// Parse an embedded release-note version string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the version is not valid semver.
-    pub fn parse_release_note_version(value: &str) -> Result<Version> {
-        super::parse_release_note_version(value)
-    }
-
-    /// Append a release-note body to display lines.
-    pub fn append_release_note_body(lines: &mut Vec<String>, body: &str) {
-        super::append_release_note_body(lines, body);
-    }
-
-    /// Restores a previous release-notes override when dropped.
-    #[must_use]
-    #[derive(Debug)]
-    pub struct ReleaseNotesOverrideGuard {
-        _restore: super::ReleaseNotesOverrideRestore,
-    }
-
-    /// Set temporary embedded release notes until the returned guard is dropped.
-    pub fn set_release_notes_override(
-        entries: &'static [super::ReleaseNoteEntry],
-    ) -> ReleaseNotesOverrideGuard {
-        ReleaseNotesOverrideGuard {
-            _restore: super::set_release_notes_override_for_tests(entries),
-        }
-    }
 }

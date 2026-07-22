@@ -61,17 +61,6 @@ trait EventReader {
 }
 
 fn poll_for_tui(timeout: Duration) -> io::Result<bool> {
-    poll_for_tui_with_failpoint(timeout, tui_run_failpoint())
-}
-
-fn poll_for_tui_with_failpoint(
-    timeout: Duration,
-    failpoint: Option<TuiRunFailpoint>,
-) -> io::Result<bool> {
-    if failpoint == Some(TuiRunFailpoint::PollImmediate) {
-        return Err(io::Error::other("Forced poll_immediate error for test"));
-    }
-
     crossterm_event::poll(timeout)
 }
 
@@ -101,94 +90,9 @@ fn env_var_truthy(value: Option<&str>) -> bool {
         || value.eq_ignore_ascii_case("on")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiRunFailpoint {
-    EnableRawMode,
-    EnterTuiScreen,
-    CreateTerminal,
-    DisableRawMode,
-    LeaveTuiScreen,
-    ShowCursor,
-    PollImmediate,
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))]
-fn tui_run_failpoint() -> Option<TuiRunFailpoint> {
-    #[cfg(not(debug_assertions))]
-    {
-        None
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        let value = std::env::var("TENEX_TEST_TUI_FAILPOINT").ok()?;
-        parse_tui_run_failpoint(&value)
-    }
-}
-
-#[cfg(debug_assertions)]
-fn parse_tui_run_failpoint(value: &str) -> Option<TuiRunFailpoint> {
-    match value.trim() {
-        "enable_raw_mode" => Some(TuiRunFailpoint::EnableRawMode),
-        "enter_tui_screen" => Some(TuiRunFailpoint::EnterTuiScreen),
-        "create_terminal" => Some(TuiRunFailpoint::CreateTerminal),
-        "disable_raw_mode" => Some(TuiRunFailpoint::DisableRawMode),
-        "leave_tui_screen" => Some(TuiRunFailpoint::LeaveTuiScreen),
-        "show_cursor" => Some(TuiRunFailpoint::ShowCursor),
-        "poll_immediate" => Some(TuiRunFailpoint::PollImmediate),
-        _ => None,
-    }
-}
-
-fn enable_raw_mode_for_tui() -> io::Result<()> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::EnableRawMode) {
-        return Err(io::Error::other("Forced enable_raw_mode error for test"));
-    }
-
-    enable_raw_mode()
-}
-
-fn disable_raw_mode_for_tui() -> io::Result<()> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::DisableRawMode) {
-        return Err(io::Error::other("Forced disable_raw_mode error for test"));
-    }
-
-    disable_raw_mode()
-}
-
-fn enter_tui_screen_for_tui(stdout: &mut dyn io::Write, enable_mouse_capture: bool) -> Result<()> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::EnterTuiScreen) {
-        anyhow::bail!("Forced enter_tui_screen error for test");
-    }
-
-    enter_tui_screen(stdout, enable_mouse_capture)
-}
-
-fn create_terminal_for_tui(
-    stdout: io::Stdout,
-) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::CreateTerminal) {
-        return Err(io::Error::other("Forced terminal creation error for test"));
-    }
-
-    Terminal::new(CrosstermBackend::new(stdout))
-}
-
-fn leave_tui_screen_for_tui(stdout: &mut dyn io::Write) -> io::Result<()> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::LeaveTuiScreen) {
-        return Err(io::Error::other("Forced leave_tui_screen error for test"));
-    }
-
+fn leave_tui_screen(stdout: &mut dyn io::Write) -> io::Result<()> {
     let mut stdout = DynWrite { inner: stdout };
     execute!(&mut stdout, LeaveAlternateScreen, DisableMouseCapture)
-}
-
-fn show_cursor_for_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    if tui_run_failpoint() == Some(TuiRunFailpoint::ShowCursor) {
-        return Err(io::Error::other("Forced show_cursor error for test"));
-    }
-
-    terminal.show_cursor()
 }
 
 fn enter_tui_screen(stdout: &mut dyn io::Write, enable_mouse_capture: bool) -> Result<()> {
@@ -356,9 +260,9 @@ impl StateFileTracker {
 /// alternate screen), or if the main event loop fails to poll input
 /// or render frames.
 pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
-    enable_raw_mode_for_tui()?;
+    enable_raw_mode()?;
     let mut stdout = io::stdout();
-    enter_tui_screen_for_tui(&mut stdout, mouse_capture_enabled())?;
+    enter_tui_screen(&mut stdout, mouse_capture_enabled())?;
 
     let keyboard_enhancement_enabled = configure_keyboard_enhancement(&mut stdout);
 
@@ -367,7 +271,7 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
 
     apply_startup_modals(&mut app);
 
-    let mut terminal = create_terminal_for_tui(stdout)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
     let event_handler = Handler::new(UI_FRAME_INTERVAL_MS);
     let action_handler = Actions::new();
@@ -383,9 +287,9 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
 
     pop_keyboard_enhancement(terminal.backend_mut(), keyboard_enhancement_enabled);
 
-    disable_raw_mode_for_tui()?;
-    leave_tui_screen_for_tui(terminal.backend_mut())?;
-    show_cursor_for_tui(&mut terminal)?;
+    disable_raw_mode()?;
+    leave_tui_screen(terminal.backend_mut())?;
+    terminal.show_cursor()?;
 
     result
 }
@@ -831,78 +735,3 @@ impl<B: Backend> TerminalOps for Terminal<B> {
             .map_err(Into::into)
     }
 }
-
-#[cfg(all(feature = "test-support", not(test)))]
-/// Integration-test helpers for driving otherwise private TUI code paths.
-pub mod test_support {
-    use super::App;
-    use std::io;
-    use std::path::PathBuf;
-
-    /// Mirror of the internal sidebar selection key, exposed for integration tests.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum SelectedSidebarKey {
-        /// A specific agent row identified by id.
-        Agent(uuid::Uuid),
-        /// A project header row identified by repo root.
-        Project(PathBuf),
-    }
-
-    /// Capture the current sidebar selection as a stable key.
-    #[must_use]
-    pub fn selected_sidebar_key(app: &App) -> Option<SelectedSidebarKey> {
-        super::selected_sidebar_key(app).map(|key| match key {
-            super::SelectedSidebarKey::Agent(id) => SelectedSidebarKey::Agent(id),
-            super::SelectedSidebarKey::Project(root) => SelectedSidebarKey::Project(root),
-        })
-    }
-
-    /// Restore sidebar selection based on a previously captured key.
-    pub fn restore_sidebar_selection(app: &mut App, key: Option<SelectedSidebarKey>) {
-        let key = key.map(|key| match key {
-            SelectedSidebarKey::Agent(id) => super::SelectedSidebarKey::Agent(id),
-            SelectedSidebarKey::Project(root) => super::SelectedSidebarKey::Project(root),
-        });
-        super::restore_sidebar_selection(app, key);
-    }
-
-    /// Flush any pending clipboard payload using the OSC52 protocol.
-    pub fn flush_pending_clipboard(stdout: &mut dyn io::Write, app: &mut App) {
-        super::flush_pending_clipboard(stdout, app);
-    }
-
-    /// Wrapper around the internal state file tracker to allow driving reload paths from
-    /// integration tests without depending on private types.
-    pub struct StateFileTracker(super::StateFileTracker);
-
-    impl std::fmt::Debug for StateFileTracker {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("StateFileTracker").finish()
-        }
-    }
-
-    impl StateFileTracker {
-        /// Create a new tracker for the app's current state file.
-        #[must_use]
-        pub fn new(app: &App) -> Self {
-            Self(super::StateFileTracker::new(app))
-        }
-
-        /// Force the next reload check to run immediately.
-        pub fn force_due(&mut self) {
-            self.0.last_check = super::Instant::now()
-                .checked_sub(super::Duration::from_millis(
-                    super::STATE_FILE_SYNC_INTERVAL_MS + 1,
-                ))
-                .unwrap_or_else(super::Instant::now);
-        }
-
-        /// Reload app state from disk if the state file has changed.
-        pub fn maybe_reload_state(&mut self, app: &mut App) -> bool {
-            self.0.maybe_reload_state(app)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests;

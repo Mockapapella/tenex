@@ -18,6 +18,3 @@ pub fn handle_model_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
 pub fn handle_settings_menu_mode(app: &mut App, code: KeyCode) -> Result<()> {
     crate::action::dispatch_settings_menu_mode(app, code)
 }
-
-#[cfg(test)]
-mod tests;

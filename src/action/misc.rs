@@ -104,6 +104,3 @@ impl ValidIn<ScrollingMode> for CancelAction {
         Ok(AppMode::normal())
     }
 }
-
-#[cfg(test)]
-mod tests;

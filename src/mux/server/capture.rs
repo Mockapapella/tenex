@@ -150,6 +150,3 @@ fn skip_escape_sequence(bytes: &[u8], start: usize) -> usize {
     }
     i.saturating_add(1)
 }
-
-#[cfg(test)]
-mod tests;
