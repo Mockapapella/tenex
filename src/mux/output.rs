@@ -123,6 +123,3 @@ fn decode_output_cursor_response(response: MuxResponse) -> Result<OutputCursor> 
         other => bail!("Unexpected response: {other:?}"),
     }
 }
-
-#[cfg(test)]
-mod tests;

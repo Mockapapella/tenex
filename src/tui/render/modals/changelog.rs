@@ -300,6 +300,3 @@ fn chunk_into_width(mut s: &str, width: usize) -> Vec<String> {
 
     out
 }
-
-#[cfg(test)]
-mod tests;

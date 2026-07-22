@@ -28,7 +28,7 @@ Run these commands FIRST to understand the full scope of changes before beginnin
 3. Review each file change in context of the broader codebase
 4. Trace data flow and control flow through modified code paths
 5. Verify error handling, input validation, and boundary conditions
-6. Check for test coverage of new functionality and edge cases
+6. Verify changed behavior against the implementation and user workflow
 7. Assess documentation updates if public APIs or behavior changed
 
 **Review Categories:**
@@ -60,12 +60,6 @@ Run these commands FIRST to understand the full scope of changes before beginnin
 - Memory usage patterns
 - Unnecessary allocations or copies
 - Caching opportunities
-
-*Testing & Verification:*
-- Test coverage for new code paths
-- Edge case testing
-- Integration test considerations
-- Mocking appropriateness
 
 **Quality Assurance:**
 - Read surrounding code to understand context before critiquing

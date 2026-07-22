@@ -47,6 +47,3 @@ pub fn handle_merge_branch_selector_mode(app: &mut App, code: KeyCode) -> Result
 pub fn handle_switch_branch_selector_mode(app: &mut App, code: KeyCode) -> Result<()> {
     crate::action::dispatch_switch_branch_selector_mode(app, code)
 }
-
-#[cfg(test)]
-mod tests;

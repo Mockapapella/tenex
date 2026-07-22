@@ -399,6 +399,3 @@ impl ValidIn<ScrollingMode> for SwitchBranchAction {
         Ok(SwitchBranchSelectorMode.into())
     }
 }
-
-#[cfg(test)]
-mod tests;

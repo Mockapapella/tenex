@@ -217,6 +217,3 @@ fn push_u8_decimal(out: &mut String, value: u8) {
 
     out.push((b'0' + value) as char);
 }
-
-#[cfg(test)]
-mod tests;

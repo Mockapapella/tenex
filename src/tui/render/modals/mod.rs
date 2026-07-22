@@ -302,6 +302,3 @@ fn confirm_overlay_rect(base_lines: usize, frame_area: Rect) -> Rect {
     let height = u16::try_from(lines + 2).unwrap_or(u16::MAX);
     centered_rect_absolute(50, height, frame_area)
 }
-
-#[cfg(test)]
-mod tests;

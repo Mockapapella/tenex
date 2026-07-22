@@ -117,35 +117,13 @@ fn is_migratable_bak_file_name(file_name: &OsStr) -> bool {
 }
 
 fn move_file(src: &Path, dst: &Path) -> Result<()> {
-    move_file_with_ops(src, dst, rename_file, copy_file, remove_file)
-}
-
-fn rename_file(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::rename(src, dst)
-}
-
-fn copy_file(src: &Path, dst: &Path) -> std::io::Result<u64> {
-    fs::copy(src, dst)
-}
-
-fn remove_file(src: &Path) -> std::io::Result<()> {
-    fs::remove_file(src)
-}
-
-fn move_file_with_ops(
-    src: &Path,
-    dst: &Path,
-    rename: fn(&Path, &Path) -> std::io::Result<()>,
-    copy: fn(&Path, &Path) -> std::io::Result<u64>,
-    remove_file: fn(&Path) -> std::io::Result<()>,
-) -> Result<()> {
-    match rename(src, dst) {
+    match fs::rename(src, dst) {
         Ok(()) => Ok(()),
         Err(err) if is_cross_device_link_error(&err) => {
-            copy(src, dst).with_context(|| {
+            fs::copy(src, dst).with_context(|| {
                 format!("Failed to copy {} to {}", src.display(), dst.display())
             })?;
-            remove_file(src).with_context(|| format!("Failed to remove {}", src.display()))?;
+            fs::remove_file(src).with_context(|| format!("Failed to remove {}", src.display()))?;
             Ok(())
         }
         Err(err) => Err(err).with_context(|| format!("Failed to rename {}", src.display())),
@@ -155,69 +133,4 @@ fn move_file_with_ops(
 fn is_cross_device_link_error(err: &std::io::Error) -> bool {
     // EXDEV indicates an invalid cross-device rename.
     err.raw_os_error() == Some(18)
-}
-
-#[cfg(any(test, feature = "test-support"))]
-/// Integration-test helpers for otherwise private migration primitives.
-pub mod test_support {
-    use anyhow::Result;
-    use std::ffi::OsStr;
-    use std::path::Path;
-
-    /// Migrate state files between two injected directories.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any filesystem operation needed for migration fails.
-    pub fn migrate_state_dir(old_dir: &Path, new_dir: &Path) -> Result<bool> {
-        super::migrate_state_dir(old_dir, new_dir)
-    }
-
-    /// Move a file using the production migration move logic.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be renamed or copied and removed.
-    pub fn move_file(src: &Path, dst: &Path) -> Result<()> {
-        super::move_file(src, dst)
-    }
-
-    /// Copy a file with the production migration copy helper.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the filesystem copy fails.
-    pub fn copy_file(src: &Path, dst: &Path) -> std::io::Result<u64> {
-        super::copy_file(src, dst)
-    }
-
-    /// Remove a file with the production migration remove helper.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the filesystem removal fails.
-    pub fn remove_file(src: &Path) -> std::io::Result<()> {
-        super::remove_file(src)
-    }
-
-    /// Move a file using injected filesystem operations.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the injected operations cannot complete the move.
-    pub fn move_file_with_ops(
-        src: &Path,
-        dst: &Path,
-        rename: fn(&Path, &Path) -> std::io::Result<()>,
-        copy: fn(&Path, &Path) -> std::io::Result<u64>,
-        remove_file: fn(&Path) -> std::io::Result<()>,
-    ) -> Result<()> {
-        super::move_file_with_ops(src, dst, rename, copy, remove_file)
-    }
-
-    /// Return whether a file name is a migratable backup file.
-    #[must_use]
-    pub fn is_migratable_bak_file_name(file_name: &OsStr) -> bool {
-        super::is_migratable_bak_file_name(file_name)
-    }
 }

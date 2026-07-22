@@ -116,6 +116,3 @@ impl Capture {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

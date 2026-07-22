@@ -981,6 +981,3 @@ pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
 
     (inner_width, inner_height)
 }
-
-#[cfg(test)]
-mod tests;

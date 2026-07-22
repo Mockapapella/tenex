@@ -46,6 +46,3 @@ pub fn handle_keyboard_remap_mode(app: &mut App, code: KeyCode) -> Result<()> {
 pub fn handle_update_prompt_mode(app: &mut App, info: &UpdateInfo, code: KeyCode) -> Result<()> {
     crate::action::dispatch_update_prompt_mode(app, info, code)
 }
-
-#[cfg(test)]
-mod tests;

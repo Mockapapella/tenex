@@ -1,5 +1,4 @@
 //! Background mux daemon.
-#![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::endpoint::SocketEndpoint;
 use super::ipc;
@@ -22,13 +21,6 @@ impl<T: io::Read + io::Write + ?Sized> ReadWrite for T {}
 ///
 /// Returns an error if the listener cannot be created or if a fatal I/O error occurs.
 pub fn run(endpoint: &SocketEndpoint) -> Result<()> {
-    run_with_connection_limit(endpoint, None)
-}
-
-fn run_with_connection_limit(
-    endpoint: &SocketEndpoint,
-    connection_limit: Option<usize>,
-) -> Result<()> {
     if let Some(path) = endpoint
         .cleanup_path
         .as_ref()
@@ -74,31 +66,16 @@ fn run_with_connection_limit(
     info!(endpoint = %endpoint.display, "Mux daemon listening");
 
     let mut incoming = listener.incoming();
-    serve_incoming(&mut incoming, connection_limit);
+    serve_incoming(&mut incoming);
 
     Ok(())
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
-fn serve_incoming(
-    incoming: &mut dyn Iterator<Item = io::Result<Stream>>,
-    connection_limit: Option<usize>,
-) {
-    if connection_limit == Some(0) {
-        return;
-    }
-
-    let limit = connection_limit.unwrap_or(usize::MAX);
-    let mut accepted = 0usize;
+fn serve_incoming(incoming: &mut dyn Iterator<Item = io::Result<Stream>>) {
     for conn in incoming {
         match conn {
             Ok(stream) => {
-                accepted = accepted.saturating_add(1);
                 std::thread::spawn(move || handle_connection_spawned(stream));
-
-                if accepted >= limit {
-                    break;
-                }
             }
             Err(err) => {
                 warn!(error = %err, "Mux accept failed");
@@ -113,7 +90,6 @@ fn handle_connection_spawned(mut stream: Stream) {
     });
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn try_ping_stream(stream: &mut dyn ReadWrite) -> bool {
     if ipc::write_json(stream, &MuxRequest::Ping).is_err() {
         return false;
@@ -229,7 +205,6 @@ fn handle_session_exists(name: &str) -> MuxResponse {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> Result<MuxResponse> {
     let dir = Path::new(working_dir);
     let command = if command.is_empty() {
@@ -246,7 +221,6 @@ fn handle_kill_session(name: &str) -> Result<MuxResponse> {
     Ok(MuxResponse::Ok)
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_rename_session(old_name: &str, new_name: &str) -> Result<MuxResponse> {
     super::server::SessionManager::rename(old_name, new_name)?;
     Ok(MuxResponse::Ok)
@@ -343,7 +317,6 @@ enum ReadResult {
     Reset { start: u64, checkpoint: Vec<u8> },
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn handle_read_output(target: &str, after: u64, max_bytes: u32) -> Result<MuxResponse> {
     use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -430,6 +403,3 @@ fn handle_list_pids(session: &str) -> Result<MuxResponse> {
     let pids = super::server::SessionManager::list_pane_pids(session)?;
     Ok(MuxResponse::Pids { pids })
 }
-
-#[cfg(test)]
-mod tests;

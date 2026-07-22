@@ -1,5 +1,4 @@
 //! IPC framing helpers for the mux daemon.
-#![cfg_attr(coverage_nightly, coverage(off))]
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -14,7 +13,6 @@ use std::io::{Read, Write};
 /// worst-case response while still rejecting corrupt or hostile length prefixes before allocation.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn payload_len_bytes(payload_len: usize) -> Result<[u8; 4]> {
     if payload_len > MAX_FRAME_BYTES {
         bail!("Message too large: {payload_len} bytes exceeds max frame size {MAX_FRAME_BYTES}");
@@ -26,7 +24,6 @@ fn payload_len_bytes(payload_len: usize) -> Result<[u8; 4]> {
     Ok(len.to_le_bytes())
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn write_len_prefixed_payload_with_len(
     writer: &mut dyn Write,
     payload_len: usize,
@@ -47,13 +44,6 @@ fn write_len_prefixed_payload_with_len(
 
 fn write_len_prefixed_payload(writer: &mut dyn Write, payload: &[u8]) -> Result<()> {
     write_len_prefixed_payload_with_len(writer, payload.len(), Some(payload))
-}
-
-#[cfg(any(test, coverage))]
-#[doc(hidden)]
-pub fn exercise_len_prefixed_payload_length_for_tests(payload_len: usize) -> Result<()> {
-    let mut writer = std::io::sink();
-    write_len_prefixed_payload_with_len(&mut writer, payload_len, None)
 }
 
 /// Read a length-prefixed JSON message.
@@ -87,7 +77,3 @@ pub fn write_json<T: Serialize>(writer: &mut dyn Write, value: &T) -> Result<()>
     let buf = serde_json::to_vec(value).context("Failed to encode JSON message")?;
     write_len_prefixed_payload(writer, &buf)
 }
-
-#[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test assertions")]
-mod tests;

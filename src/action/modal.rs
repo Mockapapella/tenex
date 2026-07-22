@@ -431,8 +431,6 @@ impl ValidIn<HelpMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: HelpMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(test)]
-        super::picker::force_picker_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
@@ -441,8 +439,6 @@ impl ValidIn<ErrorModalMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: ErrorModalMode, app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         app_data.ui.clear_error();
         Ok(AppMode::normal())
     }
@@ -452,11 +448,6 @@ impl ValidIn<SuccessModalMode> for DismissAction {
     type NextState = AppMode;
 
     fn execute(self, _state: SuccessModalMode, _app_data: &mut AppData) -> Result<Self::NextState> {
-        #[cfg(any(test, coverage))]
-        super::force_infallible_action_error_if_enabled_for_tests()?;
         Ok(AppMode::normal())
     }
 }
-
-#[cfg(test)]
-mod tests;

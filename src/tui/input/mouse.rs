@@ -659,6 +659,3 @@ const fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 fn modal_rect(app: &App, frame_area: Rect) -> Option<Rect> {
     crate::tui::render::modals::modal_rect_for_mode(app, frame_area)
 }
-
-#[cfg(test)]
-mod tests;

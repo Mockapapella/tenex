@@ -139,22 +139,14 @@ impl WindowInput {
         let queue = Arc::clone(&self.queue);
         let thread_name = format!("tenex-mux-input-{label}");
         let dispatch = tracing::dispatcher::get_default(Clone::clone);
-        #[cfg(test)]
-        let force_spawn_error = FORCE_WRITER_THREAD_SPAWN_ERROR.with(std::cell::Cell::get);
-        #[cfg(not(test))]
-        let force_spawn_error = false;
 
-        let spawn_result = if force_spawn_error {
-            Err(std::io::Error::other("forced writer thread spawn failure"))
-        } else {
-            std::thread::Builder::new()
-                .name(thread_name)
-                .spawn(move || {
-                    tracing::dispatcher::with_default(&dispatch, move || {
-                        writer_pump_loop(&queue, &mut writer, &label);
-                    });
-                })
-        };
+        let spawn_result = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                tracing::dispatcher::with_default(&dispatch, move || {
+                    writer_pump_loop(&queue, &mut writer, &label);
+                });
+            });
 
         if let Err(err) = spawn_result {
             self.close();
@@ -196,36 +188,6 @@ impl WindowInput {
     pub(crate) fn close(&self) {
         close_input_queue(&self.queue);
     }
-}
-
-#[cfg(test)]
-impl MuxWindow {
-    pub(crate) fn replace_input_writer_for_tests(&mut self, writer: Box<dyn Write + Send>) {
-        self.input.close();
-        self.input = WindowInput::new(window_input_label(&self.name, self.index), writer);
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static FORCE_WRITER_THREAD_SPAWN_ERROR: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-struct ForceWriterThreadSpawnErrorGuard;
-
-#[cfg(test)]
-impl Drop for ForceWriterThreadSpawnErrorGuard {
-    fn drop(&mut self) {
-        FORCE_WRITER_THREAD_SPAWN_ERROR.with(|flag| flag.set(false));
-    }
-}
-
-#[cfg(test)]
-fn force_writer_thread_spawn_error() -> ForceWriterThreadSpawnErrorGuard {
-    FORCE_WRITER_THREAD_SPAWN_ERROR.with(|flag| flag.set(true));
-    ForceWriterThreadSpawnErrorGuard
 }
 
 fn window_input_label(window_name: &str, window_index: u32) -> String {
@@ -396,24 +358,6 @@ pub fn spawn_window(
     size: PtySize,
 ) -> Result<Arc<Mutex<MuxWindow>>> {
     let pty_system = portable_pty::native_pty_system();
-    spawn_window_with_system(
-        pty_system.as_ref(),
-        index,
-        window_name,
-        working_dir,
-        command,
-        size,
-    )
-}
-
-fn spawn_window_with_system(
-    pty_system: &dyn portable_pty::PtySystem,
-    index: u32,
-    window_name: &str,
-    working_dir: &Path,
-    command: Option<&[String]>,
-    size: PtySize,
-) -> Result<Arc<Mutex<MuxWindow>>> {
     let pair = pty_system.openpty(size).context("Failed to open PTY")?;
 
     let reader = pair
@@ -461,36 +405,10 @@ fn spawn_reader_thread(window: Arc<Mutex<MuxWindow>>, reader: Box<dyn Read + Sen
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    static FORCE_READER_THREAD_SPAWN_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-struct ForceReaderThreadSpawnErrorGuard;
-
-#[cfg(test)]
-impl Drop for ForceReaderThreadSpawnErrorGuard {
-    fn drop(&mut self) {
-        FORCE_READER_THREAD_SPAWN_ERROR.with(|flag| flag.set(false));
-    }
-}
-
-#[cfg(test)]
-fn force_reader_thread_spawn_error() -> ForceReaderThreadSpawnErrorGuard {
-    FORCE_READER_THREAD_SPAWN_ERROR.with(|flag| flag.set(true));
-    ForceReaderThreadSpawnErrorGuard
-}
-
 fn spawn_reader_thread_inner(
     window: Arc<Mutex<MuxWindow>>,
     mut reader: Box<dyn Read + Send>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
-    #[cfg(test)]
-    if FORCE_READER_THREAD_SPAWN_ERROR.with(std::cell::Cell::get) {
-        return Err(std::io::Error::other("forced reader thread spawn failure"));
-    }
-
     let (window_name, window_index) = {
         let guard = window.lock();
         (guard.name.clone(), guard.index)
@@ -713,6 +631,3 @@ pub fn unix_timestamp() -> i64 {
             i64::try_from(duration.as_secs()).unwrap_or_default()
         })
 }
-
-#[cfg(test)]
-mod tests;

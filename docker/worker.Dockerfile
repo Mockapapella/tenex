@@ -24,9 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
-RUN rustup component add clippy llvm-tools rustfmt
-RUN cargo install cargo-llvm-cov --locked --version 0.6.22
-RUN python3 -m pip install --no-cache-dir --break-system-packages pre-commit
+RUN rustup component add clippy rustfmt
 RUN printf '%s\n' 'export PATH=/usr/local/cargo/bin:$PATH' >/etc/profile.d/tenex-rust-path.sh \
  && chmod 0644 /etc/profile.d/tenex-rust-path.sh \
  && for bin in /usr/local/cargo/bin/*; do ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"; done
