@@ -19,7 +19,9 @@ const WORKER_CONTAINER_LAYOUT_VERSION: &str = "5";
 const NSS_WRAPPER_LIB_PATH: &str = "/usr/local/lib/libnss_wrapper.so";
 const RUNTIME_PASSWD_FILE_NAME: &str = ".tenex-passwd";
 const RUNTIME_GROUP_FILE_NAME: &str = ".tenex-group";
+#[cfg(unix)]
 const DEFAULT_RUNTIME_USER_NAME: &str = "tenex";
+#[cfg(unix)]
 const DEFAULT_RUNTIME_GROUP_NAME: &str = "tenex";
 #[cfg(windows)]
 const WINDOWS_CONTAINER_ROOT: &str = "/tenex-host";
@@ -996,6 +998,7 @@ fn current_runtime_user_info() -> Option<RuntimeUserIdentity> {
     }
 }
 
+#[cfg(unix)]
 fn sanitize_runtime_account_name(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
