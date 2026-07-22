@@ -173,7 +173,7 @@ impl AppData {
         self.ui.set_status(message);
     }
 
-    pub(crate) fn synthesis_target_descendants(&self, parent_id: Uuid) -> Vec<&Agent> {
+    fn synthesis_target_descendants(&self, parent_id: Uuid) -> Vec<&Agent> {
         self.storage
             .descendants(parent_id)
             .into_iter()
@@ -239,7 +239,7 @@ impl AppData {
         subtree_ids
     }
 
-    pub(crate) fn is_synthesis_marked(&self, agent_id: Uuid) -> bool {
+    fn is_synthesis_marked(&self, agent_id: Uuid) -> bool {
         self.synthesis_marks.contains(&agent_id)
     }
 
@@ -255,7 +255,7 @@ impl AppData {
         self.toggle_synthesis_mark(agent_id)
     }
 
-    pub(crate) fn toggle_synthesis_mark(&mut self, agent_id: Uuid) -> bool {
+    fn toggle_synthesis_mark(&mut self, agent_id: Uuid) -> bool {
         if !self.is_synthesis_mark_eligible(agent_id) {
             return false;
         }

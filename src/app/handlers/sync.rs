@@ -320,7 +320,7 @@ impl Actions {
         self.respawn_missing_agents_in_data(&mut app.data)
     }
 
-    pub(crate) fn respawn_missing_agents_in_data(self, app_data: &mut AppData) -> Result<()> {
+    fn respawn_missing_agents_in_data(self, app_data: &mut AppData) -> Result<()> {
         let roots = stored_root_agents(app_data);
         if roots.is_empty() {
             return Ok(());

@@ -1194,9 +1194,8 @@ impl<'a> Manager<'a> {
             return Ok(());
         };
 
-        let parent_is_symlink = fs::symlink_metadata(parent)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
+        let parent_is_symlink =
+            fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink());
         if parent_is_symlink {
             return Ok(());
         }

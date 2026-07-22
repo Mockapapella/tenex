@@ -31,7 +31,7 @@ Tenex runs AI coding agents in one terminal interface. In a Git repository, each
 - Git for worktree isolation and all Git actions.
 - GitHub CLI `gh` for opening pull requests.
 - Cargo for installation and in-app updates.
-- Rust 1.91 or newer when you build from source.
+- Rust 1.97.1 or newer when you build from source.
 - Docker with a running daemon if you enable the Docker runtime.
 
 Tenex includes its own terminal multiplexer. It does not require tmux or another external multiplexer.

@@ -231,7 +231,7 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            format!("{}_", &app.data.input.buffer),
+            format!("{}_", app.data.input.buffer),
             Style::default()
                 .fg(colors::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),

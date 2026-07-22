@@ -587,10 +587,10 @@ fn run_loop(
     let mut last_preview_follow = app.data.ui.preview_follow;
     let mut last_preview_update = Instant::now();
     // Diff refresh is expensive; throttle tick-based updates.
-    let diff_refresh_interval = Duration::from_millis(1000);
+    let diff_refresh_interval = Duration::from_secs(1);
     let mut last_diff_update = Instant::now();
     // Commits refresh is cheap; still throttle tick-based updates.
-    let commits_refresh_interval = Duration::from_millis(1000);
+    let commits_refresh_interval = Duration::from_secs(1);
     let mut last_commits_update = Instant::now();
     let mut last_status_sync = Instant::now();
     let mut last_pane_activity_sync = Instant::now();

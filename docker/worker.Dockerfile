@@ -1,4 +1,4 @@
-FROM rust:1.91-bookworm
+FROM rust:1.97.1-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NPM_CONFIG_UPDATE_NOTIFIER=false \

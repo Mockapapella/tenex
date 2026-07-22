@@ -42,7 +42,7 @@ pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("Filter: ", Style::default().fg(colors::TEXT_DIM)),
         Span::styled(
-            format!("{}_", &app.data.model_selector.filter),
+            format!("{}_", app.data.model_selector.filter),
             Style::default().fg(colors::TEXT_PRIMARY),
         ),
     ]));

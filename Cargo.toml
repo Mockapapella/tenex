@@ -2,7 +2,7 @@
 name = "tenex"
 version = "1.0.10"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.97.1"
 resolver = "3"
 authors = ["Quinten Lisowe"]
 description = "Terminal multiplexer for AI coding agents"

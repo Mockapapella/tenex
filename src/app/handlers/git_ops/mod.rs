@@ -18,7 +18,7 @@ use super::Actions;
 
 impl Actions {
     /// Spawn a terminal for resolving conflicts
-    pub(crate) fn spawn_conflict_terminal(
+    fn spawn_conflict_terminal(
         app_data: &mut AppData,
         title: &str,
         startup_command: &str,
