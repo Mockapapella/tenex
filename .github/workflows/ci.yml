@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: "1.91.0"
+          toolchain: "1.97.1"
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: "1.91.0"
+          toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
       - name: Start Tenex
         run: cargo run --locked --bin tenex -- --version

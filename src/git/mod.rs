@@ -151,9 +151,8 @@ pub fn ensure_tenex_excluded(repo_path: &Path) -> Result<()> {
     // buffer without a bound. Non-regular paths fall through to the append open so the OS returns
     // the path error.
     if exclude_path.exists() {
-        let should_scan_existing = fs::metadata(&exclude_path)
-            .map(|metadata| metadata.is_file())
-            .unwrap_or(false);
+        let should_scan_existing =
+            fs::metadata(&exclude_path).is_ok_and(|metadata| metadata.is_file());
 
         if should_scan_existing {
             let file = fs::File::open(&exclude_path)

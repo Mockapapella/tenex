@@ -217,8 +217,7 @@ impl Actions {
             // Try to get existing worktree info
             let (existing_branch, existing_commit) = worktree_mgr
                 .worktree_head_info(&branch)
-                .map(|(b, c)| (Some(b), Some(c)))
-                .unwrap_or((None, None));
+                .map_or((None, None), |(b, c)| (Some(b), Some(c)));
 
             app_data.spawn.worktree_conflict = Some(WorktreeConflictInfo {
                 title: title.to_string(),
@@ -273,7 +272,7 @@ impl Actions {
     }
 
     /// Internal function to actually create the agent after conflict resolution
-    pub(crate) fn create_agent_internal(
+    fn create_agent_internal(
         self,
         app_data: &mut AppData,
         repo_path: &Path,

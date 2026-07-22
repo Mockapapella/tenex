@@ -290,7 +290,7 @@ const fn worker_image_tag(_settings: &Settings) -> &str {
     DEFAULT_DOCKER_IMAGE
 }
 
-pub(super) fn container_name(agent: &Agent) -> String {
+fn container_name(agent: &Agent) -> String {
     let mut name = format!("tenex-runtime-{}", agent.effective_runtime_scope());
     name.make_ascii_lowercase();
     name.chars()

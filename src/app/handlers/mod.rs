@@ -26,11 +26,11 @@ use crate::action::{CancelAction, ConfirmYesAction, SubmitAction, UnfocusPreview
 #[derive(Debug, Clone, Copy)]
 pub struct Actions {
     /// Mux session manager
-    pub(crate) session_manager: SessionManager,
+    session_manager: SessionManager,
     /// Output capture
-    pub(crate) output_capture: OutputCapture,
+    output_capture: OutputCapture,
     /// Raw output stream
-    pub(crate) output_stream: OutputStream,
+    output_stream: OutputStream,
 }
 
 impl Actions {

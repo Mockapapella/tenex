@@ -128,7 +128,7 @@ impl Actions {
     }
 
     /// Find the worktree path for a branch, if one exists
-    pub(super) fn find_worktree_for_branch(
+    fn find_worktree_for_branch(
         repo_path: &std::path::Path,
         branch: &str,
     ) -> Result<Option<std::path::PathBuf>> {
