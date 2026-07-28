@@ -50,17 +50,38 @@ pub fn wrap_input_with_cursor(text: &str, max_width: usize) -> (Vec<String>, usi
 }
 
 /// Render a text input overlay
-#[expect(
-    clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    reason = "Complex but cohesive rendering; casts are bounded by max_input_height=20"
-)]
 pub fn render_input_overlay(
     frame: &mut Frame<'_>,
     title: &str,
     prompt: &str,
     input: &str,
     cursor_pos: usize,
+) {
+    render_input_overlay_layout(frame, title, prompt, input, cursor_pos, true);
+}
+
+pub(in crate::tui::render) fn render_single_line_input_overlay(
+    frame: &mut Frame<'_>,
+    title: &str,
+    prompt: &str,
+    input: &str,
+    cursor_pos: usize,
+) {
+    render_input_overlay_layout(frame, title, prompt, input, cursor_pos, false);
+}
+
+#[expect(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    reason = "Complex but cohesive rendering; casts are bounded by max_input_height=20"
+)]
+fn render_input_overlay_layout(
+    frame: &mut Frame<'_>,
+    title: &str,
+    prompt: &str,
+    input: &str,
+    cursor_pos: usize,
+    multiline: bool,
 ) {
     let text_with_cursor = if cursor_pos >= input.len() {
         format!("{input}│")
@@ -70,14 +91,14 @@ pub fn render_input_overlay(
         format!("{before}│{after}")
     };
 
-    let min_input_height = 3_usize;
-    let max_input_height = 20_usize;
+    let min_input_height = if multiline { 3 } else { 1 };
+    let max_input_height = if multiline { 20 } else { 1 };
     let modal_width = centered_rect_absolute(60, 1, frame.area()).width;
     let mut inner_width = modal_width.saturating_sub(2).max(1);
     let (mut input_lines, mut cursor_line) =
         wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width));
     let mut input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
-    let mut needs_scrollbar = input_lines.len() > input_area_height;
+    let mut needs_scrollbar = multiline && input_lines.len() > input_area_height;
 
     if needs_scrollbar {
         inner_width = modal_width.saturating_sub(3).max(1);
@@ -135,8 +156,13 @@ pub fn render_input_overlay(
         content_lines.push(Line::from(""));
     }
     content_lines.push(Line::from(""));
+    let instructions = if multiline {
+        "Enter: submit | Alt+Enter: newline | ←→↑↓: move | Esc: cancel"
+    } else {
+        "Enter: submit | ←→: move | Esc: cancel"
+    };
     content_lines.push(Line::from(Span::styled(
-        "Enter: submit | Alt+Enter: newline | ←→↑↓: move | Esc: cancel",
+        instructions,
         Style::default().fg(colors::TEXT_MUTED),
     )));
 

@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         AppMode::Help(_) => modals::render_help_overlay(frame, app),
         AppMode::CommandPalette(_) => modals::render_command_palette_overlay(frame, app),
         AppMode::Creating(_) => {
-            modals::render_input_overlay(
+            modals::render_single_line_input_overlay(
                 frame,
                 "New Agent",
                 "Enter agent name:",
@@ -48,7 +48,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 app.data.input.cursor,
             );
         }
-        AppMode::Prompting(_) => modals::render_input_overlay(
+        AppMode::Prompting(_) => modals::render_single_line_input_overlay(
             frame,
             "New Agent with Prompt",
             "Enter prompt:",

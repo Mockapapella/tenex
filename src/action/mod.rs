@@ -436,7 +436,12 @@ pub fn dispatch_diff_focused_mode(
 ///
 /// Returns an error if the dispatched action fails.
 pub fn dispatch_creating_mode(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
-    dispatch_text_input_mode(app, CreatingMode, code, modifiers)
+    dispatch_text_input_mode(
+        app,
+        CreatingMode,
+        code,
+        single_line_input_modifiers(code, modifiers),
+    )
 }
 
 /// Dispatch a raw key event while in `PromptingMode`, using typed actions.
@@ -449,7 +454,20 @@ pub fn dispatch_prompting_mode(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<()> {
-    dispatch_text_input_mode(app, PromptingMode, code, modifiers)
+    dispatch_text_input_mode(
+        app,
+        PromptingMode,
+        code,
+        single_line_input_modifiers(code, modifiers),
+    )
+}
+
+fn single_line_input_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
+    if code == KeyCode::Enter {
+        KeyModifiers::empty()
+    } else {
+        modifiers
+    }
 }
 
 /// Dispatch a raw key event while in `ChildPromptMode`, using typed actions.

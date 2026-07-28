@@ -16,9 +16,9 @@ use tracing::{debug, warn};
 #[serde(rename_all = "lowercase")]
 pub enum AgentProgram {
     /// Use the `codex` CLI when spawning new agents.
-    Codex,
-    /// Use the `claude` CLI (Tenex default) when spawning new agents.
     #[default]
+    Codex,
+    /// Use the `claude` CLI when spawning new agents.
     Claude,
     /// Use a user-provided command when spawning new agents.
     Custom,
