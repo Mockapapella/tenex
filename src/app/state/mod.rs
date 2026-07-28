@@ -36,7 +36,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{Actions, AppData, Settings};
 
-// Re-export BranchInfo so it's available from app module
 pub use crate::git::BranchInfo;
 
 /// Slash command definition (for the `/` command palette)
@@ -84,7 +83,7 @@ pub struct App {
 impl App {
     /// Create a new application with the given config, storage, and settings
     #[must_use]
-    pub const fn new(
+    pub fn new(
         config: Config,
         storage: Storage,
         settings: Settings,

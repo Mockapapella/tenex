@@ -146,7 +146,6 @@ pub fn render_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Render the agent list panel
 pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Use optimized method that pre-computes child info in O(n) instead of O(n²)
     let visible = app.data.sidebar_items();
     let total_items = visible.len();
     let visible_height = usize::from(area.height.saturating_sub(2));
@@ -164,8 +163,6 @@ pub fn render_agent_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let title = format!(" Agents ({}) ", app.data.storage.len());
 
-    // Highlight agents list border only when it has focus. When a modal is open,
-    // the modal should be the highlighted element instead.
     let border_color = if matches!(&app.mode, AppMode::Normal(_)) {
         colors::SELECTED
     } else {
@@ -335,7 +332,6 @@ pub fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let full_text = &app.data.ui.preview_text;
     let line_count = full_text.lines.len();
 
-    // Use highlighted border when focused, show exit hint in title.
     let title = if is_focused {
         " Terminal Output (ATTACHED) [Ctrl+q detach] "
     } else {
@@ -902,7 +898,6 @@ fn render_diff_scrollbar(
 
 /// Render the status bar
 pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Don't show error in status bar when error modal is displayed
     let showing_error_modal = matches!(&app.mode, AppMode::ErrorModal(_));
 
     let left_content = match (
@@ -966,16 +961,12 @@ pub fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// This is used to resize mux windows to match the preview pane size.
 #[must_use]
 pub fn calculate_preview_dimensions(frame_area: Rect) -> (u16, u16) {
-    // Main layout: Vertical split with status bar at bottom (1 line)
     let main_area_height = frame_area.height.saturating_sub(1);
 
-    // Horizontal split: 30% agents, 70% content
     let content_width = u16::try_from((u32::from(frame_area.width) * 70) / 100).unwrap_or(0);
 
-    // Content pane: preview/diff pane with 1-line tab bar inside
     let preview_height = main_area_height;
 
-    // Inner area: subtract borders + 1-line tab bar (2 chars total width, 3 lines total height)
     let inner_width = content_width.saturating_sub(2);
     let inner_height = preview_height.saturating_sub(3);
 

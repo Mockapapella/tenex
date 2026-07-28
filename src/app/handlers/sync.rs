@@ -41,7 +41,6 @@ impl Actions {
     ) -> Result<()> {
         let mut changed = false;
 
-        // Fetch all sessions once instead of calling exists() per agent.
         let sessions = match sessions {
             Ok(sessions) => sessions,
             Err(err) => {
@@ -63,7 +62,6 @@ impl Actions {
         let active_sessions: std::collections::HashSet<String> =
             sessions.into_iter().map(|s| s.name).collect();
 
-        // Remove stored agents whose sessions no longer exist.
         let roots: Vec<Agent> = app
             .data
             .storage
@@ -118,7 +116,8 @@ impl Actions {
             changed = true;
         }
 
-        // Update starting agents to running if their session exists
+        changed |= self.reconcile_child_windows(app, &active_sessions);
+
         for agent in app.data.storage.iter_mut() {
             if agent.status == Status::Starting && active_sessions.contains(&agent.mux_session) {
                 debug!(title = %agent.title, "Agent status: Starting -> Running");
@@ -135,6 +134,56 @@ impl Actions {
         Ok(())
     }
 
+    fn reconcile_child_windows(self, app: &mut App, active_sessions: &HashSet<String>) -> bool {
+        let active_roots: Vec<Agent> = app
+            .data
+            .storage
+            .root_agents()
+            .into_iter()
+            .filter(|root| active_sessions.contains(&root.mux_session))
+            .cloned()
+            .collect();
+        let mut stale_children = Vec::new();
+        let mut remapped_windows = Vec::new();
+
+        for root in active_roots {
+            let Ok(windows) = self.session_manager.list_windows(&root.mux_session) else {
+                continue;
+            };
+            let live_windows: HashMap<uuid::Uuid, u32> = windows
+                .iter()
+                .map(|window| (window.id, window.index))
+                .collect();
+
+            for agent in app.data.storage.descendants(root.id) {
+                match live_windows.get(&agent.id) {
+                    Some(live_index) if agent.window_index != Some(*live_index) => {
+                        remapped_windows.push((agent.id, *live_index));
+                    }
+                    Some(_) => {}
+                    None => stale_children.push(agent.id),
+                }
+            }
+        }
+
+        let mut changed = false;
+        for (agent_id, live_index) in remapped_windows {
+            if let Some(agent) = app.data.storage.get_mut(agent_id)
+                && agent.window_index != Some(live_index)
+            {
+                agent.window_index = Some(live_index);
+                changed = true;
+            }
+        }
+        for agent_id in stale_children {
+            if app.data.storage.get(agent_id).is_some() {
+                app.data.storage.remove_with_descendants(agent_id);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Update per-agent activity indicators from raw output sequence changes once per interval.
     ///
     /// If an agent's mux output sequence has not changed since the previous observation,
@@ -147,7 +196,6 @@ impl Actions {
     ///
     /// Returns an error only if internal state mutation fails (captures are best-effort).
     pub fn sync_agent_pane_activity(self, app: &mut App) -> Result<()> {
-        // Pane capture depends on the mux daemon; avoid stale "waiting" indicators when it's down.
         if !crate::mux::is_server_running() {
             app.data.ui.pane_digest_by_agent.clear();
             app.data.ui.pane_last_seen_hash_by_agent.clear();
@@ -163,7 +211,6 @@ impl Actions {
         for agent in app.data.storage.iter() {
             keep_ids.insert(agent.id);
 
-            // Only track activity once the session exists and the agent is running.
             if agent.status != Status::Running {
                 continue;
             }
@@ -210,7 +257,6 @@ impl Actions {
             }
         };
         let Ok(repo) = git::open_repository(&repo_path) else {
-            // Not in a git repository, nothing to auto-connect
             debug!("Not in a git repository, skipping auto-connect");
             return Ok(());
         };
@@ -251,8 +297,6 @@ impl Actions {
                 continue;
             }
 
-            // Get the actual branch name from the worktree's HEAD
-            // This is more reliable than trying to reverse-engineer from worktree name
             let branch_name = match worktree_mgr.worktree_head_info(&wt.name) {
                 Ok((branch, _commit)) => branch,
                 Err(e) => {
@@ -270,7 +314,6 @@ impl Actions {
                 continue;
             }
 
-            // Check if there's already an agent for this branch
             let agent_exists = app.data.storage.iter().any(|a| a.branch == branch_name);
             if agent_exists {
                 debug!(branch = %branch_name, "Agent already exists for worktree");
@@ -283,7 +326,6 @@ impl Actions {
                 "Auto-connecting to existing worktree"
             );
 
-            // Create an agent for this worktree
             let mut agent = Agent::new(
                 title_for_branch(&branch_name, &app.data.config.branch_prefix),
                 program.clone(),
@@ -298,7 +340,6 @@ impl Actions {
             info!(branch = %branch_name, "Auto-connected to existing worktree");
         }
 
-        // Save storage if we added any agents
         app.data.storage.save()?;
         Ok(())
     }
@@ -342,7 +383,6 @@ impl Actions {
         app_data.ui.muxd_version_mismatch = None;
         app_data.ui.pane_activity_digest_mode = PaneActivityDigestMode::Cursor;
 
-        // Recreate missing sessions/windows after the daemon restart (best-effort inside helper).
         self.respawn_missing_agents_in_data(app_data)?;
 
         app_data.set_status("Mux daemon restarted");
@@ -383,7 +423,6 @@ fn mux_target_for_agent(app: &App, agent: &Agent) -> String {
     agent.window_index.map_or_else(
         || agent.mux_session.clone(),
         |window_idx| {
-            // Child agent: target specific window within root's session.
             let root = app.data.storage.root_ancestor(agent.id);
             let root_session = root.unwrap_or(agent).mux_session.clone();
             crate::mux::SessionManager::window_target(&root_session, window_idx)
@@ -467,7 +506,6 @@ fn respawn_root_agent(
         return;
     }
 
-    // Mark as not running while we attempt to respawn.
     summary.changed |= normalize_tree_running(app_data, root.id, &root.mux_session, false);
 
     if !root.worktree_path.exists() {
@@ -505,6 +543,7 @@ fn respawn_root_agent(
 
     if let Err(err) = session_manager.create(
         &root.mux_session,
+        root.id,
         &root.worktree_path,
         root_command.as_deref(),
     ) {
@@ -582,6 +621,7 @@ fn recreate_descendant_windows(
 
         match session_manager.create_window(
             root_session,
+            desc.id,
             &desc.title,
             &desc.worktree_path,
             command.as_deref(),

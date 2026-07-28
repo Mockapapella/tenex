@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 /// Default PTY rows when no UI size is known.
 pub const DEFAULT_ROWS: u16 = 24;
@@ -52,6 +53,8 @@ pub struct MuxSession {
 
 /// A window with its PTY and terminal state.
 pub struct MuxWindow {
+    /// Stable identity shared with the owning Tenex agent.
+    pub id: Uuid,
     /// Window index within the session.
     pub index: u32,
     /// Window name.
@@ -77,6 +80,7 @@ pub struct MuxWindow {
 impl std::fmt::Debug for MuxWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxWindow")
+            .field("id", &self.id)
             .field("index", &self.index)
             .field("name", &self.name)
             .field("working_dir", &self.working_dir)
@@ -351,6 +355,7 @@ pub fn resolve_window(target: &str) -> Result<Arc<Mutex<MuxWindow>>> {
 ///
 /// Returns an error if the PTY or child process cannot be created.
 pub fn spawn_window(
+    id: Uuid,
     index: u32,
     window_name: &str,
     working_dir: &Path,
@@ -382,6 +387,7 @@ pub fn spawn_window(
     let input = WindowInput::new(window_input_label(window_name, index), writer);
 
     let window = Arc::new(Mutex::new(MuxWindow {
+        id,
         index,
         name: window_name.to_string(),
         working_dir: working_dir.to_path_buf(),

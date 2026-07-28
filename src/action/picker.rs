@@ -8,10 +8,10 @@ use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, BranchSelectorMode, ChildCountMode, ChildPromptMode, CommandPaletteMode,
     ConfirmAction, ConfirmingMode, ErrorModalMode, MergeBranchSelectorMode, ModelSelectorMode,
-    RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode, SettingsMenuMode,
-    SwitchBranchSelectorMode,
+    PendingOperation, RebaseBranchSelectorMode, ReviewChildCountMode, ReviewInfoMode,
+    SettingsMenuMode, SwitchBranchSelectorMode,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Picker action: increment a count (Up key in count pickers).
 #[derive(Debug, Clone, Copy, Default)]
@@ -395,11 +395,21 @@ impl ValidIn<BranchSelectorMode> for SelectAction {
         _state: BranchSelectorMode,
         app_data: &mut AppData,
     ) -> Result<Self::NextState> {
-        if app_data.confirm_branch_selection()
-            && let Err(err) = Actions::new().spawn_review_agents(app_data)
-        {
-            return Ok(ErrorModalMode {
-                message: format!("Failed to spawn review agents: {err:#}"),
+        if app_data.confirm_branch_selection() {
+            let parent_id = app_data
+                .spawn
+                .spawning_under
+                .context("No agent selected for review")?;
+            let base_branch = app_data
+                .review
+                .base_branch
+                .clone()
+                .context("No base branch selected for review")?;
+            return Ok(PendingOperation::SpawnReviewAgents {
+                parent_id,
+                count: app_data.spawn.child_count,
+                base_branch,
+                program: app_data.review_agent_spawn_command(),
             }
             .into());
         }

@@ -194,7 +194,7 @@ impl Actions {
         Ok(CodexReviewStart::MatchedBaseBranch)
     }
 
-    fn start_codex_review_flows(self, flows: Vec<(String, String)>) -> bool {
+    fn start_codex_review_flows(self, flows: Vec<(String, String)>) -> Result<bool> {
         let mut found_mismatch = false;
         for (target, base_branch) in flows {
             match self.start_codex_review_flow(&target, &base_branch) {
@@ -203,11 +203,12 @@ impl Actions {
                 }
                 Ok(CodexReviewStart::NotObserved | CodexReviewStart::MatchedBaseBranch) => {}
                 Err(err) => {
-                    warn!(target, error = %err, "Failed to drive Codex /review flow");
+                    return Err(err)
+                        .with_context(|| format!("Failed to start Codex review in {target}"));
                 }
             }
         }
-        found_mismatch
+        Ok(found_mismatch)
     }
 
     fn codex_review_flow_for_child(child: &Agent, base_branch: &str) -> Option<(String, String)> {
@@ -351,7 +352,6 @@ impl Actions {
 
         self.spawn_child_agents(app_data, &spawn_config, count, task)?;
 
-        // Expand the parent to show children
         app_data
             .storage
             .set_collapsed(spawn_config.parent_agent_id, false);
@@ -659,7 +659,6 @@ impl Actions {
     ) -> Result<()> {
         self.spawn_child_agents(app_data, config, count, Some(task))?;
 
-        // Expand the parent to show children
         app_data
             .storage
             .set_collapsed(config.parent_agent_id, false);
@@ -667,17 +666,19 @@ impl Actions {
         Ok(())
     }
 
-    /// Spawn review agents for the selected agent against a base branch
+    /// Spawn the confirmed review agents and complete each Codex review setup.
     ///
     /// # Errors
     ///
-    /// Returns an error if spawning fails
-    pub fn spawn_review_agents(self, app_data: &mut AppData) -> Result<()> {
-        let count = app_data.spawn.child_count;
-        let parent_id = app_data
-            .spawn
-            .spawning_under
-            .ok_or_else(|| anyhow::anyhow!("No agent selected for review"))?;
+    /// Returns an error if agent creation or Codex review setup fails.
+    pub fn spawn_review_agents(
+        self,
+        app_data: &mut AppData,
+        parent_id: uuid::Uuid,
+        count: usize,
+        base_branch: &str,
+        program: &str,
+    ) -> Result<()> {
         let parent = app_data
             .storage
             .get(parent_id)
@@ -685,15 +686,9 @@ impl Actions {
         if parent.is_terminal_agent() {
             bail!("Cannot spawn review agents under a terminal");
         }
-        let base_branch = app_data
-            .review
-            .base_branch
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("No base branch selected for review"))?;
 
         info!(count, parent_id = %parent_id, base_branch, "Spawning review agents");
 
-        // Get the root agent's session and worktree info
         let root = Self::root_ancestor_for_known_agent(&app_data.storage, parent);
 
         let root_session = root.mux_session.clone();
@@ -705,16 +700,12 @@ impl Actions {
             bail!("Review swarm requires a git repository");
         }
 
-        // Build the review prompt
-        let review_prompt = prompts::build_review_prompt(&base_branch);
+        let review_prompt = prompts::build_review_prompt(base_branch);
 
-        // Reserve window indices
         let start_window_index = app_data.storage.reserve_window_indices(parent_id);
-        let program = app_data.review_agent_spawn_command();
         let mut codex_review_flows: Vec<(String, String)> = Vec::new();
         let start_reviewer_number = next_child_number(&app_data.storage, parent_id, "Reviewer");
 
-        // Create review child agents
         for i in 0..count {
             let offset = u32::try_from(i).map_or(u32::MAX, |value| value);
             let window_index = start_window_index.saturating_add(offset);
@@ -726,35 +717,30 @@ impl Actions {
                 workspace_kind: root_workspace_kind,
                 runtime: root_runtime,
                 parent_id,
-                program: program.as_str(),
+                program,
                 review_prompt: review_prompt.as_str(),
                 reviewer_number,
                 reserved_window_index: window_index,
             };
             let child = self.spawn_review_child_agent(app_data, config)?;
-            codex_review_flows.extend(Self::codex_review_flow_for_child(&child, &base_branch));
+            codex_review_flows.extend(Self::codex_review_flow_for_child(&child, base_branch));
             app_data.storage.add(child);
         }
 
-        // Expand the parent to show children
         app_data.storage.set_collapsed(parent_id, false);
 
         app_data.storage.save()?;
         info!(count, parent_id = %parent_id, base_branch, "Review agents spawned successfully");
-        app_data.set_status(format!(
-            "Spawned {count} review agents against {base_branch}"
-        ));
-
-        // Clear review state
         app_data.review.clear();
 
-        if !codex_review_flows.is_empty() {
-            let found_mismatch = self.start_codex_review_flows(codex_review_flows);
-            if found_mismatch {
-                app_data.set_status(format!(
-                    "{CODEX_REVIEW_BASE_BRANCH_MISMATCH_STATUS}: {base_branch}"
-                ));
-            }
+        if !codex_review_flows.is_empty() && self.start_codex_review_flows(codex_review_flows)? {
+            app_data.set_status(format!(
+                "{CODEX_REVIEW_BASE_BRANCH_MISMATCH_STATUS}: {base_branch}"
+            ));
+        } else {
+            app_data.set_status(format!(
+                "Spawned {count} review agents against {base_branch}"
+            ));
         }
 
         Ok(())
@@ -810,8 +796,6 @@ impl Actions {
         let parent_session = agent.mux_session.clone();
         let parent_title = agent.title.clone();
         let worktree_path = agent.worktree_path.clone();
-        // Determine the correct target for the parent
-        // If the parent has a window_index, it's a child agent running in a window
         let parent_target = agent.window_index.map_or_else(
             || parent_session.clone(),
             |window_idx| SessionManager::window_target(&parent_session, window_idx),
@@ -832,7 +816,6 @@ impl Actions {
         let findings =
             self.capture_synthesis_findings(app_data, &parent_session, &targets.capture_agent_ids);
 
-        // Build synthesis content
         let synthesis_content = prompts::build_synthesis_prompt(&findings);
 
         let synthesis_id = uuid::Uuid::new_v4();
@@ -854,7 +837,6 @@ impl Actions {
             &targets.teardown_agent_ids,
         );
 
-        // Now tell the parent to read the file
         let read_command = Self::build_synthesis_read_command(synthesis_id, prompt);
         let session_manager = &self.session_manager;
         let target = &parent_target;

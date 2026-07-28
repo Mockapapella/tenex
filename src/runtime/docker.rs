@@ -101,11 +101,6 @@ pub(super) fn ensure_image_ready(settings: &Settings, program: &str) -> Result<(
     build_default_image(image)
 }
 
-pub(super) fn image_build_required(settings: &Settings, program: &str) -> Result<bool> {
-    ensure_default_image_support(program)?;
-    Ok(!image_matches_default_template(worker_image_tag(settings))?)
-}
-
 pub(super) fn ensure_container(agent: &Agent, settings: &Settings) -> Result<()> {
     let host_paths = DockerHostPaths::from_process_environment();
     ensure_container_with_paths(agent, settings, &host_paths)
@@ -161,7 +156,7 @@ fn ensure_container_with_paths(
         }
         Err(err) => {
             let message = format!("{err:#}");
-            if !message.contains("No such object") && !message.contains("No such container") {
+            if !docker_resource_is_missing(&message) {
                 return Err(err);
             }
         }
@@ -211,7 +206,7 @@ fn remove_container_by_name(name: &str) -> Result<()> {
         Ok(_) => Ok(()),
         Err(err) => {
             let message = format!("{err:#}");
-            if message.contains("No such container") || message.contains("No such object") {
+            if docker_resource_is_missing(&message) {
                 return Ok(());
             }
             Err(err)
@@ -1080,7 +1075,7 @@ fn image_template_hash(image: &str) -> Result<Option<String>> {
         }
         Err(err) => {
             let message = format!("{err:#}");
-            if message.contains("No such image") || message.contains("No such object") {
+            if docker_resource_is_missing(&message) {
                 return Ok(None);
             }
             Err(err)
@@ -1114,12 +1109,19 @@ fn container_layout_hash(name: &str) -> Result<Option<String>> {
         }
         Err(err) => {
             let message = format!("{err:#}");
-            if message.contains("No such container") || message.contains("No such object") {
+            if docker_resource_is_missing(&message) {
                 return Ok(None);
             }
             Err(err)
         }
     }
+}
+
+fn docker_resource_is_missing(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("no such object")
+        || message.contains("no such container")
+        || message.contains("no such image")
 }
 
 fn ensure_default_image_support(program: &str) -> Result<()> {

@@ -6,7 +6,7 @@ mod push;
 mod rebase;
 mod rename;
 
-use crate::agent::{Agent, ChildConfig};
+use crate::agent::{Agent, AgentRuntime, ChildConfig};
 use crate::mux::SessionManager;
 use anyhow::Result;
 use tracing::{debug, info};
@@ -28,40 +28,62 @@ impl Actions {
             .agent_id
             .ok_or_else(|| anyhow::anyhow!("No agent ID"))?;
 
-        // Get the root ancestor to use its mux session
+        let root = app_data
+            .storage
+            .root_ancestor(agent_id)
+            .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
+            .clone();
+        Self::spawn_conflict_terminal_at(
+            app_data,
+            title,
+            startup_command,
+            &root.worktree_path,
+            &root.branch,
+            root.runtime,
+        )
+    }
+
+    fn spawn_conflict_terminal_at(
+        app_data: &mut AppData,
+        title: &str,
+        startup_command: &str,
+        worktree_path: &std::path::Path,
+        branch: &str,
+        runtime: AgentRuntime,
+    ) -> Result<AppMode> {
+        let agent_id = app_data
+            .git_op
+            .agent_id
+            .ok_or_else(|| anyhow::anyhow!("No agent ID"))?;
         let root = app_data
             .storage
             .root_ancestor(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent not found"))?;
-
         let root_session = root.mux_session.clone();
-        let worktree_path = root.worktree_path.clone();
-        let branch = root.branch.clone();
         let root_id = root.id;
+        let repo_root = root.repo_root.clone();
+        let runtime_scope = root.effective_runtime_scope().to_string();
 
         debug!(title, startup_command, "Creating conflict terminal");
 
-        // Reserve a window index
         let window_index = app_data.storage.reserve_window_indices(root_id);
 
-        // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
             title.to_string(),
             "terminal".to_string(),
-            branch,
-            worktree_path.clone(),
+            branch.to_string(),
+            worktree_path.to_path_buf(),
             ChildConfig {
                 parent_id: root_id,
                 mux_session: root_session.clone(),
                 window_index,
-                repo_root: root.repo_root.clone(),
+                repo_root,
             },
         );
         terminal.is_terminal = true;
-        terminal.runtime = root.runtime;
-        terminal.runtime_scope = root.effective_runtime_scope().to_string();
+        terminal.runtime = runtime;
+        terminal.runtime_scope = runtime_scope;
 
-        // Create session manager and window
         let session_manager = SessionManager::new();
         crate::runtime::ensure_runtime_ready(&terminal, &app_data.settings)?;
         let terminal_command = crate::runtime::build_terminal_command(
@@ -71,18 +93,17 @@ impl Actions {
         );
         let actual_index = session_manager.create_window(
             &root_session,
+            terminal.id,
             title,
-            &worktree_path,
+            worktree_path,
             terminal_command.as_deref(),
         )?;
 
-        // Resize the new window to match preview dimensions
         if let Some((width, height)) = app_data.ui.preview_dimensions {
             let window_target = SessionManager::window_target(&root_session, actual_index);
             let _ = session_manager.resize_window(&window_target, width, height);
         }
 
-        // Update window index if it differs
         terminal.window_index = Some(actual_index);
 
         let window_target = SessionManager::window_target(&root_session, actual_index);
@@ -92,7 +113,6 @@ impl Actions {
 
         app_data.storage.add(terminal);
 
-        // Expand the parent to show the new terminal
         for agent in app_data.storage.iter_mut() {
             if agent.id == root_id {
                 agent.collapsed = false;
@@ -101,7 +121,6 @@ impl Actions {
 
         app_data.storage.save()?;
 
-        // Clear git op state and exit mode
         app_data.git_op.clear();
         app_data.review.clear();
 

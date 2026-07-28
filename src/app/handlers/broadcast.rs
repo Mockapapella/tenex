@@ -33,12 +33,10 @@ impl Actions {
             targets.push(agent);
             targets.extend(app_data.storage.descendants(agent_id));
 
-            // Filter to only leaf agents (excluding terminals) and send message
             for target_agent in targets {
                 if !app_data.storage.has_children(target_agent.id)
                     && !target_agent.is_terminal_agent()
                 {
-                    // Determine the mux target (session or window)
                     let target = target_agent.window_index.map_or_else(
                         || target_agent.mux_session.clone(),
                         |window_idx| {
@@ -46,7 +44,6 @@ impl Actions {
                         },
                     );
 
-                    // Send the message and submit it (program-specific)
                     if self
                         .session_manager
                         .send_keys_and_submit_for_agent(&target, target_agent, message)

@@ -3,8 +3,8 @@
 mod input;
 mod render;
 
-use crate::app::{Actions, App, Event, Handler, Tab};
-use crate::state::AppMode;
+use crate::app::{Actions, App, BackgroundResult, Event, Handler, Tab};
+use crate::state::{AppMode, PendingOperation, UpdatePromptMode};
 use crate::update::UpdateInfo;
 use anyhow::Result;
 use ratatui::{
@@ -18,13 +18,11 @@ use ratatui::{
             PushKeyboardEnhancementFlags,
         },
         execute,
-        terminal::{
-            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-            supports_keyboard_enhancement,
-        },
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
     layout::Rect,
 };
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -36,8 +34,9 @@ const PREVIEW_SMOOTH_REFRESH_MS: u64 = 33;
 const AGENT_STATUS_SYNC_INTERVAL_MS: u64 = 500;
 const MIN_OUTPUT_REFRESH_MS: u64 = 16;
 const MIN_PANE_ACTIVITY_SYNC_MS: u64 = 500;
-const STATE_FILE_SYNC_INTERVAL_MS: u64 = 250;
+const STATE_FILE_SYNC_INTERVAL_MS: u64 = 50;
 const OSC52_MAX_BYTES: usize = 100_000;
+const KEYBOARD_PROBE_TIMEOUT_MS: u64 = 25;
 
 type DrainedEvents = (Vec<String>, Option<(u16, u16)>, bool);
 
@@ -266,7 +265,6 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
 
     let keyboard_enhancement_enabled = configure_keyboard_enhancement(&mut stdout);
 
-    // Update the app with keyboard enhancement status
     app.data.keyboard_enhancement_supported = keyboard_enhancement_enabled;
 
     apply_startup_modals(&mut app);
@@ -275,6 +273,11 @@ pub fn run(mut app: App) -> Result<Option<UpdateInfo>> {
 
     let event_handler = Handler::new(UI_FRAME_INTERVAL_MS);
     let action_handler = Actions::new();
+    let background_results = app.data.background_result_sender();
+    std::thread::spawn(move || {
+        let result = crate::update::check_for_update().map_err(|error| error.to_string());
+        let _ = background_results.send(BackgroundResult::Update(result));
+    });
 
     let mut clipboard_out = io::stdout();
     let result = run_loop(
@@ -299,7 +302,6 @@ fn apply_startup_modals(app: &mut App) {
         app.show_keyboard_remap_prompt();
     }
 
-    // If no higher-priority modal is open, show any deferred "What's New" changelog modal.
     if matches!(app.mode, AppMode::Normal(_))
         && let Some(pending) = app.data.pending_changelog.take()
     {
@@ -308,12 +310,35 @@ fn apply_startup_modals(app: &mut App) {
 }
 
 fn configure_keyboard_enhancement(stdout: &mut dyn io::Write) -> bool {
-    // Enable Kitty keyboard protocol to disambiguate Ctrl+M from Enter
-    // This is supported by modern terminals: kitty, foot, WezTerm, alacritty (0.13+)
-    enable_keyboard_enhancement_with_support(
-        stdout,
-        supports_keyboard_enhancement().unwrap_or(false),
-    )
+    enable_keyboard_enhancement_with_support(stdout, probe_keyboard_enhancement())
+}
+
+fn probe_keyboard_enhancement() -> bool {
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(mut child) = std::process::Command::new(executable)
+        .arg("keyboard-probe")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    let deadline = Instant::now() + Duration::from_millis(KEYBOARD_PROBE_TIMEOUT_MS);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+            Err(_) => return false,
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    false
 }
 
 fn enable_keyboard_enhancement_with_support(stdout: &mut dyn io::Write, supported: bool) -> bool {
@@ -529,14 +554,83 @@ fn should_refresh_commits(active_tab: Tab, needs_content_update: bool, commits_d
     commits_due
 }
 
-fn maybe_finish_preparing_docker(app: &mut App) -> bool {
-    if !matches!(&app.mode, AppMode::PreparingDocker(_)) {
+fn maybe_finish_working(app: &mut App) -> bool {
+    let AppMode::Working(operation) = &app.mode else {
         return false;
-    }
-
-    let next = app.data.finish_preparing_docker_for_new_roots();
+    };
+    let operation = operation.clone();
+    let actions = Actions::new();
+    let next = match operation {
+        PendingOperation::PrepareDocker => app.data.finish_preparing_docker_for_new_roots(),
+        PendingOperation::CreateAgent {
+            repo_path,
+            title,
+            prompt,
+        } => actions
+            .create_agent(&mut app.data, &repo_path, &title, prompt.as_deref())
+            .unwrap_or_else(|error| {
+                crate::state::ErrorModalMode {
+                    message: format!("Failed to create agent: {error:#}"),
+                }
+                .into()
+            }),
+        PendingOperation::KillAgent { agent_id } => {
+            match actions.kill_agent(&mut app.data, agent_id) {
+                Ok(()) => AppMode::normal(),
+                Err(error) => crate::state::ErrorModalMode {
+                    message: format!("Failed to delete agent: {error:#}"),
+                }
+                .into(),
+            }
+        }
+        PendingOperation::SpawnReviewAgents {
+            parent_id,
+            count,
+            base_branch,
+            program,
+        } => match actions.spawn_review_agents(
+            &mut app.data,
+            parent_id,
+            count,
+            &base_branch,
+            &program,
+        ) {
+            Ok(()) => AppMode::normal(),
+            Err(error) => crate::state::ErrorModalMode {
+                message: format!("Failed to start review: {error:#}"),
+            }
+            .into(),
+        },
+    };
     app.apply_mode(next);
     true
+}
+
+fn apply_background_results(app: &mut App, pending_results: &mut VecDeque<BackgroundResult>) {
+    pending_results.extend(app.data.drain_background_results());
+    while let Some(result) = pending_results.pop_front() {
+        match result {
+            BackgroundResult::Status(message) => app.set_status(message),
+            BackgroundResult::Error(message) if matches!(app.mode, AppMode::Normal(_)) => {
+                app.apply_mode(crate::state::ErrorModalMode { message }.into());
+            }
+            BackgroundResult::Error(message) => {
+                pending_results.push_front(BackgroundResult::Error(message));
+                break;
+            }
+            BackgroundResult::Update(Ok(Some(info))) if matches!(app.mode, AppMode::Normal(_)) => {
+                app.apply_mode(UpdatePromptMode { info }.into());
+            }
+            BackgroundResult::Update(Ok(Some(info))) => {
+                pending_results.push_front(BackgroundResult::Update(Ok(Some(info))));
+                break;
+            }
+            BackgroundResult::Update(Ok(None)) => {}
+            BackgroundResult::Update(Err(error)) => {
+                warn!("Failed to check for updates: {error}");
+            }
+        }
+    }
 }
 
 fn apply_pending_resize(app: &mut App, action_handler: Actions, last_resize: Option<(u16, u16)>) {
@@ -575,14 +669,12 @@ fn run_loop(
     action_handler: Actions,
     clipboard_out: &mut dyn io::Write,
 ) -> Result<Option<UpdateInfo>> {
+    terminal.draw(app)?;
     init_preview_dimensions(terminal, app, action_handler);
 
     let mut state_tracker = StateFileTracker::new(app);
-    // Track selection to detect changes
     let mut last_selected = app.data.selected;
-    // Track active tab so we can refresh content when switching tabs
     let mut last_tab = app.data.active_tab;
-    // Force initial preview/diff update
     let mut needs_content_update = true;
     let mut last_preview_follow = app.data.ui.preview_follow;
     let mut last_preview_update = Instant::now();
@@ -594,10 +686,9 @@ fn run_loop(
     let mut last_commits_update = Instant::now();
     let mut last_status_sync = Instant::now();
     let mut last_pane_activity_sync = Instant::now();
+    let mut pending_results = VecDeque::new();
 
     loop {
-        // If we returned to normal mode and still need to show the keyboard prompt,
-        // display it now (e.g., after dismissing another startup modal).
         if matches!(app.mode, AppMode::Normal(_)) && app.should_show_keyboard_remap_prompt() {
             app.show_keyboard_remap_prompt();
         }
@@ -605,7 +696,13 @@ fn run_loop(
         let (batched_keys, last_resize, flushed_batched_keys) =
             drain_events(terminal, app, event_handler)?;
 
-        // Send batched keys to the mux in one command (much faster than per-keystroke)
+        if matches!(app.mode, AppMode::Working(_)) {
+            terminal.draw(app)?;
+            if maybe_finish_working(app) {
+                continue;
+            }
+        }
+
         let sent_keys_in_preview =
             compute_sent_keys_in_preview(flushed_batched_keys, &batched_keys, &app.mode);
         send_keys_and_flush_clipboard(clipboard_out, app, &batched_keys);
@@ -617,7 +714,6 @@ fn run_loop(
             last_selected = app.data.selected;
         }
 
-        // Detect selection change
         if app.data.selected != last_selected {
             last_selected = app.data.selected;
             needs_content_update = true;
@@ -627,12 +723,10 @@ fn run_loop(
                 app.data.ui.mark_agent_pane_seen(agent_id);
             }
         }
-        // Detect tab change
         if app.data.active_tab != last_tab {
             last_tab = app.data.active_tab;
             needs_content_update = true;
         }
-        // Detect follow-mode changes so we can adjust refresh strategy immediately.
         if app.data.ui.preview_follow != last_preview_follow {
             last_preview_follow = app.data.ui.preview_follow;
             needs_content_update = true;
@@ -677,12 +771,9 @@ fn run_loop(
 
         needs_content_update = false;
 
-        // Draw ONCE after draining all queued events
-        terminal.draw(app)?;
+        apply_background_results(app, &mut pending_results);
 
-        if maybe_finish_preparing_docker(app) {
-            continue;
-        }
+        terminal.draw(app)?;
 
         // Diff-check each pane less frequently than the UI frame rate.
         let pane_activity_interval = Duration::from_millis(

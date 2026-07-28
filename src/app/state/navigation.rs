@@ -24,7 +24,6 @@ impl App {
 
     /// Get a mutable reference to the currently selected agent
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
-        // Get the ID first, then get mutable reference
         let agent_id = self.data.selected_agent()?.id;
         self.data.storage.get_mut(agent_id)
     }
@@ -68,8 +67,6 @@ impl App {
             return;
         }
 
-        // `preview_dimensions` stores the preview inner height, which is `frame_height - 4`.
-        // The agent list inner height is `frame_height - 3` (one line taller, because it has no tab bar).
         let preview_inner_height =
             usize::from(self.data.ui.preview_dimensions.map_or(20, |(_, h)| h));
         let viewport_height = preview_inner_height.saturating_add(1);

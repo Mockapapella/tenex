@@ -28,7 +28,6 @@ pub fn handle_key_event(
     batched_keys: &mut Vec<String>,
 ) -> Result<()> {
     match &app.mode {
-        // Text input modes
         AppMode::Creating(_)
         | AppMode::Prompting(_)
         | AppMode::ChildPrompt(_)
@@ -40,7 +39,6 @@ pub fn handle_key_event(
             text_input::handle_text_input_mode(app, code, modifiers)?;
         }
 
-        // Count picker modes
         AppMode::ChildCount(_) => {
             picker::handle_child_count_mode(app, code)?;
         }
@@ -51,12 +49,10 @@ pub fn handle_key_event(
             picker::handle_review_info_mode(app)?;
         }
 
-        // Branch selector mode
         AppMode::BranchSelector(_) => {
             picker::handle_branch_selector_mode(app, code)?;
         }
 
-        // Git operation confirmation modes
         AppMode::ConfirmPush(_) => {
             confirm::handle_confirm_push_mode(app, code)?;
         }
@@ -67,12 +63,10 @@ pub fn handle_key_event(
             confirm::handle_rename_branch_mode(app, code)?;
         }
 
-        // General confirmation mode
         AppMode::Confirming(state) => {
             confirm::handle_confirming_mode(app, state.action, code)?;
         }
 
-        // Rebase/Merge branch selector modes
         AppMode::RebaseBranchSelector(_) => {
             picker::handle_rebase_branch_selector_mode(app, code)?;
         }
@@ -83,19 +77,15 @@ pub fn handle_key_event(
             picker::handle_switch_branch_selector_mode(app, code)?;
         }
 
-        // Keyboard remap prompt
         AppMode::KeyboardRemapPrompt(_) => {
             confirm::handle_keyboard_remap_mode(app, code)?;
         }
-        // Self-update prompt on startup
         AppMode::UpdatePrompt(state) => {
             let info = state.info.clone();
             confirm::handle_update_prompt_mode(app, &info, code)?;
         }
-        // Ignore input while the app is busy with a blocking background step.
-        AppMode::UpdateRequested(_) | AppMode::PreparingDocker(_) => {}
+        AppMode::UpdateRequested(_) | AppMode::Working(_) => {}
 
-        // Help, error, and success modes
         AppMode::Changelog(state) => {
             let mark_seen_version = state.mark_seen_version.clone();
             let max_scroll = crate::action::changelog_max_scroll(&app.data, state);
@@ -117,12 +107,10 @@ pub fn handle_key_event(
             crate::action::dispatch_success_modal_mode(app, state.message.clone())?;
         }
 
-        // Slash commands
         AppMode::CommandPalette(_) => {
             command::handle_command_palette_mode(app, code)?;
         }
 
-        // Slash command modal/pickers
         AppMode::ModelSelector(_) => {
             command::handle_model_selector_mode(app, code)?;
         }
@@ -130,16 +118,13 @@ pub fn handle_key_event(
             command::handle_settings_menu_mode(app, code)?;
         }
 
-        // Preview focused mode (forwards keys to the mux backend)
         AppMode::PreviewFocused(_) => {
             crate::action::dispatch_preview_focused_mode(app, code, modifiers, batched_keys)?;
         }
-        // Diff focused mode (interactive diff view)
         AppMode::DiffFocused(_) => {
             crate::action::dispatch_diff_focused_mode(app, code, modifiers)?;
         }
 
-        // Normal and scrolling modes
         AppMode::Normal(_) | AppMode::Scrolling(_) => {
             normal::handle_normal_mode(app, code, modifiers)?;
         }

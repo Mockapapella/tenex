@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use super::super::backend::{default_pty_size, global_state, spawn_window, unix_timestamp};
 
@@ -16,14 +17,19 @@ impl Manager {
     /// # Errors
     ///
     /// Returns an error if the session cannot be created.
-    pub fn create(name: &str, working_dir: &Path, command: Option<&[String]>) -> Result<()> {
+    pub fn create(
+        name: &str,
+        window_id: Uuid,
+        working_dir: &Path,
+        command: Option<&[String]>,
+    ) -> Result<()> {
         debug!(name, ?working_dir, ?command, "Creating mux session");
 
         if Self::exists(name) {
             bail!("Session '{name}' already exists");
         }
 
-        let window = spawn_window(0, name, working_dir, command, default_pty_size())?;
+        let window = spawn_window(window_id, 0, name, working_dir, command, default_pty_size())?;
 
         {
             let mut state = global_state().lock();
@@ -170,6 +176,7 @@ impl Manager {
     /// Returns an error if the window cannot be created.
     pub fn create_window(
         session: &str,
+        window_id: Uuid,
         window_name: &str,
         working_dir: &Path,
         command: Option<&[String]>,
@@ -189,7 +196,14 @@ impl Manager {
 
         let index = u32::try_from(window_count).context("Mux session has too many windows")?;
 
-        let window = spawn_window(index, window_name, working_dir, command, default_pty_size())?;
+        let window = spawn_window(
+            window_id,
+            index,
+            window_name,
+            working_dir,
+            command,
+            default_pty_size(),
+        )?;
 
         {
             let mut guard = session_ref.lock();
@@ -262,6 +276,7 @@ impl Manager {
             .map(|window| {
                 let window = window.lock();
                 Window {
+                    id: window.id,
                     index: window.index,
                     name: window.name.clone(),
                 }
@@ -371,6 +386,8 @@ pub struct Session {
 /// Information about a window.
 #[derive(Debug, Clone)]
 pub struct Window {
+    /// Stable identity of the owning Tenex agent.
+    pub id: Uuid,
     /// Window index.
     pub index: u32,
     /// Window name.
@@ -506,7 +523,7 @@ fn restart_root_window(
         return false;
     }
 
-    let (working_dir, command, size) = {
+    let (id, working_dir, command, size) = {
         let root = {
             let guard = session.lock();
             guard.windows.first().cloned()
@@ -517,10 +534,16 @@ fn restart_root_window(
         };
 
         let guard = root.lock();
-        (guard.working_dir.clone(), guard.command.clone(), guard.size)
+        (
+            guard.id,
+            guard.working_dir.clone(),
+            guard.command.clone(),
+            guard.size,
+        )
     };
 
     let new_root = match spawn_window(
+        id,
         0,
         session_name,
         &working_dir,

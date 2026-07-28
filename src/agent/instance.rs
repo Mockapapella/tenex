@@ -31,13 +31,15 @@ pub enum AgentRuntime {
     Docker,
 }
 
-/// A single agent instance
+/// Persisted identity, process, workspace, and hierarchy state for one agent.
+#[expect(
+    missing_docs,
+    reason = "self-describing fields omit restatements; persistence exceptions remain documented"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
-    /// Unique identifier for the agent
     pub id: Uuid,
 
-    /// Human-readable title/description
     pub title: String,
 
     /// Program being run (e.g., "claude", "aider")
@@ -47,13 +49,10 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
 
-    /// Current status of the agent
     pub status: Status,
 
-    /// Git branch name for this agent's work
     pub branch: String,
 
-    /// Path to the git worktree
     pub worktree_path: PathBuf,
 
     /// Root directory of the repository/workspace this agent belongs to.
@@ -62,11 +61,9 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_root: Option<PathBuf>,
 
-    /// Whether this agent runs in a Tenex-managed git worktree or a plain directory.
     #[serde(default)]
     pub workspace_kind: WorkspaceKind,
 
-    /// Where Tenex should run the agent process.
     #[serde(default)]
     pub runtime: AgentRuntime,
 
@@ -78,21 +75,16 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub runtime_scope: String,
 
-    /// Mux session name
     #[serde(alias = "tmux_session")]
     pub mux_session: String,
 
-    /// When the agent was created
     pub created_at: DateTime<Utc>,
 
-    /// When the agent was last updated
     pub updated_at: DateTime<Utc>,
 
-    /// Parent agent ID (None for root agents)
     #[serde(default)]
     pub parent_id: Option<Uuid>,
 
-    /// Window index within the root ancestor's session (None for root agents)
     #[serde(default)]
     pub window_index: Option<u32>,
 
@@ -105,26 +97,29 @@ pub struct Agent {
     pub is_terminal: bool,
 }
 
-/// Default value for collapsed field
 const fn default_collapsed() -> bool {
     true
 }
 
-/// Configuration for creating a child agent
+/// Parent session coordinates inherited by a new child.
+#[expect(
+    missing_docs,
+    reason = "the coordinate field names and types are the complete contract"
+)]
 #[derive(Debug, Clone)]
 pub struct ChildConfig {
-    /// Parent agent ID
     pub parent_id: Uuid,
-    /// Mux session name (from root ancestor)
     pub mux_session: String,
-    /// Window index in the session
     pub window_index: u32,
     /// Repository/workspace root for the agent.
     pub repo_root: Option<PathBuf>,
 }
 
+#[expect(
+    missing_docs,
+    reason = "self-describing constructors and predicates omit restatements"
+)]
 impl Agent {
-    /// Create a new agent with the given parameters
     #[must_use]
     pub fn new(title: String, program: String, branch: String, worktree_path: PathBuf) -> Self {
         let id = Uuid::new_v4();
@@ -153,7 +148,6 @@ impl Agent {
         }
     }
 
-    /// Create a new child agent under a parent
     #[must_use]
     pub fn new_child(
         title: String,
@@ -187,13 +181,11 @@ impl Agent {
         }
     }
 
-    /// Check if this agent is a root agent (no parent)
     #[must_use]
     pub const fn is_root(&self) -> bool {
         self.parent_id.is_none()
     }
 
-    /// Check if this agent is a child agent (has a parent)
     #[must_use]
     pub const fn is_child(&self) -> bool {
         self.parent_id.is_some()
@@ -207,7 +199,6 @@ impl Agent {
         self.is_terminal || self.program == "terminal"
     }
 
-    /// Whether this agent supports Tenex git operations (branch/worktree management).
     #[must_use]
     pub const fn is_git_workspace(&self) -> bool {
         matches!(self.workspace_kind, WorkspaceKind::GitWorktree)
@@ -232,7 +223,7 @@ impl Agent {
         }
     }
 
-    /// Update the agent's status
+    /// Set the status and refresh `updated_at`.
     pub fn set_status(&mut self, status: Status) {
         self.status = status;
         self.updated_at = Utc::now();

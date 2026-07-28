@@ -89,8 +89,6 @@ impl Actions {
             app.data.ui.preview_scroll = new_max.saturating_sub(distance_from_bottom);
         }
 
-        // Auto-scroll to bottom only if follow mode is enabled
-        // (disabled when user manually scrolls up, re-enabled when they scroll to bottom)
         if app.data.ui.preview_follow {
             app.data.ui.preview_scroll = usize::MAX;
         }

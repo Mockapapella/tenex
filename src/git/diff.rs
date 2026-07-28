@@ -552,7 +552,6 @@ impl<'a> Generator<'a> {
 
             match origin {
                 'H' => {
-                    // Start a new hunk.
                     let (old_start, old_lines, new_start, new_lines) = hunk
                         .map_or((0, 0, 0, 0), |h| {
                             (h.old_start(), h.old_lines(), h.new_start(), h.new_lines())
@@ -567,7 +566,6 @@ impl<'a> Generator<'a> {
                     });
                 }
                 '+' | '-' | ' ' | '\\' => {
-                    // Hunk line. Ensure we have a hunk to attach to.
                     push_model_hunk_line(
                         file,
                         origin,
@@ -589,7 +587,6 @@ impl<'a> Generator<'a> {
                     }
                 }
                 _ => {
-                    // File-level metadata or other patch lines (diff --git, index, ---/+++).
                     file.meta.push(content);
                 }
             }

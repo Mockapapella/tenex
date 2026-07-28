@@ -197,7 +197,6 @@ impl<'a> Manager<'a> {
         let mut local_branches = Vec::new();
         let mut remote_branch_infos = Vec::new();
 
-        // Get local branches
         let branches = self
             .repo
             .branches(Some(BranchType::Local))
@@ -229,7 +228,6 @@ impl<'a> Manager<'a> {
             });
         }
 
-        // Get remote branches
         let branches = self
             .repo
             .branches(Some(BranchType::Remote))
@@ -241,12 +239,10 @@ impl<'a> Manager<'a> {
                 continue;
             };
 
-            // Skip HEAD references like "origin/HEAD"
             if full_name.ends_with("/HEAD") {
                 continue;
             }
 
-            // Parse remote name and branch name (e.g., "origin/main" -> ("origin", "main"))
             let parts: Vec<&str> = full_name.splitn(2, '/').collect();
             let (remote_name, branch_name) = if parts.len() == 2 {
                 (Some(parts[0].to_string()), parts[1].to_string())
@@ -274,22 +270,16 @@ impl<'a> Manager<'a> {
             });
         }
 
-        // Sort local branches: main/master first, then by most recent commit
         local_branches.sort_by(|a, b| {
             let a_priority = Self::branch_priority(&a.name);
             let b_priority = Self::branch_priority(&b.name);
 
-            // Higher priority first (main/master)
             match b_priority.cmp(&a_priority) {
-                std::cmp::Ordering::Equal => {
-                    // Then by most recent commit
-                    b.last_commit_time.cmp(&a.last_commit_time)
-                }
+                std::cmp::Ordering::Equal => b.last_commit_time.cmp(&a.last_commit_time),
                 other => other,
             }
         });
 
-        // Sort remote branches: main/master first, then by most recent commit
         remote_branch_infos.sort_by(|a, b| {
             let a_priority = Self::branch_priority(&a.name);
             let b_priority = Self::branch_priority(&b.name);
@@ -300,7 +290,6 @@ impl<'a> Manager<'a> {
             }
         });
 
-        // Combine: local branches first, then remote
         let mut result = local_branches;
         result.extend(remote_branch_infos);
         Ok(result)

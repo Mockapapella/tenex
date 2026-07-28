@@ -73,14 +73,12 @@ impl ReviewState {
     /// Handle character input in branch filter
     pub fn handle_filter_char(&mut self, c: char) {
         self.filter.push(c);
-        // Reset selection to 0 when filter changes
         self.selected = 0;
     }
 
     /// Handle backspace in branch filter
     pub fn handle_filter_backspace(&mut self) {
         self.filter.pop();
-        // Reset selection when filter changes
         self.selected = 0;
     }
 
@@ -103,14 +101,14 @@ impl ReviewState {
     }
 }
 
-use super::App;
+use super::{App, spawn::DEFAULT_CHILD_COUNT};
 use crate::state::{BranchSelectorMode, ReviewChildCountMode, ReviewInfoMode};
 
 impl App {
     /// Start the review flow - show info if no agent selected, otherwise proceed to count
     pub fn start_review(&mut self, branches: Vec<BranchInfo>) {
         self.data.review.start(branches);
-        self.data.spawn.child_count = 3; // Reset to default
+        self.data.spawn.child_count = DEFAULT_CHILD_COUNT;
         self.apply_mode(ReviewChildCountMode.into());
     }
 

@@ -141,7 +141,6 @@ pub fn ensure_tenex_excluded(repo_path: &Path) -> Result<()> {
     let info_dir = git_dir.join("info");
     let exclude_path = info_dir.join("exclude");
 
-    // Create info directory if it doesn't exist
     if !info_dir.exists() {
         fs::create_dir_all(&info_dir)
             .with_context(|| format!("Failed to create {}", info_dir.display()))?;
@@ -162,14 +161,12 @@ pub fn ensure_tenex_excluded(repo_path: &Path) -> Result<()> {
             for line in reader.lines() {
                 let line = line.context("Failed to read exclude file")?;
                 if line.trim() == EXCLUDE_ENTRY {
-                    // Already excluded
                     return Ok(());
                 }
             }
         }
     }
 
-    // Append .tenex/ to exclude file
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

@@ -20,13 +20,11 @@ pub fn render_command_palette_overlay(frame: &mut Frame<'_>, app: &App) {
     let visible_count = total_count.min(max_visible).max(1);
     let visible_count_u16 = u16::try_from(visible_count).unwrap_or(0);
 
-    // Header + blank + list + blank + help
     let content_height = 1u16 + 1u16 + visible_count_u16 + 1u16 + 1u16;
-    let total_height = content_height.saturating_add(2); // borders
+    let total_height = content_height.saturating_add(2);
 
     let area = centered_rect_absolute(60, total_height, frame.area());
 
-    // Insert cursor marker at cursor position
     let input = app.data.input.buffer.as_str();
     let cursor_pos = app.data.input.cursor;
     let text_with_cursor = if cursor_pos >= input.len() {

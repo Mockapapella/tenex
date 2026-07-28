@@ -152,7 +152,7 @@ impl App {
             .git_op
             .start_rename(agent_id, current_name.clone(), is_root);
         self.data.input.buffer = current_name;
-        self.data.input.cursor = self.data.input.buffer.len(); // Cursor at end
+        self.data.input.cursor = self.data.input.buffer.len();
         self.apply_mode(RenameBranchMode.into());
     }
 
@@ -180,8 +180,6 @@ impl App {
 
         if has_unpushed {
             self.apply_mode(ConfirmPushForPRMode.into());
-        } else {
-            // No unpushed commits, will open PR directly (handled in handler)
         }
     }
 

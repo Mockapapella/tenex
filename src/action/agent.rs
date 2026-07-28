@@ -410,10 +410,8 @@ impl ValidIn<NormalMode> for ReviewSwarmAction {
             return Ok(AppMode::normal());
         }
 
-        // Store the selected agent's ID for later use.
         app_data.spawn.spawning_under = Some(selected_id);
 
-        // Fetch branches for the selector.
         let Ok(repo) = git::open_repository(&selected_worktree_path) else {
             app_data.set_status("Review swarm requires a git repository");
             return Ok(AppMode::normal());
@@ -445,10 +443,8 @@ impl ValidIn<ScrollingMode> for ReviewSwarmAction {
             return Ok(ScrollingMode.into());
         }
 
-        // Store the selected agent's ID for later use.
         app_data.spawn.spawning_under = Some(selected_id);
 
-        // Fetch branches for the selector.
         let Ok(repo) = git::open_repository(&selected_worktree_path) else {
             app_data.set_status("Review swarm requires a git repository");
             return Ok(ScrollingMode.into());

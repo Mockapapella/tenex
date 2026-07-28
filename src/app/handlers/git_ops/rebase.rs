@@ -32,7 +32,6 @@ impl Actions {
 
         debug!(branch = %current_branch, "Starting rebase flow");
 
-        // Fetch branches for selector from the selected agent's repository.
         let repo_path = agent
             .repo_root
             .clone()
@@ -81,7 +80,6 @@ impl Actions {
             "Executing rebase"
         );
 
-        // Execute git rebase
         let output = crate::git::git_command()
             .args(["rebase", &target_branch])
             .current_dir(&worktree_path)
@@ -93,18 +91,15 @@ impl Actions {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined = format!("{stdout}{stderr}");
 
-            // Check if there are merge conflicts (git may output to stdout or stderr)
             if output_indicates_rebase_conflict(&combined) {
                 info!(
                     current = %current_branch,
                     target = %target_branch,
                     "Rebase has conflicts - spawning terminal"
                 );
-                // Spawn terminal for conflict resolution
                 return Self::spawn_conflict_terminal(app_data, "Rebase Conflict", "git status");
             }
 
-            // Show error with both stdout and stderr for context
             let error_msg = super::merge::git_failure_message(stdout.as_ref(), stderr.as_ref());
             app_data.git_op.clear();
             app_data.review.clear();

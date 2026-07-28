@@ -20,7 +20,6 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
     let mut remaining = description;
 
     while let Some(start) = remaining.find('[') {
-        // Add text before the bracket
         if start > 0 {
             spans.push(Span::styled(
                 remaining[..start].to_string(),
@@ -28,12 +27,10 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
             ));
         }
 
-        // Find the closing bracket
         if let Some(end) = remaining[start..].find(']') {
             let end = start + end;
             let bracket_content = &remaining[start + 1..end];
 
-            // Add styled bracket and content
             spans.push(Span::styled(
                 "[".to_string(),
                 Style::default().fg(colors::TEXT_DIM),
@@ -51,7 +48,6 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
 
             remaining = &remaining[end + 1..];
         } else {
-            // No closing bracket, add rest as-is
             spans.push(Span::styled(
                 remaining[start..].to_string(),
                 Style::default().fg(colors::TEXT_PRIMARY),
@@ -60,7 +56,6 @@ fn styled_mnemonic_description(description: &str) -> Vec<Span<'static>> {
         }
     }
 
-    // Add any remaining text after the last bracket
     if !remaining.is_empty() {
         spans.push(Span::styled(
             remaining.to_string(),
@@ -89,7 +84,6 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
     for &action in Action::ALL_FOR_HELP {
         let group = action.group();
 
-        // Add section header when group changes
         if current_group != Some(group) {
             if current_group.is_some() {
                 help_text.push(Line::from(""));
@@ -101,8 +95,6 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
             current_group = Some(group);
         }
 
-        // Build help line with styled mnemonics
-        // Use dynamic display functions for keyboard remap support
         let key_str = get_display_keys(action, merge_key_remapped);
         let description = get_display_description(action, merge_key_remapped);
 
@@ -127,7 +119,6 @@ pub fn render_help_overlay(frame: &mut Frame<'_>, app: &App) {
 
     let total_lines = help_text.len();
 
-    // Size the modal to fit content when possible; otherwise take as much height as we can.
     let max_height = frame.area().height.saturating_sub(4);
     let min_height = 12u16.min(max_height);
     let desired_height = u16::try_from(total_lines)

@@ -1,6 +1,7 @@
 //! IPC protocol between the Tenex TUI and the mux daemon.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// A running mux session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,8 @@ pub struct SessionInfo {
 /// A mux window inside a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
+    /// Stable identity supplied by the Tenex agent record.
+    pub id: Uuid,
     /// Window index within the session.
     pub index: u32,
     /// Window title/name.
@@ -52,6 +55,8 @@ pub enum MuxRequest {
     CreateSession {
         /// Session name.
         name: String,
+        /// Stable identity of the root agent.
+        window_id: Uuid,
         /// Working directory.
         working_dir: String,
         /// Command argv (empty means the platform default shell).
@@ -82,6 +87,8 @@ pub enum MuxRequest {
     CreateWindow {
         /// Session name.
         session: String,
+        /// Stable identity of the child agent.
+        window_id: Uuid,
         /// Window title/name.
         window_name: String,
         /// Working directory.

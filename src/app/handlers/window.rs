@@ -45,12 +45,10 @@ impl Actions {
         let mut targets = Vec::new();
         for agent in app.data.storage.iter() {
             if agent.is_root() {
-                // Root agent: resize the session
                 if self.session_manager.exists(&agent.mux_session) {
                     targets.push(agent.mux_session.clone());
                 }
             } else if let Some(window_idx) = agent.window_index {
-                // Child agent: resize the specific window
                 let mut root_agent = agent;
                 while let Some(parent_id) = root_agent.parent_id {
                     let Some(parent) = app.data.storage.get(parent_id) else {
@@ -143,13 +141,11 @@ fn adjust_window_indices_for_agent_ids(
     agent_ids: &[uuid::Uuid],
     deleted_indices_sorted: &[u32],
 ) {
-    // Update each remaining agent's window index
     for agent_id in agent_ids {
         let Some(agent) = app_data.storage.get_mut(*agent_id) else {
             continue;
         };
         if let Some(current_idx) = agent.window_index {
-            // Count how many deleted indices are less than current index
             let decrement = u32::try_from(
                 deleted_indices_sorted
                     .iter()

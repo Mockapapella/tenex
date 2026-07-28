@@ -645,7 +645,6 @@ impl<'a> Manager<'a> {
         let head = self.repo.head().context("Failed to get HEAD")?;
         let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
 
-        // Clean up any existing worktree/branch with this name (from a previous run)
         // Must remove worktree first, as the branch can't be deleted while it's
         // the HEAD of a linked worktree
         let worktree_name = branch.replace('/', "-");
@@ -664,7 +663,6 @@ impl<'a> Manager<'a> {
 
         self.cleanup_orphaned_worktree_admin_dir(&worktree_name)?;
 
-        // Now delete the branch if it exists
         let branch_mgr = super::BranchManager::new(self.repo);
         if branch_mgr.exists(branch) {
             debug!(branch, "Deleting existing branch before recreation");
@@ -843,10 +841,8 @@ impl<'a> Manager<'a> {
     pub fn remove(&self, name: &str) -> Result<()> {
         debug!(name, "Removing worktree and branch");
 
-        // Worktree name has slashes replaced with dashes
         let worktree_name = name.replace('/', "-");
 
-        // Try to remove the worktree with retries (may already be gone)
         if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
             let wt_path = worktree.path().to_path_buf();
 
@@ -882,21 +878,16 @@ impl<'a> Manager<'a> {
                 return Err(e);
             }
 
-            // Verify the worktree is actually gone from git's perspective
-            if !prune_succeeded {
-                // Check if it's still registered with git
-                if self.repo.find_worktree(&worktree_name).is_ok() {
-                    warn!(name, "Worktree still exists in git after prune attempts");
-                    return Err(anyhow::anyhow!(
-                        "Failed to remove worktree '{name}' - it may still be in use"
-                    ));
-                }
+            if !prune_succeeded && self.repo.find_worktree(&worktree_name).is_ok() {
+                warn!(name, "Worktree still exists in git after prune attempts");
+                return Err(anyhow::anyhow!(
+                    "Failed to remove worktree '{name}' - it may still be in use"
+                ));
             }
 
             debug!(name, "Worktree pruned");
         }
 
-        // Always try to delete the branch (critical for cleanup)
         // Ignore errors - branch may already be deleted or checked out elsewhere
         let branch_mgr = super::BranchManager::new(self.repo);
         let _ = branch_mgr.delete(name);
@@ -914,10 +905,8 @@ impl<'a> Manager<'a> {
     pub fn remove_worktree_only(&self, name: &str) -> Result<()> {
         debug!(name, "Removing worktree (keeping branch)");
 
-        // Worktree name has slashes replaced with dashes
         let worktree_name = name.replace('/', "-");
 
-        // Try to remove the worktree with retries (may already be gone)
         if let Ok(worktree) = self.repo.find_worktree(&worktree_name) {
             let wt_path = worktree.path().to_path_buf();
 
@@ -953,7 +942,6 @@ impl<'a> Manager<'a> {
                 return Err(e);
             }
 
-            // Verify the worktree is actually gone from git's perspective
             if !prune_succeeded && self.repo.find_worktree(&worktree_name).is_ok() {
                 warn!(name, "Worktree still exists in git after prune attempts");
                 return Err(anyhow::anyhow!(
@@ -1113,7 +1101,6 @@ impl<'a> Manager<'a> {
             .find_worktree(&worktree_name)
             .with_context(|| format!("Worktree not found: {name}"))?;
 
-        // Open the worktree as a repository to get its HEAD
         let wt_repo = git2::Repository::open(worktree.path()).with_context(|| {
             format!(
                 "Failed to open worktree repository at {}",

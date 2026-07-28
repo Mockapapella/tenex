@@ -4,6 +4,7 @@ use super::protocol::{MuxRequest, MuxResponse};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tracing::debug;
+use uuid::Uuid;
 
 const CLAUDE_ENTER_CSI_U: &[u8] = b"\x1b[13;1u";
 const CLAUDE_CSI_U_SPLIT_DELAY_MS: u64 = 150;
@@ -61,7 +62,13 @@ impl Manager {
     /// # Errors
     ///
     /// Returns an error if the session cannot be created.
-    pub fn create(&self, name: &str, working_dir: &Path, command: Option<&[String]>) -> Result<()> {
+    pub fn create(
+        &self,
+        name: &str,
+        window_id: Uuid,
+        working_dir: &Path,
+        command: Option<&[String]>,
+    ) -> Result<()> {
         let working_dir = resolve_working_dir(working_dir)?;
         debug!(name, ?working_dir, ?command, "Creating mux session");
 
@@ -73,6 +80,7 @@ impl Manager {
 
         match super::client::request(&MuxRequest::CreateSession {
             name: name.to_string(),
+            window_id,
             working_dir: working_dir.to_string_lossy().into_owned(),
             command,
             cols: super::backend::DEFAULT_COLS,
@@ -307,6 +315,7 @@ impl Manager {
     pub fn create_window(
         &self,
         session: &str,
+        window_id: Uuid,
         window_name: &str,
         working_dir: &Path,
         command: Option<&[String]>,
@@ -320,6 +329,7 @@ impl Manager {
 
         match super::client::request(&MuxRequest::CreateWindow {
             session: session.to_string(),
+            window_id,
             window_name: window_name.to_string(),
             working_dir: working_dir.to_string_lossy().into_owned(),
             command,
@@ -366,6 +376,7 @@ impl Manager {
             MuxResponse::Windows { windows } => Ok(windows
                 .into_iter()
                 .map(|w| Window {
+                    id: w.id,
                     index: w.index,
                     name: w.name,
                 })
@@ -493,6 +504,8 @@ pub struct Session {
 /// Information about a mux window.
 #[derive(Debug, Clone)]
 pub struct Window {
+    /// Stable identity of the owning Tenex agent.
+    pub id: Uuid,
     /// Window index.
     pub index: u32,
     /// Window name.
