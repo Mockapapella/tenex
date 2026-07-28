@@ -24,6 +24,7 @@ pub use confirm::{
 };
 pub use error::{render_error_modal, render_success_modal};
 pub use help::render_help_overlay;
+pub(super) use input::render_single_line_input_overlay;
 pub use input::{render_input_overlay, render_rename_overlay};
 pub use models::render_model_selector_overlay;
 pub use picker::{
@@ -69,14 +70,15 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
         AppMode::Changelog(state) => Some(changelog_rect(state, frame_area)),
         AppMode::Help(_) => Some(help_rect(frame_area)),
         AppMode::CommandPalette(_) => Some(command_palette_rect(app, frame_area)),
-        AppMode::Creating(_)
-        | AppMode::Prompting(_)
-        | AppMode::ChildPrompt(_)
+        AppMode::Creating(_) | AppMode::Prompting(_) => {
+            Some(text_input_rect(app, frame_area, false))
+        }
+        AppMode::ChildPrompt(_)
         | AppMode::Broadcasting(_)
         | AppMode::ReconnectPrompt(_)
         | AppMode::TerminalPrompt(_)
         | AppMode::CustomAgentCommand(_)
-        | AppMode::SynthesisPrompt(_) => Some(text_input_rect(app, frame_area)),
+        | AppMode::SynthesisPrompt(_) => Some(text_input_rect(app, frame_area, true)),
         AppMode::ChildCount(_) | AppMode::ReviewChildCount(_) => {
             Some(centered_rect_absolute(40, 12, frame_area))
         }
@@ -163,7 +165,7 @@ fn command_palette_rect(app: &App, frame_area: Rect) -> Rect {
     centered_rect_absolute(60, total_height, frame_area)
 }
 
-fn text_input_rect(app: &App, frame_area: Rect) -> Rect {
+fn text_input_rect(app: &App, frame_area: Rect, multiline: bool) -> Rect {
     let input = app.data.input.buffer.as_str();
     let cursor_pos = app.data.input.cursor;
     let text_with_cursor = if cursor_pos >= input.len() {
@@ -174,15 +176,15 @@ fn text_input_rect(app: &App, frame_area: Rect) -> Rect {
         format!("{before}│{after}")
     };
 
-    let min_input_height = 3_usize;
-    let max_input_height = 20_usize;
+    let min_input_height = if multiline { 3 } else { 1 };
+    let max_input_height = if multiline { 20 } else { 1 };
     let modal_width = centered_rect_absolute(60, 1, frame_area).width;
     let mut inner_width = modal_width.saturating_sub(2).max(1);
 
     let mut input_lines =
         input::wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width)).0;
     let mut input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
-    let needs_scrollbar = input_lines.len() > input_area_height;
+    let needs_scrollbar = multiline && input_lines.len() > input_area_height;
 
     if needs_scrollbar {
         inner_width = modal_width.saturating_sub(3).max(1);

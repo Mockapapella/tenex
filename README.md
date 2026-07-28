@@ -153,7 +153,7 @@ Open the Diff tab and press `Enter` before you use these keys.
 
 ## Configuration
 
-Tenex uses `claude --allow-dangerously-skip-permissions` for new, planning, and review agents by default. Open `/agents` to set the program for each role to Claude, Codex, or a custom command.
+Tenex uses Codex for new, planning, and review agents by default. Open `/agents` to set the program for each role to Codex, Claude, or a custom command.
 
 The command palette contains these commands.
 
