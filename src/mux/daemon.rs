@@ -133,10 +133,11 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
         MuxRequest::SessionExists { name } => Ok(handle_session_exists(&name)),
         MuxRequest::CreateSession {
             name,
+            window_id,
             working_dir,
             command,
             ..
-        } => handle_create_session(&name, &working_dir, &command),
+        } => handle_create_session(&name, window_id, &working_dir, &command),
         MuxRequest::KillSession { name } => handle_kill_session(&name),
         MuxRequest::RenameSession { old_name, new_name } => {
             handle_rename_session(&old_name, &new_name)
@@ -144,11 +145,12 @@ fn dispatch_request(request: MuxRequest) -> Result<MuxResponse> {
         MuxRequest::ListWindows { session } => handle_list_windows(&session),
         MuxRequest::CreateWindow {
             session,
+            window_id,
             window_name,
             working_dir,
             command,
             ..
-        } => handle_create_window(&session, &window_name, &working_dir, &command),
+        } => handle_create_window(&session, window_id, &window_name, &working_dir, &command),
         MuxRequest::KillWindow {
             session,
             window_index,
@@ -205,14 +207,19 @@ fn handle_session_exists(name: &str) -> MuxResponse {
     }
 }
 
-fn handle_create_session(name: &str, working_dir: &str, command: &[String]) -> Result<MuxResponse> {
+fn handle_create_session(
+    name: &str,
+    window_id: uuid::Uuid,
+    working_dir: &str,
+    command: &[String],
+) -> Result<MuxResponse> {
     let dir = Path::new(working_dir);
     let command = if command.is_empty() {
         None
     } else {
         Some(command)
     };
-    super::server::SessionManager::create(name, dir, command)?;
+    super::server::SessionManager::create(name, window_id, dir, command)?;
     Ok(MuxResponse::Ok)
 }
 
@@ -230,6 +237,7 @@ fn handle_list_windows(session: &str) -> Result<MuxResponse> {
     let windows = super::server::SessionManager::list_windows(session)?
         .into_iter()
         .map(|w| WindowInfo {
+            id: w.id,
             index: w.index,
             name: w.name,
         })
@@ -239,6 +247,7 @@ fn handle_list_windows(session: &str) -> Result<MuxResponse> {
 
 fn handle_create_window(
     session: &str,
+    window_id: uuid::Uuid,
     window_name: &str,
     working_dir: &str,
     command: &[String],
@@ -249,7 +258,13 @@ fn handle_create_window(
     } else {
         Some(command)
     };
-    let index = super::server::SessionManager::create_window(session, window_name, dir, command)?;
+    let index = super::server::SessionManager::create_window(
+        session,
+        window_id,
+        window_name,
+        dir,
+        command,
+    )?;
     Ok(MuxResponse::WindowCreated { index })
 }
 

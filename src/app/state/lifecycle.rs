@@ -98,9 +98,9 @@ impl App {
             AppMode::SuccessModal(state) => {
                 self.mode = AppMode::SuccessModal(state);
             }
-            AppMode::PreparingDocker(state) => {
+            AppMode::Working(state) => {
                 self.data.input.clear();
-                self.mode = AppMode::PreparingDocker(state);
+                self.mode = AppMode::Working(state);
             }
             AppMode::Changelog(state) => {
                 self.data.input.clear();

@@ -15,15 +15,6 @@ pub enum AgentLaunch<'a> {
     Resume,
 }
 
-/// What Tenex still needs to do before Docker mode is ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DockerPreparation {
-    /// Docker is available and the shipped worker image is already present.
-    Ready,
-    /// Docker is available, but the shipped worker image still needs to be built.
-    NeedsImageBuild,
-}
-
 /// Runtime for newly created root agents.
 #[must_use]
 pub const fn new_root_runtime(settings: &Settings) -> AgentRuntime {
@@ -32,27 +23,6 @@ pub const fn new_root_runtime(settings: &Settings) -> AgentRuntime {
     } else {
         AgentRuntime::Host
     }
-}
-
-/// Check whether Docker mode can be enabled immediately or needs a first-use image build.
-///
-/// # Errors
-///
-/// Returns an error if Docker is missing, the daemon is unavailable, or the configured programs
-/// are not supported by the shipped worker image.
-pub fn inspect_docker_runtime(settings: &Settings, programs: &[&str]) -> Result<DockerPreparation> {
-    docker::check_available()?;
-
-    let mut needs_image_build = false;
-    for program in programs {
-        needs_image_build |= docker::image_build_required(settings, program)?;
-    }
-
-    Ok(if needs_image_build {
-        DockerPreparation::NeedsImageBuild
-    } else {
-        DockerPreparation::Ready
-    })
 }
 
 /// Check whether Docker is available and the needed Docker image can be used.

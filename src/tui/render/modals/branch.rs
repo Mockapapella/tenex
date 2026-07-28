@@ -18,10 +18,8 @@ use crate::tui::render::colors;
     reason = "Branch selector has many UI elements"
 )]
 pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
-    // Get current branch for context
     let current_branch = &app.data.git_op.branch_name;
 
-    // Determine title based on mode
     let title = match &app.mode {
         AppMode::RebaseBranchSelector(_) => " Rebase onto Branch ",
         AppMode::MergeBranchSelector(_) => " Merge Branch ",
@@ -29,11 +27,9 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
         _ => " Select Base Branch ",
     };
 
-    // Calculate how many branches we can display
     let max_visible_branches: usize = 10;
-    let header_lines: u16 = 7; // Title + instruction + search box + section headers
-    let footer_lines: u16 = 3; // Instructions + border
-    // Safe cast: max_visible_branches is a small constant (10)
+    let header_lines: u16 = 7;
+    let footer_lines: u16 = 3;
     #[expect(
         clippy::cast_possible_truncation,
         reason = "max_visible_branches is small constant"
@@ -45,17 +41,14 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     let selected_idx = app.data.review.selected;
     let total_count = filtered.len();
 
-    // Calculate scroll offset to keep selection visible
     let scroll_offset = if selected_idx >= max_visible_branches {
         selected_idx - max_visible_branches + 1
     } else {
         0
     };
 
-    // Build list content with sections
     let mut lines: Vec<Line<'_>> = Vec::new();
 
-    // Show merge/rebase direction instruction
     match &app.mode {
         AppMode::MergeBranchSelector(_) => {
             lines.push(Line::from(vec![
@@ -108,7 +101,6 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     }
     lines.push(Line::from(""));
 
-    // Search box
     lines.push(Line::from(vec![
         Span::styled("Search: ", Style::default().fg(colors::TEXT_DIM)),
         Span::styled(
@@ -118,28 +110,22 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
     ]));
     lines.push(Line::from(""));
 
-    // Track if we've shown section headers
     let mut shown_local_header = false;
     let mut shown_remote_header = false;
     let mut displayed_count = 0;
 
-    // Iterate through filtered branches with proper indexing
     for (idx, branch) in filtered.iter().enumerate() {
-        // Skip branches before scroll offset
         if idx < scroll_offset {
-            // But still track if we passed local branches for header logic
             if !branch.is_remote {
                 shown_local_header = true;
             }
             continue;
         }
 
-        // Stop if we've shown enough branches
         if displayed_count >= max_visible_branches {
             break;
         }
 
-        // Show section header when transitioning
         if !branch.is_remote && !shown_local_header {
             lines.push(Line::from(Span::styled(
                 "── Local ──",
@@ -165,7 +151,6 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
         };
         let prefix = if is_selected { "▶ " } else { "  " };
 
-        // Format branch name
         let display_name = if branch.is_remote {
             let remote_prefix = branch.remote.as_deref().unwrap_or("");
             if remote_prefix.is_empty() {
@@ -184,7 +169,6 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
         displayed_count += 1;
     }
 
-    // Show scroll indicator if there are more branches
     if total_count > max_visible_branches {
         let hidden_above = scroll_offset;
         let hidden_below = total_count.saturating_sub(scroll_offset + max_visible_branches);
@@ -202,7 +186,6 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
         )));
     }
 
-    // Empty state
     if filtered.is_empty() {
         lines.push(Line::from(Span::styled(
             "No matching branches",
@@ -210,7 +193,6 @@ pub fn render_branch_selector_overlay(frame: &mut Frame<'_>, app: &App) {
         )));
     }
 
-    // Instructions
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "↑/↓ select • Enter confirm • Esc cancel",

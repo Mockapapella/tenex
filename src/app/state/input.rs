@@ -89,7 +89,6 @@ impl InputState {
     /// Delete the character before the cursor (backspace)
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
-            // Find the previous character boundary
             let prev_char_boundary = self.buffer[..self.cursor]
                 .char_indices()
                 .next_back()
@@ -109,7 +108,6 @@ impl InputState {
     /// Move cursor left by one character
     pub fn cursor_left(&mut self) {
         if self.cursor > 0 {
-            // Find previous character boundary
             self.cursor = self.buffer[..self.cursor]
                 .char_indices()
                 .next_back()
@@ -120,7 +118,6 @@ impl InputState {
     /// Move cursor right by one character
     pub fn cursor_right(&mut self) {
         if self.cursor < self.buffer.len() {
-            // Find next character boundary
             self.cursor = self.buffer[self.cursor..]
                 .char_indices()
                 .nth(1)
@@ -131,17 +128,14 @@ impl InputState {
     /// Move cursor up one line (for multiline input)
     pub fn cursor_up(&mut self) {
         let text = &self.buffer[..self.cursor];
-        // Find current line start and column
         let current_line_start = text.rfind('\n').map_or(0, |i| i + 1);
         let column = self.cursor - current_line_start;
 
         if current_line_start > 0 {
-            // Find previous line
             let prev_text = &self.buffer[..current_line_start - 1];
             let prev_line_start = prev_text.rfind('\n').map_or(0, |i| i + 1);
             let prev_line_len = current_line_start - 1 - prev_line_start;
 
-            // Move to same column or end of previous line
             self.cursor = prev_line_start + column.min(prev_line_len);
         }
     }
@@ -149,12 +143,10 @@ impl InputState {
     /// Move cursor down one line (for multiline input)
     pub fn cursor_down(&mut self) {
         let text = &self.buffer;
-        // Find current line start and column
         let before_cursor = &text[..self.cursor];
         let current_line_start = before_cursor.rfind('\n').map_or(0, |i| i + 1);
         let column = self.cursor - current_line_start;
 
-        // Find next line
         if let Some(next_newline) = text[self.cursor..].find('\n') {
             let next_line_start = self.cursor + next_newline + 1;
             let next_line_end = text[next_line_start..]
@@ -162,7 +154,6 @@ impl InputState {
                 .map_or(text.len(), |i| next_line_start + i);
             let next_line_len = next_line_end - next_line_start;
 
-            // Move to same column or end of next line
             self.cursor = next_line_start + column.min(next_line_len);
         }
     }

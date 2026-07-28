@@ -63,7 +63,6 @@ impl Actions {
             .into());
         };
 
-        // Verify agent exists
         if app_data.storage.get(agent_id).is_none() {
             app_data.git_op.agent_id = None;
             return Ok(ErrorModalMode {
@@ -90,10 +89,8 @@ impl Actions {
         );
 
         let result = if is_root {
-            // Root agent: rename branch + agent + mux session
             Self::execute_root_rename(app_data, agent_id, &old_name, &new_name)
         } else {
-            // Sub-agent: rename agent title + mux window only
             Self::execute_subagent_rename(app_data, agent_id, &new_name)
         };
 
@@ -130,13 +127,11 @@ impl Actions {
         let old_branch = agent.branch.clone();
         let mux_session = agent.mux_session.clone();
 
-        // Generate new branch name from new title
         let new_branch = app_data.config.generate_branch_name(new_name);
         let new_worktree_path = app_data
             .config
             .worktree_path_for_repo_root(&repo_root, &new_branch);
 
-        // Rename local branch
         let rename_output = crate::git::git_command()
             .args(["branch", "-m", &old_branch, &new_branch])
             .current_dir(&worktree_path)
@@ -148,7 +143,6 @@ impl Actions {
             anyhow::bail!("Failed to rename branch: {}", stderr.trim());
         }
 
-        // Move the worktree directory and update metadata
         let mut effective_worktree_path = worktree_path.clone();
         if worktree_path != new_worktree_path {
             Self::move_worktree_directory(
@@ -161,7 +155,6 @@ impl Actions {
             effective_worktree_path.clone_from(&new_worktree_path);
         }
 
-        // Update agent records and mux session
         Self::update_agent_records(
             app_data,
             agent_id,
@@ -190,16 +183,13 @@ impl Actions {
         new_branch: &str,
         repo_root: &std::path::Path,
     ) -> Result<()> {
-        // Ensure parent directory exists
         let Some(parent) = new_path.parent() else {
             anyhow::bail!("Worktree path has no parent directory");
         };
         std::fs::create_dir_all(parent).context("Failed to create worktree parent directory")?;
 
-        // Move the worktree directory
         std::fs::rename(old_path, new_path).context("Failed to move worktree directory")?;
 
-        // Update git worktree metadata
         let gitdir_file = new_path.join(".git");
         if gitdir_file.exists() {
             let git_path_string =
@@ -212,7 +202,6 @@ impl Actions {
                 .join(&old_worktree_name);
 
             if worktree_meta_dir.exists() {
-                // Update the gitdir file to point to new location
                 let gitdir_path = worktree_meta_dir.join("gitdir");
                 if gitdir_path.exists() {
                     let new_gitdir_content =
@@ -222,7 +211,6 @@ impl Actions {
                     }
                 }
 
-                // Rename the worktree metadata directory
                 let new_worktree_name = new_branch.replace('/', "-");
                 let new_worktree_meta_dir = repo_root
                     .join(".git")
@@ -232,7 +220,6 @@ impl Actions {
                     if let Err(e) = std::fs::rename(&worktree_meta_dir, &new_worktree_meta_dir) {
                         warn!(error = %e, "Failed to rename worktree metadata directory");
                     } else {
-                        // Update the worktree's .git file to point to the renamed metadata directory
                         // Without this, git worktree remove will fail with "is not a .git file" error
                         let new_gitdir_pointer =
                             format!("gitdir: {}\n", git_path_string(&new_worktree_meta_dir));
@@ -255,14 +242,12 @@ impl Actions {
         new_branch: &str,
         new_worktree_path: &std::path::Path,
     ) -> Result<()> {
-        // Update the agent's title, branch name, and worktree path
         if let Some(agent) = app_data.storage.get_mut(agent_id) {
             agent.title = new_name.to_string();
             agent.branch = new_branch.to_string();
             agent.worktree_path = new_worktree_path.to_path_buf();
         }
 
-        // Update all descendants' worktree_path
         let descendant_ids: std::collections::HashSet<uuid::Uuid> = app_data
             .storage
             .descendant_ids(agent_id)
@@ -306,7 +291,6 @@ impl Actions {
             })
         });
 
-        // Update root agent's mux_session
         if let Some(agent) = app_data.storage.get_mut(agent_id) {
             if let Some(runtime_scope) = runtime_scope.as_ref() {
                 agent.runtime_scope.clone_from(runtime_scope);
@@ -314,7 +298,6 @@ impl Actions {
             agent.mux_session.clone_from(&new_session_name);
         }
 
-        // Update all descendants' mux_session
         let descendant_ids: std::collections::HashSet<uuid::Uuid> = app_data
             .storage
             .descendant_ids(agent_id)
@@ -428,7 +411,6 @@ impl Actions {
         };
         app_data.storage.save()?;
 
-        // Rename mux window if agent has a window index
         if let Some(idx) = window_index
             && let Err(e) = SessionManager::new().rename_window(&mux_session, idx, new_name)
         {

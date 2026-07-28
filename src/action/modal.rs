@@ -37,11 +37,6 @@ fn help_total_lines() -> usize {
         }
     }
 
-    // Content structure:
-    // - Header: 2 lines ("Keybindings" + blank)
-    // - Groups: each group adds a header line, and each transition adds an extra blank line
-    // - Actions: 1 line per action
-    // - Footer: blank line + 2 footer lines
     KeyAction::ALL_FOR_HELP
         .len()
         .saturating_add(group_count.saturating_mul(2))
@@ -57,8 +52,6 @@ fn help_total_lines() -> usize {
 pub fn help_max_scroll(data: &AppData) -> usize {
     let total_lines = help_total_lines();
 
-    // The help overlay uses `frame.area().height.saturating_sub(4)` as its max height.
-    // `preview_dimensions` stores the preview inner height, which is also `frame_height - 4`.
     let max_height = usize::from(data.ui.preview_dimensions.map_or(20, |(_, h)| h));
     let min_height = 12usize.min(max_height);
     let desired_height = total_lines.saturating_add(2);

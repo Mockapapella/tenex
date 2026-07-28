@@ -14,7 +14,6 @@ use crate::tui::render::colors;
 
 /// Render a confirmation overlay with yes/no buttons
 pub fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
-    // Add the yes/no prompt at the end
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled(
@@ -33,7 +32,6 @@ pub fn render_confirm_overlay(frame: &mut Frame<'_>, mut lines: Vec<Line<'_>>) {
         Span::styled("o", Style::default().fg(colors::TEXT_PRIMARY)),
     ]));
 
-    // Height: content lines + 2 for borders
     let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
     let area = centered_rect_absolute(50, height, frame.area());
 
@@ -78,7 +76,6 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
         Line::from(""),
     ];
 
-    // Show existing worktree info
     lines.push(Line::from(Span::styled(
         "Existing worktree:",
         Style::default()
@@ -102,7 +99,6 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
 
     lines.push(Line::from(""));
 
-    // Show what a new worktree would be based on
     lines.push(Line::from(Span::styled(
         "New worktree would be based on:",
         Style::default()
@@ -131,7 +127,6 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
     )));
     lines.push(Line::from(""));
 
-    // Add the choice buttons
     lines.push(Line::from(vec![
         Span::styled(
             "[R]",
@@ -176,7 +171,6 @@ pub fn render_worktree_conflict_overlay(frame: &mut Frame<'_>, app: &App) {
         Span::styled(" Cancel", Style::default().fg(colors::TEXT_MUTED)),
     ]));
 
-    // Height: content lines + 2 for borders
     let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
     let area = centered_rect_absolute(60, height, frame.area());
 
@@ -347,7 +341,6 @@ pub fn render_keyboard_remap_overlay(frame: &mut Frame<'_>) {
         ]),
     ];
 
-    // Height: content lines + 2 for borders
     let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
     let area = centered_rect_absolute(55, height, frame.area());
 
@@ -442,7 +435,6 @@ pub fn render_update_prompt_overlay(frame: &mut Frame<'_>, info: &UpdateInfo) {
 
 /// Render the confirm push for PR overlay
 pub fn render_confirm_push_for_pr_overlay(frame: &mut Frame<'_>, app: &App) {
-    // 9 lines of content + 2 for borders = 11 lines
     let area = centered_rect_absolute(55, 11, frame.area());
 
     let text = vec![

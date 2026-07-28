@@ -9,7 +9,7 @@ use crate::agent::Storage;
 use crate::app::{MuxdVersionMismatchInfo, Settings};
 use crate::config::Config;
 use crate::mux::SessionManager;
-use crate::state::{ChangelogMode, ConfirmAction, ConfirmingMode, UpdatePromptMode};
+use crate::state::{ChangelogMode, ConfirmAction, ConfirmingMode};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use semver::Version;
@@ -36,6 +36,9 @@ pub enum Commands {
     /// Run the mux daemon (internal).
     #[command(hide = true)]
     Muxd,
+    /// Probe terminal keyboard capabilities (internal).
+    #[command(hide = true)]
+    KeyboardProbe,
 }
 
 /// Reset breadth selected for the reset flow.
@@ -54,9 +57,12 @@ pub enum ResetScope {
 /// Returns any error raised while initializing state, executing a command, or
 /// running the interactive TUI.
 pub fn run() -> Result<()> {
-    init_logging();
-
     let cli = parse_cli();
+    if matches!(cli.command, Some(Commands::KeyboardProbe)) {
+        return run_keyboard_probe();
+    }
+
+    init_logging();
     match &cli.command {
         Some(Commands::Reset { force }) => {
             crate::migration::migrate_default_state_dir()
@@ -64,11 +70,20 @@ pub fn run() -> Result<()> {
             cmd_reset(*force)
         }
         Some(Commands::Muxd) => crate::mux::run_mux_daemon(),
+        Some(Commands::KeyboardProbe) => unreachable!("keyboard probe handled before logging"),
         None => {
             crate::migration::migrate_default_state_dir()
                 .unwrap_or_else(|err| warn_migration_failure(&err));
             cmd_default()
         }
+    }
+}
+
+fn run_keyboard_probe() -> Result<()> {
+    if ratatui::crossterm::terminal::supports_keyboard_enhancement()? {
+        Ok(())
+    } else {
+        anyhow::bail!("terminal does not support keyboard enhancement")
     }
 }
 
@@ -118,7 +133,6 @@ fn init_logging() {
         );
     }
 
-    // Clear the log file on startup
     if let Err(e) = std::fs::write(&log_path, "") {
         eprintln!(
             "Warning: Failed to clear log file {}: {e}",
@@ -126,8 +140,6 @@ fn init_logging() {
         );
     }
 
-    // Log to tenex.log in the OS temp directory
-    // Set DEBUG=0-3 to control verbosity (0=off, 1=warn, 2=info, 3=debug)
     let debug_level = debug.and_then(|v| v.parse::<u8>().ok()).unwrap_or(0);
 
     if debug_level == 0 {
@@ -299,7 +311,6 @@ fn run_interactive(
         .as_ref()
         .map(|cwd| crate::git::repository_workspace_root(cwd).unwrap_or_else(|_| cwd.clone()));
 
-    // Ensure .tenex/ is excluded from git tracking
     if let Some(cwd) = cwd.as_ref()
         && crate::git::is_git_repository(cwd)
         && let Err(e) = crate::git::ensure_tenex_excluded(cwd)
@@ -307,7 +318,6 @@ fn run_interactive(
         eprintln!("Warning: Failed to exclude .tenex from git: {e}");
     }
 
-    // keyboard_enhancement_supported will be set in tui::run after terminal setup
     let mut app = App::new(config, storage, settings, false);
     if let Some(message) = storage_load_error {
         app.set_error(message);
@@ -320,19 +330,6 @@ fn run_interactive(
         maybe_prompt_restart_mux_daemon(&mut app);
     }
 
-    if matches!(&app.mode, AppMode::Normal(_)) {
-        match crate::update::check_for_update() {
-            Ok(Some(info)) => {
-                app.apply_mode(UpdatePromptMode { info }.into());
-            }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("Warning: Failed to check for updates: {e}");
-            }
-        }
-    }
-
-    // Auto-connect to any existing worktrees
     if let Err(e) = crate::app::Actions::new().auto_connect_worktrees(&mut app) {
         eprintln!("Warning: Failed to auto-connect to worktrees: {e}");
     }
@@ -509,7 +506,6 @@ pub fn restart_current_process() -> Result<()> {
 
     let installed = find_installed_binary(env!("CARGO_PKG_NAME"));
 
-    // `exec` replaces the current process on success; on failure it returns an io::Error.
     let err = std::process::Command::new(installed).args(args).exec();
     Err(anyhow::Error::new(err).context("Failed to restart Tenex"))
 }
@@ -543,7 +539,6 @@ fn cmd_reset(force: bool) -> Result<()> {
     let instance_prefix = storage.instance_session_prefix();
     let scope = prompt_reset_scope(force)?;
 
-    // Find orphaned Tenex mux sessions (not in storage)
     let storage_sessions: HashSet<_> = storage
         .iter()
         .map(|agent| agent.mux_session.clone())
@@ -566,7 +561,6 @@ fn cmd_reset(force: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Kill mux sessions and remove worktrees/branches
     let repo_path = std::env::current_dir()?;
     let repo = crate::git::open_repository(&repo_path).ok();
     let worktree_mgr = repo.as_ref().map(WorktreeManager::new);
@@ -602,7 +596,6 @@ fn cmd_reset(force: bool) -> Result<()> {
         }
     }
 
-    // Kill orphaned sessions
     if mux_running {
         for session in &orphaned_sessions {
             if let Err(e) = mux.kill(session) {
@@ -611,7 +604,6 @@ fn cmd_reset(force: bool) -> Result<()> {
         }
     }
 
-    // Clear storage
     storage.clear();
     storage.save()?;
 

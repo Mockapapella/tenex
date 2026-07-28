@@ -9,6 +9,7 @@ mod state;
 
 pub use crate::state::ConfirmAction;
 pub use data::AppData;
+pub(crate) use data::BackgroundResult;
 pub use event::{Event, Handler};
 pub use handlers::Actions;
 pub use settings::{AgentProgram, AgentRole, Settings};

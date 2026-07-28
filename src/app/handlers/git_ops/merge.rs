@@ -57,7 +57,6 @@ impl Actions {
 
         debug!(branch = %current_branch, "Starting merge flow");
 
-        // Fetch branches for selector from the selected agent's repository.
         let repo_path = agent
             .repo_root
             .clone()
@@ -105,8 +104,8 @@ impl Actions {
             .or_else(|| git::repository_workspace_root(&agent.worktree_path).ok())
             .unwrap_or_else(|| agent.worktree_path.clone());
 
-        let source_branch = app_data.git_op.branch_name.clone(); // Agent's branch (e.g., tenex/feature)
-        let target_branch = app_data.git_op.target_branch.clone(); // Branch to merge into (e.g., master)
+        let source_branch = app_data.git_op.branch_name.clone();
+        let target_branch = app_data.git_op.target_branch.clone();
 
         debug!(
             source = %source_branch,
@@ -114,7 +113,6 @@ impl Actions {
             "Executing merge: {source_branch} -> {target_branch}"
         );
 
-        // Check if target branch has a worktree
         if let Some(worktree_path) = Self::find_worktree_for_branch(&repo_path, &target_branch)? {
             Self::execute_merge_in_worktree(
                 app_data,
@@ -164,7 +162,6 @@ impl Actions {
     ) -> Result<AppMode> {
         debug!(source = %source_branch, target = %target_branch, worktree = %worktree_path.display(), "Merging in worktree");
 
-        // Merge directly in the worktree
         let merge_output = crate::git::git_command()
             .args([
                 "merge",
@@ -181,7 +178,6 @@ impl Actions {
             let stderr = String::from_utf8_lossy(&merge_output.stderr);
             let combined = format!("{stdout}{stderr}");
 
-            // Check if there are merge conflicts (git outputs to stdout)
             if output_indicates_merge_conflict(&combined) {
                 info!(source = %source_branch, target = %target_branch, "Merge has conflicts - spawning terminal");
 
@@ -193,7 +189,6 @@ impl Actions {
                 );
             }
 
-            // Show error with both stdout and stderr for context
             let error_msg = git_failure_message(&stdout, &stderr);
             app_data.git_op.clear();
             app_data.review.clear();
@@ -228,7 +223,6 @@ impl Actions {
             .unwrap_or_else(|_| worktree_path.to_path_buf());
         let worktree_path_display = worktree_path.display().to_string();
 
-        // Find the agent that owns this worktree
         let root_snapshot = app_data.storage.agents.iter().find_map(|agent| {
             let agent_worktree = agent
                 .worktree_path
@@ -253,10 +247,8 @@ impl Actions {
         {
             let title = format!("Merge Conflict: {source_branch} -> {target_branch}");
 
-            // Reserve a window index
             let window_index = app_data.storage.reserve_window_indices(root_id);
 
-            // Create child agent marked as terminal
             let mut terminal = Agent::new_child(
                 title.clone(),
                 "terminal".to_string(),
@@ -273,7 +265,6 @@ impl Actions {
             terminal.runtime = runtime;
             terminal.runtime_scope = runtime_scope;
 
-            // Create session manager and window
             let session_manager = SessionManager::new();
             crate::runtime::ensure_runtime_ready(&terminal, &app_data.settings)?;
             let terminal_command = crate::runtime::build_terminal_command(
@@ -283,18 +274,17 @@ impl Actions {
             );
             let actual_index = session_manager.create_window(
                 &root_session,
+                terminal.id,
                 &title,
                 terminal.worktree_path.as_path(),
                 terminal_command.as_deref(),
             )?;
 
-            // Resize the new window to match preview dimensions
             if let Some((width, height)) = app_data.ui.preview_dimensions {
                 let window_target = SessionManager::window_target(&root_session, actual_index);
                 let _ = session_manager.resize_window(&window_target, width, height);
             }
 
-            // Update window index if it differs
             terminal.window_index = Some(actual_index);
 
             let window_target = SessionManager::window_target(&root_session, actual_index);
@@ -304,14 +294,34 @@ impl Actions {
 
             app_data.storage.add(terminal);
 
-            // Expand the parent to show the new terminal
             let _ = app_data.storage.set_collapsed(root_id, false);
 
             app_data.storage.save()?;
 
             app_data.set_status(format!("Opened terminal for conflict resolution: {title}"));
         } else {
-            // No agent owns this worktree, just show a message
+            let main_repo = app_data
+                .git_op
+                .agent_id
+                .and_then(|agent_id| app_data.storage.get(agent_id))
+                .and_then(|agent| agent.repo_root.as_ref())
+                .is_some_and(|repo_root| {
+                    repo_root
+                        .canonicalize()
+                        .unwrap_or_else(|_| repo_root.clone())
+                        == worktree_path
+                });
+            if main_repo {
+                return Self::spawn_conflict_terminal_at(
+                    app_data,
+                    &format!("Merge Conflict: {source_branch} -> {target_branch}"),
+                    "git status",
+                    &worktree_path,
+                    target_branch,
+                    crate::agent::AgentRuntime::Host,
+                );
+            }
+
             app_data.set_status(format!(
                 "Merge conflict in {target_branch}. Resolve in: {worktree_path_display}"
             ));
@@ -332,11 +342,9 @@ impl Actions {
     ) -> Result<AppMode> {
         debug!(source = %source_branch, target = %target_branch, "Merging in main repo");
 
-        // Prepare: stash changes and get current branch
         let did_stash = Self::git_stash_push(repo_path)?;
         let original_branch = Self::git_get_current_branch(repo_path)?;
 
-        // Checkout target branch
         if !Self::git_checkout(repo_path, target_branch)? {
             Self::restore_git_state(repo_path, did_stash);
             app_data.git_op.clear();
@@ -347,7 +355,6 @@ impl Actions {
             .into());
         }
 
-        // Attempt merge
         let merge_result = Self::git_merge(
             repo_path,
             source_branch,
@@ -367,10 +374,13 @@ impl Actions {
             }
             MergeResult::Conflict => {
                 // Stay on target branch, don't restore stash - user needs to resolve.
-                return Self::spawn_conflict_terminal(
+                return Self::spawn_conflict_terminal_at(
                     app_data,
                     &format!("Merge Conflict: {source_branch} -> {target_branch}"),
                     "git status",
+                    repo_path,
+                    target_branch,
+                    crate::agent::AgentRuntime::Host,
                 );
             }
             MergeResult::Failed(error_msg) => {
@@ -454,7 +464,6 @@ impl Actions {
         };
 
         if merge_output.status.success() {
-            // Go back to original branch after successful merge
             let _ = crate::git::git_command()
                 .args(["checkout", original_branch])
                 .current_dir(repo_path)
@@ -469,7 +478,6 @@ impl Actions {
         if output_indicates_merge_conflict(&combined) {
             MergeResult::Conflict
         } else {
-            // Restore state before returning error
             let _ = crate::git::git_command()
                 .args(["checkout", original_branch])
                 .current_dir(repo_path)

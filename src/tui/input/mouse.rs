@@ -69,7 +69,6 @@ fn handle_scroll_wheel(
     frame_area: Rect,
     batched_keys: &mut Vec<String>,
 ) {
-    // Allow scroll wheel when the changelog modal is open.
     if let AppMode::Changelog(state) = &app.mode {
         let modal_area = crate::tui::render::modals::changelog_modal_rect(state, frame_area);
         if !rect_contains(modal_area, x, y) {
@@ -99,7 +98,6 @@ fn handle_scroll_wheel(
         return;
     }
 
-    // Ignore scroll wheel while a modal is open or text input is active.
     if !matches!(
         &app.mode,
         AppMode::Normal(_)
@@ -170,7 +168,6 @@ fn handle_scroll_wheel(
         return;
     }
 
-    // Reserved for future: scrolling the agents list.
     let _ = agents_area;
 }
 
@@ -187,8 +184,6 @@ fn scroll_wheel_to_sgr_sequence(
     modifiers: KeyModifiers,
     direction: ScrollDirection,
 ) -> Option<String> {
-    // Compute inner block area (inside borders), then the preview "body" area
-    // (inner area excluding the 1-line tab bar).
     let inner = Rect {
         x: content_area.x.saturating_add(1),
         y: content_area.y.saturating_add(1),
@@ -234,7 +229,6 @@ fn scroll_wheel_to_sgr_sequence(
 }
 
 fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) {
-    // If a modal is open, only handle outside-click-to-cancel.
     if !matches!(
         &app.mode,
         AppMode::Normal(_)
@@ -245,7 +239,6 @@ fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) {
         if let Some(modal_area) = modal_rect(app, frame_area)
             && !rect_contains(modal_area, x, y)
         {
-            // Clicking off the modal is equivalent to pressing Escape/cancel.
             let mut unused_batched_keys = Vec::new();
             let _ = crate::tui::input::handle_key_event(
                 app,
@@ -260,7 +253,6 @@ fn handle_left_click(app: &mut App, x: u16, y: u16, frame_area: Rect) {
     let (agents_area, content_area) = main_panes(frame_area);
 
     if rect_contains(agents_area, x, y) {
-        // Clicking anywhere in the agents pane should focus Tenex (i.e., detach from preview).
         app.apply_mode(AppMode::normal());
         clear_preview_selection(app);
         handle_agent_list_click(app, x, y, agents_area);
@@ -364,8 +356,6 @@ fn handle_left_up(app: &mut App, x: u16, y: u16, frame_area: Rect) {
 }
 
 const fn content_body_area(content_area: Rect) -> Option<Rect> {
-    // Compute inner block area (inside borders), then the content "body" area
-    // (inner area excluding the 1-line tab bar).
     let inner = Rect {
         x: content_area.x.saturating_add(1),
         y: content_area.y.saturating_add(1),
@@ -551,7 +541,6 @@ fn handle_agent_list_click(app: &mut App, x: u16, y: u16, area: Rect) {
 }
 
 fn handle_content_pane_click(app: &mut App, x: u16, y: u16, area: Rect) {
-    // Compute inner block area (inside borders).
     let inner = Rect {
         x: area.x.saturating_add(1),
         y: area.y.saturating_add(1),
@@ -559,7 +548,6 @@ fn handle_content_pane_click(app: &mut App, x: u16, y: u16, area: Rect) {
         height: area.height.saturating_sub(2),
     };
 
-    // Tab bar is the first line of the inner area.
     let tab_bar_area = Rect {
         x: inner.x,
         y: inner.y,
@@ -573,7 +561,6 @@ fn handle_content_pane_click(app: &mut App, x: u16, y: u16, area: Rect) {
         return;
     }
 
-    // Click in the content body focuses the content pane.
     if app.data.active_tab == Tab::Preview
         && let Some(body_area) = content_body_area(area)
         && rect_contains(body_area, x, y)

@@ -62,7 +62,6 @@ pub fn render_input_overlay(
     input: &str,
     cursor_pos: usize,
 ) {
-    // Insert cursor marker at cursor position
     let text_with_cursor = if cursor_pos >= input.len() {
         format!("{input}│")
     } else {
@@ -71,7 +70,6 @@ pub fn render_input_overlay(
         format!("{before}│{after}")
     };
 
-    // Expandable height: min 3 lines for input, max 20, then scroll
     let min_input_height = 3_usize;
     let max_input_height = 20_usize;
     let modal_width = centered_rect_absolute(60, 1, frame.area()).width;
@@ -90,31 +88,26 @@ pub fn render_input_overlay(
         needs_scrollbar = input_lines.len() > input_area_height;
     }
 
-    // Calculate scroll to keep cursor visible
     let scroll_offset = if cursor_line >= input_area_height {
         cursor_line - input_area_height + 1
     } else {
         0
     };
 
-    // Total height: borders(2) + prompt(1) + empty(1) + input area + empty(1) + help(1)
     let total_height = (6 + input_area_height) as u16;
     let area = centered_rect_absolute(60, total_height, frame.area());
 
-    // Calculate inner area for the input box (after removing borders and prompt)
-    // Reserve 1 column for scrollbar if needed
     let inner_area_width = area
         .width
         .saturating_sub(if needs_scrollbar { 3 } else { 2 })
         .max(1);
     let inner_area = Rect {
         x: area.x + 1,
-        y: area.y + 3, // After border + prompt + empty line
+        y: area.y + 3,
         width: inner_area_width,
         height: input_area_height as u16,
     };
 
-    // Get visible lines with scroll
     let visible_lines: Vec<Line<'_>> = input_lines
         .iter()
         .skip(scroll_offset)
@@ -129,7 +122,6 @@ pub fn render_input_overlay(
         })
         .collect();
 
-    // Build content: prompt, empty, (input rendered separately), empty, help
     let header = vec![
         Line::from(Span::styled(
             prompt,
@@ -138,7 +130,6 @@ pub fn render_input_overlay(
         Line::from(""),
     ];
 
-    // Pad for input area
     let mut content_lines = header;
     for _ in 0..input_area_height {
         content_lines.push(Line::from(""));
@@ -162,12 +153,10 @@ pub fn render_input_overlay(
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 
-    // Render input area with different background
     let input_paragraph =
         Paragraph::new(visible_lines).style(Style::default().bg(colors::INPUT_BG));
     frame.render_widget(input_paragraph, inner_area);
 
-    // Render scrollbar if needed
     if needs_scrollbar {
         let scrollbar_area = Rect {
             x: inner_area.x + inner_area.width,
@@ -176,19 +165,17 @@ pub fn render_input_overlay(
             height: input_area_height as u16,
         };
 
-        // Calculate thumb position and size
         let total_lines = input_lines.len();
         let visible_height = input_area_height;
         let thumb_height = ((visible_height * visible_height) / total_lines).max(1);
         let max_scroll = total_lines - visible_height;
         let thumb_pos = (scroll_offset * (visible_height - thumb_height)) / max_scroll;
 
-        // Render scrollbar track and thumb
         for i in 0..visible_height {
             let ch = if i >= thumb_pos && i < thumb_pos + thumb_height {
-                "█" // Thumb
+                "█"
             } else {
-                "░" // Track
+                "░"
             };
             let scrollbar_cell = Rect {
                 x: scrollbar_area.x,
@@ -214,7 +201,6 @@ pub fn render_rename_overlay(frame: &mut Frame<'_>, app: &App) {
         ("Rename Agent", "Renames agent title and window:")
     };
 
-    // 7 lines of content + 2 for borders = 9 lines
     let area = centered_rect_absolute(55, 9, frame.area());
 
     let text = vec![

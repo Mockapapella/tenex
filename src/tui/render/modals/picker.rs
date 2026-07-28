@@ -13,7 +13,6 @@ use crate::tui::render::colors;
 
 /// Render the child count picker overlay
 pub fn render_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
-    // 10 lines of content + 2 for borders = 12 lines
     let area = centered_rect_absolute(40, 12, frame.area());
 
     let context = if app.data.spawn.spawning_under.is_some() {
@@ -116,7 +115,6 @@ pub fn render_review_info_overlay(frame: &mut Frame<'_>) {
 
 /// Render the review count picker overlay
 pub fn render_review_count_picker_overlay(frame: &mut Frame<'_>, app: &App) {
-    // 10 lines of content + 2 for borders = 12 lines
     let area = centered_rect_absolute(40, 12, frame.area());
 
     let text = vec![

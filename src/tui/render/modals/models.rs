@@ -14,7 +14,6 @@ use crate::tui::render::colors;
 
 /// Render the model selector overlay
 pub fn render_model_selector_overlay(frame: &mut Frame<'_>, app: &App) {
-    // 10 lines of content + 2 for borders = 12 lines
     let area = centered_rect_absolute(55, 12, frame.area());
 
     let filtered = app.filtered_model_programs();

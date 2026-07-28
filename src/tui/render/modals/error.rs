@@ -12,11 +12,9 @@ use crate::tui::render::colors;
 
 /// Render an error modal with word-wrapped message
 pub fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
-    // Wrap the error message to fit within the modal width (44 chars after padding)
     let max_line_width = 44;
     let mut lines: Vec<Line<'_>> = Vec::new();
 
-    // Add error icon and header
     lines.push(Line::from(Span::styled(
         "✖ Error",
         Style::default()
@@ -25,7 +23,6 @@ pub fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
     )));
     lines.push(Line::from(""));
 
-    // Word-wrap the message
     let words: Vec<&str> = message.split_whitespace().collect();
     let mut current_line = String::new();
 
@@ -50,14 +47,12 @@ pub fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
         )));
     }
 
-    // Add dismiss hint
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Press any key to dismiss",
         Style::default().fg(colors::TEXT_MUTED),
     )));
 
-    // Height: content lines + 2 for borders, min 7 lines
     let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).max(7);
     let area = centered_rect_absolute(50, height, frame.area());
 
@@ -78,11 +73,9 @@ pub fn render_error_modal(frame: &mut Frame<'_>, message: &str) {
 
 /// Render a success modal with word-wrapped message
 pub fn render_success_modal(frame: &mut Frame<'_>, message: &str) {
-    // Wrap the message to fit within the modal width (44 chars after padding)
     let max_line_width = 44;
     let mut lines: Vec<Line<'_>> = Vec::new();
 
-    // Add success icon and header
     lines.push(Line::from(Span::styled(
         "✔ Success",
         Style::default()
@@ -91,7 +84,6 @@ pub fn render_success_modal(frame: &mut Frame<'_>, message: &str) {
     )));
     lines.push(Line::from(""));
 
-    // Word-wrap the message
     let words: Vec<&str> = message.split_whitespace().collect();
     let mut current_line = String::new();
 
@@ -116,14 +108,12 @@ pub fn render_success_modal(frame: &mut Frame<'_>, message: &str) {
         )));
     }
 
-    // Add dismiss hint
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Press any key to continue",
         Style::default().fg(colors::TEXT_MUTED),
     )));
 
-    // Height: content lines + 2 for borders, min 7 lines
     let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).max(7);
     let area = centered_rect_absolute(50, height, frame.area());
 

@@ -128,15 +128,17 @@ fn write_state_atomically(path: &Path, contents: &str) -> Result<()> {
 }
 
 /// Pre-computed visible agent information for efficient rendering
+#[expect(
+    missing_docs,
+    reason = "self-describing aggregate fields omit restatements"
+)]
 #[derive(Debug, Clone)]
 pub struct VisibleAgentInfo<'a> {
     /// Reference to the agent
     pub agent: &'a Agent,
     /// Depth in the tree (0 for root)
     pub depth: usize,
-    /// Whether this agent has children
     pub has_children: bool,
-    /// Number of children this agent has
     pub child_count: usize,
 }
 
@@ -206,8 +208,11 @@ const fn default_version() -> u32 {
     1
 }
 
+#[expect(
+    missing_docs,
+    reason = "self-describing collection accessors omit restatements"
+)]
 impl Storage {
-    /// Create a new empty storage
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -220,7 +225,6 @@ impl Storage {
         }
     }
 
-    /// Create a new empty storage with a custom state file path.
     #[must_use]
     pub const fn with_path(path: std::path::PathBuf) -> Self {
         Self {
@@ -255,7 +259,6 @@ impl Storage {
         Some(normalized)
     }
 
-    /// Get (or generate) this instance's ID.
     ///
     /// If the ID is missing or invalid, a new one is generated and stored in memory.
     /// Persisting it is the caller's responsibility (by saving storage).
@@ -285,7 +288,6 @@ impl Storage {
         format!("tenex-{}-", self.ensure_instance_id())
     }
 
-    /// Load state from the default location
     ///
     /// # Errors
     ///
@@ -294,7 +296,6 @@ impl Storage {
         Self::load_at(&Config::state_path())
     }
 
-    /// Load state from the provided path.
     ///
     /// This performs the same backup fallback behavior as `load` but avoids reading configuration.
     ///
@@ -350,7 +351,6 @@ impl Storage {
         }
     }
 
-    /// Load state from a specific path
     ///
     /// # Errors
     ///
@@ -483,7 +483,6 @@ impl Storage {
         changed
     }
 
-    /// Save state to the configured location (custom path or default)
     ///
     /// # Errors
     ///
@@ -493,7 +492,6 @@ impl Storage {
         self.save_to(&path)
     }
 
-    /// Save state to a specific path
     ///
     /// # Errors
     ///
@@ -592,12 +590,10 @@ impl Storage {
         }
     }
 
-    /// Add a new agent
     pub fn add(&mut self, agent: Agent) {
         self.agents.push(agent);
     }
 
-    /// Remove an agent by ID
     pub fn remove(&mut self, id: Uuid) -> Option<Agent> {
         let removed = self
             .agents
@@ -612,13 +608,11 @@ impl Storage {
         removed
     }
 
-    /// Get an agent by ID
     #[must_use]
     pub fn get(&self, id: Uuid) -> Option<&Agent> {
         self.agents.iter().find(|a| a.id == id)
     }
 
-    /// Get a mutable reference to an agent by ID
     pub fn get_mut(&mut self, id: Uuid) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| a.id == id)
     }
@@ -634,18 +628,15 @@ impl Storage {
         true
     }
 
-    /// Get an agent by index
     #[must_use]
     pub fn get_by_index(&self, index: usize) -> Option<&Agent> {
         self.agents.get(index)
     }
 
-    /// Get a mutable reference to an agent by index
     pub fn get_by_index_mut(&mut self, index: usize) -> Option<&mut Agent> {
         self.agents.get_mut(index)
     }
 
-    /// Find an agent by short ID (first 8 chars)
     #[must_use]
     pub fn find_by_short_id(&self, short_id: &str) -> Option<&Agent> {
         self.agents
@@ -653,43 +644,34 @@ impl Storage {
             .find(|a| a.id.to_string().starts_with(short_id))
     }
 
-    /// Get the number of agents
     #[must_use]
     pub const fn len(&self) -> usize {
         self.agents.len()
     }
 
-    /// Check if there are no agents
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.agents.is_empty()
     }
 
-    /// Clear all agents
     pub fn clear(&mut self) {
         self.agents.clear();
         self.mux_socket = None;
     }
 
-    /// Get an iterator over all agents
     pub fn iter(&self) -> impl Iterator<Item = &Agent> {
         self.agents.iter()
     }
 
-    /// Get a mutable iterator over all agents
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Agent> {
         self.agents.iter_mut()
     }
 
-    // === Hierarchy Methods ===
-
-    /// Get all root agents (agents without a parent)
     #[must_use]
     pub fn root_agents(&self) -> Vec<&Agent> {
         self.agents.iter().filter(|a| a.is_root()).collect()
     }
 
-    /// Get all children of a specific agent
     #[must_use]
     pub fn children(&self, parent_id: Uuid) -> Vec<&Agent> {
         self.agents
@@ -698,13 +680,11 @@ impl Storage {
             .collect()
     }
 
-    /// Check if an agent has any children
     #[must_use]
     pub fn has_children(&self, agent_id: Uuid) -> bool {
         self.agents.iter().any(|a| a.parent_id == Some(agent_id))
     }
 
-    /// Get the count of children for an agent
     #[must_use]
     pub fn child_count(&self, agent_id: Uuid) -> usize {
         self.agents
@@ -713,7 +693,6 @@ impl Storage {
             .count()
     }
 
-    /// Get the root ancestor of an agent (follows parent chain to the top)
     #[must_use]
     pub fn root_ancestor(&self, agent_id: Uuid) -> Option<&Agent> {
         let agent = self.get(agent_id)?;
@@ -721,7 +700,6 @@ impl Storage {
             return Some(agent);
         }
 
-        // Follow parent chain
         let mut current = agent;
         while let Some(parent_id) = current.parent_id {
             if let Some(parent) = self.get(parent_id) {
@@ -733,7 +711,6 @@ impl Storage {
         Some(current)
     }
 
-    /// Get all descendants of an agent (children, grandchildren, etc.)
     #[must_use]
     pub fn descendants(&self, agent_id: Uuid) -> Vec<&Agent> {
         let mut result = Vec::new();
@@ -741,7 +718,6 @@ impl Storage {
         result
     }
 
-    /// Helper to recursively collect descendants
     fn collect_descendants<'a>(&'a self, agent_id: Uuid, result: &mut Vec<&'a Agent>) {
         for child in self.children(agent_id) {
             result.push(child);
@@ -749,13 +725,11 @@ impl Storage {
         }
     }
 
-    /// Get all descendant IDs (useful for removal operations)
     #[must_use]
     pub fn descendant_ids(&self, agent_id: Uuid) -> Vec<Uuid> {
         self.descendants(agent_id).iter().map(|a| a.id).collect()
     }
 
-    /// Get the depth of an agent in the tree (root = 0)
     #[must_use]
     pub fn depth(&self, agent_id: Uuid) -> usize {
         let Some(agent) = self.get(agent_id) else {
@@ -780,7 +754,6 @@ impl Storage {
     /// Use this for rendering instead of calling `has_children`/`child_count` per agent.
     #[must_use]
     pub fn visible_agents_with_info(&self) -> Vec<VisibleAgentInfo<'_>> {
-        // Build child count map in single O(n) pass
         let mut child_counts: HashMap<Uuid, usize> = HashMap::new();
         for agent in &self.agents {
             if let Some(parent_id) = agent.parent_id {
@@ -788,7 +761,6 @@ impl Storage {
             }
         }
 
-        // Build children lookup for efficient tree traversal
         let mut children_map: HashMap<Uuid, Vec<&Agent>> = HashMap::new();
         for agent in &self.agents {
             if let Some(parent_id) = agent.parent_id {
@@ -796,10 +768,8 @@ impl Storage {
             }
         }
 
-        // Collect root agents
         let roots: Vec<&Agent> = self.agents.iter().filter(|a| a.is_root()).collect();
 
-        // Build visible list with pre-computed info
         let mut result = Vec::new();
         for root in roots {
             self.add_visible_with_info_recursive(
@@ -813,7 +783,6 @@ impl Storage {
         result
     }
 
-    /// Helper to recursively add visible agents with pre-computed info
     #[expect(
         clippy::self_only_used_in_recursion,
         reason = "&self is needed for lifetime 'a to tie result to Storage"
@@ -849,7 +818,6 @@ impl Storage {
         }
     }
 
-    /// Get visible agents (respecting collapsed state) in display order
     /// Returns a list of (agent, depth) tuples for rendering
     #[must_use]
     pub fn visible_agents(&self) -> Vec<(&Agent, usize)> {
@@ -860,7 +828,6 @@ impl Storage {
         result
     }
 
-    /// Helper to recursively add visible agents
     fn add_visible_recursive<'a>(
         &'a self,
         agent: &'a Agent,
@@ -875,19 +842,16 @@ impl Storage {
         }
     }
 
-    /// Get the visible agent at a specific index
     #[must_use]
     pub fn visible_agent_at(&self, index: usize) -> Option<&Agent> {
         self.visible_agents().get(index).map(|(agent, _)| *agent)
     }
 
-    /// Get the number of visible agents
     #[must_use]
     pub fn visible_count(&self) -> usize {
         self.visible_agents().len()
     }
 
-    /// Find the visible index for a given agent ID
     #[must_use]
     pub fn visible_index_of(&self, agent_id: Uuid) -> Option<usize> {
         self.visible_agents()
@@ -895,13 +859,10 @@ impl Storage {
             .position(|(agent, _)| agent.id == agent_id)
     }
 
-    /// Remove an agent and all its descendants
     pub fn remove_with_descendants(&mut self, agent_id: Uuid) -> Vec<Agent> {
-        // First collect all IDs to remove
         let mut ids_to_remove = self.descendant_ids(agent_id);
         ids_to_remove.push(agent_id);
 
-        // Remove them all
         let mut removed = Vec::new();
         for id in ids_to_remove {
             if let Some(agent) = self.remove(id) {
@@ -911,10 +872,8 @@ impl Storage {
         removed
     }
 
-    /// Get the next available window index for a root agent's session
     #[must_use]
     pub fn next_window_index(&self, root_id: Uuid) -> u32 {
-        // Window 1 is the root, children start at 2
         let descendants = self.descendants(root_id);
         let max_index = descendants
             .iter()
@@ -929,7 +888,6 @@ impl Storage {
     /// This is O(n) once instead of O(n*count) for repeated `next_window_index` calls.
     #[must_use]
     pub fn reserve_window_indices(&self, root_id: Uuid) -> u32 {
-        // Window 1 is the root, children start at 2
         let descendants = self.descendants(root_id);
         let max_index = descendants
             .iter()
@@ -937,7 +895,6 @@ impl Storage {
             .max()
             .unwrap_or(1);
         max_index + 1
-        // Caller should use indices: start_index, start_index+1, ..., start_index+count-1
     }
 }
 

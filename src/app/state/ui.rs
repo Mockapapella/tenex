@@ -418,15 +418,12 @@ impl UiState {
     /// Reset scroll positions for both panes
     /// Preview is pinned to bottom (with follow enabled), Diff is pinned to top
     pub fn reset_scroll(&mut self) {
-        // Preview: set to max so render functions clamp to bottom of content
         self.preview_scroll = usize::MAX;
         self.preview_follow = true;
         self.preview_using_full_history = false;
-        // Diff: set to 0 to show from top
         self.diff_scroll = 0;
         self.diff_cursor = 0;
         self.normalize_diff_cursor();
-        // Commits: set to 0 to show from top (most recent first)
         self.commits_scroll = 0;
         self.normalize_commits_scroll();
     }
@@ -493,7 +490,6 @@ impl UiState {
         self.normalize_preview_scroll();
         let before = self.preview_scroll;
         self.preview_scroll = self.preview_scroll.saturating_sub(amount);
-        // Disable auto-follow only if the scroll position actually changed.
         if self.preview_scroll < before {
             self.preview_follow = false;
         }
@@ -503,7 +499,6 @@ impl UiState {
     pub fn scroll_preview_down(&mut self, amount: usize) {
         self.normalize_preview_scroll();
         self.preview_scroll = self.preview_scroll.saturating_add(amount);
-        // Re-enable auto-follow if we've scrolled to the bottom
         self.check_preview_follow();
     }
 

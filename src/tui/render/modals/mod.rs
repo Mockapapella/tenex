@@ -29,7 +29,7 @@ pub use models::render_model_selector_overlay;
 pub use picker::{
     render_count_picker_overlay, render_review_count_picker_overlay, render_review_info_overlay,
 };
-pub use progress::render_preparing_docker_modal;
+pub use progress::render_working_modal;
 pub use settings_menu::render_settings_menu_overlay;
 
 use crate::app::App;
@@ -67,7 +67,7 @@ pub fn centered_rect_absolute(percent_x: u16, height: u16, area: Rect) -> Rect {
 pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
     match &app.mode {
         AppMode::Changelog(state) => Some(changelog_rect(state, frame_area)),
-        AppMode::Help(_) => Some(help_rect(app, frame_area)),
+        AppMode::Help(_) => Some(help_rect(frame_area)),
         AppMode::CommandPalette(_) => Some(command_palette_rect(app, frame_area)),
         AppMode::Creating(_)
         | AppMode::Prompting(_)
@@ -93,7 +93,7 @@ pub fn modal_rect_for_mode(app: &App, frame_area: Rect) -> Option<Rect> {
             Some(centered_rect_absolute(55, 11, frame_area))
         }
         AppMode::KeyboardRemapPrompt(_) => Some(centered_rect_absolute(55, 16, frame_area)),
-        AppMode::PreparingDocker(state) => Some(success_modal_rect(&state.message, frame_area)),
+        AppMode::Working(_) => Some(centered_rect_absolute(58, 9, frame_area)),
         AppMode::ErrorModal(state) => Some(error_modal_rect(&state.message, frame_area)),
         AppMode::SuccessModal(state) => Some(success_modal_rect(&state.message, frame_area)),
         AppMode::Confirming(state) => Some(confirming_rect(app, state.action, frame_area)),
@@ -121,27 +121,22 @@ fn changelog_rect(state: &crate::state::ChangelogMode, frame_area: Rect) -> Rect
     centered_rect_absolute(60, height, frame_area)
 }
 
-fn help_rect(app: &App, frame_area: Rect) -> Rect {
-    // Mirror `render_help_overlay`'s line-count and sizing logic.
-    let _merge_key_remapped = app.is_merge_key_remapped();
-
-    let mut total_lines: usize = 2; // "Keybindings" + blank
+fn help_rect(frame_area: Rect) -> Rect {
+    let mut total_lines: usize = 2;
     let mut current_group = None;
     for &action in Action::ALL_FOR_HELP {
         let group = action.group();
         if current_group != Some(group) {
             if current_group.is_some() {
-                total_lines = total_lines.saturating_add(1); // blank between groups
+                total_lines = total_lines.saturating_add(1);
             }
-            total_lines = total_lines.saturating_add(1); // group title line
+            total_lines = total_lines.saturating_add(1);
             current_group = Some(group);
         }
 
-        // One line per action entry. The actual text varies, but line count does not.
         total_lines = total_lines.saturating_add(1);
     }
 
-    // Footer: blank + 2 hint lines
     total_lines = total_lines.saturating_add(3);
 
     let max_height = frame_area.height.saturating_sub(4);
@@ -162,15 +157,13 @@ fn command_palette_rect(app: &App, frame_area: Rect) -> Rect {
     let visible_count = total_count.min(max_visible).max(1);
     let visible_count_u16 = u16::try_from(visible_count).unwrap_or(0);
 
-    // Header + blank + list + blank + help
     let content_height = 1u16 + 1u16 + visible_count_u16 + 1u16 + 1u16;
-    let total_height = content_height.saturating_add(2); // borders
+    let total_height = content_height.saturating_add(2);
 
     centered_rect_absolute(60, total_height, frame_area)
 }
 
 fn text_input_rect(app: &App, frame_area: Rect) -> Rect {
-    // Mirror `render_input_overlay`'s dynamic sizing logic; title/prompt do not affect layout.
     let input = app.data.input.buffer.as_str();
     let cursor_pos = app.data.input.cursor;
     let text_with_cursor = if cursor_pos >= input.len() {
@@ -189,18 +182,15 @@ fn text_input_rect(app: &App, frame_area: Rect) -> Rect {
     let mut input_lines =
         input::wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width)).0;
     let mut input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
-    let mut needs_scrollbar = input_lines.len() > input_area_height;
+    let needs_scrollbar = input_lines.len() > input_area_height;
 
     if needs_scrollbar {
         inner_width = modal_width.saturating_sub(3).max(1);
         input_lines = input::wrap_input_with_cursor(&text_with_cursor, usize::from(inner_width)).0;
         input_area_height = input_lines.len().clamp(min_input_height, max_input_height);
-        needs_scrollbar = input_lines.len() > input_area_height;
     }
 
-    // Total height: borders(2) + prompt(1) + empty(1) + input area + empty(1) + help(1)
     let total_height = u16::try_from(6 + input_area_height).unwrap_or(u16::MAX);
-    let _ = needs_scrollbar; // Keep parity with render logic for future changes.
 
     centered_rect_absolute(60, total_height, frame_area)
 }
@@ -297,7 +287,6 @@ fn confirming_rect(app: &App, action: ConfirmAction, frame_area: Rect) -> Rect {
 }
 
 fn confirm_overlay_rect(base_lines: usize, frame_area: Rect) -> Rect {
-    // `render_confirm_overlay` appends 2 lines for the prompt, then adds 2 border lines.
     let lines = base_lines.saturating_add(2);
     let height = u16::try_from(lines + 2).unwrap_or(u16::MAX);
     centered_rect_absolute(50, height, frame_area)

@@ -198,7 +198,6 @@ impl Settings {
     pub fn save(&self) -> std::io::Result<()> {
         let path = Self::path();
 
-        // Ensure parent directory exists
         let parent = path
             .parent()
             .ok_or_else(|| std::io::Error::other("Settings path has no parent directory"))?;

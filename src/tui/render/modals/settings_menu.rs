@@ -13,7 +13,6 @@ use crate::tui::render::colors;
 
 /// Render the settings menu overlay.
 pub fn render_settings_menu_overlay(frame: &mut Frame<'_>, app: &App) {
-    // Header + blank + 3 items + blank + help = 7, plus borders = 9.
     let area = centered_rect_absolute(60, 9, frame.area());
 
     let total = AgentRole::ALL.len();

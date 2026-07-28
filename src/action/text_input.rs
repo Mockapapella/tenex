@@ -2,10 +2,12 @@ use crate::action::{CancelAction, ValidIn};
 use crate::app::{Actions, App, AppData};
 use crate::state::{
     AppMode, BroadcastingMode, ChildPromptMode, CreatingMode, CustomAgentCommandMode,
-    ErrorModalMode, PromptingMode, ReconnectPromptMode, SynthesisPromptMode, TerminalPromptMode,
+    ErrorModalMode, PendingOperation, PromptingMode, ReconnectPromptMode, SynthesisPromptMode,
+    TerminalPromptMode,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Text-input action: insert a character.
@@ -55,6 +57,14 @@ pub struct DeleteWordAction;
 /// Text-input action: submit (Enter) in the current mode.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SubmitAction;
+
+fn agent_creation_target(app_data: &AppData) -> Result<PathBuf> {
+    app_data
+        .selected_project_root()
+        .or_else(|| app_data.cwd_project_root.clone())
+        .or_else(|| std::env::current_dir().ok())
+        .context("Failed to resolve target directory")
+}
 
 /// Dispatch a raw key event in a text input state via typed actions.
 ///
@@ -1103,7 +1113,12 @@ impl ValidIn<CreatingMode> for SubmitAction {
             return Ok(AppMode::normal());
         }
 
-        ok_or_error_modal(Actions::new().create_agent(app_data, &input, None))
+        Ok(PendingOperation::CreateAgent {
+            repo_path: agent_creation_target(app_data)?,
+            title: input,
+            prompt: None,
+        }
+        .into())
     }
 }
 
@@ -1120,7 +1135,12 @@ impl ValidIn<PromptingMode> for SubmitAction {
             Some(input.as_str())
         };
 
-        ok_or_error_modal(Actions::new().create_agent(app_data, &title, prompt))
+        Ok(PendingOperation::CreateAgent {
+            repo_path: agent_creation_target(app_data)?,
+            title,
+            prompt: prompt.map(str::to_string),
+        }
+        .into())
     }
 }
 

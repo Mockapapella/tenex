@@ -4,8 +4,8 @@ use crate::action::{BackspaceAction, CancelAction, CharInputAction, SubmitAction
 use crate::app::{Actions, AppData};
 use crate::state::{
     AppMode, ConfirmAction, ConfirmPushForPRMode, ConfirmPushMode, ConfirmingMode, ErrorModalMode,
-    KeyboardRemapPromptMode, PreviewFocusedMode, ReconnectPromptMode, RenameBranchMode,
-    SynthesisPromptMode, UpdatePromptMode, UpdateRequestedMode,
+    KeyboardRemapPromptMode, PendingOperation, PreviewFocusedMode, ReconnectPromptMode,
+    RenameBranchMode, SynthesisPromptMode, UpdatePromptMode, UpdateRequestedMode,
 };
 use anyhow::Result;
 use tracing::warn;
@@ -32,7 +32,9 @@ impl ValidIn<ConfirmingMode> for ConfirmYesAction {
     fn execute(self, state: ConfirmingMode, app_data: &mut AppData) -> Result<Self::NextState> {
         match state.action {
             ConfirmAction::Kill => {
-                Actions::new().kill_agent(app_data)?;
+                if let Some(agent_id) = app_data.selected_agent().map(|agent| agent.id) {
+                    return Ok(PendingOperation::KillAgent { agent_id }.into());
+                }
             }
             ConfirmAction::InterruptAgent => {
                 if let Some(agent) = app_data.selected_agent()

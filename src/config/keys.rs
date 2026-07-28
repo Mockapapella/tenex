@@ -3,29 +3,26 @@
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 /// Actions that can be triggered by keybindings
+#[expect(
+    missing_docs,
+    reason = "variant names define the actions; only non-obvious behavior is documented"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
-    /// Create a new agent
     NewAgent,
-    /// Create a new agent with a prompt
     NewAgentWithPrompt,
     /// Focus the active detail pane (Preview attaches terminal, Diff enters diff focus)
     FocusPreview,
     /// Detach from the agent terminal (return to Tenex controls)
     UnfocusPreview,
-    /// Kill selected agent
     Kill,
-    /// Push branch to remote
     Push,
     /// Rename branch (local; pushes new remote branch, keeps old remote branch)
     RenameBranch,
     /// Open pull request (push first if needed)
     OpenPR,
-    /// Switch between detail pane tabs
     SwitchTab,
-    /// Move the diff cursor up (Diff tab)
     DiffCursorUp,
-    /// Move the diff cursor down (Diff tab)
     DiffCursorDown,
     /// Toggle visual selection (multi-line) in diff focus
     DiffToggleVisual,
@@ -35,41 +32,27 @@ pub enum Action {
     DiffUndo,
     /// Redo the last undone diff edit (Diff tab)
     DiffRedo,
-    /// Select next agent
     NextAgent,
-    /// Select previous agent
     PrevAgent,
     /// Highlight the selected agent's project header
     SelectProjectHeader,
     /// Highlight the first agent under the selected project
     SelectProjectFirstAgent,
-    /// Show help
     Help,
-    /// Quit application
     Quit,
-    /// Scroll up in preview
     ScrollUp,
-    /// Scroll down in preview
     ScrollDown,
-    /// Scroll to top
     ScrollTop,
-    /// Scroll to bottom
     ScrollBottom,
-    /// Cancel current operation
     Cancel,
-    /// Confirm current operation
     Confirm,
     /// Spawn new root with children (no pre-prompt)
     SpawnChildren,
     /// Plan: spawn planners under selected agent (with planning pre-prompt)
     PlanSwarm,
-    /// Add children to selected agent
     AddChildren,
-    /// Synthesize children into parent
     Synthesize,
-    /// Toggle synthesis mark on selected agent
     ToggleSynthesisMark,
-    /// Toggle expand/collapse of selected agent
     ToggleCollapse,
     /// Broadcast message to agent and all descendants
     Broadcast,
@@ -79,35 +62,29 @@ pub enum Action {
     SpawnTerminal,
     /// Spawn a new terminal with a startup command
     SpawnTerminalPrompted,
-    /// Rebase current branch onto selected branch
     Rebase,
-    /// Merge selected branch into current branch
     Merge,
-    /// Switch the current agent's branch
     SwitchBranch,
-    /// Open slash command palette
     CommandPalette,
 }
 
 /// Categories for grouping actions in help display
+#[expect(
+    missing_docs,
+    reason = "variant names are the help categories shown to users"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionGroup {
-    /// Agent creation and management actions
     Agents,
-    /// Terminal (non-Claude shell) actions
     Terminals,
-    /// Git operations (push, rename, PR)
     GitOps,
-    /// Navigation and scrolling actions
     Navigation,
-    /// Miscellaneous actions
     Other,
-    /// Actions not shown in help (internal or context-specific)
     Hidden,
 }
 
 impl ActionGroup {
-    /// Get the display title for this group
+    /// Label shown in the help overlay.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
@@ -121,7 +98,6 @@ impl ActionGroup {
     }
 }
 
-/// A single keybinding definition
 #[derive(Debug, Clone, Copy)]
 struct Binding {
     code: KeyCode,
@@ -131,7 +107,6 @@ struct Binding {
 
 /// All keybindings - single source of truth
 const BINDINGS: &[Binding] = &[
-    // Agents
     Binding {
         code: KeyCode::Char('a'),
         modifiers: KeyModifiers::NONE,
@@ -162,7 +137,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::NONE,
         action: Action::Kill,
     },
-    // Hierarchy
     Binding {
         code: KeyCode::Char('S'),
         modifiers: KeyModifiers::NONE,
@@ -228,7 +202,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::ReviewSwarm,
     },
-    // Terminals
     Binding {
         code: KeyCode::Char('t'),
         modifiers: KeyModifiers::NONE,
@@ -244,7 +217,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::SpawnTerminalPrompted,
     },
-    // Navigation
     Binding {
         code: KeyCode::Down,
         modifiers: KeyModifiers::NONE,
@@ -270,7 +242,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::NONE,
         action: Action::SwitchTab,
     },
-    // Diff (interactive)
     Binding {
         code: KeyCode::Char('V'),
         modifiers: KeyModifiers::NONE,
@@ -316,7 +287,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::ScrollBottom,
     },
-    // Other
     Binding {
         code: KeyCode::Char('?'),
         modifiers: KeyModifiers::NONE,
@@ -337,7 +307,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::SHIFT,
         action: Action::CommandPalette,
     },
-    // Git operations (all use Ctrl modifier, requires Kitty keyboard protocol)
     Binding {
         code: KeyCode::Char('p'),
         modifiers: KeyModifiers::CONTROL,
@@ -363,7 +332,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::CONTROL,
         action: Action::Merge,
     },
-    // Alternative binding for Merge when terminal doesn't support Ctrl+M
     Binding {
         code: KeyCode::Char('n'),
         modifiers: KeyModifiers::CONTROL,
@@ -374,7 +342,6 @@ const BINDINGS: &[Binding] = &[
         modifiers: KeyModifiers::CONTROL,
         action: Action::SwitchBranch,
     },
-    // Hidden (not shown in help but still functional)
     Binding {
         code: KeyCode::Esc,
         modifiers: KeyModifiers::NONE,
@@ -454,7 +421,6 @@ impl Action {
             Self::DiffUndo => "Ctrl+z",
             Self::DiffRedo => "Ctrl+y",
             Self::Help => "?",
-            // Both use Ctrl+q: UnfocusPreview when in preview, Quit otherwise
             Self::UnfocusPreview | Self::Quit => "Ctrl+q",
             Self::ScrollUp => "Ctrl+u",
             Self::ScrollDown => "Ctrl+d",
@@ -529,14 +495,12 @@ impl Action {
 
     /// All actions in display order for help
     pub const ALL_FOR_HELP: &'static [Self] = &[
-        // Navigation
         Self::FocusPreview,
         Self::UnfocusPreview,
         Self::ToggleCollapse,
         Self::SelectProjectHeader,
         Self::SelectProjectFirstAgent,
         Self::SwitchTab,
-        // Agents
         Self::NewAgent,
         Self::NewAgentWithPrompt,
         Self::Kill,
@@ -547,17 +511,14 @@ impl Action {
         Self::Synthesize,
         Self::ToggleSynthesisMark,
         Self::Broadcast,
-        // Terminals
         Self::SpawnTerminal,
         Self::SpawnTerminalPrompted,
-        // Git Ops
         Self::Push,
         Self::RenameBranch,
         Self::OpenPR,
         Self::Rebase,
         Self::Merge,
         Self::SwitchBranch,
-        // Other
         Self::Help,
         Self::CommandPalette,
     ];

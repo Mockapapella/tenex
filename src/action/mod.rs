@@ -105,7 +105,6 @@ pub fn dispatch_normal_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::CommandPalette => CommandPaletteAction.execute(NormalMode, app_data),
         KeyAction::Cancel => CancelAction.execute(NormalMode, app_data),
 
-        // Not valid in Normal mode; treat as no-op.
         KeyAction::Confirm
         | KeyAction::UnfocusPreview
         | KeyAction::DiffCursorUp
@@ -171,7 +170,6 @@ pub fn dispatch_scrolling_mode(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::CommandPalette => CommandPaletteAction.execute(ScrollingMode, app_data),
         KeyAction::Cancel => CancelAction.execute(ScrollingMode, app_data),
 
-        // Not valid in Scrolling mode; treat as no-op.
         KeyAction::Confirm
         | KeyAction::UnfocusPreview
         | KeyAction::DiffCursorUp
@@ -351,7 +349,6 @@ pub fn dispatch_preview_focused_mode(
         return Ok(());
     }
 
-    // Ctrl+q exits preview focus mode (same key quits app when not focused).
     let next = if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
         UnfocusPreviewAction.execute(PreviewFocusedMode, &mut app.data)?
     } else {
@@ -377,24 +374,20 @@ pub fn dispatch_diff_focused_mode(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<()> {
-    // Ctrl+q exits diff focus mode (same key quits app when not focused).
     if matches!(code, KeyCode::Char('q' | 'Q')) && modifiers.contains(KeyModifiers::CONTROL) {
         let next = UnfocusDiffAction.execute(DiffFocusedMode, &mut app.data)?;
         app.apply_mode(next);
         return Ok(());
     }
 
-    // Tab switching is bound to Normal mode only.
     if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
         return Ok(());
     }
 
-    // Esc should not exit diff focus mode (keep consistent with preview focus).
     if code == KeyCode::Esc {
         return Ok(());
     }
 
-    // Diff navigation uses ↑/↓.
     if modifiers == KeyModifiers::NONE {
         match code {
             KeyCode::Up => {
@@ -428,7 +421,6 @@ pub fn dispatch_diff_focused_mode(
         KeyAction::ScrollTop => ScrollTopAction.execute(DiffFocusedMode, &mut app.data),
         KeyAction::ScrollBottom => ScrollBottomAction.execute(DiffFocusedMode, &mut app.data),
         other => {
-            // For everything else, fall back to normal-mode dispatch (which exits diff focus).
             return dispatch_normal_mode(app, other);
         }
     }?;

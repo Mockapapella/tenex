@@ -17,7 +17,6 @@ use crate::tui::render::colors;
 pub fn render_changelog_overlay(frame: &mut Frame<'_>, app: &App, state: &ChangelogMode) {
     let total_lines = state.lines.len();
 
-    // Similar sizing behavior to the help overlay: attempt to fit, but don't exceed the frame.
     let max_height = frame.area().height.saturating_sub(4);
     let min_height = 12u16.min(max_height);
     let desired_height = u16::try_from(total_lines)

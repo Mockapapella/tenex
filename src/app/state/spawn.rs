@@ -1,5 +1,7 @@
 //! Spawn state: child agent spawning configuration
 
+pub(super) const DEFAULT_CHILD_COUNT: usize = 3;
+
 /// Information about an existing worktree that conflicts with a new agent.
 #[derive(Debug, Clone)]
 pub struct WorktreeConflictInfo {
@@ -52,7 +54,7 @@ impl SpawnState {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            child_count: 3,
+            child_count: DEFAULT_CHILD_COUNT,
             spawning_under: None,
             use_plan_prompt: false,
             terminal_counter: 0,
@@ -76,7 +78,7 @@ impl SpawnState {
     /// Start spawning children under a specific agent
     pub fn start_spawning_under(&mut self, parent_id: uuid::Uuid) {
         self.spawning_under = Some(parent_id);
-        self.child_count = 3; // Reset to default
+        self.child_count = DEFAULT_CHILD_COUNT;
         self.use_plan_prompt = false;
         self.root_repo_path = None;
     }
@@ -84,7 +86,7 @@ impl SpawnState {
     /// Start spawning a new root agent with children (no plan prompt)
     pub fn start_spawning_root(&mut self) {
         self.spawning_under = None;
-        self.child_count = 3; // Reset to default
+        self.child_count = DEFAULT_CHILD_COUNT;
         self.use_plan_prompt = false;
         self.root_repo_path = None;
     }
@@ -92,7 +94,7 @@ impl SpawnState {
     /// Start spawning a new root agent with children (with planning pre-prompt)
     pub fn start_planning_swarm(&mut self) {
         self.spawning_under = None;
-        self.child_count = 3; // Reset to default
+        self.child_count = DEFAULT_CHILD_COUNT;
         self.use_plan_prompt = true;
         self.root_repo_path = None;
     }
@@ -100,7 +102,7 @@ impl SpawnState {
     /// Start spawning a planning swarm under an existing agent.
     pub fn start_planning_swarm_under(&mut self, parent_id: uuid::Uuid) {
         self.spawning_under = Some(parent_id);
-        self.child_count = 3; // Reset to default
+        self.child_count = DEFAULT_CHILD_COUNT;
         self.use_plan_prompt = true;
         self.root_repo_path = None;
     }

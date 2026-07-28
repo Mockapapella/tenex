@@ -11,11 +11,24 @@ use crate::app::state::{
 use crate::config::Config;
 use crate::state::{
     AppMode, ChangelogMode, CustomAgentCommandMode, ErrorModalMode, HelpMode, ModelSelectorMode,
-    PreparingDockerMode, SettingsMenuMode,
+    PendingOperation, SettingsMenuMode,
 };
+use crate::update::UpdateInfo;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
+
+/// Result produced by work that runs outside the TUI loop.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BackgroundResult {
+    /// Replace the current status text without changing the application mode.
+    Status(String),
+    /// Show an error when no user operation or input mode is active.
+    Error(String),
+    /// Apply the completed startup update check when normal mode is available.
+    Update(Result<Option<UpdateInfo>, String>),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SynthesisTargets {
@@ -81,17 +94,21 @@ pub struct AppData {
 
     /// Whether the terminal supports the keyboard enhancement protocol.
     pub keyboard_enhancement_supported: bool,
+
+    background_result_sender: Sender<BackgroundResult>,
+    background_result_receiver: Receiver<BackgroundResult>,
 }
 
 impl AppData {
     /// Create a new `AppData` with the given config, storage, and settings.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         config: Config,
         storage: Storage,
         settings: Settings,
         keyboard_enhancement_supported: bool,
     ) -> Self {
+        let (background_result_sender, background_result_receiver) = std::sync::mpsc::channel();
         Self {
             config,
             storage,
@@ -111,7 +128,17 @@ impl AppData {
             settings,
             pending_changelog: None,
             keyboard_enhancement_supported,
+            background_result_sender,
+            background_result_receiver,
         }
+    }
+
+    pub(crate) fn background_result_sender(&self) -> Sender<BackgroundResult> {
+        self.background_result_sender.clone()
+    }
+
+    pub(crate) fn drain_background_results(&self) -> Vec<BackgroundResult> {
+        self.background_result_receiver.try_iter().collect()
     }
 
     /// The base command used when spawning new agents (based on user settings).
@@ -871,23 +898,7 @@ impl AppData {
             );
         }
 
-        let programs = self.docker_runtime_programs();
-        let program_refs = programs.iter().map(String::as_str).collect::<Vec<_>>();
-        match crate::runtime::inspect_docker_runtime(&self.settings, &program_refs) {
-            Ok(crate::runtime::DockerPreparation::Ready) => self.persist_docker_for_new_roots(
-                previous,
-                true,
-                "Docker for new root agents: ON",
-            ),
-            Ok(crate::runtime::DockerPreparation::NeedsImageBuild) => PreparingDockerMode {
-                message: "Building the shipped Tenex Docker worker image. This can take a minute the first time, and the image will be reused for future root agents.".to_string(),
-            }
-            .into(),
-            Err(err) => ErrorModalMode {
-                message: format!("Cannot enable Docker for new root agents: {err}"),
-            }
-            .into(),
-        }
+        PendingOperation::PrepareDocker.into()
     }
 
     pub(crate) fn finish_preparing_docker_for_new_roots(&mut self) -> AppMode {

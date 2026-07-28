@@ -178,7 +178,7 @@ pub(crate) fn terminate_mux_daemon_for_socket(socket: &str) -> Result<()> {
 #[must_use]
 pub fn version() -> String {
     // Bump this when Tenex makes incompatible changes to mux IPC payloads.
-    const MUX_PROTOCOL_VERSION: u32 = 3;
+    const MUX_PROTOCOL_VERSION: u32 = 4;
 
     format!(
         "tenex-mux/{}/proto-{}",

@@ -210,7 +210,6 @@ impl ValidIn<NormalMode> for RebaseAction {
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -244,7 +243,6 @@ impl ValidIn<ScrollingMode> for RebaseAction {
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -282,7 +280,6 @@ impl ValidIn<NormalMode> for MergeAction {
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -316,7 +313,6 @@ impl ValidIn<ScrollingMode> for MergeAction {
         let agent_id = agent.id;
         let current_branch = agent.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&agent.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -354,7 +350,6 @@ impl ValidIn<NormalMode> for SwitchBranchAction {
         let root_id = root.id;
         let root_branch = root.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&root.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;
@@ -388,7 +383,6 @@ impl ValidIn<ScrollingMode> for SwitchBranchAction {
         let root_id = root.id;
         let root_branch = root.branch.clone();
 
-        // Fetch branches for selector.
         let repo = git::open_repository(&root.worktree_path)?;
         let branch_mgr = git::BranchManager::new(&repo);
         let branches = branch_mgr.list_for_selector()?;

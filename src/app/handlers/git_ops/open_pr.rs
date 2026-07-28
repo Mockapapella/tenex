@@ -56,10 +56,8 @@ impl Actions {
         let branch_name = agent.branch.clone();
         let worktree_path = agent.worktree_path.clone();
 
-        // Detect base branch from git history (best-effort)
         let base_branch = Self::detect_base_branch(&worktree_path, &branch_name);
 
-        // Check if there are unpushed commits
         let has_unpushed = Self::has_unpushed_commits(&worktree_path, &branch_name)?;
 
         debug!(
@@ -73,7 +71,6 @@ impl Actions {
             .git_op
             .start_open_pr(agent_id, branch_name, base_branch, has_unpushed);
 
-        // If no unpushed commits, open PR immediately
         if has_unpushed {
             return Ok(ConfirmPushForPRMode.into());
         }
@@ -198,11 +195,9 @@ impl Actions {
             .context("Failed to check remote branch")?;
 
         if !output.status.success() {
-            // No remote branch means all commits are unpushed
             return Ok(true);
         }
 
-        // Compare local and remote
         let output = crate::git::git_command()
             .args([
                 "rev-list",
@@ -261,7 +256,6 @@ impl Actions {
 
         info!(branch = %branch_name, "Push successful, opening PR");
 
-        // Now open the PR
         if let Err(err) = Self::open_pr_in_browser(app_data) {
             return Ok(ErrorModalMode {
                 message: format!("Failed to open PR: {err:#}"),
@@ -294,30 +288,68 @@ impl Actions {
             "Opening PR with gh CLI"
         );
 
-        // Use gh pr create with --web flag to open in browser
-        let output = std::process::Command::new("gh")
+        let child = std::process::Command::new("gh")
             .args(["pr", "create", "--web", "--base", &base_branch])
             .current_dir(&worktree_path)
-            .output();
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
 
-        match output {
-            Ok(result) if result.status.success() => {
-                info!(branch = %branch, base = %base_branch, "Opened PR creation page in browser");
-                app_data.set_status(format!("Opening PR: {branch} → {base_branch}"));
-            }
-            Ok(result) => {
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                warn!(error = %stderr, "gh pr create failed");
-                app_data.git_op.clear();
-                anyhow::bail!("{}", stderr.trim());
-            }
-            Err(e) => {
-                warn!(error = %e, "gh CLI not found");
+        let child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                warn!(error = %error, "gh CLI not found");
                 app_data.git_op.clear();
                 anyhow::bail!("gh CLI not found. Install it with: brew install gh");
             }
-        }
+        };
 
+        let logged_branch = branch.clone();
+        let logged_base_branch = base_branch.clone();
+        let background_results = app_data.background_result_sender();
+        std::thread::spawn(move || match child.wait_with_output() {
+            Ok(result) if result.status.success() => {
+                info!(
+                    branch = %logged_branch,
+                    base = %logged_base_branch,
+                    "Opened PR creation page in browser"
+                );
+                let _ = background_results.send(crate::app::BackgroundResult::Status(format!(
+                    "Opened PR: {logged_branch} -> {logged_base_branch}"
+                )));
+            }
+            Ok(result) => {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                warn!(
+                    branch = %logged_branch,
+                    base = %logged_base_branch,
+                    error = %stderr,
+                    "gh pr create failed"
+                );
+                let detail = stderr.trim();
+                let detail = if detail.is_empty() {
+                    format!("gh exited with {}", result.status)
+                } else {
+                    detail.to_string()
+                };
+                let _ = background_results.send(crate::app::BackgroundResult::Error(format!(
+                    "Failed to open PR: {detail}"
+                )));
+            }
+            Err(error) => {
+                warn!(
+                    branch = %logged_branch,
+                    base = %logged_base_branch,
+                    error = %error,
+                    "Failed to wait for gh pr create"
+                );
+                let _ = background_results.send(crate::app::BackgroundResult::Error(format!(
+                    "Failed to open PR: {error}"
+                )));
+            }
+        });
+
+        app_data.set_status(format!("Opening PR: {branch} → {base_branch}"));
         app_data.git_op.clear();
         Ok(())
     }

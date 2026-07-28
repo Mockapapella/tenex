@@ -132,8 +132,12 @@ impl Actions {
         );
         let command = command?;
         let started_at = SystemTime::now();
-        self.session_manager
-            .create(&agent.mux_session, &agent.worktree_path, Some(&command))?;
+        self.session_manager.create(
+            &agent.mux_session,
+            agent.id,
+            &agent.worktree_path,
+            Some(&command),
+        )?;
         Self::finish_agent_launch(app_data, agent, started_at);
         self.resize_target_to_preview(app_data, &agent.mux_session);
         Ok(())
@@ -156,6 +160,7 @@ impl Actions {
         let started_at = SystemTime::now();
         let actual_index = self.session_manager.create_window(
             &agent.mux_session,
+            agent.id,
             title,
             &agent.worktree_path,
             Some(&command),
@@ -178,43 +183,36 @@ impl Actions {
     pub fn create_agent(
         self,
         app_data: &mut AppData,
+        repo_path: &Path,
         title: &str,
         prompt: Option<&str>,
     ) -> Result<AppMode> {
-        debug!(title, prompt, "Creating new agent");
+        debug!(title, prompt, repo = %repo_path.display(), "Creating new agent");
 
-        let current_dir = std::env::current_dir().ok();
-        let repo_path = app_data
-            .selected_project_root()
-            .or_else(|| app_data.cwd_project_root.clone())
-            .or(current_dir)
-            .context("Failed to resolve target directory")?;
-        let Ok(repo) = git::open_repository(&repo_path) else {
-            self.create_agent_in_plain_dir(app_data, title, prompt, &repo_path)?;
+        let Ok(repo) = git::open_repository(repo_path) else {
+            self.create_agent_in_plain_dir(app_data, title, prompt, repo_path)?;
             return Ok(AppMode::normal());
         };
         let branch = app_data.config.generate_branch_name(title);
         let worktree_path = app_data
             .config
-            .worktree_path_for_repo_root(&repo_path, &branch);
+            .worktree_path_for_repo_root(repo_path, &branch);
 
         let worktree_mgr = WorktreeManager::new(&repo);
 
         let target_preparation = worktree_mgr.prepare_worktree_creation_target(
             &worktree_path,
             &branch,
-            &app_data.config.worktree_dir_for_repo_root(&repo_path),
+            &app_data.config.worktree_dir_for_repo_root(repo_path),
         )?;
 
         if let Some(conflict_worktree_path) = target_preparation.registered_path() {
             debug!(branch, "Worktree already exists, prompting user");
 
-            // Get current HEAD info for new worktree context
             let (current_branch, current_commit) = worktree_mgr
                 .head_info()
                 .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
 
-            // Try to get existing worktree info
             let (existing_branch, existing_commit) = worktree_mgr
                 .worktree_head_info(&branch)
                 .map_or((None, None), |(b, c)| (Some(b), Some(c)));
@@ -224,12 +222,12 @@ impl Actions {
                 prompt: prompt.map(String::from),
                 branch: branch.clone(),
                 worktree_path: conflict_worktree_path.to_path_buf(),
-                repo_root: repo_path.clone(),
+                repo_root: repo_path.to_path_buf(),
                 existing_branch,
                 existing_commit,
                 current_branch,
                 current_commit,
-                swarm_child_count: None, // Not a swarm creation
+                swarm_child_count: None,
             });
             return Ok(ConfirmingMode {
                 action: ConfirmAction::WorktreeConflict,
@@ -238,7 +236,7 @@ impl Actions {
         }
 
         let cleaned_stale_target = target_preparation.cleaned_stale_target();
-        self.create_agent_internal(app_data, &repo_path, title, prompt, &branch, &worktree_path)?;
+        self.create_agent_internal(app_data, repo_path, title, prompt, &branch, &worktree_path)?;
         if cleaned_stale_target {
             app_data.set_status(format!("Cleaned stale worktree and created agent: {title}"));
         }
@@ -499,22 +497,17 @@ impl Actions {
 
         debug!(branch = %conflict.branch, swarm_child_count = ?conflict.swarm_child_count, "Recreating worktree from scratch");
 
-        // Remove existing worktree first
         let repo = git::open_repository(&conflict.repo_root)?;
         let worktree_mgr = WorktreeManager::new(&repo);
         worktree_mgr.remove(&conflict.branch)?;
 
-        // Check if this is a swarm creation
         if let Some(child_count) = conflict.swarm_child_count {
-            // Set up app state for spawn_children
             app_data.spawn.spawning_under = None;
             app_data.spawn.child_count = child_count;
             app_data.spawn.root_repo_path = Some(conflict.repo_root.clone());
 
-            // Call spawn_children with the task/prompt (if any)
             self.spawn_children(app_data, conflict.prompt.as_deref())
         } else {
-            // Single agent creation
             let created = self.create_agent_internal(
                 app_data,
                 &conflict.repo_root,
@@ -528,76 +521,66 @@ impl Actions {
         }
     }
 
-    /// Kill the selected agent (and all its descendants)
-    pub(crate) fn kill_agent(self, app_data: &mut AppData) -> Result<()> {
-        if let Some(agent) = app_data.selected_agent() {
-            let agent_id = agent.id;
-            let is_root = agent.is_root();
-            let session = agent.mux_session.clone();
-            let worktree_name = agent.branch.clone();
-            let window_index = agent.window_index;
-            let title = agent.title.clone();
+    /// Delete one agent and its descendants by stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Tenex cannot remove or save the selected agent tree.
+    pub(crate) fn kill_agent(self, app_data: &mut AppData, agent_id: Uuid) -> Result<()> {
+        let Some(agent) = app_data.storage.get(agent_id) else {
+            app_data.set_status("Agent was already removed");
+            return Ok(());
+        };
+        let is_root = agent.is_root();
+        let session = agent.mux_session.clone();
+        let worktree_name = agent.branch.clone();
+        let window_index = agent.window_index;
+        let title = agent.title.clone();
 
-            info!(
-                %title,
-                %agent_id,
-                is_root,
-                %session,
-                "Killing agent"
-            );
+        info!(
+            %title,
+            %agent_id,
+            is_root,
+            %session,
+            "Killing agent"
+        );
 
-            if is_root {
-                let delete_branch = worktree_name.starts_with(&app_data.config.branch_prefix)
-                    || worktree_name.starts_with("tenex/");
-                self.kill_root_agent_tree(app_data, agent_id, delete_branch)?;
-                app_data.set_status("Agent killed");
-                return Ok(());
-            }
-
-            // Child agent: kill just this window and its descendants
-            // Get the root's session for killing windows
-            let root = app_data.storage.root_ancestor(agent_id).unwrap_or(agent);
-            let root_session = root.mux_session.clone();
-            let root_id = root.id;
-
-            // Collect all window indices being deleted
-            let mut deleted_indices: Vec<u32> = Vec::new();
-            let descendants = app_data.storage.descendants(agent_id);
-            for desc in &descendants {
-                if let Some(idx) = desc.window_index {
-                    deleted_indices.push(idx);
-                }
-            }
-
-            // Add this agent's window
-            if let Some(idx) = window_index {
-                deleted_indices.push(idx);
-            }
-
-            // Sort in descending order and kill windows from highest to lowest
-            // This prevents window renumbering from affecting indices we haven't killed yet
-            deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
-            for idx in &deleted_indices {
-                let _ = self.session_manager.kill_window(&root_session, *idx);
-            }
-
-            // Update window indices for remaining agents under the same root
-            // When the mux renumbers windows, indices shift down
-            super::window::adjust_window_indices_after_deletion(
-                app_data,
-                root_id,
-                agent_id,
-                &deleted_indices,
-            );
-
-            // Remove agent and all descendants from storage
-            app_data.storage.remove_with_descendants(agent_id);
-
-            app_data.validate_selection();
-            app_data.storage.save()?;
-
+        if is_root {
+            let delete_branch = worktree_name.starts_with(&app_data.config.branch_prefix)
+                || worktree_name.starts_with("tenex/");
+            self.kill_root_agent_tree(app_data, agent_id, delete_branch)?;
             app_data.set_status("Agent killed");
+            return Ok(());
         }
+
+        let root = app_data
+            .storage
+            .root_ancestor(agent_id)
+            .context("Agent root no longer exists")?;
+        let root_session = root.mux_session.clone();
+        let root_id = root.id;
+        let mut deleted_indices: Vec<u32> = app_data
+            .storage
+            .descendants(agent_id)
+            .iter()
+            .filter_map(|descendant| descendant.window_index)
+            .collect();
+        deleted_indices.extend(window_index);
+        deleted_indices.sort_unstable_by(|a, b| b.cmp(a));
+        for index in &deleted_indices {
+            let _ = self.session_manager.kill_window(&root_session, *index);
+        }
+
+        super::window::adjust_window_indices_after_deletion(
+            app_data,
+            root_id,
+            agent_id,
+            &deleted_indices,
+        );
+        app_data.storage.remove_with_descendants(agent_id);
+        app_data.validate_selection();
+        app_data.storage.save()?;
+        app_data.set_status("Agent killed");
         Ok(())
     }
 
@@ -830,37 +813,8 @@ impl Actions {
         let repo_root = root.repo_root.clone();
         let runtime_agent = root.clone();
 
-        let pane_pids = self
-            .session_manager
-            .list_pane_pids(&session)
-            .unwrap_or_default();
-
-        // First kill all descendant windows in descending order.
-        let descendants = app_data.storage.descendants(root_id);
-        let mut indices: Vec<u32> = descendants
-            .iter()
-            .filter_map(|desc| desc.window_index)
-            .collect();
-        indices.sort_unstable_by(|a, b| b.cmp(a));
-        for idx in indices {
-            let _ = self.session_manager.kill_window(&session, idx);
-        }
-
-        // Kill the session
+        // Killing the root session owns teardown of every child window.
         let _ = self.session_manager.kill(&session);
-
-        // Ensure any remaining pane processes are terminated before removing the worktree.
-        for pid in pane_pids {
-            let _ = std::process::Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(100));
 
         if let Err(err) = crate::runtime::cleanup_runtime(&runtime_agent) {
             warn!(session = %session, error = %err, "Failed to clean up agent runtime");
@@ -900,12 +854,10 @@ impl Actions {
         app_data: &mut AppData,
         startup_command: Option<&str>,
     ) -> Result<AppMode> {
-        // Must have a selected agent
         let selected = app_data
             .selected_agent()
             .ok_or_else(|| anyhow::anyhow!("No agent selected"))?;
 
-        // Get the root ancestor to use its mux session
         let selected_id = selected.id;
         let root = app_data
             .storage
@@ -924,10 +876,8 @@ impl Actions {
         let title = app_data.spawn.next_terminal_name();
         debug!(title, startup_command, "Creating new terminal");
 
-        // Reserve a window index
         let window_index = app_data.storage.reserve_window_indices(root_id);
 
-        // Create child agent marked as terminal
         let mut terminal = Agent::new_child(
             title.clone(),
             "terminal".to_string(),
@@ -950,6 +900,7 @@ impl Actions {
             crate::runtime::build_terminal_command(&terminal, startup_command, &app_data.settings);
         let actual_index = self.session_manager.create_window(
             &root_session,
+            terminal.id,
             &title,
             &worktree_path,
             terminal_command.as_deref(),
@@ -958,7 +909,6 @@ impl Actions {
         let window_target = SessionManager::window_target(&root_session, actual_index);
         self.resize_target_to_preview(app_data, &window_target);
 
-        // Update window index if it differs
         terminal.window_index = Some(actual_index);
 
         // Host terminals still use the default shell and receive startup commands after launch.
@@ -973,7 +923,6 @@ impl Actions {
 
         app_data.storage.add(terminal);
 
-        // Expand the parent to show the new terminal.
         app_data.storage.set_collapsed(root_id, false);
 
         app_data.storage.save()?;
